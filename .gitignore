@@ -1,0 +1,8 @@
+test_report.txt
+tests/test_mat
+tests/test_mat_special
+tests/test_decomp
+tests/test_solver
+examples/mat_example
+mat_example
+libmat.so
