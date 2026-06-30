@@ -9,6 +9,9 @@ examples/mat_example: examples/mat_example.c mat.h
 libmat.so: bench/bench_matmul.c mat.h
 	$(CC) $(CFLAGS) -shared -fPIC bench/bench_matmul.c $(LDLIBS) -o libmat.so
 
+libmat_omp.so: bench/bench_matmul.c mat.h
+	$(CC) $(CFLAGS) -fopenmp -shared -fPIC bench/bench_matmul.c $(LDLIBS) -o libmat_omp.so
+
 # --- tests ---
 tests/test_mat: tests/test_mat.c mat.h
 	$(CC) $(CFLAGS) tests/test_mat.c $(LDLIBS) -o tests/test_mat

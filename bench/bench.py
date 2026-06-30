@@ -5,50 +5,88 @@ import time
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+subprocess.run(["make", "libmat.so", "libmat_omp.so"], cwd=ROOT, check=True)
+time.sleep(2)  # let the CPU settle after compilation
 
-subprocess.run(["make", "libmat.so"], cwd=ROOT, check=True)
+def load_lib(name):
+    lib = ctypes.CDLL(os.path.join(ROOT, name))
+    lib.c_matmul.argtypes = [
+        ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.POINTER(ctypes.c_float),
+    ]
+    lib.c_matmul.restype = None
+    lib.c_matmul_omp.argtypes = lib.c_matmul.argtypes
+    lib.c_matmul_omp.restype = None
+    return lib
 
-lib = ctypes.CDLL(os.path.join(ROOT, "libmat.so"))
-lib.c_matmul.argtypes = [
-    ctypes.c_int,
-    ctypes.POINTER(ctypes.c_float),
-    ctypes.POINTER(ctypes.c_float),
-    ctypes.POINTER(ctypes.c_float),
-]
-lib.c_matmul.restype = None
+lib = load_lib("libmat.so")
+lib_omp = load_lib("libmat_omp.so")
 
 
-def bench(fn, min_seconds=1.0):
+def ptr(arr):
+    return arr.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+
+
+REPEATS = 3  # number of independent 1-second trials per measurement
+
+
+def bench(fn):
     fn()  # warmup
-    t0 = time.perf_counter()
-    runs = 0
-    while time.perf_counter() - t0 < min_seconds:
-        fn()
-        runs += 1
-    return (time.perf_counter() - t0) / runs * 1000  # ms per call
+    best = float("inf")
+    for _ in range(REPEATS):
+        t0 = time.perf_counter()
+        runs = 0
+        while time.perf_counter() - t0 < 1.0:
+            fn()
+            runs += 1
+        ms = (time.perf_counter() - t0) / runs * 1000
+        if ms < best:
+            best = ms
+    return best
 
 
-sizes = [32, 64, 128, 256, 512, 1024]
-
-print(f"{'N':>6}  {'C (ms)':>10}  {'NumPy (ms)':>10}  {'Ratio':>8}  {'Max err':>10}")
-print("-" * 56)
-
-for n in sizes:
+def bench_shape(m, k, n):
     rng = np.random.default_rng(42)
-    a = rng.standard_normal((n, n)).astype(np.float32)
-    b = rng.standard_normal((n, n)).astype(np.float32)
-    out = np.zeros((n, n), dtype=np.float32)
+    a = np.ascontiguousarray(rng.standard_normal((m, k)).astype(np.float32))
+    b = np.ascontiguousarray(rng.standard_normal((k, n)).astype(np.float32))
+    out_c = np.zeros((m, n), dtype=np.float32)
+    out_omp = np.zeros((m, n), dtype=np.float32)
+    out_np = np.zeros((m, n), dtype=np.float32)
 
-    ap  = a.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    bp  = b.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    op  = out.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    lib.c_matmul(m, k, n, ptr(a), ptr(b), ptr(out_c))
+    max_err = float(np.max(np.abs(out_c - a @ b)))
 
-    # correctness
-    expected = a @ b
-    lib.c_matmul(n, ap, bp, op)
-    max_err = float(np.max(np.abs(out - expected)))
+    gflops = 2.0 * m * k * n / 1e9
+    c_ms   = bench(lambda: lib.c_matmul(m, k, n, ptr(a), ptr(b), ptr(out_c)))
+    omp_ms = bench(lambda: lib_omp.c_matmul_omp(m, k, n, ptr(a), ptr(b), ptr(out_omp)))
+    np_ms  = bench(lambda: np.matmul(a, b, out=out_np))
 
-    c_ms  = bench(lambda: lib.c_matmul(n, ap, bp, op))
-    np_ms = bench(lambda: np.dot(a, b))
+    return c_ms, omp_ms, np_ms, gflops / (c_ms / 1000), gflops / (omp_ms / 1000), gflops / (np_ms / 1000), max_err
 
-    print(f"{n:>6}  {c_ms:>10.3f}  {np_ms:>10.3f}  {c_ms/np_ms:>7.1f}x  {max_err:>10.2e}")
+
+def print_header(title):
+    print(f"\n{title}")
+    print(f"{'shape':>16}  {'C ms':>8}  {'OMP ms':>8}  {'NP ms':>8}  {'C GF/s':>8}  {'OMP GF/s':>9}  {'NP GF/s':>8}  {'max err':>9}")
+    print("-" * 95)
+
+
+def print_row(label, c_ms, omp_ms, np_ms, c_gf, omp_gf, np_gf, err):
+    print(f"{label:>16}  {c_ms:>8.3f}  {omp_ms:>8.3f}  {np_ms:>8.3f}  {c_gf:>8.2f}  {omp_gf:>9.2f}  {np_gf:>8.2f}  {err:>9.2e}")
+
+
+print_header("Square matrices")
+for n in [32, 64, 128, 256, 512, 1024]:
+    print_row(f"{n}x{n}x{n}", *bench_shape(n, n, n))
+
+print_header("Rectangular matrices (batch x in_features x out_features)")
+shapes = [
+    (64,  784, 256),
+    (64,  256, 128),
+    (64,  128,  64),
+    (256, 1024, 512),
+    (512,  512, 512),
+]
+for m, k, n in shapes:
+    print_row(f"{m}x{k}x{n}", *bench_shape(m, k, n))

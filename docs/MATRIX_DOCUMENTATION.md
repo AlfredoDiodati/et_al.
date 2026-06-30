@@ -149,16 +149,57 @@ void mat_print(Mat m)   // print to stdout, %8.4f per element
 ## Performance design
 
 ### Allocation
-`mat_new` uses `aligned_alloc(32, ...)` for 32-byte aligned memory, which maps onto AVX registers and is required for the compiler to emit 256-bit SIMD instructions.
+`mat_new` uses `aligned_alloc(32, ...)` so that every matrix starts at a 32-byte boundary. The CPU's wide floating-point units require this alignment to process 8 floats at a time; misaligned data forces the compiler to fall back to slower scalar instructions.
 
 ### Element-wise operations
-Every element-wise function checks `stride == c` (contiguous fast path). If true, it uses a single flat loop with `restrict`-qualified pointers. This removes pointer aliasing ambiguity and allows the compiler to auto-vectorize the loop with SIMD when built with `-O3 -march=native -ffast-math`. The strided fallback uses nested loops for slices.
+Every element-wise function checks `stride == c` first. If the matrix is contiguous in memory, a single flat loop over all elements is used with `restrict`-qualified pointers (telling the compiler the inputs and output do not overlap). This lets the compiler turn the loop into wide CPU instructions automatically. The strided fallback uses nested loops and works correctly on slices.
 
 ### Matrix multiply
-Uses cache-blocked (tiled) ikj ordering with tile size `MAT_TILE 32`. Blocking keeps the working set inside L1 cache. The innermost loop is a SAXPY (scalar times vector plus vector) that the compiler vectorizes. Without tiling, large matrix multiplies thrash the cache and performance degrades significantly.
+Uses a tiled loop with tile size `MAT_TILE 32`. The idea is to break the matrices into 32×32 blocks that fit in the CPU's fast on-chip memory and compute one block at a time. Without tiling, large matrices cause constant slow reads from main memory and performance falls off sharply with size.
+
+Within each tile, the i loop is unrolled by 4: four output rows are computed simultaneously so that each value read from B is reused four times instead of one. The innermost j loop uses explicit 8-wide CPU instructions (`__m256` / `_mm256_fmadd_ps`) when compiled on x86 with AVX2 support (`#ifdef __AVX2__`). A scalar fallback handles non-AVX2 builds and any remaining elements when the tile width is not a multiple of 8.
 
 ### Compiler flags
-`-ffast-math` is required for many vectorization opportunities (it allows reordering of floating-point operations). `-march=native` emits instructions for the host CPU's exact SIMD capabilities (SSE4, AVX, AVX2, etc.).
+`-ffast-math` lets the compiler reorder floating-point operations, which is required to generate wide CPU instructions for many loops. `-march=native` tells the compiler to use the full instruction set of the machine it is running on rather than a conservative baseline.
+
+### Benchmark results
+
+Machine: Intel Core i5-7400 @ 3.00 GHz. Both C and NumPy use pre-allocated output buffers so allocation cost is excluded. NumPy uses the system math library (OpenBLAS). Run `bench/bench.py` to reproduce.
+
+**Square matrices**
+
+| Shape | C (ms) | OMP (ms) | NumPy (ms) | C GF/s | OMP GF/s | NumPy GF/s |
+|---|---|---|---|---|---|---|
+| 32×32×32 | 0.011 | 0.013 | 0.003 | 6.01 | 4.91 | 22.37 |
+| 64×64×64 | 0.030 | 0.022 | 0.009 | 17.42 | 23.34 | 57.37 |
+| 128×128×128 | 0.186 | 0.061 | 0.021 | 22.56 | 68.57 | 203.27 |
+| 256×256×256 | 1.596 | 0.393 | 0.114 | 21.03 | 85.47 | 295.14 |
+| 512×512×512 | 15.022 | 4.171 | 0.768 | 17.87 | 64.36 | 349.49 |
+| 1024×1024×1024 | 152.012 | 43.941 | 6.199 | 14.13 | 48.87 | 346.42 |
+
+**Rectangular matrices (batch × input features × output features)**
+
+| Shape | C (ms) | OMP (ms) | NumPy (ms) | C GF/s | OMP GF/s | NumPy GF/s |
+|---|---|---|---|---|---|---|
+| 64×784×256 | 1.182 | 0.541 | 0.114 | 21.73 | 47.49 | 226.11 |
+| 64×256×128 | 0.194 | 0.100 | 0.025 | 21.64 | 41.95 | 166.13 |
+| 64×128×64 | 0.051 | 0.035 | 0.012 | 20.39 | 30.08 | 87.46 |
+| 256×1024×512 | 16.814 | 3.892 | 0.820 | 15.96 | 68.97 | 327.30 |
+| 512×512×512 | 15.412 | 3.600 | 0.760 | 17.42 | 74.58 | 353.43 |
+
+GF/s = billions of multiply-adds per second. OMP = 4-core parallel version (OpenMP, `-fopenmp`). The parallel version is slower than serial at 32×32 because the cost of starting 4 threads exceeds the benefit for that amount of work. From 128×128 onwards the speedup is 3.5–4× over serial, close to the theoretical maximum for 4 cores. The remaining gap to NumPy (3–7×) comes from panel packing — copying slices of the matrices into a sequential memory layout before computing, which reduces interference between cores and improves memory access speed.
+
+**How the benchmark is run:** `bench/bench.py` waits 2 seconds after compilation before starting, so the CPU is not still busy from the compiler. Each measurement runs 3 independent 1-second trials and keeps the fastest. Any trial interrupted by background system activity will be slower — taking the best discards those and keeps the cleanest reading. For reproducible results, close other applications before running. Even so, expect ±5% variation across runs.
+
+**mat_mul implementation history**
+
+| Version | Description | GF/s serial (256×256) | GF/s parallel (256×256) |
+|---|---|---|---|
+| v1 | Tiled ikj loop, single output row per pass | 11.50 | — |
+| v2 | 4-row unrolling — process 4 output rows per pass, reading B once for all four | 13.84 | — |
+| v3 | Explicit AVX2 — inner j loop processes 8 floats at a time; guarded by `#ifdef __AVX2__` | 21.03 | — |
+| v4 | OpenMP — outer tile loop parallelised across all CPU cores; guarded by `#ifdef _OPENMP` | 21.03 | 85.47 |
+
 
 ## Conventions
 
@@ -191,5 +232,4 @@ Do not use `isnan()` or `isinf()` in new functions that will be compiled with `-
 - No in-place operation variants (would avoid intermediate allocations in chained expressions)
 - No axis-wise reductions (sum along rows/columns)
 - No linear algebra beyond transpose and dot product (no inverse, no decompositions)
-- `mat_mul` performance has not been formally benchmarked against numpy yet (`bench/bench.py` exists but results are preliminary)
 - `mat_slice` and `mat_reshape` produce views with no lifetime tracking — freeing the owner while a view is alive is undefined behavior

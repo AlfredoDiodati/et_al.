@@ -4,6 +4,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#ifdef __AVX2__
+#include <immintrin.h>
+#endif
 
 /* Row-major matrix of floats. stride is the number of floats between the
    start of consecutive rows - equals c for full matrices, parent's c for slices. */
@@ -124,13 +127,45 @@ static inline Mat mat_mul(Mat a, Mat b) {
         int imax = i0+MAT_TILE < a.r ? i0+MAT_TILE : a.r;
         int kmax = k0+MAT_TILE < a.c ? k0+MAT_TILE : a.c;
         int jmax = j0+MAT_TILE < b.c ? j0+MAT_TILE : b.c;
-        for (int i = i0; i < imax; i++)
-        for (int k = k0; k < kmax; k++) {
-            float aik = AT(a,i,k);
+        int jlen = jmax - j0;
+        int i = i0;
+        for (; i+4 <= imax; i += 4) {
+            float *restrict po0 = &AT(o,i,j0);
+            float *restrict po1 = &AT(o,i+1,j0);
+            float *restrict po2 = &AT(o,i+2,j0);
+            float *restrict po3 = &AT(o,i+3,j0);
+            for (int k = k0; k < kmax; k++) {
+                float a0 = AT(a,i,k), a1 = AT(a,i+1,k);
+                float a2 = AT(a,i+2,k), a3 = AT(a,i+3,k);
+                const float *restrict pb = &AT(b,k,j0);
+                int j = 0;
+#ifdef __AVX2__
+                __m256 va0 = _mm256_set1_ps(a0), va1 = _mm256_set1_ps(a1);
+                __m256 va2 = _mm256_set1_ps(a2), va3 = _mm256_set1_ps(a3);
+                for (; j+8 <= jlen; j += 8) {
+                    __m256 vpb = _mm256_loadu_ps(pb+j);
+                    _mm256_storeu_ps(po0+j, _mm256_fmadd_ps(va0, vpb, _mm256_loadu_ps(po0+j)));
+                    _mm256_storeu_ps(po1+j, _mm256_fmadd_ps(va1, vpb, _mm256_loadu_ps(po1+j)));
+                    _mm256_storeu_ps(po2+j, _mm256_fmadd_ps(va2, vpb, _mm256_loadu_ps(po2+j)));
+                    _mm256_storeu_ps(po3+j, _mm256_fmadd_ps(va3, vpb, _mm256_loadu_ps(po3+j)));
+                }
+#endif
+                for (; j < jlen; j++) {
+                    po0[j] += a0 * pb[j];
+                    po1[j] += a1 * pb[j];
+                    po2[j] += a2 * pb[j];
+                    po3[j] += a3 * pb[j];
+                }
+            }
+        }
+        for (; i < imax; i++) {
             float *restrict po = &AT(o,i,j0);
-            const float *restrict pb = &AT(b,k,j0);
-            for (int j = 0; j < jmax-j0; j++)
-                po[j] += aik * pb[j];
+            for (int k = k0; k < kmax; k++) {
+                float aik = AT(a,i,k);
+                const float *restrict pb = &AT(b,k,j0);
+                for (int j = 0; j < jlen; j++)
+                    po[j] += aik * pb[j];
+            }
         }
     }
     return o;

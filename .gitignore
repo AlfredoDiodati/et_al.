@@ -6,3 +6,4 @@ tests/test_solver
 examples/mat_example
 mat_example
 libmat.so
+libmat_omp.so
