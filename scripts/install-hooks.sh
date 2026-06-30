@@ -5,6 +5,10 @@
 
 cd "$(dirname "$0")/.."
 
-cp check.sh .git/hooks/pre-commit
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/bash
+cd "$(git rev-parse --show-toplevel)"
+./check.sh
+EOF
 chmod +x .git/hooks/pre-commit
 echo "pre-commit hook installed"
