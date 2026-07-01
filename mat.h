@@ -118,6 +118,7 @@ static inline Mat mat_sub(Mat a, Mat b) {
     }
     return o;
 }
+
 /* Return the matrix product of a and b. a.c must equal b.r. */
 static inline Mat mat_mul(Mat a, Mat b) {
     Mat o = mat_new(a.r, b.c);
@@ -142,12 +143,10 @@ static inline Mat mat_mul(Mat a, Mat b) {
         int ilen = (i0+MAT_TILE < a.r ? i0+MAT_TILE : a.r) - i0;
         for (int k0 = 0; k0 < a.c; k0 += MAT_TILE) {
             int klen = (k0+MAT_TILE < a.c ? k0+MAT_TILE : a.c) - k0;
-            /* column-major: pa[k*MAT_TILE+ii] = AT(a, i0+ii, k0+k)
-               makes a0..a5 for the same k consecutive in memory */
-            for (int k = 0; k < klen; k++) {
-                float *col = pa + k*MAT_TILE;
-                for (int ii = 0; ii < ilen; ii++)
-                    col[ii] = AT(a, i0+ii, k0+k);
+            for (int ii = 0; ii < ilen; ii++) {
+                const float *row = a.d + (i0+ii)*(size_t)a.stride + k0;
+                for (int k = 0; k < klen; k++)
+                    pa[k*MAT_TILE+ii] = row[k];
             }
             for (int j0 = 0; j0 < b.c; j0 += MAT_TILE) {
                 int jlen = (j0+MAT_TILE < b.c ? j0+MAT_TILE : b.c) - j0;
@@ -162,6 +161,33 @@ static inline Mat mat_mul(Mat a, Mat b) {
                     float *restrict po5 = &AT(o, i0+i+5, j0);
                     int j = 0;
 #ifdef __AVX2__
+                    for (; j+16 <= jlen; j += 16) {
+                        __m256 a00=_mm256_setzero_ps(), a01=_mm256_setzero_ps();
+                        __m256 a10=_mm256_setzero_ps(), a11=_mm256_setzero_ps();
+                        __m256 a20=_mm256_setzero_ps(), a21=_mm256_setzero_ps();
+                        __m256 a30=_mm256_setzero_ps(), a31=_mm256_setzero_ps();
+                        __m256 a40=_mm256_setzero_ps(), a41=_mm256_setzero_ps();
+                        __m256 a50=_mm256_setzero_ps(), a51=_mm256_setzero_ps();
+                        for (int k = 0; k < klen; k++) {
+                            __builtin_prefetch(ppb + (k+8)*MAT_TILE + j,     0, 0);
+                            __builtin_prefetch(ppb + (k+8)*MAT_TILE + j + 8, 0, 0);
+                            __m256 v0 = _mm256_loadu_ps(ppb + k*MAT_TILE + j);
+                            __m256 v1 = _mm256_loadu_ps(ppb + k*MAT_TILE + j + 8);
+                            __m256 va;
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i  ]); a00=_mm256_fmadd_ps(va,v0,a00); a01=_mm256_fmadd_ps(va,v1,a01);
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+1]); a10=_mm256_fmadd_ps(va,v0,a10); a11=_mm256_fmadd_ps(va,v1,a11);
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+2]); a20=_mm256_fmadd_ps(va,v0,a20); a21=_mm256_fmadd_ps(va,v1,a21);
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+3]); a30=_mm256_fmadd_ps(va,v0,a30); a31=_mm256_fmadd_ps(va,v1,a31);
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+4]); a40=_mm256_fmadd_ps(va,v0,a40); a41=_mm256_fmadd_ps(va,v1,a41);
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+5]); a50=_mm256_fmadd_ps(va,v0,a50); a51=_mm256_fmadd_ps(va,v1,a51);
+                        }
+                        _mm256_storeu_ps(po0+j,   _mm256_add_ps(a00,_mm256_loadu_ps(po0+j  ))); _mm256_storeu_ps(po0+j+8,_mm256_add_ps(a01,_mm256_loadu_ps(po0+j+8)));
+                        _mm256_storeu_ps(po1+j,   _mm256_add_ps(a10,_mm256_loadu_ps(po1+j  ))); _mm256_storeu_ps(po1+j+8,_mm256_add_ps(a11,_mm256_loadu_ps(po1+j+8)));
+                        _mm256_storeu_ps(po2+j,   _mm256_add_ps(a20,_mm256_loadu_ps(po2+j  ))); _mm256_storeu_ps(po2+j+8,_mm256_add_ps(a21,_mm256_loadu_ps(po2+j+8)));
+                        _mm256_storeu_ps(po3+j,   _mm256_add_ps(a30,_mm256_loadu_ps(po3+j  ))); _mm256_storeu_ps(po3+j+8,_mm256_add_ps(a31,_mm256_loadu_ps(po3+j+8)));
+                        _mm256_storeu_ps(po4+j,   _mm256_add_ps(a40,_mm256_loadu_ps(po4+j  ))); _mm256_storeu_ps(po4+j+8,_mm256_add_ps(a41,_mm256_loadu_ps(po4+j+8)));
+                        _mm256_storeu_ps(po5+j,   _mm256_add_ps(a50,_mm256_loadu_ps(po5+j  ))); _mm256_storeu_ps(po5+j+8,_mm256_add_ps(a51,_mm256_loadu_ps(po5+j+8)));
+                    }
                     for (; j+8 <= jlen; j += 8) {
                         __m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
                         __m256 acc2 = _mm256_setzero_ps(), acc3 = _mm256_setzero_ps();

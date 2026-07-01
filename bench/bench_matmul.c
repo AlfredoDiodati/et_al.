@@ -81,7 +81,6 @@ void c_matmul_packed(int m, int k, int n, float *a, float *b, float *out) {
                 memcpy(dst + kk*MAT_TILE, b + (k0+kk)*n + j0, jlen * sizeof(float));
         }
     }
-    Mat ma = { m, k, k, a };
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static) if((long)m * k * n > 150000)
 #endif
@@ -90,10 +89,10 @@ void c_matmul_packed(int m, int k, int n, float *a, float *b, float *out) {
         int ilen = (i0+MAT_TILE < m ? i0+MAT_TILE : m) - i0;
         for (int k0 = 0; k0 < k; k0 += MAT_TILE) {
             int klen = (k0+MAT_TILE < k ? k0+MAT_TILE : k) - k0;
-            for (int k = 0; k < klen; k++) {
-                float *col = pa + k*MAT_TILE;
-                for (int ii = 0; ii < ilen; ii++)
-                    col[ii] = AT(ma, i0+ii, k0+k);
+            for (int ii = 0; ii < ilen; ii++) {
+                const float *row = a + (size_t)(i0+ii)*k + k0;
+                for (int kk = 0; kk < klen; kk++)
+                    pa[kk*MAT_TILE+ii] = row[kk];
             }
             for (int j0 = 0; j0 < n; j0 += MAT_TILE) {
                 int jlen = (j0+MAT_TILE < n ? j0+MAT_TILE : n) - j0;
@@ -108,6 +107,33 @@ void c_matmul_packed(int m, int k, int n, float *a, float *b, float *out) {
                     float *restrict po5 = out + (i0+i+5)*n + j0;
                     int j = 0;
 #ifdef __AVX2__
+                    for (; j+16 <= jlen; j += 16) {
+                        __m256 a00=_mm256_setzero_ps(), a01=_mm256_setzero_ps();
+                        __m256 a10=_mm256_setzero_ps(), a11=_mm256_setzero_ps();
+                        __m256 a20=_mm256_setzero_ps(), a21=_mm256_setzero_ps();
+                        __m256 a30=_mm256_setzero_ps(), a31=_mm256_setzero_ps();
+                        __m256 a40=_mm256_setzero_ps(), a41=_mm256_setzero_ps();
+                        __m256 a50=_mm256_setzero_ps(), a51=_mm256_setzero_ps();
+                        for (int k = 0; k < klen; k++) {
+                            __builtin_prefetch(ppb + (k+8)*MAT_TILE + j,     0, 0);
+                            __builtin_prefetch(ppb + (k+8)*MAT_TILE + j + 8, 0, 0);
+                            __m256 v0 = _mm256_loadu_ps(ppb + k*MAT_TILE + j);
+                            __m256 v1 = _mm256_loadu_ps(ppb + k*MAT_TILE + j + 8);
+                            __m256 va;
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i  ]); a00=_mm256_fmadd_ps(va,v0,a00); a01=_mm256_fmadd_ps(va,v1,a01);
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+1]); a10=_mm256_fmadd_ps(va,v0,a10); a11=_mm256_fmadd_ps(va,v1,a11);
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+2]); a20=_mm256_fmadd_ps(va,v0,a20); a21=_mm256_fmadd_ps(va,v1,a21);
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+3]); a30=_mm256_fmadd_ps(va,v0,a30); a31=_mm256_fmadd_ps(va,v1,a31);
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+4]); a40=_mm256_fmadd_ps(va,v0,a40); a41=_mm256_fmadd_ps(va,v1,a41);
+                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+5]); a50=_mm256_fmadd_ps(va,v0,a50); a51=_mm256_fmadd_ps(va,v1,a51);
+                        }
+                        _mm256_storeu_ps(po0+j,   _mm256_add_ps(a00,_mm256_loadu_ps(po0+j  ))); _mm256_storeu_ps(po0+j+8,_mm256_add_ps(a01,_mm256_loadu_ps(po0+j+8)));
+                        _mm256_storeu_ps(po1+j,   _mm256_add_ps(a10,_mm256_loadu_ps(po1+j  ))); _mm256_storeu_ps(po1+j+8,_mm256_add_ps(a11,_mm256_loadu_ps(po1+j+8)));
+                        _mm256_storeu_ps(po2+j,   _mm256_add_ps(a20,_mm256_loadu_ps(po2+j  ))); _mm256_storeu_ps(po2+j+8,_mm256_add_ps(a21,_mm256_loadu_ps(po2+j+8)));
+                        _mm256_storeu_ps(po3+j,   _mm256_add_ps(a30,_mm256_loadu_ps(po3+j  ))); _mm256_storeu_ps(po3+j+8,_mm256_add_ps(a31,_mm256_loadu_ps(po3+j+8)));
+                        _mm256_storeu_ps(po4+j,   _mm256_add_ps(a40,_mm256_loadu_ps(po4+j  ))); _mm256_storeu_ps(po4+j+8,_mm256_add_ps(a41,_mm256_loadu_ps(po4+j+8)));
+                        _mm256_storeu_ps(po5+j,   _mm256_add_ps(a50,_mm256_loadu_ps(po5+j  ))); _mm256_storeu_ps(po5+j+8,_mm256_add_ps(a51,_mm256_loadu_ps(po5+j+8)));
+                    }
                     for (; j+8 <= jlen; j += 8) {
                         __m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
                         __m256 acc2 = _mm256_setzero_ps(), acc3 = _mm256_setzero_ps();
