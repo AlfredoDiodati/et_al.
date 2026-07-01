@@ -143,7 +143,7 @@ static inline Mat mat_mul(Mat a, Mat b) {
         for (int k0 = 0; k0 < a.c; k0 += MAT_TILE) {
             int klen = (k0+MAT_TILE < a.c ? k0+MAT_TILE : a.c) - k0;
             /* column-major: pa[k*MAT_TILE+ii] = AT(a, i0+ii, k0+k)
-               makes a0..a3 for the same k consecutive in memory */
+               makes a0..a5 for the same k consecutive in memory */
             for (int k = 0; k < klen; k++) {
                 float *col = pa + k*MAT_TILE;
                 for (int ii = 0; ii < ilen; ii++)
@@ -153,41 +153,50 @@ static inline Mat mat_mul(Mat a, Mat b) {
                 int jlen = (j0+MAT_TILE < b.c ? j0+MAT_TILE : b.c) - j0;
                 const float *restrict ppb = packed_b + ((k0/MAT_TILE)*nj + j0/MAT_TILE) * MAT_TILE * MAT_TILE;
                 int i = 0;
-                for (; i+4 <= ilen; i += 4) {
+                for (; i+6 <= ilen; i += 6) {
                     float *restrict po0 = &AT(o, i0+i,   j0);
                     float *restrict po1 = &AT(o, i0+i+1, j0);
                     float *restrict po2 = &AT(o, i0+i+2, j0);
                     float *restrict po3 = &AT(o, i0+i+3, j0);
+                    float *restrict po4 = &AT(o, i0+i+4, j0);
+                    float *restrict po5 = &AT(o, i0+i+5, j0);
                     int j = 0;
 #ifdef __AVX2__
-                    /* j is outer, k is inner: accumulate into registers,
-                       write output once per j-vector instead of once per k */
                     for (; j+8 <= jlen; j += 8) {
                         __m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
                         __m256 acc2 = _mm256_setzero_ps(), acc3 = _mm256_setzero_ps();
+                        __m256 acc4 = _mm256_setzero_ps(), acc5 = _mm256_setzero_ps();
                         for (int k = 0; k < klen; k++) {
+                            __builtin_prefetch(ppb + (k+8)*MAT_TILE + j, 0, 0);
                             __m256 vpb = _mm256_loadu_ps(ppb + k*MAT_TILE + j);
                             acc0 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i  ]), vpb, acc0);
                             acc1 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+1]), vpb, acc1);
                             acc2 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+2]), vpb, acc2);
                             acc3 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+3]), vpb, acc3);
+                            acc4 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+4]), vpb, acc4);
+                            acc5 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+5]), vpb, acc5);
                         }
                         _mm256_storeu_ps(po0+j, _mm256_add_ps(acc0, _mm256_loadu_ps(po0+j)));
                         _mm256_storeu_ps(po1+j, _mm256_add_ps(acc1, _mm256_loadu_ps(po1+j)));
                         _mm256_storeu_ps(po2+j, _mm256_add_ps(acc2, _mm256_loadu_ps(po2+j)));
                         _mm256_storeu_ps(po3+j, _mm256_add_ps(acc3, _mm256_loadu_ps(po3+j)));
+                        _mm256_storeu_ps(po4+j, _mm256_add_ps(acc4, _mm256_loadu_ps(po4+j)));
+                        _mm256_storeu_ps(po5+j, _mm256_add_ps(acc5, _mm256_loadu_ps(po5+j)));
                     }
 #endif
                     for (; j < jlen; j++) {
-                        float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+                        float s0=0, s1=0, s2=0, s3=0, s4=0, s5=0;
                         for (int k = 0; k < klen; k++) {
                             float pb_kj = ppb[k*MAT_TILE+j];
                             s0 += pa[k*MAT_TILE+i  ] * pb_kj;
                             s1 += pa[k*MAT_TILE+i+1] * pb_kj;
                             s2 += pa[k*MAT_TILE+i+2] * pb_kj;
                             s3 += pa[k*MAT_TILE+i+3] * pb_kj;
+                            s4 += pa[k*MAT_TILE+i+4] * pb_kj;
+                            s5 += pa[k*MAT_TILE+i+5] * pb_kj;
                         }
-                        po0[j] += s0; po1[j] += s1; po2[j] += s2; po3[j] += s3;
+                        po0[j] += s0; po1[j] += s1; po2[j] += s2;
+                        po3[j] += s3; po4[j] += s4; po5[j] += s5;
                     }
                 }
                 for (; i < ilen; i++) {
