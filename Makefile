@@ -12,6 +12,12 @@ libmat.so: bench/bench_matmul.c mat.h
 libmat_omp.so: bench/bench_matmul.c mat.h
 	$(CC) $(CFLAGS) -fopenmp -shared -fPIC bench/bench_matmul.c $(LDLIBS) -o libmat_omp.so
 
+bench/bench_breakeven: bench/bench_breakeven.c mat.h
+	$(CC) $(CFLAGS) -fopenmp bench/bench_breakeven.c $(LDLIBS) -o bench/bench_breakeven
+
+bench/bench_omp_vs_ada: bench/bench_omp_vs_ada.c mat.h
+	$(CC) $(CFLAGS) -fopenmp bench/bench_omp_vs_ada.c $(LDLIBS) -o bench/bench_omp_vs_ada
+
 # --- tests ---
 tests/test_mat: tests/test_mat.c mat.h
 	$(CC) $(CFLAGS) tests/test_mat.c $(LDLIBS) -o tests/test_mat

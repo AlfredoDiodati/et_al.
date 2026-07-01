@@ -7,3 +7,5 @@ examples/mat_example
 mat_example
 libmat.so
 libmat_omp.so
+bench/bench_breakeven
+bench/bench_omp_vs_ada

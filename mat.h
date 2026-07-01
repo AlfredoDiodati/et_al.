@@ -121,53 +121,98 @@ static inline Mat mat_sub(Mat a, Mat b) {
 /* Return the matrix product of a and b. a.c must equal b.r. */
 static inline Mat mat_mul(Mat a, Mat b) {
     Mat o = mat_new(a.r, b.c);
-    for (int i0 = 0; i0 < a.r; i0 += MAT_TILE)
-    for (int k0 = 0; k0 < a.c; k0 += MAT_TILE)
-    for (int j0 = 0; j0 < b.c; j0 += MAT_TILE) {
-        int imax = i0+MAT_TILE < a.r ? i0+MAT_TILE : a.r;
-        int kmax = k0+MAT_TILE < a.c ? k0+MAT_TILE : a.c;
-        int jmax = j0+MAT_TILE < b.c ? j0+MAT_TILE : b.c;
-        int jlen = jmax - j0;
-        int i = i0;
-        for (; i+4 <= imax; i += 4) {
-            float *restrict po0 = &AT(o,i,j0);
-            float *restrict po1 = &AT(o,i+1,j0);
-            float *restrict po2 = &AT(o,i+2,j0);
-            float *restrict po3 = &AT(o,i+3,j0);
-            for (int k = k0; k < kmax; k++) {
-                float a0 = AT(a,i,k), a1 = AT(a,i+1,k);
-                float a2 = AT(a,i+2,k), a3 = AT(a,i+3,k);
-                const float *restrict pb = &AT(b,k,j0);
-                int j = 0;
-#ifdef __AVX2__
-                __m256 va0 = _mm256_set1_ps(a0), va1 = _mm256_set1_ps(a1);
-                __m256 va2 = _mm256_set1_ps(a2), va3 = _mm256_set1_ps(a3);
-                for (; j+8 <= jlen; j += 8) {
-                    __m256 vpb = _mm256_loadu_ps(pb+j);
-                    _mm256_storeu_ps(po0+j, _mm256_fmadd_ps(va0, vpb, _mm256_loadu_ps(po0+j)));
-                    _mm256_storeu_ps(po1+j, _mm256_fmadd_ps(va1, vpb, _mm256_loadu_ps(po1+j)));
-                    _mm256_storeu_ps(po2+j, _mm256_fmadd_ps(va2, vpb, _mm256_loadu_ps(po2+j)));
-                    _mm256_storeu_ps(po3+j, _mm256_fmadd_ps(va3, vpb, _mm256_loadu_ps(po3+j)));
-                }
-#endif
-                for (; j < jlen; j++) {
-                    po0[j] += a0 * pb[j];
-                    po1[j] += a1 * pb[j];
-                    po2[j] += a2 * pb[j];
-                    po3[j] += a3 * pb[j];
-                }
-            }
+    int nk = (a.c + MAT_TILE - 1) / MAT_TILE;
+    int nj = (b.c + MAT_TILE - 1) / MAT_TILE;
+    size_t pb_bytes = (size_t)nk * nj * MAT_TILE * MAT_TILE * sizeof(float);
+    float *packed_b = aligned_alloc(32, pb_bytes < 32 ? 32 : pb_bytes);
+    for (int k0 = 0; k0 < a.c; k0 += MAT_TILE) {
+        int klen = (k0+MAT_TILE < a.c ? k0+MAT_TILE : a.c) - k0;
+        for (int j0 = 0; j0 < b.c; j0 += MAT_TILE) {
+            int jlen = (j0+MAT_TILE < b.c ? j0+MAT_TILE : b.c) - j0;
+            float *dst = packed_b + ((k0/MAT_TILE)*nj + j0/MAT_TILE) * MAT_TILE * MAT_TILE;
+            for (int k = 0; k < klen; k++)
+                memcpy(dst + k*MAT_TILE, &AT(b, k0+k, j0), jlen * sizeof(float));
         }
-        for (; i < imax; i++) {
-            float *restrict po = &AT(o,i,j0);
-            for (int k = k0; k < kmax; k++) {
-                float aik = AT(a,i,k);
-                const float *restrict pb = &AT(b,k,j0);
-                for (int j = 0; j < jlen; j++)
-                    po[j] += aik * pb[j];
+    }
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) if((long)a.r * a.c * b.c > 150000)
+#endif
+    for (int i0 = 0; i0 < a.r; i0 += MAT_TILE) {
+        float pa[MAT_TILE * MAT_TILE];
+        int ilen = (i0+MAT_TILE < a.r ? i0+MAT_TILE : a.r) - i0;
+        for (int k0 = 0; k0 < a.c; k0 += MAT_TILE) {
+            int klen = (k0+MAT_TILE < a.c ? k0+MAT_TILE : a.c) - k0;
+            /* column-major: pa[k*MAT_TILE+ii] = AT(a, i0+ii, k0+k)
+               makes a0..a3 for the same k consecutive in memory */
+            for (int k = 0; k < klen; k++) {
+                float *col = pa + k*MAT_TILE;
+                for (int ii = 0; ii < ilen; ii++)
+                    col[ii] = AT(a, i0+ii, k0+k);
+            }
+            for (int j0 = 0; j0 < b.c; j0 += MAT_TILE) {
+                int jlen = (j0+MAT_TILE < b.c ? j0+MAT_TILE : b.c) - j0;
+                const float *restrict ppb = packed_b + ((k0/MAT_TILE)*nj + j0/MAT_TILE) * MAT_TILE * MAT_TILE;
+                int i = 0;
+                for (; i+4 <= ilen; i += 4) {
+                    float *restrict po0 = &AT(o, i0+i,   j0);
+                    float *restrict po1 = &AT(o, i0+i+1, j0);
+                    float *restrict po2 = &AT(o, i0+i+2, j0);
+                    float *restrict po3 = &AT(o, i0+i+3, j0);
+                    int j = 0;
+#ifdef __AVX2__
+                    /* j is outer, k is inner: accumulate into registers,
+                       write output once per j-vector instead of once per k */
+                    for (; j+8 <= jlen; j += 8) {
+                        __m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
+                        __m256 acc2 = _mm256_setzero_ps(), acc3 = _mm256_setzero_ps();
+                        for (int k = 0; k < klen; k++) {
+                            __m256 vpb = _mm256_loadu_ps(ppb + k*MAT_TILE + j);
+                            acc0 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i  ]), vpb, acc0);
+                            acc1 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+1]), vpb, acc1);
+                            acc2 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+2]), vpb, acc2);
+                            acc3 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+3]), vpb, acc3);
+                        }
+                        _mm256_storeu_ps(po0+j, _mm256_add_ps(acc0, _mm256_loadu_ps(po0+j)));
+                        _mm256_storeu_ps(po1+j, _mm256_add_ps(acc1, _mm256_loadu_ps(po1+j)));
+                        _mm256_storeu_ps(po2+j, _mm256_add_ps(acc2, _mm256_loadu_ps(po2+j)));
+                        _mm256_storeu_ps(po3+j, _mm256_add_ps(acc3, _mm256_loadu_ps(po3+j)));
+                    }
+#endif
+                    for (; j < jlen; j++) {
+                        float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+                        for (int k = 0; k < klen; k++) {
+                            float pb_kj = ppb[k*MAT_TILE+j];
+                            s0 += pa[k*MAT_TILE+i  ] * pb_kj;
+                            s1 += pa[k*MAT_TILE+i+1] * pb_kj;
+                            s2 += pa[k*MAT_TILE+i+2] * pb_kj;
+                            s3 += pa[k*MAT_TILE+i+3] * pb_kj;
+                        }
+                        po0[j] += s0; po1[j] += s1; po2[j] += s2; po3[j] += s3;
+                    }
+                }
+                for (; i < ilen; i++) {
+                    float *restrict po = &AT(o, i0+i, j0);
+                    int j = 0;
+#ifdef __AVX2__
+                    for (; j+8 <= jlen; j += 8) {
+                        __m256 acc = _mm256_setzero_ps();
+                        for (int k = 0; k < klen; k++)
+                            acc = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i]),
+                                                  _mm256_loadu_ps(ppb+k*MAT_TILE+j), acc);
+                        _mm256_storeu_ps(po+j, _mm256_add_ps(acc, _mm256_loadu_ps(po+j)));
+                    }
+#endif
+                    for (; j < jlen; j++) {
+                        float s = 0;
+                        for (int k = 0; k < klen; k++)
+                            s += pa[k*MAT_TILE+i] * ppb[k*MAT_TILE+j];
+                        po[j] += s;
+                    }
+                }
             }
         }
     }
+    free(packed_b);
     return o;
 }
 /* Return a scaled by scalar s (element-wise). */

@@ -157,7 +157,13 @@ Every element-wise function checks `stride == c` first. If the matrix is contigu
 ### Matrix multiply
 Uses a tiled loop with tile size `MAT_TILE 32`. The idea is to break the matrices into 32×32 blocks that fit in the CPU's fast on-chip memory and compute one block at a time. Without tiling, large matrices cause constant slow reads from main memory and performance falls off sharply with size.
 
-Within each tile, the i loop is unrolled by 4: four output rows are computed simultaneously so that each value read from B is reused four times instead of one. The innermost j loop uses explicit 8-wide CPU instructions (`__m256` / `_mm256_fmadd_ps`) when compiled on x86 with AVX2 support (`#ifdef __AVX2__`). A scalar fallback handles non-AVX2 builds and any remaining elements when the tile width is not a multiple of 8.
+Within each tile, the i loop is unrolled by 4: four output rows are computed simultaneously so that each value read from B is reused four times instead of one.
+
+Before computing, B tiles are packed into a contiguous buffer (allocated once before the parallel loop and shared read-only across threads). A tiles are packed column-major into a thread-local stack buffer at the start of each (i0, k0) pair. Column-major layout means the four A values for the same k and four consecutive rows are adjacent in memory, so they hit one cache line instead of four.
+
+The inner compute loop runs with j as the outer dimension and k as the inner dimension. For each j-vector position, a local AVX2 accumulator (`acc0..acc3`) collects the full sum across all k values before writing to the output. This eliminates the read-modify-write to output memory on every k iteration — the output is touched once per j-vector per k-tile instead of once per k value, reducing output memory traffic by up to 32×. A scalar fallback handles non-AVX2 builds and remaining elements when jlen is not a multiple of 8.
+
+The outer tile loop is parallelised with OpenMP when compiled with `-fopenmp`. An `if()` clause on the pragma checks whether `m * k * n > 150000` before starting threads. Below that threshold, thread startup costs more than the computation itself (breakeven is around n=52 for square matrices, measured with `bench/bench_breakeven`). Above it, the parallel and adaptive versions perform identically — confirmed by an interleaved benchmark (`bench/bench_omp_vs_ada`) that alternates which version runs first each round to cancel thermal ordering effects. The ratio across 6 rounds at 256, 512, and 1024 was 0.994–1.009, indistinguishable from noise.
 
 ### Compiler flags
 `-ffast-math` lets the compiler reorder floating-point operations, which is required to generate wide CPU instructions for many loops. `-march=native` tells the compiler to use the full instruction set of the machine it is running on rather than a conservative baseline.
@@ -168,26 +174,30 @@ Machine: Intel Core i5-7400 @ 3.00 GHz. Both C and NumPy use pre-allocated outpu
 
 **Square matrices**
 
-| Shape | C (ms) | OMP (ms) | NumPy (ms) | C GF/s | OMP GF/s | NumPy GF/s |
-|---|---|---|---|---|---|---|
-| 32×32×32 | 0.011 | 0.013 | 0.003 | 6.01 | 4.91 | 22.37 |
-| 64×64×64 | 0.030 | 0.022 | 0.009 | 17.42 | 23.34 | 57.37 |
-| 128×128×128 | 0.186 | 0.061 | 0.021 | 22.56 | 68.57 | 203.27 |
-| 256×256×256 | 1.596 | 0.393 | 0.114 | 21.03 | 85.47 | 295.14 |
-| 512×512×512 | 15.022 | 4.171 | 0.768 | 17.87 | 64.36 | 349.49 |
-| 1024×1024×1024 | 152.012 | 43.941 | 6.199 | 14.13 | 48.87 | 346.42 |
+| Shape | C (ms) | ADA (ms) | PACK (ms) | NumPy (ms) | C GF/s | ADA GF/s | PACK GF/s | NumPy GF/s |
+|---|---|---|---|---|---|---|---|---|
+| 32×32×32 | 0.011 | 0.012 | 0.011 | 0.003 | 5.93 | 5.36 | 5.85 | 22.15 |
+| 64×64×64 | 0.031 | 0.031 | 0.023 | 0.009 | 16.96 | 17.03 | 22.39 | 57.02 |
+| 128×128×128 | 0.192 | 0.081 | 0.052 | 0.025 | 21.90 | 51.89 | 80.58 | 164.61 |
+| 256×256×256 | 1.637 | 0.546 | 0.257 | 0.144 | 20.49 | 61.42 | 130.54 | 233.77 |
+| 512×512×512 | 15.232 | 3.899 | 1.768 | 0.988 | 17.62 | 68.84 | 151.85 | 271.75 |
+| 1024×1024×1024 | 156.203 | 41.676 | 14.369 | 7.550 | 13.75 | 51.53 | 149.45 | 284.42 |
 
 **Rectangular matrices (batch × input features × output features)**
 
-| Shape | C (ms) | OMP (ms) | NumPy (ms) | C GF/s | OMP GF/s | NumPy GF/s |
-|---|---|---|---|---|---|---|
-| 64×784×256 | 1.182 | 0.541 | 0.114 | 21.73 | 47.49 | 226.11 |
-| 64×256×128 | 0.194 | 0.100 | 0.025 | 21.64 | 41.95 | 166.13 |
-| 64×128×64 | 0.051 | 0.035 | 0.012 | 20.39 | 30.08 | 87.46 |
-| 256×1024×512 | 16.814 | 3.892 | 0.820 | 15.96 | 68.97 | 327.30 |
-| 512×512×512 | 15.412 | 3.600 | 0.760 | 17.42 | 74.58 | 353.43 |
+| Shape | C (ms) | ADA (ms) | PACK (ms) | NumPy (ms) | C GF/s | ADA GF/s | PACK GF/s | NumPy GF/s |
+|---|---|---|---|---|---|---|---|---|
+| 64×784×256 | 1.230 | 0.793 | 0.400 | 0.147 | 20.88 | 32.40 | 64.19 | 174.46 |
+| 64×256×128 | 0.193 | 0.113 | 0.067 | 0.025 | 21.71 | 37.19 | 62.35 | 167.90 |
+| 64×128×64 | 0.053 | 0.072 | 0.055 | 0.012 | 19.80 | 14.54 | 19.23 | 86.88 |
+| 256×1024×512 | 17.099 | 7.428 | 2.899 | 1.675 | 15.70 | 36.14 | 92.60 | 160.30 |
+| 512×512×512 | 16.390 | 7.678 | 2.675 | 1.553 | 16.38 | 34.96 | 100.37 | 172.84 |
 
-GF/s = billions of multiply-adds per second. OMP = 4-core parallel version (OpenMP, `-fopenmp`). The parallel version is slower than serial at 32×32 because the cost of starting 4 threads exceeds the benefit for that amount of work. From 128×128 onwards the speedup is 3.5–4× over serial, close to the theoretical maximum for 4 cores. The remaining gap to NumPy (3–7×) comes from panel packing — copying slices of the matrices into a sequential memory layout before computing, which reduces interference between cores and improves memory access speed.
+GF/s = billions of multiply-adds per second. ADA = adaptive threshold version (serial below n≈52, parallel above). PACK = panel-packed version with column-major A tiles and local AVX2 accumulators (current `mat_mul`). The PACK column includes the cost of allocating and filling the packed B buffer on each call.
+
+The packed version closes most of the remaining gap to NumPy. At 256×256 and above the gap is 1.7–2× rather than 3–5×. The remaining difference is that OpenBLAS uses hand-written assembly micro-kernels and multi-level cache-aware panel sizes, while this implementation stays in portable C with AVX2 intrinsics.
+
+**How the benchmark is run:** `bench/bench.py` waits 2 seconds after compilation before starting, so the CPU is not still busy from the compiler. Each measurement runs 3 independent 1-second trials and keeps the fastest. Expect ±10% variation across runs — when comparing versions, use the interleaved benchmarks (`bench/bench_omp_vs_ada`, `bench/bench_breakeven`) rather than the sequential Python script, which is susceptible to thermal ordering effects.
 
 **How the benchmark is run:** `bench/bench.py` waits 2 seconds after compilation before starting, so the CPU is not still busy from the compiler. Each measurement runs 3 independent 1-second trials and keeps the fastest. Any trial interrupted by background system activity will be slower — taking the best discards those and keeps the cleanest reading. For reproducible results, close other applications before running. Even so, expect ±5% variation across runs.
 
@@ -199,6 +209,8 @@ GF/s = billions of multiply-adds per second. OMP = 4-core parallel version (Open
 | v2 | 4-row unrolling — process 4 output rows per pass, reading B once for all four | 13.84 | — |
 | v3 | Explicit AVX2 — inner j loop processes 8 floats at a time; guarded by `#ifdef __AVX2__` | 21.03 | — |
 | v4 | OpenMP — outer tile loop parallelised across all CPU cores; guarded by `#ifdef _OPENMP` | 21.03 | 85.47 |
+| v5 | Adaptive threshold — uses OpenMP `if(m*k*n > 150000)` to take serial path for small matrices and parallel path for large ones; breakeven confirmed at n≈52 for square matrices | 21.03 | 91.26 |
+| v6 | Panel packing + accumulators — B tiles packed into contiguous buffer before the parallel loop; A tiles packed column-major per thread; j-outer/k-inner AVX2 loop accumulates into registers and writes output once per j-vector, cutting output memory traffic ~32× | 130.54 | 130.54 |
 
 
 ## Conventions
