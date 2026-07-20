@@ -46,7 +46,7 @@ static inline Vec vec_solve_sym(Mat a, Vec b) {
     Vec x = mat_copy(b);
     lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
 
-    int info = MLAPACK(sysv)(LAPACK_ROW_MAJOR, 'L', n, 1, af.d, af.stride, piv, x.d, x.stride);
+    int info = MLAPACK(sysv)(LAPACK_ROW_MAJOR, 'L', n, 1, af.d, af.stride, piv, x.d, x.stride); /* 'L': read the lower triangle */
     assert(info == 0); /* a is singular */
 
     free(piv);
@@ -67,7 +67,7 @@ static inline Vec vec_solve_sym(Mat a, Vec b) {
 static inline Vec vec_lu_solve(Mat lu, lapack_int *piv, Vec b) {
     assert(lu.r == lu.c && b.r == lu.r && b.c == 1);
     Vec x = mat_copy(b);
-    int info = MLAPACK(getrs)(LAPACK_ROW_MAJOR, 'N', lu.r, 1, lu.d, lu.stride, piv, x.d, x.stride);
+    int info = MLAPACK(getrs)(LAPACK_ROW_MAJOR, 'N', lu.r, 1, lu.d, lu.stride, piv, x.d, x.stride); /* 'N': solve a*x=b, not the transposed system a^T*x=b */
     assert(info == 0);
     return x;
 }
@@ -81,7 +81,7 @@ static inline Vec vec_lu_solve(Mat lu, lapack_int *piv, Vec b) {
 static inline Vec vec_chol_solve(Mat l, Vec b) {
     assert(l.r == l.c && b.r == l.r && b.c == 1);
     Vec x = mat_copy(b);
-    int info = MLAPACK(potrs)(LAPACK_ROW_MAJOR, 'L', l.r, 1, l.d, l.stride, x.d, x.stride);
+    int info = MLAPACK(potrs)(LAPACK_ROW_MAJOR, 'L', l.r, 1, l.d, l.stride, x.d, x.stride); /* 'L': l is the lower-triangular factor mat_chol produces */
     assert(info == 0);
     return x;
 }
@@ -98,7 +98,7 @@ static inline Mat mat_lstsq(Mat a, Mat b) {
     /* ?gels overwrites its b argument in place with the solution in the
        first n rows - work is an m x nrhs copy of b sized for that. */
     Mat work = mat_copy(b);
-    int info = MLAPACK(gels)(LAPACK_ROW_MAJOR, 'N', m, n, nrhs, qr.d, qr.stride, work.d, work.stride);
+    int info = MLAPACK(gels)(LAPACK_ROW_MAJOR, 'N', m, n, nrhs, qr.d, qr.stride, work.d, work.stride); /* 'N': solve with a itself, not a^T */
     assert(info == 0); /* a is rank-deficient */
 
     Mat x = mat_new(n, nrhs);

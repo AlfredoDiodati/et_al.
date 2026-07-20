@@ -25,11 +25,14 @@ tests/correctness/test_decomp: tests/correctness/test_decomp.c decomp.h mat.h
 tests/correctness/test_solver: tests/correctness/test_solver.c solver.h decomp.h mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_solver.c $(LDLIBS) -o tests/correctness/test_solver
 
-test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver
-	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver
+tests/correctness/test_gauss: tests/correctness/test_gauss.c dist/gauss.h mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_gauss.c $(LDLIBS) -o tests/correctness/test_gauss
 
-test-stress: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver
-	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver
+test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss
+	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_gauss
+
+test-stress: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss
+	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_gauss
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754
 tests/correctness/test_mat_special: tests/correctness/test_mat_special.c mat.h

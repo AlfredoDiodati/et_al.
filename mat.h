@@ -118,7 +118,11 @@ static inline Mat mat_reshape(Mat m, int new_r, int new_c) {
 }
 
 
-/* Return a + b (element-wise). a and b must have the same shape. */
+/* Return a + b (element-wise). a and b must have the same shape.
+   Every element-wise function below follows this same shape: a flat
+   restrict-qualified loop when both operands are contiguous (stride==c,
+   so the compiler can auto-vectorize freely), a nested AT()-indexed
+   fallback when either is a strided view. */
 static inline Mat mat_add(Mat a, Mat b) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c && b.stride == b.c) {
