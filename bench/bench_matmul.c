@@ -1,7 +1,7 @@
 #include "../mat.h"
 
 /* Exposes matmul as a flat-pointer function for ctypes benchmarking (see
-   bench.py). This is a direct cblas_?gemm call - the same thing mat_mul
+   bench_matmul.py). This is a direct cblas_?gemm call - the same thing mat_mul
    itself wraps, minus the mat_new allocation - so this measures OpenBLAS
    against NumPy (which also calls OpenBLAS), not a competing kernel. */
 void c_matmul(int m, int k, int n, mreal *a, mreal *b, mreal *out) {

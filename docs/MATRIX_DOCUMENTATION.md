@@ -1,4 +1,4 @@
-# mat.h - Single-header float matrix library in C
+# mat.h - Single-header dense matrix library in C
 
 ## Project overview
 
@@ -6,22 +6,22 @@ A pure C (C11), single-header matrix library targeting econometrics research, bu
 - Simple, readable API similar in spirit to numpy/R (function-call style - C does not support operator overloading)
 - Zero-copy views via stride-based slicing and reshaping
 - Performance via OpenBLAS: `mat_mul`, dot/norm, and (in `decomp.h`/`solver.h`) all factorizations and solves call directly into BLAS/LAPACK; the rest of the library (element-wise ops, reductions, views) uses compiler-driven SIMD (auto-vectorization) the same way it always has
-- Exactly one external dependency: OpenBLAS. See `README.md`'s "Policy: dependencies" section for the reasoning and the dependency/precision boundary
+- Exactly one external dependency: OpenBLAS. See `README.md`'s [Dependencies](../README.md#dependencies) section for the reasoning and the dependency/precision boundary
 
 ## File structure
 
 | File | Purpose |
 |---|---|
 | `mat.h` | Full library - structs, macros, and all functions as static inline |
-| `decomp.h` | Decompositions (Cholesky, LU, QR) - LAPACKE wrappers, includes mat.h |
+| `decomp.h` | Decompositions (Cholesky, LU, QR, eig, SVD) - LAPACKE wrappers, includes mat.h |
 | `solver.h` | Solvers (Ax=b, least squares) - LAPACKE wrappers, includes decomp.h |
 | `examples/mat_example.c` | Usage example covering every function in the API |
 | `tests/test_mat.c` | Correctness tests for mat.h |
 | `tests/test_decomp.c` | Correctness tests for decomp.h |
 | `tests/test_solver.c` | Correctness tests for solver.h |
-| `bench/bench_matmul.c` | Thin C wrapper exposing `c_matmul` as a shared library symbol for ctypes |
-| `bench/bench.py` | Python benchmark comparing matmul against numpy |
-| `Makefile` | Builds examples, tests, and `libmat.so` |
+| `bench/bench_matmul.c` + `bench_matmul.py` | matmul vs NumPy, via a `libmat.so` ctypes shared library |
+| `bench/bench_decomp.c` + `bench_decomp.py` | decomp.h/solver.h functions vs NumPy, via `libdecomp.so` |
+| `Makefile` | Builds examples, tests, and the benchmark shared libraries |
 
 ## Build
 
@@ -36,7 +36,7 @@ make test-special           # special value tests (built without -ffast-math)
 make test-stress            # stress tests with larger inputs
 
 make libmat.so              # shared library for benchmarking
-python bench/bench.py
+python bench/bench_matmul.py
 ```
 
 Production compiler flags: `-O3 -march=native -ffast-math -lm $(pkg-config --cflags --libs openblas)` (falls back to `-lopenblas` if `pkg-config` cannot find it). Add `-DMAT_DOUBLE` to build against `double`/`cblas_d*`/`LAPACKE_d*` instead of the `float` default.
@@ -177,14 +177,14 @@ Every element-wise function checks `stride == c` first. If the matrix is contigu
 ### Matrix multiply
 `mat_mul` is a thin wrapper around `cblas_?gemm` (`sgemm` or `dgemm`, selected by `MAT_DOUBLE`). It validates shapes, allocates the output with `mat_new`, and calls into OpenBLAS with `CblasRowMajor` and `lda`/`ldb`/`ldc` taken from each operand's `stride`, so strided views pass through without a copy. All cache blocking, register tiling, and SIMD micro-kernel selection is OpenBLAS's responsibility - this project does not attempt to match it with hand-written C.
 
-This replaces a hand-rolled AVX2 tiled kernel (32x32 tiles, panel packing, a 12-accumulator 2-j-vector micro-kernel with software prefetch, OpenMP-parallelised above an empirically measured breakeven size) that topped out at 62-81% of OpenBLAS's throughput at 256x256 and above. Its full implementation history and measurement methodology are preserved in git history up to the `pre-openblas` tag, for reference if the dependency is ever reconsidered.
+See the corresponding pitfall in `README.md` ("Do not hand-write a kernel for something OpenBLAS already provides") for why this project does not maintain its own tiled/vectorized matmul kernel alongside this wrapper.
 
 ### Compiler flags
 `-ffast-math` lets the compiler reorder floating-point operations, which is required to generate wide CPU instructions for many loops. `-march=native` tells the compiler to use the full instruction set of the machine it is running on rather than a conservative baseline. These flags apply only to this project's own kernels (element-wise ops, reductions); OpenBLAS is prebuilt and separately optimized, and unaffected by them.
 
 ### Benchmark results
 
-Measured post-migration with `bench/bench.py` (float32, both C and NumPy using pre-allocated output buffers):
+Measured with `bench/bench_matmul.py` (float32, both C and NumPy using pre-allocated output buffers):
 
 | Shape | C ms | NumPy ms | C GF/s | NumPy GF/s | max err |
 |---|---|---|---|---|---|
@@ -192,7 +192,7 @@ Measured post-migration with `bench/bench.py` (float32, both C and NumPy using p
 | 512x512x512 | 0.623 | 0.884 | 430.6 | 303.7 | 0 |
 | 1024x1024x1024 | 7.435 | 7.445 | 288.8 | 288.5 | 0 |
 
-`max err` is exactly `0` at every shape tested, not just small - `mat_mul` and NumPy call the literal same `cblas_?gemm` on the same input, so there is no floating-point reordering difference to produce one. At and above 256x256, C GF/s tracks NumPy's GF/s within measurement noise (occasionally faster, since `mat_mul` has one fewer indirection than NumPy's dispatch path); below that, per-call overhead (mostly the `mat_new` allocation) dominates and the two diverge more. This closes the 62-81% gap the old hand-rolled kernel had. Run `bench/bench.py` to reproduce; expect run-to-run variance from CPU turbo state.
+`max err` is exactly `0` at every shape tested, not just small - `mat_mul` and NumPy call the literal same `cblas_?gemm` on the same input, so there is no floating-point reordering difference to produce one. At and above 256x256, C GF/s tracks NumPy's GF/s within measurement noise (occasionally faster, since `mat_mul` has one fewer indirection than NumPy's dispatch path); below that, per-call overhead (mostly the `mat_new` allocation) dominates and the two diverge more. Run `bench/bench_matmul.py` to reproduce; expect run-to-run variance from CPU turbo state.
 
 ## Conventions
 
@@ -227,4 +227,4 @@ Do not use `isnan()` or `isinf()` in new functions that will be compiled with `-
 - No axis-wise reductions (sum along rows/columns)
 - `mat.h` itself has no linear algebra beyond transpose, dot product, and norm - Cholesky/LU/QR live in `decomp.h`, solving in `solver.h`; see `docs/DECOMP_DOCUMENTATION.md`/`docs/SOLVER_DOCUMENTATION.md`
 - `mat_slice` and `mat_reshape` produce views with no lifetime tracking — freeing the owner while a view is alive is undefined behavior
-- OpenBLAS is a required runtime and link-time dependency once the migration lands. This library can no longer be dropped into a project as a single header with zero linking; `mat.h` stays single-header for the code we write, but the build now needs `-lopenblas` and OpenBLAS's own headers (`cblas.h`, `lapacke.h`) on the include path
+- OpenBLAS is a required runtime and link-time dependency. This library cannot be dropped into a project as a single header with zero linking; `mat.h` stays single-header for the code we write, but the build needs `-lopenblas` and OpenBLAS's own headers (`cblas.h`, `lapacke.h`) on the include path
