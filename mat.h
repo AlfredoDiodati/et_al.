@@ -4,13 +4,42 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
-#ifdef __AVX2__
-#include <immintrin.h>
+#include <float.h>
+#include <cblas.h>
+
+/* mreal is the one element type every function in this library is written
+   against. -DMAT_DOUBLE switches it (and the BLAS/LAPACK/libm call sites
+   dispatched through the macros below) from float to double. Never call
+   cblas_s-prefixed or cblas_d-prefixed functions, or an f-suffixed /
+   unsuffixed libm function, directly - always go through
+   MBLAS/MLAPACK/M{EXP,LOG,ABS,SQRT,POW,EPS} so the file stays correct
+   under both builds. decomp.h/solver.h must include lapacke.h themselves
+   before using MLAPACK. */
+#ifdef MAT_DOUBLE
+typedef double mreal;
+#define MBLAS(fn)   cblas_d##fn
+#define MLAPACK(fn) LAPACKE_d##fn
+#define MEXP  exp
+#define MLOG  log
+#define MABS  fabs
+#define MSQRT sqrt
+#define MPOW  pow
+#define MEPS  DBL_EPSILON
+#else
+typedef float mreal;
+#define MBLAS(fn)   cblas_s##fn
+#define MLAPACK(fn) LAPACKE_s##fn
+#define MEXP  expf
+#define MLOG  logf
+#define MABS  fabsf
+#define MSQRT sqrtf
+#define MPOW  powf
+#define MEPS  FLT_EPSILON
 #endif
 
-/* Row-major matrix of floats. stride is the number of floats between the
+/* Row-major matrix of mreal. stride is the number of mreal elements between the
    start of consecutive rows - equals c for full matrices, parent's c for slices. */
-typedef struct { int r, c, stride; float *d; } Mat;
+typedef struct { int r, c, stride; mreal *d; } Mat;
 typedef Mat Vec;
 
 /* Element access: row i, column j of matrix m. */
@@ -18,16 +47,13 @@ typedef Mat Vec;
 /* Allocate a column vector of length n. */
 #define vec_new(n) mat_new(n,1)
 
-/* Tile size for blocked matrix multiply - tuned for L1 cache. */
-#define MAT_TILE 32
-
 
 /* Allocate an r x c zero matrix with 32-byte alignment for SIMD. Caller must mat_free(). */
 static inline Mat mat_new(int r, int c) {
     size_t n = (size_t)r * c;
-    size_t sz = (n * sizeof(float) + 31) & ~(size_t)31;
-    float *d = (float*)aligned_alloc(32, sz);
-    memset(d, 0, n * sizeof(float));
+    size_t sz = (n * sizeof(mreal) + 31) & ~(size_t)31;
+    mreal *d = (mreal*)aligned_alloc(32, sz);
+    memset(d, 0, n * sizeof(mreal));
     return (Mat){ r, c, c, d };
 }
 /* Free the heap storage owned by m. Do NOT call on slices. */
@@ -35,32 +61,32 @@ static inline void mat_free(Mat m) { free(m.d); }
 
 /* Allocate an r x c matrix and copy values from the flat array data (row-major).
    data must have at least r*c elements. Caller must mat_free(). */
-static inline Mat mat_from(int r, int c, float *data) {
+static inline Mat mat_from(int r, int c, mreal *data) {
     Mat m = mat_new(r, c);
-    memcpy(m.d, data, (size_t)r * c * sizeof(float));
+    memcpy(m.d, data, (size_t)r * c * sizeof(mreal));
     return m;
 }
-/* Shorthand: construct a matrix from a literal list of floats.
+/* Shorthand: construct a matrix from a literal list of numbers.
    Example: Mat a = mat_lit(2, 3, 1,2,3,4,5,6); */
-#define mat_lit(r, c, ...) mat_from(r, c, (float[]){__VA_ARGS__})
+#define mat_lit(r, c, ...) mat_from(r, c, (mreal[]){__VA_ARGS__})
 
 /* Return a deep copy of m. Caller must mat_free(). */
 static inline Mat mat_copy(Mat m) {
     Mat o = mat_new(m.r, m.c);
     if (m.stride == m.c) {
-        memcpy(o.d, m.d, (size_t)m.r * m.c * sizeof(float));
+        memcpy(o.d, m.d, (size_t)m.r * m.c * sizeof(mreal));
     } else {
         for (int i = 0; i < m.r; i++)
-            memcpy(&AT(o,i,0), &AT(m,i,0), (size_t)m.c * sizeof(float));
+            memcpy(&AT(o,i,0), &AT(m,i,0), (size_t)m.c * sizeof(mreal));
     }
     return o;
 }
 
 /* Return an r x c matrix filled with val. Caller must mat_free(). */
-static inline Mat mat_fill(int r, int c, float val) {
+static inline Mat mat_fill(int r, int c, mreal val) {
     Mat m = mat_new(r, c);
     int n = r * c;
-    float *restrict p = m.d;
+    mreal *restrict p = m.d;
     for (int i = 0; i < n; i++) p[i] = val;
     return m;
 }
@@ -95,7 +121,7 @@ static inline Mat mat_add(Mat a, Mat b) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c && b.stride == b.c) {
         int n = a.r * a.c;
-        float *restrict pa = a.d, *restrict pb = b.d, *restrict po = o.d;
+        mreal *restrict pa = a.d, *restrict pb = b.d, *restrict po = o.d;
         for (int i = 0; i < n; i++) po[i] = pa[i] + pb[i];
     } else {
         for (int i = 0; i < a.r; i++)
@@ -109,7 +135,7 @@ static inline Mat mat_sub(Mat a, Mat b) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c && b.stride == b.c) {
         int n = a.r * a.c;
-        float *restrict pa = a.d, *restrict pb = b.d, *restrict po = o.d;
+        mreal *restrict pa = a.d, *restrict pb = b.d, *restrict po = o.d;
         for (int i = 0; i < n; i++) po[i] = pa[i] - pb[i];
     } else {
         for (int i = 0; i < a.r; i++)
@@ -119,143 +145,23 @@ static inline Mat mat_sub(Mat a, Mat b) {
     return o;
 }
 
-/* Return the matrix product of a and b. a.c must equal b.r. */
+/* Return the matrix product of a and b. a.c must equal b.r.
+   Thin wrapper over cblas_?gemm - all blocking/vectorization is OpenBLAS's
+   responsibility. lda/ldb/ldc are taken from stride, so strided views pass
+   through with no copy. */
 static inline Mat mat_mul(Mat a, Mat b) {
     Mat o = mat_new(a.r, b.c);
-    int nk = (a.c + MAT_TILE - 1) / MAT_TILE;
-    int nj = (b.c + MAT_TILE - 1) / MAT_TILE;
-    size_t pb_bytes = (size_t)nk * nj * MAT_TILE * MAT_TILE * sizeof(float);
-    float *packed_b = aligned_alloc(32, pb_bytes < 32 ? 32 : pb_bytes);
-    for (int k0 = 0; k0 < a.c; k0 += MAT_TILE) {
-        int klen = (k0+MAT_TILE < a.c ? k0+MAT_TILE : a.c) - k0;
-        for (int j0 = 0; j0 < b.c; j0 += MAT_TILE) {
-            int jlen = (j0+MAT_TILE < b.c ? j0+MAT_TILE : b.c) - j0;
-            float *dst = packed_b + ((k0/MAT_TILE)*nj + j0/MAT_TILE) * MAT_TILE * MAT_TILE;
-            for (int k = 0; k < klen; k++)
-                memcpy(dst + k*MAT_TILE, &AT(b, k0+k, j0), jlen * sizeof(float));
-        }
-    }
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(static) if((long)a.r * a.c * b.c > 150000)
-#endif
-    for (int i0 = 0; i0 < a.r; i0 += MAT_TILE) {
-        float pa[MAT_TILE * MAT_TILE];
-        int ilen = (i0+MAT_TILE < a.r ? i0+MAT_TILE : a.r) - i0;
-        for (int k0 = 0; k0 < a.c; k0 += MAT_TILE) {
-            int klen = (k0+MAT_TILE < a.c ? k0+MAT_TILE : a.c) - k0;
-            for (int ii = 0; ii < ilen; ii++) {
-                const float *row = a.d + (i0+ii)*(size_t)a.stride + k0;
-                for (int k = 0; k < klen; k++)
-                    pa[k*MAT_TILE+ii] = row[k];
-            }
-            for (int j0 = 0; j0 < b.c; j0 += MAT_TILE) {
-                int jlen = (j0+MAT_TILE < b.c ? j0+MAT_TILE : b.c) - j0;
-                const float *restrict ppb = packed_b + ((k0/MAT_TILE)*nj + j0/MAT_TILE) * MAT_TILE * MAT_TILE;
-                int i = 0;
-                for (; i+6 <= ilen; i += 6) {
-                    float *restrict po0 = &AT(o, i0+i,   j0);
-                    float *restrict po1 = &AT(o, i0+i+1, j0);
-                    float *restrict po2 = &AT(o, i0+i+2, j0);
-                    float *restrict po3 = &AT(o, i0+i+3, j0);
-                    float *restrict po4 = &AT(o, i0+i+4, j0);
-                    float *restrict po5 = &AT(o, i0+i+5, j0);
-                    int j = 0;
-#ifdef __AVX2__
-                    for (; j+16 <= jlen; j += 16) {
-                        __m256 a00=_mm256_setzero_ps(), a01=_mm256_setzero_ps();
-                        __m256 a10=_mm256_setzero_ps(), a11=_mm256_setzero_ps();
-                        __m256 a20=_mm256_setzero_ps(), a21=_mm256_setzero_ps();
-                        __m256 a30=_mm256_setzero_ps(), a31=_mm256_setzero_ps();
-                        __m256 a40=_mm256_setzero_ps(), a41=_mm256_setzero_ps();
-                        __m256 a50=_mm256_setzero_ps(), a51=_mm256_setzero_ps();
-                        for (int k = 0; k < klen; k++) {
-                            __builtin_prefetch(ppb + (k+8)*MAT_TILE + j,     0, 0);
-                            __builtin_prefetch(ppb + (k+8)*MAT_TILE + j + 8, 0, 0);
-                            __m256 v0 = _mm256_loadu_ps(ppb + k*MAT_TILE + j);
-                            __m256 v1 = _mm256_loadu_ps(ppb + k*MAT_TILE + j + 8);
-                            __m256 va;
-                            va=_mm256_set1_ps(pa[k*MAT_TILE+i  ]); a00=_mm256_fmadd_ps(va,v0,a00); a01=_mm256_fmadd_ps(va,v1,a01);
-                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+1]); a10=_mm256_fmadd_ps(va,v0,a10); a11=_mm256_fmadd_ps(va,v1,a11);
-                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+2]); a20=_mm256_fmadd_ps(va,v0,a20); a21=_mm256_fmadd_ps(va,v1,a21);
-                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+3]); a30=_mm256_fmadd_ps(va,v0,a30); a31=_mm256_fmadd_ps(va,v1,a31);
-                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+4]); a40=_mm256_fmadd_ps(va,v0,a40); a41=_mm256_fmadd_ps(va,v1,a41);
-                            va=_mm256_set1_ps(pa[k*MAT_TILE+i+5]); a50=_mm256_fmadd_ps(va,v0,a50); a51=_mm256_fmadd_ps(va,v1,a51);
-                        }
-                        _mm256_storeu_ps(po0+j,   _mm256_add_ps(a00,_mm256_loadu_ps(po0+j  ))); _mm256_storeu_ps(po0+j+8,_mm256_add_ps(a01,_mm256_loadu_ps(po0+j+8)));
-                        _mm256_storeu_ps(po1+j,   _mm256_add_ps(a10,_mm256_loadu_ps(po1+j  ))); _mm256_storeu_ps(po1+j+8,_mm256_add_ps(a11,_mm256_loadu_ps(po1+j+8)));
-                        _mm256_storeu_ps(po2+j,   _mm256_add_ps(a20,_mm256_loadu_ps(po2+j  ))); _mm256_storeu_ps(po2+j+8,_mm256_add_ps(a21,_mm256_loadu_ps(po2+j+8)));
-                        _mm256_storeu_ps(po3+j,   _mm256_add_ps(a30,_mm256_loadu_ps(po3+j  ))); _mm256_storeu_ps(po3+j+8,_mm256_add_ps(a31,_mm256_loadu_ps(po3+j+8)));
-                        _mm256_storeu_ps(po4+j,   _mm256_add_ps(a40,_mm256_loadu_ps(po4+j  ))); _mm256_storeu_ps(po4+j+8,_mm256_add_ps(a41,_mm256_loadu_ps(po4+j+8)));
-                        _mm256_storeu_ps(po5+j,   _mm256_add_ps(a50,_mm256_loadu_ps(po5+j  ))); _mm256_storeu_ps(po5+j+8,_mm256_add_ps(a51,_mm256_loadu_ps(po5+j+8)));
-                    }
-                    for (; j+8 <= jlen; j += 8) {
-                        __m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
-                        __m256 acc2 = _mm256_setzero_ps(), acc3 = _mm256_setzero_ps();
-                        __m256 acc4 = _mm256_setzero_ps(), acc5 = _mm256_setzero_ps();
-                        for (int k = 0; k < klen; k++) {
-                            __builtin_prefetch(ppb + (k+8)*MAT_TILE + j, 0, 0);
-                            __m256 vpb = _mm256_loadu_ps(ppb + k*MAT_TILE + j);
-                            acc0 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i  ]), vpb, acc0);
-                            acc1 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+1]), vpb, acc1);
-                            acc2 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+2]), vpb, acc2);
-                            acc3 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+3]), vpb, acc3);
-                            acc4 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+4]), vpb, acc4);
-                            acc5 = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i+5]), vpb, acc5);
-                        }
-                        _mm256_storeu_ps(po0+j, _mm256_add_ps(acc0, _mm256_loadu_ps(po0+j)));
-                        _mm256_storeu_ps(po1+j, _mm256_add_ps(acc1, _mm256_loadu_ps(po1+j)));
-                        _mm256_storeu_ps(po2+j, _mm256_add_ps(acc2, _mm256_loadu_ps(po2+j)));
-                        _mm256_storeu_ps(po3+j, _mm256_add_ps(acc3, _mm256_loadu_ps(po3+j)));
-                        _mm256_storeu_ps(po4+j, _mm256_add_ps(acc4, _mm256_loadu_ps(po4+j)));
-                        _mm256_storeu_ps(po5+j, _mm256_add_ps(acc5, _mm256_loadu_ps(po5+j)));
-                    }
-#endif
-                    for (; j < jlen; j++) {
-                        float s0=0, s1=0, s2=0, s3=0, s4=0, s5=0;
-                        for (int k = 0; k < klen; k++) {
-                            float pb_kj = ppb[k*MAT_TILE+j];
-                            s0 += pa[k*MAT_TILE+i  ] * pb_kj;
-                            s1 += pa[k*MAT_TILE+i+1] * pb_kj;
-                            s2 += pa[k*MAT_TILE+i+2] * pb_kj;
-                            s3 += pa[k*MAT_TILE+i+3] * pb_kj;
-                            s4 += pa[k*MAT_TILE+i+4] * pb_kj;
-                            s5 += pa[k*MAT_TILE+i+5] * pb_kj;
-                        }
-                        po0[j] += s0; po1[j] += s1; po2[j] += s2;
-                        po3[j] += s3; po4[j] += s4; po5[j] += s5;
-                    }
-                }
-                for (; i < ilen; i++) {
-                    float *restrict po = &AT(o, i0+i, j0);
-                    int j = 0;
-#ifdef __AVX2__
-                    for (; j+8 <= jlen; j += 8) {
-                        __m256 acc = _mm256_setzero_ps();
-                        for (int k = 0; k < klen; k++)
-                            acc = _mm256_fmadd_ps(_mm256_set1_ps(pa[k*MAT_TILE+i]),
-                                                  _mm256_loadu_ps(ppb+k*MAT_TILE+j), acc);
-                        _mm256_storeu_ps(po+j, _mm256_add_ps(acc, _mm256_loadu_ps(po+j)));
-                    }
-#endif
-                    for (; j < jlen; j++) {
-                        float s = 0;
-                        for (int k = 0; k < klen; k++)
-                            s += pa[k*MAT_TILE+i] * ppb[k*MAT_TILE+j];
-                        po[j] += s;
-                    }
-                }
-            }
-        }
-    }
-    free(packed_b);
+    MBLAS(gemm)(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                a.r, b.c, a.c, (mreal)1, a.d, a.stride, b.d, b.stride,
+                (mreal)0, o.d, o.stride);
     return o;
 }
 /* Return a scaled by scalar s (element-wise). */
-static inline Mat mat_scale(Mat a, float s) {
+static inline Mat mat_scale(Mat a, mreal s) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c) {
         int n = a.r * a.c;
-        float *restrict pa = a.d, *restrict po = o.d;
+        mreal *restrict pa = a.d, *restrict po = o.d;
         for (int i = 0; i < n; i++) po[i] = pa[i] * s;
     } else {
         for (int i = 0; i < a.r; i++)
@@ -269,7 +175,7 @@ static inline Mat mat_emul(Mat a, Mat b) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c && b.stride == b.c) {
         int n = a.r * a.c;
-        float *restrict pa = a.d, *restrict pb = b.d, *restrict po = o.d;
+        mreal *restrict pa = a.d, *restrict pb = b.d, *restrict po = o.d;
         for (int i = 0; i < n; i++) po[i] = pa[i] * pb[i];
     } else {
         for (int i = 0; i < a.r; i++)
@@ -283,7 +189,7 @@ static inline Mat mat_ediv(Mat a, Mat b) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c && b.stride == b.c) {
         int n = a.r * a.c;
-        float *restrict pa = a.d, *restrict pb = b.d, *restrict po = o.d;
+        mreal *restrict pa = a.d, *restrict pb = b.d, *restrict po = o.d;
         for (int i = 0; i < n; i++) po[i] = pa[i] / pb[i];
     } else {
         for (int i = 0; i < a.r; i++)
@@ -293,16 +199,16 @@ static inline Mat mat_ediv(Mat a, Mat b) {
     return o;
 }
 /* Return a with every element raised to the power p. */
-static inline Mat mat_pow(Mat a, float p) {
+static inline Mat mat_pow(Mat a, mreal p) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c) {
         int n = a.r * a.c;
-        float *restrict pa = a.d, *restrict po = o.d;
-        for (int i = 0; i < n; i++) po[i] = powf(pa[i], p);
+        mreal *restrict pa = a.d, *restrict po = o.d;
+        for (int i = 0; i < n; i++) po[i] = MPOW(pa[i], p);
     } else {
         for (int i = 0; i < a.r; i++)
             for (int j = 0; j < a.c; j++)
-                AT(o,i,j) = powf(AT(a,i,j), p);
+                AT(o,i,j) = MPOW(AT(a,i,j), p);
     }
     return o;
 }
@@ -313,12 +219,12 @@ static inline Mat mat_exp(Mat a) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c) {
         int n = a.r * a.c;
-        float *restrict pa = a.d, *restrict po = o.d;
-        for (int i = 0; i < n; i++) po[i] = expf(pa[i]);
+        mreal *restrict pa = a.d, *restrict po = o.d;
+        for (int i = 0; i < n; i++) po[i] = MEXP(pa[i]);
     } else {
         for (int i = 0; i < a.r; i++)
             for (int j = 0; j < a.c; j++)
-                AT(o,i,j) = expf(AT(a,i,j));
+                AT(o,i,j) = MEXP(AT(a,i,j));
     }
     return o;
 }
@@ -327,12 +233,12 @@ static inline Mat mat_log(Mat a) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c) {
         int n = a.r * a.c;
-        float *restrict pa = a.d, *restrict po = o.d;
-        for (int i = 0; i < n; i++) po[i] = logf(pa[i]);
+        mreal *restrict pa = a.d, *restrict po = o.d;
+        for (int i = 0; i < n; i++) po[i] = MLOG(pa[i]);
     } else {
         for (int i = 0; i < a.r; i++)
             for (int j = 0; j < a.c; j++)
-                AT(o,i,j) = logf(AT(a,i,j));
+                AT(o,i,j) = MLOG(AT(a,i,j));
     }
     return o;
 }
@@ -341,12 +247,12 @@ static inline Mat mat_abs(Mat a) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c) {
         int n = a.r * a.c;
-        float *restrict pa = a.d, *restrict po = o.d;
-        for (int i = 0; i < n; i++) po[i] = fabsf(pa[i]);
+        mreal *restrict pa = a.d, *restrict po = o.d;
+        for (int i = 0; i < n; i++) po[i] = MABS(pa[i]);
     } else {
         for (int i = 0; i < a.r; i++)
             for (int j = 0; j < a.c; j++)
-                AT(o,i,j) = fabsf(AT(a,i,j));
+                AT(o,i,j) = MABS(AT(a,i,j));
     }
     return o;
 }
@@ -355,23 +261,23 @@ static inline Mat mat_sqrt(Mat a) {
     Mat o = mat_new(a.r, a.c);
     if (a.stride == a.c) {
         int n = a.r * a.c;
-        float *restrict pa = a.d, *restrict po = o.d;
-        for (int i = 0; i < n; i++) po[i] = sqrtf(pa[i]);
+        mreal *restrict pa = a.d, *restrict po = o.d;
+        for (int i = 0; i < n; i++) po[i] = MSQRT(pa[i]);
     } else {
         for (int i = 0; i < a.r; i++)
             for (int j = 0; j < a.c; j++)
-                AT(o,i,j) = sqrtf(AT(a,i,j));
+                AT(o,i,j) = MSQRT(AT(a,i,j));
     }
     return o;
 }
 
 
 /* Return the sum of all elements. */
-static inline float mat_sum(Mat m) {
-    float s = 0.f;
+static inline mreal mat_sum(Mat m) {
+    mreal s = 0;
     if (m.stride == m.c) {
         int n = m.r * m.c;
-        float *restrict p = m.d;
+        mreal *restrict p = m.d;
         for (int i = 0; i < n; i++) s += p[i];
     } else {
         for (int i = 0; i < m.r; i++)
@@ -381,14 +287,14 @@ static inline float mat_sum(Mat m) {
     return s;
 }
 /* Return the mean of all elements. */
-static inline float mat_mean(Mat m) { return mat_sum(m) / (float)(m.r * m.c); }
+static inline mreal mat_mean(Mat m) { return mat_sum(m) / (mreal)(m.r * m.c); }
 
 /* Return the maximum element. */
-static inline float mat_max(Mat m) {
-    float v = AT(m,0,0);
+static inline mreal mat_max(Mat m) {
+    mreal v = AT(m,0,0);
     if (m.stride == m.c) {
         int n = m.r * m.c;
-        float *restrict p = m.d;
+        mreal *restrict p = m.d;
         for (int i = 0; i < n; i++) {
             if (__builtin_isnan(p[i])) return NAN;
             if (p[i] > v) v = p[i];
@@ -403,11 +309,11 @@ static inline float mat_max(Mat m) {
     return v;
 }
 /* Return the minimum element. */
-static inline float mat_min(Mat m) {
-    float v = AT(m,0,0);
+static inline mreal mat_min(Mat m) {
+    mreal v = AT(m,0,0);
     if (m.stride == m.c) {
         int n = m.r * m.c;
-        float *restrict p = m.d;
+        mreal *restrict p = m.d;
         for (int i = 0; i < n; i++) {
             if (__builtin_isnan(p[i])) return NAN;
             if (p[i] < v) v = p[i];
@@ -427,17 +333,17 @@ static inline float mat_min(Mat m) {
 static inline Mat mat_vcat(Mat a, Mat b) {
     Mat o = mat_new(a.r + b.r, a.c);
     for (int i = 0; i < a.r; i++)
-        memcpy(&AT(o,i,0), &AT(a,i,0), (size_t)a.c * sizeof(float));
+        memcpy(&AT(o,i,0), &AT(a,i,0), (size_t)a.c * sizeof(mreal));
     for (int i = 0; i < b.r; i++)
-        memcpy(&AT(o,a.r+i,0), &AT(b,i,0), (size_t)b.c * sizeof(float));
+        memcpy(&AT(o,a.r+i,0), &AT(b,i,0), (size_t)b.c * sizeof(mreal));
     return o;
 }
 /* Stack a and b horizontally (a on left). a.r must equal b.r. */
 static inline Mat mat_hcat(Mat a, Mat b) {
     Mat o = mat_new(a.r, a.c + b.c);
     for (int i = 0; i < a.r; i++) {
-        memcpy(&AT(o,i,0), &AT(a,i,0), (size_t)a.c * sizeof(float));
-        memcpy(&AT(o,i,a.c), &AT(b,i,0), (size_t)b.c * sizeof(float));
+        memcpy(&AT(o,i,0), &AT(a,i,0), (size_t)a.c * sizeof(mreal));
+        memcpy(&AT(o,i,a.c), &AT(b,i,0), (size_t)b.c * sizeof(mreal));
     }
     return o;
 }
@@ -451,14 +357,14 @@ static inline Mat mat_T(Mat a) {
             AT(o,j,i) = AT(a,i,j);
     return o;
 }
-/* Return the dot product of two column vectors. */
-static inline float vec_dot(Vec a, Vec b) {
-    float s = 0.f;
-    for (int i = 0; i < a.r; i++) s += AT(a,i,0) * AT(b,i,0);
-    return s;
+/* Return the dot product of two column vectors. cblas_?dot; incX/incY = stride
+   so strided (sliced-column) views work without a copy. */
+static inline mreal vec_dot(Vec a, Vec b) {
+    return MBLAS(dot)(a.r, a.d, a.stride, b.d, b.stride);
 }
-/* Return the Euclidean (L2) norm of v. */
-static inline float vec_norm(Vec v) { return sqrtf(vec_dot(v,v)); }
+/* Return the Euclidean (L2) norm of v. cblas_?nrm2 - more overflow/underflow
+   resistant than sqrt(dot(v,v)) since it scales before squaring. */
+static inline mreal vec_norm(Vec v) { return MBLAS(nrm2)(v.r, v.d, v.stride); }
 
 
 /* Print m to stdout, one row per line, values formatted as %8.4f. */

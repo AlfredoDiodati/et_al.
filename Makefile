@@ -1,5 +1,8 @@
-CFLAGS  = -Wall -Wextra -O3 -march=native -ffast-math
-LDLIBS  = -lm
+BLAS_CFLAGS := $(shell pkg-config --cflags openblas 2>/dev/null)
+BLAS_LIBS   := $(shell pkg-config --libs openblas 2>/dev/null || echo -lopenblas)
+
+CFLAGS  = -Wall -Wextra -O3 -march=native -ffast-math $(BLAS_CFLAGS) $(if $(MAT_DOUBLE),-DMAT_DOUBLE)
+LDLIBS  = -lm $(BLAS_LIBS)
 
 # --- examples ---
 examples/mat_example: examples/mat_example.c mat.h
@@ -9,14 +12,8 @@ examples/mat_example: examples/mat_example.c mat.h
 libmat.so: bench/bench_matmul.c mat.h
 	$(CC) $(CFLAGS) -shared -fPIC bench/bench_matmul.c $(LDLIBS) -o libmat.so
 
-libmat_omp.so: bench/bench_matmul.c mat.h
-	$(CC) $(CFLAGS) -fopenmp -shared -fPIC bench/bench_matmul.c $(LDLIBS) -o libmat_omp.so
-
-bench/bench_breakeven: bench/bench_breakeven.c mat.h
-	$(CC) $(CFLAGS) -fopenmp bench/bench_breakeven.c $(LDLIBS) -o bench/bench_breakeven
-
-bench/bench_omp_vs_ada: bench/bench_omp_vs_ada.c mat.h
-	$(CC) $(CFLAGS) -fopenmp bench/bench_omp_vs_ada.c $(LDLIBS) -o bench/bench_omp_vs_ada
+libdecomp.so: bench/bench_decomp.c solver.h decomp.h mat.h
+	$(CC) $(CFLAGS) -shared -fPIC bench/bench_decomp.c $(LDLIBS) -o libdecomp.so
 
 # --- tests ---
 tests/test_mat: tests/test_mat.c mat.h
@@ -36,7 +33,7 @@ test-stress: tests/test_mat tests/test_decomp tests/test_solver
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754
 tests/test_mat_special: tests/test_mat_special.c mat.h
-	$(CC) -Wall -Wextra -O1 -g tests/test_mat_special.c $(LDLIBS) -o tests/test_mat_special
+	$(CC) -Wall -Wextra -O1 -g $(BLAS_CFLAGS) $(if $(MAT_DOUBLE),-DMAT_DOUBLE) tests/test_mat_special.c $(LDLIBS) -o tests/test_mat_special
 
 test-special: tests/test_mat_special
 	./tests/test_mat_special

@@ -1,6 +1,6 @@
 # mat.h
 
-A pure C (C11), dependency-free, single-header dense matrix library targeting data science and ML workloads.
+A pure C (C11) linear algebra and econometrics compute backend, aimed at the performance class of JAX/NumPy/numba without a Python runtime, pandas, or matplotlib. The code we write is dependency-free and single-header; the one exception is OpenBLAS, linked in for BLAS/LAPACK-level dense operations — see [Policy: dependencies](#policy-dependencies) below.
 
 For the full API reference, build instructions, and performance design, see [docs/MATRIX_DOCUMENTATION.md](docs/MATRIX_DOCUMENTATION.md).
 
@@ -9,8 +9,8 @@ For the full API reference, build instructions, and performance design, see [doc
 ```
 la/
 ├── mat.h              # dense core — types, views, arithmetic, matmul
-├── decomp.h           # Cholesky, LU, QR — includes mat.h; mat.h never includes this
-├── solver.h           # Ax=b, least squares — includes decomp.h; decomp.h never includes this
+├── decomp.h           # Cholesky, LU, QR, eig, SVD — LAPACKE wrappers; includes mat.h; mat.h never includes this
+├── solver.h           # Ax=b, least squares — LAPACKE wrappers; includes decomp.h; decomp.h never includes this
 │
 ├── tests/
 │   ├── test_mat.c     # correctness: views, arithmetic, edge cases
@@ -26,8 +26,8 @@ la/
 │
 ├── docs/
 │   ├── MATRIX_DOCUMENTATION.md   # full reference for mat.h
-│   ├── DECOMP_DOCUMENTATION.md   # full reference for decomp.h (created with the header)
-│   └── SOLVER_DOCUMENTATION.md   # full reference for solver.h (created with the header)
+│   ├── DECOMP_DOCUMENTATION.md   # full reference for decomp.h
+│   └── SOLVER_DOCUMENTATION.md   # full reference for solver.h
 │
 ├── scripts/
 │   └── install-hooks.sh           # installs git hooks after cloning
@@ -51,7 +51,11 @@ make test-stress            # stress tests with larger inputs
 
 make libmat.so              # build shared library for benchmarking
 python bench/bench.py       # numpy comparison (works from the project root)
+
+make MAT_DOUBLE=1 test      # same targets, built against cblas_d*/LAPACKE_d* (float64)
 ```
+
+All targets link against OpenBLAS (`-lopenblas`, discovered via `pkg-config openblas` when available). Install it first — see [Policy: dependencies](#policy-dependencies).
 
 ### Pre-commit check
 
@@ -64,6 +68,32 @@ bash scripts/install-hooks.sh
 ```
 
 `test_report.txt` is generated output and is listed in `.gitignore`.
+
+## Policy: dependencies
+
+### One dependency, chosen deliberately
+
+The library links against exactly one external dependency: **OpenBLAS**, which supplies both BLAS (`cblas.h`) and LAPACK (`lapacke.h`) routines. This is not a relaxation of the original "no black box" goal so much as a relocation of it: OpenBLAS's hand-tuned, architecture-specific assembly kernels are the one piece of numerical code in this project we do not attempt to out-write ourselves. Everything else — the memory model, views, element-wise kernels, orchestration, and any future econometrics layer built on top of `solver.h` — stays pure C with no further dependencies.
+
+Do not add a second dependency to reach some future goal. No pandas, no NumPy, no matplotlib, no Eigen, no Python runtime of any kind. If something looks like it needs another library, write the (usually small) piece of functionality directly against `mat.h`'s primitives first.
+
+### What OpenBLAS is used for, and what stays hand-rolled
+
+| Layer | Delegated to OpenBLAS | Still hand-rolled |
+|---|---|---|
+| `mat.h` | `mat_mul` (`cblas_?gemm`), `vec_dot` (`cblas_?dot`), `vec_norm` (`cblas_?nrm2`) | Element-wise ops (`mat_add`, `mat_exp`, ...), reductions (`mat_sum`, `mat_max`, ...), views, concatenation — anything BLAS has no routine for |
+| `decomp.h` | Cholesky (`?potrf`), LU (`?getrf`), QR (`?geqrf`/`?orgqr`), symmetric eig (`?syevd`), SVD (`?gesdd`), general eig (`?geev`), inverse (`?getri`) via LAPACKE | Shape checks, packing `Mat` views into the layout LAPACKE expects; `mat_det`/`mat_cond`/`mat_rank` are derived from the above with no extra LAPACK call |
+| `solver.h` | `?gesv` (LU solve), `?gels` (least squares) via LAPACKE | Residual/diagnostic helpers that are not themselves linear algebra kernels |
+
+If an operation has no BLAS/LAPACK routine, write it by hand in the appropriate layer, in the same `stride`-aware, `restrict`-qualified style as the rest of the codebase. Do not add a hand-written competitor to a routine OpenBLAS already provides — see the corresponding pitfall below.
+
+### Precision: float32 and float64, chosen at build time
+
+`mat.h` supports both `float` and `double` storage behind one build-time switch (`-DMAT_DOUBLE`). Econometrics workloads (OLS on ill-conditioned design matrices, MLE, GMM) often need `double`'s extra precision; ML-style workloads are fine with, and faster in, `float`. The active element type, the BLAS/LAPACK function prefix (`s`/`d`), and the libm function family (`expf`/`exp`, etc.) all switch together off the same macro — see `docs/MATRIX_DOCUMENTATION.md` for the exact mechanism.
+
+### Linking
+
+Install OpenBLAS first (`pacman -S openblas`, `apt install libopenblas-dev`, or build from source), then build normally. The Makefile discovers compiler/linker flags via `pkg-config openblas` when available and falls back to `-lopenblas`.
 
 ## Policy: documentation structure
 
@@ -239,13 +269,15 @@ The row-major convention is also what allows the innermost loop of `mat_mul` to 
 
 Functions in `mat.h` do one thing: compute. They do not handle high-level concerns like broadcasting, automatic differentiation, or solver orchestration. The split that mature numerical libraries like BLAS and LAPACK use — a small set of heavily optimized compute kernels, called by higher-level routines — is the right model here.
 
+This is no longer just an analogy: `mat.h`'s heaviest kernels (`mat_mul`, `vec_dot`, `vec_norm`) and `decomp.h`/`solver.h`'s factorizations and solves call directly into OpenBLAS's BLAS and LAPACK implementations. Our code is the orchestration layer — shape checks, view/stride handling, packing into and out of the layout LAPACKE expects — not a second implementation of the kernel itself.
+
 When adding higher-level functionality (solvers, decompositions, statistics), put it in a separate header that calls `mat.h` functions. Do not entangle "how the numbers move in memory" with "what the user is trying to solve." The two have different change rates and different correctness criteria.
 
 ### 4. Performance lives in a small number of kernels
 
-Most of the machine-specific speed in a numerical library comes from a handful of inner loops. Here, the critical kernel is the innermost loop in `mat_mul`. The cache-blocked (tiled) `ikj` ordering with `MAT_TILE 32` keeps the working set in L1 cache. The SAXPY structure of the inner loop is what the compiler vectorizes.
+Most of the machine-specific speed in a numerical library comes from a handful of inner loops. For every operation OpenBLAS provides, that inner loop is OpenBLAS's — a hand-tuned, per-architecture assembly kernel this project does not attempt to match. `mat_mul`, the factorizations in `decomp.h`, and the solves in `solver.h` are wrappers around it, not competing implementations.
 
-Do not scatter performance-critical patterns throughout the codebase. Optimize the kernels; let the rest of the code be readable. When in doubt, measure with `mat_bench.c` and `bench.py` before and after any change to the hot path.
+For the operations OpenBLAS does not cover (element-wise ops, reductions, concatenation), the same discipline that used to apply to `mat_mul` still applies to them: keep the hot loop small, `restrict`-qualified, and stride-aware, and let the compiler auto-vectorize. Do not scatter performance-critical patterns throughout the codebase — optimize the few kernels that matter, let the rest of the code be readable. When in doubt, measure with `bench/bench.py` before and after any change to a hot path.
 
 ### 5. Tests are first-class; correctness and speed are tested separately
 
@@ -268,8 +300,8 @@ Build in layers. Each layer depends on the correctness of the one below it. Do n
 1. **Types and memory model** — `Mat`, `Vec`, ownership rules, `mat_new`, `mat_free`, `mat_slice`, `mat_reshape`. Get the mental model right before writing any math.
 2. **Vector operations** — copy, scale, dot product, norm, add, subtract, elementwise transforms. These are the simplest loops and the first test of the contiguous/strided split.
 3. **Matrix-vector operations** — build on dot product; verify shape rules and stride handling under non-trivial views.
-4. **Matrix-matrix multiply** — the most performance-critical function in the library. Get correctness first (compare against a naive triple loop), then add tiling, then benchmark. Most downstream speed comes from this one function.
-5. **Decompositions** — Cholesky for symmetric positive-definite systems (covariance matrices), LU for general square systems, QR for least squares. Implement these as solvers, not as inverters. Never expose a matrix inverse as the primary interface to a linear system.
+4. **Matrix-matrix multiply** — implemented as a thin wrapper over `cblas_?gemm`. Get correctness first (compare against a naive triple loop), then benchmark against NumPy directly — there should be near-zero wrapper overhead, since both call the same OpenBLAS routine.
+5. **Decompositions** — Cholesky for symmetric positive-definite systems (covariance matrices), LU for general square systems, QR for least squares, implemented as thin wrappers over LAPACKE (`?potrf`, `?getrf`, `?geqrf`). Implement these as solvers, not as inverters. Never expose a matrix inverse as the primary interface to a linear system.
 
 ---
 
@@ -281,7 +313,9 @@ These are mistakes that are easy to make and hard to debug. Treat this list as a
 
 **Do not make matrix inversion the primary linear algebra operation.** Solving `Ax = b` through LU factorization is numerically more stable, faster, and what all mature libraries do. Inversion is a derived operation that most users should never need directly.
 
-**Do not ignore memory layout.** The same mathematical matrix can be stored in different ways in memory. When a function receives a `Mat`, it must check `stride` before assuming the data is flat. Adding a new function and forgetting the strided path will produce silently wrong results on any view that is not contiguous.
+**Do not hand-write a kernel for something OpenBLAS already provides.** Before writing a new loop in `mat.h` or a new factorization in `decomp.h`, check whether `cblas.h` or `lapacke.h` already has it. Matching OpenBLAS's hand-tuned assembly with portable C is a losing, ongoing maintenance burden — this project tried exactly that before this policy existed, and its best hand-rolled kernel still topped out at 62-81% of OpenBLAS's throughput (see git history up to the `pre-openblas` tag). Delegate; do not compete.
+
+**Do not ignore memory layout.** The same mathematical matrix can be stored in different ways in memory. When a function receives a `Mat`, it must check `stride` before assuming the data is flat. Adding a new function and forgetting the strided path will produce silently wrong results on any view that is not contiguous. This applies doubly when calling into OpenBLAS: `Mat` is row-major, so every CBLAS/LAPACKE call must pass `CblasRowMajor` / `LAPACK_ROW_MAJOR` explicitly and pass `stride` as the leading dimension (`lda`) — never assume `lda == c`.
 
 **Do not copy on every transpose, slice, or reshape.** `mat_T` currently allocates a new matrix (transpose requires reordering elements). `mat_slice` and `mat_reshape` do not. The asymmetry is intentional. A transpose view would require a two-dimensional stride (row stride and column stride), which the current `Mat` struct does not support. Do not add an implicit copy anywhere a view was previously returned.
 

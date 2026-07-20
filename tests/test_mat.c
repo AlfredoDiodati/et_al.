@@ -7,13 +7,13 @@
 #define TOL 1e-5f
 #define TOL_MUL 1e-3f /* looser: -ffast-math reorders accumulation */
 
-#define CHECK(got, exp) assert(fabsf((got) - (exp)) < TOL)
+#define CHECK(got, exp) assert(MABS((got) - (exp)) < TOL)
 
-static void check_eq(Mat a, Mat b, float tol) {
+static void check_eq(Mat a, Mat b, mreal tol) {
     assert(a.r == b.r && a.c == b.c);
     for (int i = 0; i < a.r; i++)
         for (int j = 0; j < a.c; j++)
-            assert(fabsf(AT(a,i,j) - AT(b,i,j)) < tol);
+            assert(MABS(AT(a,i,j) - AT(b,i,j)) < tol);
 }
 
 /* naive triple-loop reference — slow but clearly correct */
@@ -55,7 +55,7 @@ static void test_construction(void) {
 
     /* mat_from: copies from a flat C array; mutating source afterwards has no effect */
     {
-        float data[] = {1.f, 2.f, 3.f, 4.f, 5.f, 6.f};
+        mreal data[] = {1.f, 2.f, 3.f, 4.f, 5.f, 6.f};
         Mat m = mat_from(2, 3, data);
         CHECK(AT(m,0,0), 1.f); CHECK(AT(m,0,2), 3.f);
         CHECK(AT(m,1,0), 4.f); CHECK(AT(m,1,2), 6.f);
@@ -285,7 +285,7 @@ static void test_arithmetic_strided(void) {
         Mat r = mat_exp(a);
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
-                CHECK(AT(r,i,j), expf(AT(a,i,j)));
+                CHECK(AT(r,i,j), MEXP(AT(a,i,j)));
         mat_free(r);
     }
     {
@@ -299,7 +299,7 @@ static void test_arithmetic_strided(void) {
         Mat r = mat_pow(a, 2.f);
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
-                CHECK(AT(r,i,j), powf(AT(a,i,j), 2.f));
+                CHECK(AT(r,i,j), MPOW(AT(a,i,j), 2.f));
         mat_free(r);
     }
     /* a contains 1..9, all positive — valid inputs for log and sqrt */
@@ -307,21 +307,21 @@ static void test_arithmetic_strided(void) {
         Mat r = mat_log(a);
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
-                CHECK(AT(r,i,j), logf(AT(a,i,j)));
+                CHECK(AT(r,i,j), MLOG(AT(a,i,j)));
         mat_free(r);
     }
     {
         Mat r = mat_abs(a);
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
-                CHECK(AT(r,i,j), fabsf(AT(a,i,j)));
+                CHECK(AT(r,i,j), MABS(AT(a,i,j)));
         mat_free(r);
     }
     {
         Mat r = mat_sqrt(a);
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
-                CHECK(AT(r,i,j), sqrtf(AT(a,i,j)));
+                CHECK(AT(r,i,j), MSQRT(AT(a,i,j)));
         mat_free(r);
     }
 
@@ -376,7 +376,8 @@ static void test_matmul(void) {
         mat_free(a); mat_free(b); mat_free(got); mat_free(exp);
     }
 
-    /* sizes around the tile boundary (MAT_TILE=32): partial, full, overflow-by-one */
+    /* a spread of sizes, including powers of two and their neighbors,
+       to catch any remainder/edge handling in the underlying cblas_?gemm */
     {
         srand(42);
         int sizes[] = {1, 7, 15, 31, 32, 33, 63, 64, 65};
