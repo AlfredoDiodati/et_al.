@@ -1,4 +1,4 @@
-#include "../mat.h"
+#include "../../mat.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -535,6 +535,72 @@ static void test_linalg(void) {
         Mat v = mat_new(4, 1);
         CHECK(vec_norm(v), 0.f);
         mat_free(v);
+    }
+
+    /* mat_trace: known 3x3, identity, view, zero matrix, single element */
+    {
+        Mat a = mat_lit(3, 3, 1,2,3, 4,5,6, 7,8,9);
+        CHECK(mat_trace(a), 15.f);
+        mat_free(a);
+    }
+    {
+        Mat i4 = mat_eye(4);
+        CHECK(mat_trace(i4), 4.f);
+        mat_free(i4);
+    }
+    {
+        Mat parent = mat_lit(3, 3, 1,2,3, 4,5,6, 7,8,9);
+        Mat slice = mat_slice(parent, 1, 3, 1, 3); /* [[5,6],[8,9]] */
+        assert(slice.stride != slice.c);
+        CHECK(mat_trace(slice), 14.f);
+        mat_free(parent);
+    }
+    {
+        Mat z = mat_fill(3, 3, 0.f);
+        CHECK(mat_trace(z), 0.f);
+        mat_free(z);
+    }
+    {
+        Mat a = mat_lit(1, 1, -6.f);
+        CHECK(mat_trace(a), -6.f);
+        mat_free(a);
+    }
+
+    /* mat_norm: known Frobenius/one/inf/max, view, zero matrix, single element */
+    {
+        Mat a = mat_lit(2, 2, 3,4, 0,0);
+        CHECK(mat_norm(a, 'F'), 5.f);
+        mat_free(a);
+    }
+    {
+        Mat a = mat_lit(2, 2, 1,-2, -3,4);
+        CHECK(mat_norm(a, '1'), 6.f); /* col sums: |1|+|-3|=4, |-2|+|4|=6 */
+        CHECK(mat_norm(a, 'I'), 7.f); /* row sums: |1|+|-2|=3, |-3|+|4|=7 */
+        CHECK(mat_norm(a, 'M'), 4.f);
+        mat_free(a);
+    }
+    {
+        Mat parent = mat_lit(2, 3, 3,4,0, 0,0,0);
+        Mat slice = mat_slice(parent, 0, 2, 0, 2); /* [[3,4],[0,0]] */
+        assert(slice.stride != slice.c);
+        CHECK(mat_norm(slice, 'F'), 5.f);
+        mat_free(parent);
+    }
+    {
+        Mat z = mat_fill(2, 2, 0.f);
+        CHECK(mat_norm(z, 'F'), 0.f);
+        CHECK(mat_norm(z, '1'), 0.f);
+        CHECK(mat_norm(z, 'I'), 0.f);
+        CHECK(mat_norm(z, 'M'), 0.f);
+        mat_free(z);
+    }
+    {
+        Mat a = mat_lit(1, 1, -3.f);
+        CHECK(mat_norm(a, 'F'), 3.f);
+        CHECK(mat_norm(a, '1'), 3.f);
+        CHECK(mat_norm(a, 'I'), 3.f);
+        CHECK(mat_norm(a, 'M'), 3.f);
+        mat_free(a);
     }
 
     /* mat_print: smoke test — just verify it does not crash */

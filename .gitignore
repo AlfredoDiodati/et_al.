@@ -1,11 +1,9 @@
 test_report.txt
-tests/test_mat
-tests/test_mat_special
-tests/test_decomp
-tests/test_solver
+tests/correctness/test_mat
+tests/correctness/test_mat_special
+tests/correctness/test_decomp
+tests/correctness/test_solver
 examples/mat_example
 mat_example
 libmat.so
-libmat_omp.so
-bench/bench_breakeven
-bench/bench_omp_vs_ada
+libdecomp.so

@@ -1,4 +1,4 @@
-#include "../decomp.h"
+#include "../../decomp.h"
 #include <stdio.h>
 
 #define TOL     1e-4f

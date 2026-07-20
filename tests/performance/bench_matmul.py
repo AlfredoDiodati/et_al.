@@ -4,7 +4,7 @@ import subprocess
 import time
 import numpy as np
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 subprocess.run(["make", "libmat.so"], cwd=ROOT, check=True)
 time.sleep(2)  # let the CPU settle after compilation
 

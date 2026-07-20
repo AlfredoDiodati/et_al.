@@ -1,4 +1,4 @@
-#include "../mat.h"
+#include "../../mat.h"
 
 /* Exposes matmul as a flat-pointer function for ctypes benchmarking (see
    bench_matmul.py). This is a direct cblas_?gemm call - the same thing mat_mul

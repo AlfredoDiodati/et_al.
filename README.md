@@ -38,14 +38,16 @@ Clgebra/
 ├── decomp.h           # Cholesky, LU, QR, eig, SVD — LAPACKE wrappers; includes mat.h; mat.h never includes this
 ├── solver.h           # Ax=b, least squares — LAPACKE wrappers; includes decomp.h; decomp.h never includes this
 │
-├── tests/                          # correctness — one test_<noun>.c per header
-│   ├── test_mat.c
-│   ├── test_decomp.c
-│   └── test_solver.c
-│
-├── bench/                          # performance vs NumPy — one bench_<noun>.c + .py pair per header
-│   ├── bench_matmul.c / bench_matmul.py
-│   └── bench_decomp.c / bench_decomp.py
+├── tests/
+│   ├── correctness/                # is it right? — one test_<noun>.c per header, make test
+│   │   ├── test_mat.c
+│   │   ├── test_mat_special.c
+│   │   ├── test_decomp.c
+│   │   └── test_solver.c
+│   │
+│   └── performance/                # is it fast? — one bench_<noun>.c + .py pair per header, vs NumPy
+│       ├── bench_matmul.c / bench_matmul.py
+│       └── bench_decomp.c / bench_decomp.py
 │
 ├── examples/
 │   └── mat_example.c  # usage example covering the full API
@@ -94,15 +96,15 @@ bash scripts/install-hooks.sh
 
 ## Testing and benchmarking
 
-`tests/` and `bench/` answer two different questions and are deliberately kept separate (see "Do not mix correctness tests and speed tests" under [Pitfalls](#pitfalls)): a function can be fast and wrong, or correct and unusably slow, and merging the two obscures both.
+Both live under `tests/`, split into two subfolders that answer two different questions and are deliberately kept separate (see "Do not mix correctness tests and speed tests" under [Pitfalls](#pitfalls)): a function can be fast and wrong, or correct and unusably slow, and merging the two obscures both.
 
-**`tests/`** answers "is it correct?" via `make test`/`test-stress`/`test-special` — no comparison to any other library required. See [Testing requirements](#testing-requirements) for what a test file must cover.
+**`tests/correctness/`** answers "is it correct?" via `make test`/`test-stress`/`test-special` — no comparison to any other library required. See [Testing requirements](#testing-requirements) for what a test file must cover.
 
-**`bench/`** answers "is it fast enough?" — one `bench_<noun>.c` (a thin ctypes-exposing wrapper around the real library functions) plus a matching `bench_<noun>.py` (drives it against the NumPy equivalent) per header that has one. Build the shared library the `.c` file compiles into, then run the matching script:
+**`tests/performance/`** answers "is it fast enough?" — one `bench_<noun>.c` (a thin ctypes-exposing wrapper around the real library functions) plus a matching `bench_<noun>.py` (drives it against the NumPy equivalent) per header that has one. Build the shared library the `.c` file compiles into, then run the matching script:
 
 ```bash
-make libmat.so && python bench/bench_matmul.py       # mat_mul vs numpy.matmul
-make libdecomp.so && python bench/bench_decomp.py     # decomp.h/solver.h vs numpy.linalg
+make libmat.so && python tests/performance/bench_matmul.py       # mat_mul vs numpy.matmul
+make libdecomp.so && python tests/performance/bench_decomp.py     # decomp.h/solver.h vs numpy.linalg
 ```
 
 Both currently show this library at or ahead of NumPy for every operation measured — expected, since past `mat.h`'s own element-wise/reduction loops, this library and NumPy call the same OpenBLAS routines, and this library's call path has less dispatch overhead. See each header's own doc file for the actual numbers.
@@ -117,9 +119,9 @@ OpenBLAS's hand-tuned, architecture-specific assembly kernels are the one piece 
 
 | Layer | Delegated to OpenBLAS | Still hand-rolled |
 |---|---|---|
-| `mat.h` | `mat_mul` (`cblas_?gemm`), `vec_dot` (`cblas_?dot`), `vec_norm` (`cblas_?nrm2`) | Element-wise ops (`mat_add`, `mat_exp`, ...), reductions (`mat_sum`, `mat_max`, ...), views, concatenation — anything BLAS has no routine for |
+| `mat.h` | `mat_mul` (`cblas_?gemm`), `vec_dot` (`cblas_?dot`), `vec_norm` (`cblas_?nrm2`), `mat_norm` (`?lange`) | Element-wise ops (`mat_add`, `mat_exp`, ...), reductions (`mat_sum`, `mat_max`, ...), `mat_trace`, views, concatenation — anything BLAS/LAPACK has no routine for |
 | `decomp.h` | Cholesky (`?potrf`), LU (`?getrf`), QR (`?geqrf`/`?orgqr`), symmetric eig (`?syevd`), SVD (`?gesdd`), general eig (`?geev`), inverse (`?getri`) | Shape checks, packing `Mat` views into the layout LAPACKE expects; `mat_det`/`mat_cond`/`mat_rank` are derived from the above with no extra LAPACK call |
-| `solver.h` | `?gesv` (LU solve), `?gels` (least squares) | Residual/diagnostic helpers that are not themselves linear algebra kernels |
+| `solver.h` | `?gesv` (LU solve), `?sysv` (symmetric indefinite solve), `?getrs`/`?potrs` (solve with an existing factorization), `?gels` (least squares), `?gelsd` (rank-deficient least squares) | Residual/diagnostic helpers that are not themselves linear algebra kernels |
 
 If an operation has no BLAS/LAPACK routine, write it by hand in the appropriate layer, in the same `stride`-aware, `restrict`-qualified style as the rest of the codebase. Do not add a hand-written competitor to a routine OpenBLAS already provides — see [Pitfalls](#pitfalls).
 
@@ -153,13 +155,13 @@ Create a new `.h` file only when a group of functions introduces a concept that 
 | What | Pattern | Example |
 |---|---|---|
 | Core compute layer | `<noun>.h` | `mat.h`, `decomp.h` |
-| Correctness test | `tests/test_<noun>.c` | `tests/test_decomp.c` |
-| Benchmark wrapper + driver | `bench/bench_<noun>.c` + `bench/bench_<noun>.py` | `bench/bench_decomp.c` + `.py` |
+| Correctness test | `tests/correctness/test_<noun>.c` | `tests/correctness/test_decomp.c` |
+| Benchmark wrapper + driver | `tests/performance/bench_<noun>.c` + `tests/performance/bench_<noun>.py` | `tests/performance/bench_decomp.c` + `.py` |
 | Usage example | `examples/<noun>_example.c` | `examples/mat_example.c` |
 
-Every new `.h` file gets a corresponding `tests/test_<name>.c` created immediately, even if it only contains a `main` that prints "no tests yet" — a header without a test file is a signal that the test was skipped, not that correctness was verified. Add a target to the Makefile for every new binary (test, example, benchmark), and add new test binaries to the `test` phony target's dependency list; `make test` must stay green before any commit.
+Every new `.h` file gets a corresponding `tests/correctness/test_<name>.c` created immediately, even if it only contains a `main` that prints "no tests yet" — a header without a test file is a signal that the test was skipped, not that correctness was verified. Add a target to the Makefile for every new binary (test, example, benchmark), and add new test binaries to the `test` phony target's dependency list; `make test` must stay green before any commit.
 
-What does *not* get a new file: a single new function that fits naturally in an existing header; a private helper (e.g. `clamp`) used only inside one header, which stays `static inline` there rather than in a shared `utils.h`/`common.h` (if two headers need the same helper, it belongs in the lower of the two); a new directory beyond `tests/`, `bench/`, and `examples/`, unless a wholly new concern arrives (GPU kernels, sparse storage) that cannot fit into the existing three categories.
+What does *not* get a new file: a single new function that fits naturally in an existing header; a private helper (e.g. `clamp`) used only inside one header, which stays `static inline` there rather than in a shared `utils.h`/`common.h` (if two headers need the same helper, it belongs in the lower of the two); a new top-level directory beyond `tests/` and `examples/`, or a new subfolder under `tests/` beyond `correctness/` and `performance/`, unless a wholly new concern arrives (GPU kernels, sparse storage) that cannot fit into the existing categories.
 
 ### Testing requirements
 
@@ -208,7 +210,7 @@ When adding higher-level functionality (solvers, decompositions, statistics), pu
 
 For every operation OpenBLAS provides, the hot inner loop is OpenBLAS's — a hand-tuned, per-architecture assembly kernel this project does not attempt to match. `mat_mul` and every factorization/solve in `decomp.h`/`solver.h` are wrappers around it, not competing implementations.
 
-For the operations OpenBLAS does not cover (element-wise ops, reductions, concatenation), keep the hot loop small, `restrict`-qualified, and stride-aware, and let the compiler auto-vectorize. Do not scatter performance-critical patterns throughout the codebase — optimize the few kernels that matter, let the rest of the code be readable. Measure with `bench/` before and after any change to a hot path.
+For the operations OpenBLAS does not cover (element-wise ops, reductions, concatenation), keep the hot loop small, `restrict`-qualified, and stride-aware, and let the compiler auto-vectorize. Do not scatter performance-critical patterns throughout the codebase — optimize the few kernels that matter, let the rest of the code be readable. Measure with `tests/performance/` before and after any change to a hot path.
 
 ### 5. Tests and benchmarks are both first-class, and stay separate
 
@@ -232,7 +234,7 @@ These are mistakes that are easy to make and hard to debug. Treat this list as a
 
 **Do not copy on every transpose, slice, or reshape.** `mat_T` allocates a new matrix (transpose requires reordering elements); `mat_slice` and `mat_reshape` do not. The asymmetry is intentional — a transpose view would need a two-dimensional stride (row stride and column stride), which the current `Mat` struct does not support. Do not add an implicit copy anywhere a view was previously returned.
 
-**Do not mix correctness tests and speed tests.** A function that runs in 10 microseconds and returns the wrong answer is not a fast function; it is a broken one. Keep timing code in `bench/`, correctness assertions in `tests/`.
+**Do not mix correctness tests and speed tests.** A function that runs in 10 microseconds and returns the wrong answer is not a fast function; it is a broken one. Keep timing code in `tests/performance/`, correctness assertions in `tests/correctness/`.
 
 **Do not test only with random matrices.** Use the adversarial inputs listed in [Testing requirements](#testing-requirements): the identity and zero matrices, near-singular and badly-scaled inputs, single-element matrices, non-contiguous views.
 

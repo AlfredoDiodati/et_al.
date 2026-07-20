@@ -31,7 +31,7 @@ Returns the lower-triangular Cholesky factor `L` such that `a == L * L^T`. `a` m
 
 ### `mat_lu`
 
-Factors square `a` via partial-pivoted LU. The result is LAPACK's packed layout in a single `Mat`: strictly-lower entries are `L` with an implicit unit diagonal (not stored), the diagonal and upper entries are `U`. `*piv` receives a newly allocated pivot array of length `a.r`, in LAPACK's sequential-swap encoding: row `i` of the factored matrix was interchanged with row `piv[i]-1` during elimination (1-indexed, and the swaps are meant to be replayed in order `i = 0..n-1`, not read as a final permutation directly - see `apply_pivots` in `tests/test_decomp.c` for the standard reconstruction).
+Factors square `a` via partial-pivoted LU. The result is LAPACK's packed layout in a single `Mat`: strictly-lower entries are `L` with an implicit unit diagonal (not stored), the diagonal and upper entries are `U`. `*piv` receives a newly allocated pivot array of length `a.r`, in LAPACK's sequential-swap encoding: row `i` of the factored matrix was interchanged with row `piv[i]-1` during elimination (1-indexed, and the swaps are meant to be replayed in order `i = 0..n-1`, not read as a final permutation directly - see `apply_pivots` in `tests/correctness/test_decomp.c` for the standard reconstruction).
 
 Caller must `mat_free()` the returned `Mat` and separately `free()` `*piv` - `piv` is a plain `malloc`'d `lapack_int` array, not a `Mat`, so `mat_free` does not apply to it.
 
@@ -75,13 +75,13 @@ Same rules as `mat.h`: every `Mat`/`Vec` returned from this header is an owner a
 
 ## Testing
 
-`tests/test_decomp.c` checks known hand-computed outputs for small fixed matrices, plus reconstruction/algebraic invariants that don't require solving anything by hand: `L*L^T == a`, `P*a == L*U` (reconstructed via `apply_pivots`), `Q^T*Q == I` and `Q*R == a`, `V^T*V == I` and `V*diag(w)*V^T == a` for `mat_eig_sym`, `U^T*U == I`/`Vt*V == I`/`U*diag(s)*Vt == a` for `mat_svd`, `det(A*B) == det(A)*det(B)` for `mat_det`, `A*inv(A) == I` for `mat_inv`, and `sum(eigenvalues) == trace(a)` for `mat_eig` (real part only - this holds regardless of whether the eigenvalues are real or come in complex-conjugate pairs, since the imaginary parts of a conjugate pair cancel in the sum, so it doesn't depend on LAPACK's output order the way a hardcoded expected eigenvalue would). `mat_det` is additionally cross-checked against a naive `O(n!)` recursive Laplace-expansion reference at small sizes.
+`tests/correctness/test_decomp.c` checks known hand-computed outputs for small fixed matrices, plus reconstruction/algebraic invariants that don't require solving anything by hand: `L*L^T == a`, `P*a == L*U` (reconstructed via `apply_pivots`), `Q^T*Q == I` and `Q*R == a`, `V^T*V == I` and `V*diag(w)*V^T == a` for `mat_eig_sym`, `U^T*U == I`/`Vt*V == I`/`U*diag(s)*Vt == a` for `mat_svd`, `det(A*B) == det(A)*det(B)` for `mat_det`, `A*inv(A) == I` for `mat_inv`, and `sum(eigenvalues) == trace(a)` for `mat_eig` (real part only - this holds regardless of whether the eigenvalues are real or come in complex-conjugate pairs, since the imaginary parts of a conjugate pair cancel in the sum, so it doesn't depend on LAPACK's output order the way a hardcoded expected eigenvalue would). `mat_det` is additionally cross-checked against a naive `O(n!)` recursive Laplace-expansion reference at small sizes.
 
 Every function is also exercised on a non-contiguous view (a principal submatrix taken with `mat_slice`) to cover the strided `mat_copy` path, and on a single-element matrix as the smallest boundary case. `STRESS=1` adds randomized runs at increasing sizes with a fixed seed - diagonally-dominant matrices for `mat_lu`/`mat_det`/`mat_inv` (guaranteed nonsingular by construction, so the random draw can never trip an `assert(info == 0)` contract), symmetrized random matrices (`B + B^T`) for `mat_eig_sym`, and unconstrained random rectangular/square matrices for `mat_qr`/`mat_svd`/`mat_eig` (whose invariants hold regardless of rank).
 
 ## Benchmark results
 
-Measured with `bench/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_qr` call the real library functions end to end, including their internal `mat_copy`, not a direct-LAPACKE bypass - see `bench/bench_decomp.c`):
+Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_qr` call the real library functions end to end, including their internal `mat_copy`, not a direct-LAPACKE bypass - see `tests/performance/bench_decomp.c`):
 
 | n | `mat_chol` ms | numpy ms | max err | `mat_lu` ms | `mat_qr` (m=2n) ms | numpy QR ms |
 |---|---|---|---|---|---|---|
@@ -89,7 +89,7 @@ Measured with `bench/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_qr` call the 
 | 256 | 0.561 | 1.297 | 1.9e-6 | 0.403 | 7.06 | 11.05 |
 | 512 | 2.744 | 7.607 | 3.8e-6 | 2.964 | - | - |
 
-`mat_chol` and `mat_qr` are consistently at or ahead of `numpy.linalg.cholesky`/`numpy.linalg.qr` - both call the same OpenBLAS/LAPACK under the hood, and this library's wrapper (one `mat_copy` plus the LAPACKE call) has less overhead than NumPy's dispatch path. `mat_lu` has no direct NumPy equivalent to compare against (NumPy does not expose raw `getrf`); its absolute timings sit in the same range as `mat_chol`'s, which is the expected relationship since both are O(n^3) with similar constants. Errors against NumPy (`max err`, and reconstruction error for QR) stay in the 1e-6 to 1e-7 range at every size tested - both floating-point roundoff, not an algorithmic discrepancy. Reproduce with `python bench/bench_decomp.py`.
+`mat_chol` and `mat_qr` are consistently at or ahead of `numpy.linalg.cholesky`/`numpy.linalg.qr` - both call the same OpenBLAS/LAPACK under the hood, and this library's wrapper (one `mat_copy` plus the LAPACKE call) has less overhead than NumPy's dispatch path. `mat_lu` has no direct NumPy equivalent to compare against (NumPy does not expose raw `getrf`); its absolute timings sit in the same range as `mat_chol`'s, which is the expected relationship since both are O(n^3) with similar constants. Errors against NumPy (`max err`, and reconstruction error for QR) stay in the 1e-6 to 1e-7 range at every size tested - both floating-point roundoff, not an algorithmic discrepancy. Reproduce with `python tests/performance/bench_decomp.py`.
 
 ## Known limitations and future work
 
@@ -97,4 +97,4 @@ Measured with `bench/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_qr` call the 
 - `mat_qr` requires `m >= n`; there is no underdetermined (`m < n`) QR path
 - `mat_eig` computes eigenvalues only, never eigenvectors - a real non-symmetric matrix's eigenvectors are generally complex, and this library has no complex type. Adding one (and a complex-capable eigenvector routine) is a substantial undertaking deliberately out of scope here; if it's ever needed, it belongs in a new header, not bolted onto `Mat`
 - No generalized eigenvalue problem (`?sygv`) - not currently needed by anything planned
-- No rank-deficient least-squares path tying `mat_rank`/`mat_svd` back into `solver.h`'s `mat_lstsq` - see `docs/SOLVER_DOCUMENTATION.md`'s matching limitation
+- No rank-revealing (column-pivoted) QR (`?geqp3`) - `mat_qr` assumes `a` is well-conditioned and does not pivot. `solver.h`'s `mat_lstsq_rd` covers the rank-deficient least-squares case via SVD instead; a pivoted QR would be a cheaper alternative if that ever becomes a bottleneck

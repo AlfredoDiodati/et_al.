@@ -16,11 +16,11 @@ A pure C (C11), single-header matrix library targeting econometrics research, bu
 | `decomp.h` | Decompositions (Cholesky, LU, QR, eig, SVD) - LAPACKE wrappers, includes mat.h |
 | `solver.h` | Solvers (Ax=b, least squares) - LAPACKE wrappers, includes decomp.h |
 | `examples/mat_example.c` | Usage example covering every function in the API |
-| `tests/test_mat.c` | Correctness tests for mat.h |
-| `tests/test_decomp.c` | Correctness tests for decomp.h |
-| `tests/test_solver.c` | Correctness tests for solver.h |
-| `bench/bench_matmul.c` + `bench_matmul.py` | matmul vs NumPy, via a `libmat.so` ctypes shared library |
-| `bench/bench_decomp.c` + `bench_decomp.py` | decomp.h/solver.h functions vs NumPy, via `libdecomp.so` |
+| `tests/correctness/test_mat.c` | Correctness tests for mat.h |
+| `tests/correctness/test_decomp.c` | Correctness tests for decomp.h |
+| `tests/correctness/test_solver.c` | Correctness tests for solver.h |
+| `tests/performance/bench_matmul.c` + `bench_matmul.py` | matmul vs NumPy, via a `libmat.so` ctypes shared library |
+| `tests/performance/bench_decomp.c` + `bench_decomp.py` | decomp.h/solver.h functions vs NumPy, via `libdecomp.so` |
 | `Makefile` | Builds examples, tests, and the benchmark shared libraries |
 
 ## Build
@@ -36,7 +36,7 @@ make test-special           # special value tests (built without -ffast-math)
 make test-stress            # stress tests with larger inputs
 
 make libmat.so              # shared library for benchmarking
-python bench/bench_matmul.py
+python tests/performance/bench_matmul.py
 ```
 
 Production compiler flags: `-O3 -march=native -ffast-math -lm $(pkg-config --cflags --libs openblas)` (falls back to `-lopenblas` if `pkg-config` cannot find it). Add `-DMAT_DOUBLE` to build against `double`/`cblas_d*`/`LAPACKE_d*` instead of the `float` default.
@@ -158,6 +158,8 @@ Mat mat_hcat(Mat a, Mat b)   // stack horizontally (a on left, a.r must equal b.
 Mat   mat_T(Mat a)             // transpose
 mreal vec_dot(Vec a, Vec b)    // dot product of two column vectors - cblas_?dot
 mreal vec_norm(Vec v)          // Euclidean (L2) norm - cblas_?nrm2
+mreal mat_trace(Mat m)         // sum of diagonal elements, m must be square
+mreal mat_norm(Mat m, char kind) // norm of m - LAPACK ?lange; kind: 'F'/'E' Frobenius, '1' one-norm, 'I' infinity-norm, 'M' max abs element
 ```
 
 ### Output
@@ -184,7 +186,7 @@ See the corresponding pitfall in `README.md` ("Do not hand-write a kernel for so
 
 ### Benchmark results
 
-Measured with `bench/bench_matmul.py` (float32, both C and NumPy using pre-allocated output buffers):
+Measured with `tests/performance/bench_matmul.py` (float32, both C and NumPy using pre-allocated output buffers):
 
 | Shape | C ms | NumPy ms | C GF/s | NumPy GF/s | max err |
 |---|---|---|---|---|---|
@@ -192,7 +194,7 @@ Measured with `bench/bench_matmul.py` (float32, both C and NumPy using pre-alloc
 | 512x512x512 | 0.623 | 0.884 | 430.6 | 303.7 | 0 |
 | 1024x1024x1024 | 7.435 | 7.445 | 288.8 | 288.5 | 0 |
 
-`max err` is exactly `0` at every shape tested, not just small - `mat_mul` and NumPy call the literal same `cblas_?gemm` on the same input, so there is no floating-point reordering difference to produce one. At and above 256x256, C GF/s tracks NumPy's GF/s within measurement noise (occasionally faster, since `mat_mul` has one fewer indirection than NumPy's dispatch path); below that, per-call overhead (mostly the `mat_new` allocation) dominates and the two diverge more. Run `bench/bench_matmul.py` to reproduce; expect run-to-run variance from CPU turbo state.
+`max err` is exactly `0` at every shape tested, not just small - `mat_mul` and NumPy call the literal same `cblas_?gemm` on the same input, so there is no floating-point reordering difference to produce one. At and above 256x256, C GF/s tracks NumPy's GF/s within measurement noise (occasionally faster, since `mat_mul` has one fewer indirection than NumPy's dispatch path); below that, per-call overhead (mostly the `mat_new` allocation) dominates and the two diverge more. Run `tests/performance/bench_matmul.py` to reproduce; expect run-to-run variance from CPU turbo state.
 
 ## Conventions
 
@@ -200,11 +202,11 @@ Measured with `bench/bench_matmul.py` (float32, both C and NumPy using pre-alloc
 - Functions return new matrices (owners). There are no in-place operation variants yet.
 - `Vec` is always a column vector (`c == 1`). Row vectors are `Mat` with `r == 1`.
 - The library uses `mreal` (an alias for `float` or `double`, chosen at build time by `MAT_DOUBLE`) everywhere a numeric type is needed - do not write `float` or `double` directly in new code.
-- The `stride` field must be preserved correctly when constructing `Mat` literals by hand (as done in `bench/bench_matmul.c`), and matches the `lda`/`ldb`/`ldc` passed to every CBLAS/LAPACKE call.
+- The `stride` field must be preserved correctly when constructing `Mat` literals by hand (as done in `tests/performance/bench_matmul.c`), and matches the `lda`/`ldb`/`ldc` passed to every CBLAS/LAPACKE call.
 
 ## Special value behavior
 
-Verified behavior under IEEE 754 (tested in `tests/test_mat_special.c`, built without `-ffast-math`):
+Verified behavior under IEEE 754 (tested in `tests/correctness/test_mat_special.c`, built without `-ffast-math`):
 
 | Input condition | Result |
 |---|---|

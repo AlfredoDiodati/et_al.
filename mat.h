@@ -6,6 +6,7 @@
 #include <math.h>
 #include <float.h>
 #include <cblas.h>
+#include <lapacke.h>
 
 /* mreal is the one element type every function in this library is written
    against. -DMAT_DOUBLE switches it (and the BLAS/LAPACK/libm call sites
@@ -13,8 +14,9 @@
    cblas_s-prefixed or cblas_d-prefixed functions, or an f-suffixed /
    unsuffixed libm function, directly - always go through
    MBLAS/MLAPACK/M{EXP,LOG,ABS,SQRT,POW,EPS} so the file stays correct
-   under both builds. decomp.h/solver.h must include lapacke.h themselves
-   before using MLAPACK. */
+   under both builds. mat.h itself only needs LAPACK for mat_norm
+   (?lange); decomp.h/solver.h use MLAPACK far more heavily and re-include
+   lapacke.h themselves so each file's dependencies are visible locally. */
 #ifdef MAT_DOUBLE
 typedef double mreal;
 #define MBLAS(fn)   cblas_d##fn
@@ -366,6 +368,24 @@ static inline mreal vec_dot(Vec a, Vec b) {
    resistant than sqrt(dot(v,v)) since it scales before squaring. */
 static inline mreal vec_norm(Vec v) { return MBLAS(nrm2)(v.r, v.d, v.stride); }
 
+/* Return the trace of square m (sum of diagonal elements). */
+static inline mreal mat_trace(Mat m) {
+    assert(m.r == m.c);
+    mreal s = 0;
+    for (int i = 0; i < m.r; i++) s += AT(m,i,i);
+    return s;
+}
+
+/* Return a norm of m, via LAPACK ?lange. kind selects which, using
+   LAPACK's own character convention directly:
+     'F' or 'E' - Frobenius norm (sqrt of sum of squares of all elements)
+     '1'        - one-norm (largest absolute column sum)
+     'I'        - infinity-norm (largest absolute row sum)
+     'M'        - max absolute element (not a true matrix norm, but the
+                  cheapest to compute and occasionally useful) */
+static inline mreal mat_norm(Mat m, char kind) {
+    return MLAPACK(lange)(LAPACK_ROW_MAJOR, kind, m.r, m.c, m.d, m.stride);
+}
 
 /* Print m to stdout, one row per line, values formatted as %8.4f. */
 static inline void mat_print(Mat m) {

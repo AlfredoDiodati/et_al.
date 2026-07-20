@@ -30,16 +30,16 @@ run() {
 
 printf "building...\n"
 printf "=== build ===\n" >> "$REPORT"
-if ! make tests/test_mat tests/test_mat_special tests/test_decomp tests/test_solver >> "$REPORT" 2>&1; then
+if ! make tests/correctness/test_mat tests/correctness/test_mat_special tests/correctness/test_decomp tests/correctness/test_solver >> "$REPORT" 2>&1; then
     printf "build failed — see %s\n" "$REPORT"
     exit 1
 fi
 printf "\n" >> "$REPORT"
 
-run "test_mat"          ./tests/test_mat
-run "test_mat_special"  ./tests/test_mat_special
-run "test_decomp"       ./tests/test_decomp
-run "test_solver"       ./tests/test_solver
+run "test_mat"          ./tests/correctness/test_mat
+run "test_mat_special"  ./tests/correctness/test_mat_special
+run "test_decomp"       ./tests/correctness/test_decomp
+run "test_solver"       ./tests/correctness/test_solver
 
 printf "\n=== summary ===\n%d passed, %d failed\n" "$PASS" "$FAIL" >> "$REPORT"
 
