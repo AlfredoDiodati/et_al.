@@ -28,11 +28,17 @@ tests/correctness/test_solver: tests/correctness/test_solver.c solver.h decomp.h
 tests/correctness/test_gauss: tests/correctness/test_gauss.c dist/gauss.h mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_gauss.c $(LDLIBS) -o tests/correctness/test_gauss
 
-test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss
-	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_gauss
+tests/correctness/test_ad: tests/correctness/test_ad.c ad.h dist/gauss.h solver.h decomp.h mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_ad.c $(LDLIBS) -o tests/correctness/test_ad
 
-test-stress: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss
-	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_gauss
+tests/correctness/test_adam: tests/correctness/test_adam.c optim/adam.h dist/gauss.h mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_adam.c $(LDLIBS) -o tests/correctness/test_adam
+
+test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss tests/correctness/test_ad tests/correctness/test_adam
+	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_gauss && ./tests/correctness/test_ad && ./tests/correctness/test_adam
+
+test-stress: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss tests/correctness/test_ad tests/correctness/test_adam
+	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_gauss && STRESS=1 ./tests/correctness/test_ad && STRESS=1 ./tests/correctness/test_adam
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754
 tests/correctness/test_mat_special: tests/correctness/test_mat_special.c mat.h

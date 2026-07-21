@@ -5,16 +5,20 @@ A pure C (C11) linear algebra and econometrics compute backend, targeting the pe
 Layers, each building on the last:
 
 ```
-mat.h  <-  decomp.h  <-  solver.h  <-  dist/*.h
+                    ┌─ dist/*.h    (distributions)
+mat.h <- decomp.h <- solver.h ─┼─ ad.h         (autodiff)
+                    └─ optim/*.h  (optimizers)
 ```
 
-`mat.h` is the dense core (types, views, arithmetic, matmul). `decomp.h` adds factorizations (Cholesky, LU, QR, eigendecomposition, SVD) and quantities derived from them (determinant, inverse, condition number, rank). `solver.h` adds the two top-level things a caller actually wants: solving `Ax = b`, and least squares. `dist/` adds probability distributions (pdf, log-pdf, and log-pdf derivatives) - one file per distribution, each including whichever lower layer it actually needs.
+`mat.h` is the dense core (types, views, arithmetic, matmul). `decomp.h` adds factorizations (Cholesky, LU, QR, eigendecomposition, SVD) and quantities derived from them (determinant, inverse, condition number, rank). `solver.h` adds the two top-level things a caller actually wants: solving `Ax = b`, and least squares. Three independent layers build on top of that core, none depending on the others: `dist/` adds probability distributions (pdf, log-pdf, and hand-derived log-pdf derivatives) - one file per distribution; `ad.h` adds general-purpose reverse-mode automatic differentiation (backpropagation) - given any expression built from its ops, it computes the exact gradient with respect to any traced input, not tied to any specific loss or distribution; `optim/` adds gradient-based optimizers (Adam so far) that update a parameter given *any* gradient, however it was produced - a hand-derived one from `dist/`, a tape-computed one from `ad.h`, or anything else. They're verified against each other only in tests, not via `#include`: `ad.h`'s gradient of a hand-built Gaussian log-likelihood is checked against `dist/gauss.h`'s analytical derivative, and `optim/adam.h` is exercised end to end by using `dist/gauss.h`'s analytical gradient to fit a Gaussian's parameters via MLE.
 
 For the full API reference of each header, see its dedicated doc:
 - [docs/MATRIX_DOCUMENTATION.md](docs/MATRIX_DOCUMENTATION.md) — `mat.h`
 - [docs/DECOMP_DOCUMENTATION.md](docs/DECOMP_DOCUMENTATION.md) — `decomp.h`
 - [docs/SOLVER_DOCUMENTATION.md](docs/SOLVER_DOCUMENTATION.md) — `solver.h`
 - [docs/GAUSS_DOCUMENTATION.md](docs/GAUSS_DOCUMENTATION.md) — `dist/gauss.h`
+- [docs/AD_DOCUMENTATION.md](docs/AD_DOCUMENTATION.md) — `ad.h`
+- [docs/ADAM_DOCUMENTATION.md](docs/ADAM_DOCUMENTATION.md) — `optim/adam.h`
 
 This file covers directory structure, build instructions, and the policies/principles that govern how the codebase grows — no API documentation lives here.
 
@@ -38,9 +42,13 @@ Clgebra/
 ├── mat.h              # dense core — types, views, arithmetic, matmul
 ├── decomp.h           # Cholesky, LU, QR, eig, SVD — LAPACKE wrappers; includes mat.h; mat.h never includes this
 ├── solver.h           # Ax=b, least squares — LAPACKE wrappers; includes decomp.h; decomp.h never includes this
+├── ad.h               # reverse-mode autodiff (backprop) — general-purpose; includes solver.h
 │
 ├── dist/                           # probability distributions — one file per distribution, above solver.h
 │   └── gauss.h                     # Gaussian: pdf, log-pdf, d(log-pdf)/d(loc, scale)
+│
+├── optim/                          # gradient-based optimizers — one file per algorithm, above mat.h
+│   └── adam.h                      # Adam (Kingma & Ba 2015) — see docs/ADAM_DOCUMENTATION.md for the citation
 │
 ├── tests/
 │   ├── correctness/                # is it right? — one test_<noun>.c per header, make test
@@ -48,7 +56,9 @@ Clgebra/
 │   │   ├── test_mat_special.c
 │   │   ├── test_decomp.c
 │   │   ├── test_solver.c
-│   │   └── test_gauss.c
+│   │   ├── test_gauss.c
+│   │   ├── test_ad.c
+│   │   └── test_adam.c
 │   │
 │   └── performance/                # is it fast? — one bench_<noun>.c + .py pair per header, vs NumPy
 │       ├── bench_matmul.c / bench_matmul.py
@@ -61,7 +71,9 @@ Clgebra/
 │   ├── MATRIX_DOCUMENTATION.md   # full reference for mat.h
 │   ├── DECOMP_DOCUMENTATION.md   # full reference for decomp.h
 │   ├── SOLVER_DOCUMENTATION.md   # full reference for solver.h
-│   └── GAUSS_DOCUMENTATION.md    # full reference for dist/gauss.h
+│   ├── GAUSS_DOCUMENTATION.md    # full reference for dist/gauss.h
+│   ├── AD_DOCUMENTATION.md       # full reference for ad.h
+│   └── ADAM_DOCUMENTATION.md     # full reference for optim/adam.h
 │
 ├── scripts/
 │   └── install-hooks.sh           # installs git hooks after cloning
@@ -71,7 +83,7 @@ Clgebra/
 └── README.md                      # this file — policies, principles, build; no API docs
 ```
 
-The dependency direction is strict: `solver.h` includes `decomp.h`; `decomp.h` includes `mat.h`; `dist/*.h` includes whichever of these it needs (`dist/gauss.h` only needs `mat.h` today - a future multivariate distribution would also need `decomp.h`/`solver.h` for the covariance factorization). No header includes a file above itself in that chain. If you find yourself needing to, the function belongs in the lower layer.
+The dependency direction is strict: `solver.h` includes `decomp.h`; `decomp.h` includes `mat.h`; `dist/*.h`, `ad.h`, and `optim/*.h` each include whichever lower layer they actually need (`dist/gauss.h` and `optim/adam.h` only need `mat.h` today; `ad.h` needs the full chain up to `solver.h` for its solve/determinant/inverse adjoints). No header includes a file above itself in that chain, and the three top layers never include each other. If you find yourself needing to, the function belongs in the lower layer.
 
 ## Build
 
@@ -156,19 +168,20 @@ Topics that span multiple layers (memory ownership, special value behavior, row-
 
 ### Adding files and headers
 
-Create a new `.h` file only when a group of functions introduces a concept that does not belong in the current lowest layer. The test is the include direction: if the new functions call existing ones but existing ones never need to call them back, a new header is warranted. A new layer must fit into the `mat.h <- decomp.h <- solver.h <- dist/*.h` chain, extend it downward (below `mat.h`, closer to hardware), or extend it upward (above the topmost existing layer, further from hardware - this is how `dist/` was added on top of `solver.h`). Do not add a header at the same level as an existing one that duplicates its role — merge into it instead. That's why eigendecomposition and SVD live in `decomp.h` rather than a new file: they're the same conceptual role (decomposition) as Cholesky/LU/QR. `dist/` is itself a new directory for the same reason a new layer sometimes needs one: distributions are a wholly new concern that doesn't belong inside `tests/`, `examples/`, or the `mat.h`/`decomp.h`/`solver.h` chain's existing files.
+Create a new `.h` file only when a group of functions introduces a concept that does not belong in the current lowest layer. The test is the include direction: if the new functions call existing ones but existing ones never need to call them back, a new header is warranted. A new layer must fit into the `mat.h <- decomp.h <- solver.h` chain, extend it downward (below `mat.h`, closer to hardware), or extend it upward (above the topmost existing layer, further from hardware). Three layers currently sit above the core this way - `dist/`, `ad.h`, `optim/` - added independently of each other, each for its own new concern (distributions; general differentiation; gradient-based optimization), none depending on the others. Do not add a header at the same level as an existing one that duplicates its role — merge into it instead. That's why eigendecomposition and SVD live in `decomp.h` rather than a new file: they're the same conceptual role (decomposition) as Cholesky/LU/QR. `dist/`/`optim/` are new directories for the same reason a new layer sometimes needs one: each covers a wholly new concern that doesn't belong inside `tests/`, `examples/`, or the `mat.h`/`decomp.h`/`solver.h` chain's existing files - and `optim/` specifically was named to avoid colliding with `solver.h`'s already-established meaning ("solving `Ax=b`") even though both are, in the loose sense, "solvers."
 
 | What | Pattern | Example |
 |---|---|---|
-| Core compute layer | `<noun>.h` | `mat.h`, `decomp.h` |
+| Core compute layer | `<noun>.h` | `mat.h`, `decomp.h`, `ad.h` |
 | Distribution | `dist/<noun>.h` | `dist/gauss.h` |
+| Optimizer | `optim/<noun>.h` | `optim/adam.h` |
 | Correctness test | `tests/correctness/test_<noun>.c` | `tests/correctness/test_decomp.c` |
 | Benchmark wrapper + driver | `tests/performance/bench_<noun>.c` + `tests/performance/bench_<noun>.py` | `tests/performance/bench_decomp.c` + `.py` |
 | Usage example | `examples/<noun>_example.c` | `examples/mat_example.c` |
 
 Every new `.h` file gets a corresponding `tests/correctness/test_<name>.c` created immediately, even if it only contains a `main` that prints "no tests yet" — a header without a test file is a signal that the test was skipped, not that correctness was verified. Add a target to the Makefile for every new binary (test, example, benchmark), and add new test binaries to the `test` phony target's dependency list; `make test` must stay green before any commit.
 
-What does *not* get a new file: a single new function that fits naturally in an existing header; a private helper (e.g. `clamp`) used only inside one header, which stays `static inline` there rather than in a shared `utils.h`/`common.h` (if two headers need the same helper, it belongs in the lower of the two - `dist/gauss.h`'s broadcasting helpers are private to it for now on exactly this reasoning, since no second distribution file exists yet to actually share them with); a new top-level directory beyond `tests/`, `examples/`, and `dist/`, or a new subfolder under `tests/` beyond `correctness/` and `performance/`, unless a wholly new concern arrives (GPU kernels, sparse storage) that cannot fit into the existing categories.
+What does *not* get a new file: a single new function that fits naturally in an existing header; a private helper (e.g. `clamp`) used only inside one header, which stays `static inline` there rather than in a shared `utils.h`/`common.h` (if two headers need the same helper, it belongs in the lower of the two - `dist/gauss.h`'s broadcasting helpers are private to it for now on exactly this reasoning, since no second distribution file exists yet to actually share them with); a new top-level directory beyond `tests/`, `examples/`, `dist/`, and `optim/`, or a new subfolder under `tests/` beyond `correctness/` and `performance/`, unless a wholly new concern arrives (GPU kernels, sparse storage) that cannot fit into the existing categories.
 
 ### Testing requirements
 
