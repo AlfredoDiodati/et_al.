@@ -1,5 +1,5 @@
 #include "../../nn/mlp.h"
-#include "../../optim/adam.h"
+#include "../../solver/adam.h"
 #include <stdio.h>
 
 #define TOL     1e-4f

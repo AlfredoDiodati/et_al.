@@ -1,4 +1,4 @@
-# mat.h - Single-header dense matrix library in C
+# linalg/mat.h - Single-header dense matrix library in C
 
 ## Project overview
 
@@ -7,22 +7,22 @@
 A pure C (C11), single-header matrix library targeting econometrics research, built for the performance class of JAX/NumPy/numba without needing a Python runtime, pandas, or matplotlib. The design goals are:
 - Simple, readable API similar in spirit to numpy/R (function-call style - C does not support operator overloading)
 - Zero-copy views via stride-based slicing and reshaping
-- Performance via OpenBLAS: `mat_mul`, dot/norm, and (in `decomp.h`/`solver.h`) all factorizations and solves call directly into BLAS/LAPACK; the rest of the library (element-wise ops, reductions, views) uses compiler-driven SIMD (auto-vectorization) the same way it always has
+- Performance via OpenBLAS: `mat_mul`, dot/norm, and (in `linalg/decomp.h`/`linalg/solver.h`) all factorizations and solves call directly into BLAS/LAPACK; the rest of the library (element-wise ops, reductions, views) uses compiler-driven SIMD (auto-vectorization) the same way it always has
 - Exactly one external dependency: OpenBLAS. See `README.md`'s [Dependencies](../README.md#dependencies) section for the reasoning and the dependency/precision boundary
 
 ## File structure
 
 | File | Purpose |
 |---|---|
-| `mat.h` | Full library - structs, macros, and all functions as static inline |
-| `decomp.h` | Decompositions (Cholesky, LU, QR, eig, SVD) - LAPACKE wrappers, includes mat.h |
-| `solver.h` | Solvers (Ax=b, least squares) - LAPACKE wrappers, includes decomp.h |
+| `linalg/mat.h` | Full library - structs, macros, and all functions as static inline |
+| `linalg/decomp.h` | Decompositions (Cholesky, LU, QR, eig, SVD) - LAPACKE wrappers, includes linalg/mat.h |
+| `linalg/solver.h` | Solvers (Ax=b, least squares) - LAPACKE wrappers, includes linalg/decomp.h |
 | `examples/mat_example.c` | Usage example covering every function in the API |
-| `tests/correctness/test_mat.c` | Correctness tests for mat.h |
-| `tests/correctness/test_decomp.c` | Correctness tests for decomp.h |
-| `tests/correctness/test_solver.c` | Correctness tests for solver.h |
+| `tests/correctness/test_mat.c` | Correctness tests for linalg/mat.h |
+| `tests/correctness/test_decomp.c` | Correctness tests for linalg/decomp.h |
+| `tests/correctness/test_solver.c` | Correctness tests for linalg/solver.h |
 | `tests/performance/bench_matmul.c` + `bench_matmul.py` | matmul vs NumPy, via a `libmat.so` ctypes shared library |
-| `tests/performance/bench_decomp.c` + `bench_decomp.py` | decomp.h/solver.h functions vs NumPy, via `libdecomp.so` |
+| `tests/performance/bench_decomp.c` + `bench_decomp.py` | linalg/decomp.h/linalg/solver.h functions vs NumPy, via `libdecomp.so` |
 | `Makefile` | Builds examples, tests, and the benchmark shared libraries |
 
 ## Build
@@ -74,7 +74,7 @@ typedef Mat Vec;
 | LAPACKE | `LAPACKE_spotrf`, `LAPACKE_sgetrf`, `LAPACKE_sgeqrf`, `LAPACKE_sgesv`, `LAPACKE_sgels` | `LAPACKE_dpotrf`, `LAPACKE_dgetrf`, `LAPACKE_dgeqrf`, `LAPACKE_dgesv`, `LAPACKE_dgels` |
 | libm | `expf`, `logf`, `fabsf`, `sqrtf`, `powf` | `exp`, `log`, `fabs`, `sqrt`, `pow` |
 
-Dispatch is a small set of macros near the top of `mat.h` (`MBLAS(fn)` -> `cblas_s##fn` or `cblas_d##fn`, `MLAPACK(fn)` similarly, `MEXP`/`MLOG`/`MABS`/`MSQRT`/`MPOW` for libm) so call sites read the same regardless of which precision is active. Do not call `cblas_s*`/`cblas_d*` or an `f`-suffixed/unsuffixed libm function directly in library code - always go through the macro, so the file stays correct under both builds. 32-byte alignment in `mat_new` holds under both precisions (one AVX2 register: 8 `float`s or 4 `double`s).
+Dispatch is a small set of macros near the top of `linalg/mat.h` (`MBLAS(fn)` -> `cblas_s##fn` or `cblas_d##fn`, `MLAPACK(fn)` similarly, `MEXP`/`MLOG`/`MABS`/`MSQRT`/`MPOW` for libm) so call sites read the same regardless of which precision is active. Do not call `cblas_s*`/`cblas_d*` or an `f`-suffixed/unsuffixed libm function directly in library code - always go through the macro, so the file stays correct under both builds. 32-byte alignment in `mat_new` holds under both precisions (one AVX2 register: 8 `float`s or 4 `double`s).
 
 ## Ownership and memory model
 
@@ -229,6 +229,6 @@ Do not use `isnan()` or `isinf()` in new functions that will be compiled with `-
 
 - No in-place operation variants (would avoid intermediate allocations in chained expressions)
 - No axis-wise reductions (sum along rows/columns)
-- `mat.h` itself has no linear algebra beyond transpose, dot product, and norm - Cholesky/LU/QR live in `decomp.h`, solving in `solver.h`; see `docs/DECOMP_DOCUMENTATION.md`/`docs/SOLVER_DOCUMENTATION.md`
+- `linalg/mat.h` itself has no linear algebra beyond transpose, dot product, and norm - Cholesky/LU/QR live in `linalg/decomp.h`, solving in `linalg/solver.h`; see `docs/DECOMP_DOCUMENTATION.md`/`docs/SOLVER_DOCUMENTATION.md`
 - `mat_slice` and `mat_reshape` produce views with no lifetime tracking — freeing the owner while a view is alive is undefined behavior
-- OpenBLAS is a required runtime and link-time dependency. This library cannot be dropped into a project as a single header with zero linking; `mat.h` stays single-header for the code we write, but the build needs `-lopenblas` and OpenBLAS's own headers (`cblas.h`, `lapacke.h`) on the include path
+- OpenBLAS is a required runtime and link-time dependency. This library cannot be dropped into a project as a single header with zero linking; `linalg/mat.h` stays single-header for the code we write, but the build needs `-lopenblas` and OpenBLAS's own headers (`cblas.h`, `lapacke.h`) on the include path

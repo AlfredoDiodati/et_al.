@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include "nn/mlp.h"
-#include "optim/adam.h"
+#include "solver/adam.h"
 
 int main(void) {
     /* XOR: 2 inputs, 1 output, 4 samples - one column per sample, the

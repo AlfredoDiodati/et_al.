@@ -1,16 +1,16 @@
-# decomp.h - Cholesky, LU, QR, eigendecomposition, SVD
+# linalg/decomp.h - Cholesky, LU, QR, eigendecomposition, SVD
 
 ## Overview
 
 **Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy).
 
-`decomp.h` implements the core dense factorizations - Cholesky, LU, QR, symmetric eigendecomposition, SVD - as thin wrappers over LAPACKE, plus derived quantities built on top of them (determinant, inverse, condition number, rank, general eigenvalues) that don't need a separate conceptual home. It includes `mat.h` and is included by `solver.h`; `mat.h` never includes this file. Like `mat.h`, every function is `static inline` in a single header, and uses `mreal`/`MLAPACK` so it builds correctly under both the default `float` and `-DMAT_DOUBLE` precisions (see `docs/MATRIX_DOCUMENTATION.md`'s Precision section).
+`linalg/decomp.h` implements the core dense factorizations - Cholesky, LU, QR, symmetric eigendecomposition, SVD - as thin wrappers over LAPACKE, plus derived quantities built on top of them (determinant, inverse, condition number, rank, general eigenvalues) that don't need a separate conceptual home. It includes `linalg/mat.h` and is included by `linalg/solver.h`; `linalg/mat.h` never includes this file. Like `linalg/mat.h`, every function is `static inline` in a single header, and uses `mreal`/`MLAPACK` so it builds correctly under both the default `float` and `-DMAT_DOUBLE` precisions (see `docs/MATRIX_DOCUMENTATION.md`'s Precision section).
 
 Every function here copies its input(s) with `mat_copy` before calling into LAPACKE, because LAPACKE factorizes in place but functions in this library return new matrices and never mutate their arguments. This also means inputs may be views (non-contiguous slices) - `mat_copy` handles the strided case, so a sliced submatrix works exactly like a freshly allocated owner.
 
 ## Contract: assert on failure, not error codes
 
-A LAPACKE routine's `info` output being nonzero (matrix not positive-definite for `potrf`, exactly singular for `getrf`) is treated as a contract violation here, via `assert(info == 0)` - the same pattern `mat_reshape` in `mat.h` already uses for its `stride == c` precondition. This is a deliberate choice, not an oversight: callers that need to handle a possibly-singular or possibly-indefinite matrix gracefully (rather than crash) must check that themselves before calling in, the same way a caller must check `stride == c` before calling `mat_reshape`. There is no error-code return path.
+A LAPACKE routine's `info` output being nonzero (matrix not positive-definite for `potrf`, exactly singular for `getrf`) is treated as a contract violation here, via `assert(info == 0)` - the same pattern `mat_reshape` in `linalg/mat.h` already uses for its `stride == c` precondition. This is a deliberate choice, not an oversight: callers that need to handle a possibly-singular or possibly-indefinite matrix gracefully (rather than crash) must check that themselves before calling in, the same way a caller must check `stride == c` before calling `mat_reshape`. There is no error-code return path.
 
 ## API reference
 
@@ -57,7 +57,7 @@ Determinant of square `a`, computed from the diagonal of an LU factorization (ca
 
 ### `mat_inv`
 
-Inverse of square `a`, via `?getrf` followed by LAPACK's dedicated inverse-from-factors routine `?getri` - the standard, faster-than-`n`-separate-solves way to compute a full inverse. Caller must `mat_free()`. Per the root `README.md`'s "Do not make matrix inversion the primary linear algebra operation" pitfall: prefer `vec_solve`/`mat_lstsq` (in `solver.h`) for solving a system, and reach for `mat_inv` only when the inverse itself is the object of interest - e.g. reporting `(X^T*X)^-1` as a coefficient variance-covariance matrix, which is exactly the kind of thing the econometrics layer built on top of this will need.
+Inverse of square `a`, via `?getrf` followed by LAPACK's dedicated inverse-from-factors routine `?getri` - the standard, faster-than-`n`-separate-solves way to compute a full inverse. Caller must `mat_free()`. Per the root `README.md`'s "Do not make matrix inversion the primary linear algebra operation" pitfall: prefer `vec_solve`/`mat_lstsq` (in `linalg/solver.h`) for solving a system, and reach for `mat_inv` only when the inverse itself is the object of interest - e.g. reporting `(X^T*X)^-1` as a coefficient variance-covariance matrix, which is exactly the kind of thing the econometrics layer built on top of this will need.
 
 ### `mat_cond`
 
@@ -73,7 +73,7 @@ Eigenvalues of square `a`, possibly non-symmetric, via `?geev`. Eigenvectors are
 
 ## Memory ownership
 
-Same rules as `mat.h`: every `Mat`/`Vec` returned from this header is an owner and must be freed with `mat_free`. The one exception is `mat_lu`'s `piv` out-param, which is a plain array freed with `free()`.
+Same rules as `linalg/mat.h`: every `Mat`/`Vec` returned from this header is an owner and must be freed with `mat_free`. The one exception is `mat_lu`'s `piv` out-param, which is a plain array freed with `free()`.
 
 ## Testing
 
@@ -99,4 +99,4 @@ Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_q
 - `mat_qr` requires `m >= n`; there is no underdetermined (`m < n`) QR path
 - `mat_eig` computes eigenvalues only, never eigenvectors - a real non-symmetric matrix's eigenvectors are generally complex, and this library has no complex type. Adding one (and a complex-capable eigenvector routine) is a substantial undertaking deliberately out of scope here; if it's ever needed, it belongs in a new header, not bolted onto `Mat`
 - No generalized eigenvalue problem (`?sygv`) - not currently needed by anything planned
-- No rank-revealing (column-pivoted) QR (`?geqp3`) - `mat_qr` assumes `a` is well-conditioned and does not pivot. `solver.h`'s `mat_lstsq_rd` covers the rank-deficient least-squares case via SVD instead; a pivoted QR would be a cheaper alternative if that ever becomes a bottleneck
+- No rank-revealing (column-pivoted) QR (`?geqp3`) - `mat_qr` assumes `a` is well-conditioned and does not pivot. `linalg/solver.h`'s `mat_lstsq_rd` covers the rank-deficient least-squares case via SVD instead; a pivoted QR would be a cheaper alternative if that ever becomes a bottleneck

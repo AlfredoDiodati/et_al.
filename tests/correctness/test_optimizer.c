@@ -1,11 +1,11 @@
-#include "../../optim/adam.h"
-#include "../../optim/optimizer.h"
+#include "../../solver/adam.h"
+#include "../../solver/optimizer.h"
 #include <stdio.h>
 
 #define TOL 1e-5f
 
 /* --- a minimal, hand-rolled vanilla SGD, built directly against the
-   Optimizer interface and independent of optim/adam.h - proves the
+   Optimizer interface and independent of solver/adam.h - proves the
    interface itself (not just Adam) is genuinely pluggable, the concrete
    point of this file existing. --- */
 
@@ -32,7 +32,7 @@ static Optimizer sgd_optimizer_init(const void *hp, int r, int c) {
 }
 
 static void test_generic_interface_pluggable(void) {
-    puts("Optimizer interface: a hand-rolled SGD, independent of optim/adam.h, plugs in and updates correctly");
+    puts("Optimizer interface: a hand-rolled SGD, independent of solver/adam.h, plugs in and updates correctly");
 
     Mat param = mat_lit(3, 1, 1.f, 2.f, 3.f);
     Mat grad  = mat_lit(3, 1, 0.5f, -1.f, 2.f);

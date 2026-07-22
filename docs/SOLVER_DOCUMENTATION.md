@@ -1,14 +1,14 @@
-# solver.h - Ax=b, least squares
+# linalg/solver.h - Ax=b, least squares
 
 ## Overview
 
 **Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy).
 
-`solver.h` implements the ways a caller actually wants to use the factorizations in `decomp.h`: solving a square linear system (generally, exploiting symmetry, or reusing an existing factorization), and solving an overdetermined one in the least-squares sense (assuming full column rank, or robust to rank deficiency). It includes `decomp.h` (and transitively `mat.h`); `decomp.h` never includes this file. Same `mreal`/`MLAPACK` dual-precision style as `mat.h`/`decomp.h` - see `docs/MATRIX_DOCUMENTATION.md`'s Precision section.
+`linalg/solver.h` implements the ways a caller actually wants to use the factorizations in `linalg/decomp.h`: solving a square linear system (generally, exploiting symmetry, or reusing an existing factorization), and solving an overdetermined one in the least-squares sense (assuming full column rank, or robust to rank deficiency). It includes `linalg/decomp.h` (and transitively `linalg/mat.h`); `linalg/decomp.h` never includes this file. Same `mreal`/`MLAPACK` dual-precision style as `linalg/mat.h`/`linalg/decomp.h` - see `docs/MATRIX_DOCUMENTATION.md`'s Precision section.
 
-Most functions here call LAPACKE's driver routines (`?gesv`, `?sysv`, `?gels`, `?gelsd`) directly rather than composing `decomp.h`'s `mat_lu`/`mat_chol`/`mat_qr` themselves - the driver routines do the factor-and-solve in one call, which is both simpler and avoids an extra copy. The two exceptions are `vec_lu_solve`/`vec_chol_solve`, which deliberately take an already-computed `decomp.h` factorization instead of factoring again - see their own entries below.
+Most functions here call LAPACKE's driver routines (`?gesv`, `?sysv`, `?gels`, `?gelsd`) directly rather than composing `linalg/decomp.h`'s `mat_lu`/`mat_chol`/`mat_qr` themselves - the driver routines do the factor-and-solve in one call, which is both simpler and avoids an extra copy. The two exceptions are `vec_lu_solve`/`vec_chol_solve`, which deliberately take an already-computed `linalg/decomp.h` factorization instead of factoring again - see their own entries below.
 
-Same contract as `decomp.h`: inputs are copied first and never mutated, and a singular (`vec_solve`, `vec_solve_sym`) or rank-deficient (`mat_lstsq`) input is a contract violation caught by `assert(info == 0)`, not a recoverable error path. See `docs/DECOMP_DOCUMENTATION.md`'s "Contract: assert on failure, not error codes" section - the same reasoning applies here unchanged. The one exception is `mat_lstsq_rd`, whose entire purpose is to handle rank deficiency instead of asserting on it.
+Same contract as `linalg/decomp.h`: inputs are copied first and never mutated, and a singular (`vec_solve`, `vec_solve_sym`) or rank-deficient (`mat_lstsq`) input is a contract violation caught by `assert(info == 0)`, not a recoverable error path. See `docs/DECOMP_DOCUMENTATION.md`'s "Contract: assert on failure, not error codes" section - the same reasoning applies here unchanged. The one exception is `mat_lstsq_rd`, whose entire purpose is to handle rank deficiency instead of asserting on it.
 
 ## API reference
 
@@ -61,10 +61,10 @@ Measured with `tests/performance/bench_decomp.py` (float32; wrappers call the re
 | 256 | 0.587 | 0.574 | 6.0e-8 | 6.256 | 22.475 | 9.0e-8 |
 | 512 | 2.428 | 6.667 | 6.0e-8 | - | - | - |
 
-`vec_solve` tracks `numpy.linalg.solve` closely (both call `?gesv`-equivalent LAPACK routines), pulling ahead at larger sizes for the same reason `mat_chol`/`mat_qr` do in `decomp.h`. `mat_lstsq` is markedly faster than `numpy.linalg.lstsq` - 3.8x at n=128, 3.6x at n=256 - but this is not a pure wrapper-overhead win: `numpy.linalg.lstsq` defaults to the SVD-based `?gelsd` driver (the same one `mat_lstsq_rd` now uses), which handles rank-deficient input but costs more, while `mat_lstsq` uses the QR-based `?gels`. The comparison is honest about what each is doing, not apples-to-apples on algorithm; a caller that needs `?gelsd`'s robustness should compare against `mat_lstsq_rd`, not `mat_lstsq`. Reproduce with `python tests/performance/bench_decomp.py`.
+`vec_solve` tracks `numpy.linalg.solve` closely (both call `?gesv`-equivalent LAPACK routines), pulling ahead at larger sizes for the same reason `mat_chol`/`mat_qr` do in `linalg/decomp.h`. `mat_lstsq` is markedly faster than `numpy.linalg.lstsq` - 3.8x at n=128, 3.6x at n=256 - but this is not a pure wrapper-overhead win: `numpy.linalg.lstsq` defaults to the SVD-based `?gelsd` driver (the same one `mat_lstsq_rd` now uses), which handles rank-deficient input but costs more, while `mat_lstsq` uses the QR-based `?gels`. The comparison is honest about what each is doing, not apples-to-apples on algorithm; a caller that needs `?gelsd`'s robustness should compare against `mat_lstsq_rd`, not `mat_lstsq`. Reproduce with `python tests/performance/bench_decomp.py`.
 
 ## Known limitations and future work
 
-- No iterative refinement or condition-number estimation on the solve path itself - a poorly-conditioned but technically nonsingular system solves "successfully" with no warning about accuracy loss. `mat_cond` (in `decomp.h`) can be checked separately beforehand.
+- No iterative refinement or condition-number estimation on the solve path itself - a poorly-conditioned but technically nonsingular system solves "successfully" with no warning about accuracy loss. `mat_cond` (in `linalg/decomp.h`) can be checked separately beforehand.
 - No weighted or regularized least squares (ridge/Tikhonov) - both `mat_lstsq` and `mat_lstsq_rd` are ordinary least squares only
 - No generalized/constrained least squares (`?gglse`, `?ggglm`)

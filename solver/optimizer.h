@@ -1,5 +1,5 @@
 #pragma once
-#include "../mat.h"
+#include "../linalg/mat.h"
 
 /* Generic pluggable optimizer interface: any gradient-based update rule
    (Adam, SGD, ...) can be used by a model's fit() without fit() knowing
@@ -8,15 +8,17 @@
    optimizers like Adam keep per-parameter moment estimates that must not be
    shared across unrelated parameters.
 
-   Named "Optimizer"/optimizer.h, not "Solver"/solver.h - the project already
-   has a root solver.h with an established, different meaning ("solving
-   Ax=b"), and optim/ itself was named specifically to avoid colliding with
-   that; reusing "Solver" here would recreate the exact collision optim/'s
-   own name was chosen to avoid.
+   This directory is named solver/ (gradient-based optimizers), distinct
+   from linalg/solver.h (solving Ax=b) - the two deliberately share the
+   word "solver" but are disambiguated by path; see the root README.md's
+   "Adding files and headers" policy for why. The type here stays named
+   Optimizer/OptimizerInit regardless, matching this file's own name
+   (optimizer.h) rather than the directory's - no need for the type itself
+   to also say "solver".
 
    state is heap-allocated by whichever *_init function builds it (it must
    outlive that call), and owned by the Optimizer value until freed via
-   .free(state). optim/adam.h's adam_optimizer_init is the reference
+   .free(state). solver/adam.h's adam_optimizer_init is the reference
    implementation; see docs/OPTIMIZER_DOCUMENTATION.md for a worked example
    of implementing a new one. */
 

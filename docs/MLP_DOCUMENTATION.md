@@ -4,12 +4,12 @@
 
 **Installation tier:** model (see README's [Installation tiers](../README.md#installation-tiers) policy) — exposes the fit/forecast API, requires the core tier to be installed first (`make install-model`, or `pkg-config`'s `clgebra-model` which `Requires: clgebra-core`).
 
-`nn/mlp.h` implements a fully connected feedforward MLP: general architecture, arbitrary depth and per-layer width chosen at runtime via a plain size array, with pluggable hidden and output activations. It is the first file in `nn/`, the layer for network architectures - one file per architecture, mirroring `dist/`'s and `optim/`'s one-file-per-concept pattern.
+`nn/mlp.h` implements a fully connected feedforward MLP: general architecture, arbitrary depth and per-layer width chosen at runtime via a plain size array, with pluggable hidden and output activations. It is the first file in `nn/`, the layer for network architectures - one file per architecture, mirroring `dist/`'s and `solver/`'s one-file-per-concept pattern.
 
 The file has two halves:
 
-- **Structure** - `mlp_init`/`mlp_forward`/`mlp_free` define the network, initialize its weights, and run its forward pass through `ad.h`'s tape, so gradients come for free via `tape_backward()`. Fully decoupled from `optim/` - a forward pass needs no optimizer.
-- **Orchestration** - `mlp_fit`/`mlp_forecast`/`mlp_fit_free` train and predict, implementing this project's **Model fit/forecast API** (see README's Policies section) - the standard shape every statistical/ML model header follows. This half is what pulls `optim/optimizer.h` in as a dependency: training genuinely needs both gradient production (`ad.h`) and consumption (an `Optimizer`) in one place, which is why this file - unlike before - now includes `optim/`.
+- **Structure** - `mlp_init`/`mlp_forward`/`mlp_free` define the network, initialize its weights, and run its forward pass through `ad.h`'s tape, so gradients come for free via `tape_backward()`. Fully decoupled from `solver/` - a forward pass needs no optimizer.
+- **Orchestration** - `mlp_fit`/`mlp_forecast`/`mlp_fit_free` train and predict, implementing this project's **Model fit/forecast API** (see README's Policies section) - the standard shape every statistical/ML model header follows. This half is what pulls `solver/optimizer.h` in as a dependency: training genuinely needs both gradient production (`ad.h`) and consumption (an `Optimizer`) in one place, which is why this file - unlike before - now includes `solver/`.
 
 Weight initialization uses Glorot (Xavier) uniform init:
 
@@ -60,7 +60,7 @@ void mlp_fit_free(MLPFit *fit)
 
 `train_X` is `hp.sizes[0]` x `n`, `train_Y` is `hp.sizes[hp.n_sizes-1]` x `n` - **one column per sample**, not one row; `mat_slice` gives zero-copy per-sample access, so `mlp_fit`/`mlp_forecast` loop columns internally rather than requiring a batched forward pass (`ad.h` has no batching/broadcasting - see Known limitations). `mlp_fit` asserts `hp.sizes[0] == train_X.r` and `hp.sizes[hp.n_sizes-1] == train_Y.r` rather than inferring them from the data, so a mismatched hyperparams/data pair fails loudly instead of silently.
 
-`criterion` (a `Criterion`, declared in `ad.h`) reduces a `(prediction, target)` pair to a `1`x`1` loss - `ad_squared_error` is the one implemented so far. `solver_init`/`solver_hyperparams` (an `OptimizerInit` and its opaque hyperparameters, both from `optim/optimizer.h`) build one `Optimizer` per trainable tensor (`W[l]` and `b[l]` each get their own - see `docs/OPTIMIZER_DOCUMENTATION.md`); `optim/adam.h`'s `adam_optimizer_init` plus an `AdamHyperparams` is the reference pairing. Both are swappable independently of the model and of each other - `mlp_fit` never hardcodes a specific loss or optimizer.
+`criterion` (a `Criterion`, declared in `ad.h`) reduces a `(prediction, target)` pair to a `1`x`1` loss - `ad_squared_error` is the one implemented so far. `solver_init`/`solver_hyperparams` (an `OptimizerInit` and its opaque hyperparameters, both from `solver/optimizer.h`) build one `Optimizer` per trainable tensor (`W[l]` and `b[l]` each get their own - see `docs/OPTIMIZER_DOCUMENTATION.md`); `solver/adam.h`'s `adam_optimizer_init` plus an `AdamHyperparams` is the reference pairing. Both are swappable independently of the model and of each other - `mlp_fit` never hardcodes a specific loss or optimizer.
 
 `MLPHyperparams` is model-structural (architecture only); `MLPFitOptions` is training-procedural and must never affect the trained model's shape - `epochs`/`seed` control the training run, `verbose` (0 = silent, N > 0 = print the mean training loss every N epochs) is purely informational.
 

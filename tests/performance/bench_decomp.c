@@ -1,4 +1,4 @@
-#include "../../solver.h"
+#include "../../linalg/solver.h"
 #include <string.h>
 
 /* Flat-pointer wrappers for ctypes benchmarking (see bench_decomp.py).

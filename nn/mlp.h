@@ -1,6 +1,6 @@
 #pragma once
 #include "../ad.h"
-#include "../optim/optimizer.h"
+#include "../solver/optimizer.h"
 
 /* Fully connected feedforward multilayer perceptron: general architecture
    (arbitrary depth and per-layer width, chosen per use case via a plain
@@ -14,15 +14,15 @@
    This file has two layers of its own:
      - structure: mlp_init/mlp_forward/mlp_free build the network and run
        its forward pass through ad.h's tape (gradients come for free via
-       tape_backward()). Fully decoupled from optim/ - a forward pass does
+       tape_backward()). Fully decoupled from solver/ - a forward pass does
        not need an optimizer.
      - orchestration: mlp_fit/mlp_forecast/mlp_fit_free train and predict,
        implementing this project's "Model fit/forecast API" convention
        (see README.md's Policies section) - the standard shape every
        statistical/ML model header follows. Training inherently needs both
        gradient production (ad.h) and consumption (an Optimizer, from
-       optim/optimizer.h), so this half of the file - and only this half -
-       is what pulls optim/ in as a dependency, reversing the previous rule
+       solver/optimizer.h), so this half of the file - and only this half -
+       is what pulls solver/ in as a dependency, reversing the previous rule
        that nn headers never include optim headers, now that fit()
        genuinely needs both concerns in one place.
 

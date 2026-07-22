@@ -1,4 +1,4 @@
-#include "../../solver.h"
+#include "../../linalg/solver.h"
 #include <stdio.h>
 
 #define TOL     1e-4f

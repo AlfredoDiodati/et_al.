@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include "mat.h"
+#include "linalg/mat.h"
 
 int main(void) {
     Mat a = mat_lit(3, 4,

@@ -1,5 +1,5 @@
 #pragma once
-#include "../mat.h"
+#include "../linalg/mat.h"
 #include "optimizer.h"
 
 /* Adam: a first-order gradient-based stochastic optimizer with
@@ -32,14 +32,14 @@
    one. AdamState owns its own m/v moment estimates and is freed
    separately with adam_free().
 
-   This file only needs mat.h - it operates on plain Mat gradients,
+   This file only needs linalg/mat.h - it operates on plain Mat gradients,
    however they were produced (a hand-derived analytical gradient like
    dist/gauss.h's, or a tape from ad.h's backward pass, or anything
    else). It does not depend on ad.h, the same way dist/ does not: all
-   three sit above solver.h independently of each other. It does include
-   optimizer.h (the generic pluggable Optimizer interface, also in optim/)
-   to provide adam_optimizer_init below - the adapter that lets a model's
-   fit() (see nn/mlp.h) use Adam without hardcoding it. */
+   three sit above linalg/solver.h independently of each other. It does
+   include optimizer.h (the generic pluggable Optimizer interface, also in
+   solver/) to provide adam_optimizer_init below - the adapter that lets a
+   model's fit() (see nn/mlp.h) use Adam without hardcoding it. */
 
 typedef struct {
     Mat m;    /* first moment estimate, same shape as the parameter */
@@ -113,7 +113,7 @@ static inline void adam_step(AdamState *s, Mat param, Mat grad) {
 }
 
 /* --- Optimizer adapter: lets adam_step be used through the generic
-   optim/optimizer.h interface, e.g. by nn/mlp.h's mlp_fit(). --- */
+   solver/optimizer.h interface, e.g. by nn/mlp.h's mlp_fit(). --- */
 
 typedef struct { mreal lr, beta1, beta2, eps; } AdamHyperparams;
 

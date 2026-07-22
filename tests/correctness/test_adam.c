@@ -1,4 +1,4 @@
-#include "../../optim/adam.h"
+#include "../../solver/adam.h"
 #include "../../dist/gauss.h"
 #include <stdio.h>
 
@@ -129,7 +129,7 @@ static void test_strided_param(void) {
    sample's actual distribution - a closed-form fact usable as ground
    truth here, not something specific to the synthetic data being
    "really" Gaussian. This is also the first real end-to-end test tying
-   dist/ and optim/ together, which is the point of building both. */
+   dist/ and solver/ together, which is the point of building both. */
 static void test_mle_gauss_fit(void) {
     puts("integration: Adam MLE fit of Gaussian loc/scale");
 

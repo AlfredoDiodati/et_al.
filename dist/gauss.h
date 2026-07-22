@@ -1,5 +1,5 @@
 #pragma once
-#include "../mat.h"
+#include "../linalg/mat.h"
 
 /* Gaussian (normal) distribution: pdf, log-pdf, and log-pdf derivatives
    with respect to location and scale.
@@ -17,7 +17,7 @@
 
    Every function below has two code paths: a fast flat loop (same
    restrict-qualified, contiguous-buffer idiom every element-wise
-   function in mat.h uses) when x/loc/scale all already have the same
+   function in linalg/mat.h uses) when x/loc/scale all already have the same
    shape and are contiguous - i.e. no broadcasting is actually
    happening - and a general broadcasting-aware path otherwise. In the
    general path, a loc/scale that is a 1x1 scalar is read once before
@@ -30,7 +30,7 @@
 
 /* a == b, or either is 1 (in which case the other wins). Contract
    violation (assert) if neither holds - same "assert, don't return an
-   error code" convention decomp.h/solver.h use. */
+   error code" convention linalg/decomp.h/linalg/solver.h use. */
 static inline int gauss_bcast_dim(int a, int b) {
     assert(a == b || a == 1 || b == 1);
     return a == 1 ? b : a;

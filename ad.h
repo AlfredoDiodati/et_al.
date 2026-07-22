@@ -1,5 +1,5 @@
 #pragma once
-#include "solver.h"
+#include "linalg/solver.h"
 
 /* Reverse-mode automatic differentiation (backpropagation), general-purpose:
    given any scalar expression built from the ops below, compute the exact
@@ -25,7 +25,7 @@
    Table 3, and - because the paper derives them via differentiating the *inverse*
    operation (Section 2.3) rather than from scratch - getrs/determinant/
    matrix-inverse from Table 7, all of which this library already had
-   forward implementations for in decomp.h/solver.h. The one place this
+   forward implementations for in linalg/decomp.h/linalg/solver.h. The one place this
    file's formula diverges from the paper's table as transcribed is
    ad_chol_solve - see its own comment below for why and how it was
    re-derived and verified independently. Deferred (see Known limitations
@@ -46,9 +46,9 @@
    must sum the gradient contributions from each use (fan-out).
 
    All ops here require exact shape matches between operands (like
-   mat_add/mat_mul etc. in mat.h) - no broadcasting. dist/gauss.h's
+   mat_add/mat_mul etc. in linalg/mat.h) - no broadcasting. dist/gauss.h's
    broadcasting is a separate, unrelated concern layered on top of plain
-   mat.h calls, not something this file's ops inherit. */
+   linalg/mat.h calls, not something this file's ops inherit. */
 
 typedef struct Node {
     Mat val;                 /* forward value - an owner, freed by tape_free */
@@ -116,7 +116,7 @@ static inline Node *ad_node_new(Tape *t, Mat val, void (*backward)(Node*)) {
 
 /* dst += src / dst -= src, elementwise. Every Mat in this file is a fresh
    mat_new()-produced owner (never a strided view), so a flat loop is
-   always correct - no stride==c check needed like mat.h's element-wise ops. */
+   always correct - no stride==c check needed like linalg/mat.h's element-wise ops. */
 static inline void ad_accum(Mat dst, Mat src) {
     int n = dst.r * dst.c;
     for (int i = 0; i < n; i++) dst.d[i] += src.d[i];
