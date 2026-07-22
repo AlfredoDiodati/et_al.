@@ -14,6 +14,11 @@ Traditionally, this is solved by using JIT-compilation, which has the tradeoff o
 
 Instead, this project builds a set of tools to reduce overhead in implementation of statistical models, and that are easy to optimize if assisted by an LLM, which can easily understand the low-level mechanism of the implementation.
 
+### AI full disclosure
+
+This software is developed with strong assistance from Claude Fable and with human(s) leading the ideas, testing, and debugging. We say this openly because it shaped how the project was built. If you are not happy with AI-developed code, this software is not for you.
+
+
 ## Directory structure
 
 ```
