@@ -2,8 +2,17 @@
 
 ET_AL. is a pure C11 econometrics and machine learning compute stack, built to reach the performance class of JAX, NumPy, and numba without depending on a Python runtime. It combines a dense linear algebra core, general-purpose reverse-mode automatic differentiation, probability distributions, gradient-based optimizers, a `DataFrame` layer for loading, wrangling, and querying tabular data (including a small SQL engine), a JSON serializer for parameters and diagnostics, and neural network architectures, all built as a chain of layers on the same core and shipped as single-header C files. The one dependency the whole stack links against is OpenBLAS, for BLAS and LAPACK routines; everything else, from matrix arithmetic on up through model training and SQL query execution, is C with no further external libraries.
 
+## What can I do with this software?
 
-`nn/` is the one exception to that independence: it builds directly on `ad.h` (a network's forward pass is just another traced expression) and on `solver/optimizer.h`, since training a model genuinely needs both gradient production and consumption in the same function to implement the fit/forecast API described under [Policies](#policies) below. `dist/`, `ad.h`, and `solver/` are still verified against each other in tests even though none of them depends on the others at build time: `ad.h`'s gradient of a hand-built Gaussian log-likelihood is checked against `dist/gauss.h`'s analytical derivative, and `solver/adam.h` is exercised end to end by using `dist/gauss.h`'s analytical gradient to fit a Gaussian's parameters via maximum likelihood.
+Build Machine Learning or Econometrics models in pure C, without the overhead of going through numpy or similar packages, which often slow down computations due to the parts of the code implemented in the higher-level programming language used. With the current implementation you can expect a peformance increase to sequentially compiled numpy/scipy models, with JAX / numba as upper bounds of performance. This allows to make research-oriented models and scripts without depending on a multitude of general purpuse packages.
+
+### Motivation
+
+To make efficient models in Machine Learning and Econometrics one often has to create very efficient implementations, which may require low level control. While most sequential linear algebra routines (e.g. numpy) are written in C/assembly, they often have a lot of general purpuse steps in their higher level language, adding overhead to the low-level computations. 
+
+Traditionally, this is solved by using JIT-compilation, which has the tradeoff of forcing restrictive syntax, and making the underlying computation enginge a black-box. Due to this, optimizing the implementations becomes challenging.
+
+Instead, this project builds a set of tools to reduce overhead in implementation of statistical models, and that are easy to optimize if assisted by an LLM, which can easily understand the low-level mechanism of the implementation.
 
 ## Directory structure
 
@@ -84,10 +93,6 @@ ET_AL./
 ├── check.sh                       # runs all tests and writes test_report.txt
 └── README.md                      # this file — policies, principles, build; no API docs
 ```
-
-The dependency direction is strict. `linalg/solver.h` includes `linalg/decomp.h`, and `linalg/decomp.h` includes `linalg/mat.h`, same-directory includes unaffected by where `linalg/` itself sits. `dist/*.h` and `ad.h` each include whichever lower layer they actually need — `dist/gauss.h` only needs `linalg/mat.h`, while `ad.h` needs the full chain up to `linalg/solver.h` for its solve/determinant/inverse adjoints. `solver/adam.h` includes `solver/optimizer.h`, the interface it implements, and `linalg/mat.h`. `frame/frame.h` includes only `linalg/mat.h`, and `frame/csv.h`/`frame/txt.h`/`frame/npy.h`/`frame/sql.h` each include only `frame/frame.h`, which pulls in `linalg/mat.h` transitively. `json.h` includes nothing from this project at all. No header includes a file above itself in that chain, and `dist/`/`ad.h`/`solver/`/`frame/`/`json.h` never include each other.
-
-`nn/*.h` includes both `ad.h` and `solver/optimizer.h`, the one exception to "a model doesn't include an optimizer header": `mlp_fit` is training orchestration, which genuinely needs both gradient production (`ad.h`) and consumption (`solver/optimizer.h`'s generic `Optimizer`) in the same function to implement the Model fit/forecast API described below, unlike `mlp_forward`/`mlp_init`/`mlp_free` (structure only), which stay fully decoupled from `solver/`. If you find yourself needing a dependency this paragraph doesn't already allow, the function you're writing likely belongs in a lower layer instead.
 
 ## Build
 
