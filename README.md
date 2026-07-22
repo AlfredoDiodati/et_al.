@@ -29,6 +29,7 @@ For the full API reference of each header, see its dedicated doc:
 - [docs/CSV_DOCUMENTATION.md](docs/CSV_DOCUMENTATION.md) — `frame/csv.h`
 - [docs/TXT_DOCUMENTATION.md](docs/TXT_DOCUMENTATION.md) — `frame/txt.h`
 - [docs/NPY_DOCUMENTATION.md](docs/NPY_DOCUMENTATION.md) — `frame/npy.h`
+- [docs/SQL_DOCUMENTATION.md](docs/SQL_DOCUMENTATION.md) — `frame/sql.h`
 - [docs/JSON_DOCUMENTATION.md](docs/JSON_DOCUMENTATION.md) — `json.h`
 - [docs/MLP_DOCUMENTATION.md](docs/MLP_DOCUMENTATION.md) — `nn/mlp.h`
 
@@ -73,7 +74,8 @@ Clgebra/
 │   ├── frame.h                     # DataFrame type — matrix + optional labels + typed columns; see docs/FRAME_DOCUMENTATION.md
 │   ├── csv.h                       # CSV loader + writer (RFC4180 quoting) — see docs/CSV_DOCUMENTATION.md
 │   ├── txt.h                       # whitespace-delimited loader + writer (numpy.loadtxt/savetxt scope) — see docs/TXT_DOCUMENTATION.md
-│   └── npy.h                       # NumPy .npy loader + writer — see docs/NPY_DOCUMENTATION.md
+│   ├── npy.h                       # NumPy .npy loader + writer — see docs/NPY_DOCUMENTATION.md
+│   └── sql.h                       # df_sql: a SQL subset (SELECT/FROM/WHERE/GROUP BY/ORDER BY) — see docs/SQL_DOCUMENTATION.md
 │                                    # (json.h, at repo root, is not here - it's for parameters, not DataFrame data)
 │
 ├── nn/                             # neural network architectures — one file per architecture, above ad.h
@@ -94,7 +96,8 @@ Clgebra/
 │   │   ├── test_json.c
 │   │   ├── test_csv.c
 │   │   ├── test_txt.c
-│   │   └── test_npy.c
+│   │   ├── test_npy.c
+│   │   └── test_sql.c
 │   │
 │   └── performance/                # is it fast? — one bench_<noun>.c + .py pair per header, vs NumPy
 │       ├── bench_matmul.c / bench_matmul.py
@@ -117,7 +120,8 @@ Clgebra/
 │   ├── FRAME_DOCUMENTATION.md    # full reference for frame/frame.h
 │   ├── CSV_DOCUMENTATION.md      # full reference for frame/csv.h
 │   ├── TXT_DOCUMENTATION.md      # full reference for frame/txt.h
-│   └── NPY_DOCUMENTATION.md      # full reference for frame/npy.h
+│   ├── NPY_DOCUMENTATION.md      # full reference for frame/npy.h
+│   └── SQL_DOCUMENTATION.md      # full reference for frame/sql.h
 │
 ├── scripts/
 │   └── install-hooks.sh           # installs git hooks after cloning
@@ -127,7 +131,7 @@ Clgebra/
 └── README.md                      # this file — policies, principles, build; no API docs
 ```
 
-The dependency direction is strict: `linalg/solver.h` includes `linalg/decomp.h`; `linalg/decomp.h` includes `linalg/mat.h` (same-directory includes, unaffected by where `linalg/` itself sits); `dist/*.h` and `ad.h` each include whichever lower layer they actually need (`dist/gauss.h` only needs `linalg/mat.h`; `ad.h` needs the full chain up to `linalg/solver.h` for its solve/determinant/inverse adjoints); `solver/adam.h` includes `solver/optimizer.h` (the interface it implements) and `linalg/mat.h`; `frame/frame.h` includes only `linalg/mat.h`; `frame/csv.h`/`frame/txt.h`/`frame/npy.h` each include only `frame/frame.h` (which pulls in `linalg/mat.h` transitively); `nn/*.h` includes `ad.h` **and** `solver/optimizer.h`; `json.h` includes nothing from this project at all - it has zero dependency on `linalg/mat.h`, since a parameter (its own actual use case) is typically a standalone scalar, not part of a `Mat` computation. No header includes a file above itself in that chain, and `dist/`/`ad.h`/`solver/`/`frame/`/`json.h` never include each other. `nn/*.h` is the one exception to "a model doesn't include an optimizer header": `mlp_fit` is training *orchestration*, which genuinely needs both gradient production (`ad.h`) and consumption (`solver/optimizer.h`'s generic `Optimizer`) in the same function to implement the Model fit/forecast API below - unlike `mlp_forward`/`mlp_init`/`mlp_free` (structure only), which stay fully decoupled from `solver/`. If you find yourself needing a dependency this paragraph doesn't already allow, the function likely belongs in a lower layer instead.
+The dependency direction is strict: `linalg/solver.h` includes `linalg/decomp.h`; `linalg/decomp.h` includes `linalg/mat.h` (same-directory includes, unaffected by where `linalg/` itself sits); `dist/*.h` and `ad.h` each include whichever lower layer they actually need (`dist/gauss.h` only needs `linalg/mat.h`; `ad.h` needs the full chain up to `linalg/solver.h` for its solve/determinant/inverse adjoints); `solver/adam.h` includes `solver/optimizer.h` (the interface it implements) and `linalg/mat.h`; `frame/frame.h` includes only `linalg/mat.h`; `frame/csv.h`/`frame/txt.h`/`frame/npy.h`/`frame/sql.h` each include only `frame/frame.h` (which pulls in `linalg/mat.h` transitively); `nn/*.h` includes `ad.h` **and** `solver/optimizer.h`; `json.h` includes nothing from this project at all - it has zero dependency on `linalg/mat.h`, since a parameter (its own actual use case) is typically a standalone scalar, not part of a `Mat` computation. No header includes a file above itself in that chain, and `dist/`/`ad.h`/`solver/`/`frame/`/`json.h` never include each other. `nn/*.h` is the one exception to "a model doesn't include an optimizer header": `mlp_fit` is training *orchestration*, which genuinely needs both gradient production (`ad.h`) and consumption (`solver/optimizer.h`'s generic `Optimizer`) in the same function to implement the Model fit/forecast API below - unlike `mlp_forward`/`mlp_init`/`mlp_free` (structure only), which stay fully decoupled from `solver/`. If you find yourself needing a dependency this paragraph doesn't already allow, the function likely belongs in a lower layer instead.
 
 ## Build
 
@@ -301,7 +305,7 @@ Current tier assignments:
 
 | Tier | Files |
 |---|---|
-| core | `linalg/mat.h`, `linalg/decomp.h`, `linalg/solver.h`, `ad.h`, `json.h`, `dist/gauss.h`, `solver/optimizer.h`, `solver/adam.h`, `frame/frame.h`, `frame/csv.h`, `frame/txt.h`, `frame/npy.h` |
+| core | `linalg/mat.h`, `linalg/decomp.h`, `linalg/solver.h`, `ad.h`, `json.h`, `dist/gauss.h`, `solver/optimizer.h`, `solver/adam.h`, `frame/frame.h`, `frame/csv.h`, `frame/txt.h`, `frame/npy.h`, `frame/sql.h` |
 | model | `nn/mlp.h` |
 | development | everything under `tests/`, `examples/`, `scripts/` |
 

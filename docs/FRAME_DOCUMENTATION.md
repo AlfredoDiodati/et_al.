@@ -94,7 +94,7 @@ Column type inference (`frame_build_from_rows`) is strict: a column is numeric o
 
 - No `.json` loader/writer yet (for model parameters, a different use case than the bulk-data loaders above) — planned as a further file in `frame/`.
 - Missing numeric values could now be represented as `NaN` reliably (`linalg/mat.h`'s `MISNAN`/`MISINF` exist for exactly this), but `frame_build_from_rows` still uses the simpler strict-numeric-or-string rule described above - not yet revisited since `MISNAN`/`MISINF` were added after this file's loaders were built.
-- No SQL-like query/selection layer yet — planned as a further file in `frame/`, building on `df_col_numeric`/`df_col_string`'s name-based lookup.
+- SQL-like querying is `frame/sql.h` (`df_sql`) — see `docs/SQL_DOCUMENTATION.md`.
 - `df_add_numeric_col` is O(n) per call in the current column count (copy-and-replace, no in-place append) — fine for typical DataFrame construction (tens of columns), but a loader building a DataFrame with many numeric columns one at a time will pay a repeated-copy cost. If this becomes a real bottleneck, a two-pass construction API (know the final column count up front, allocate once) would fix it without changing the type's shape.
 - Column names are not required to be unique — `frame_col_lookup` returns the first match; a duplicate name silently shadows.
 - No column deletion/reordering after the fact - append-only.
