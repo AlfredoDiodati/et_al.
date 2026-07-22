@@ -169,7 +169,7 @@ static void test_adversarial(void) {
 static void test_file_roundtrip(void) {
     puts("file round-trip: json_write_file then json_parse_file");
 
-    const char *path = "/tmp/clgebra_test.json";
+    const char *path = "/tmp/et_al_test.json";
     JsonValue *root = json_object();
     json_object_set(root, "a", json_number(42));
     json_object_set(root, "b", json_string("hello"));

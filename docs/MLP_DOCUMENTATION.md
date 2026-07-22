@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Installation tier:** model (see README's [Installation tiers](../README.md#installation-tiers) policy) — exposes the fit/forecast API, requires the core tier to be installed first (`make install-model`, or `pkg-config`'s `clgebra-model` which `Requires: clgebra-core`).
+**Installation tier:** model (see README's [Installation tiers](../README.md#installation-tiers) policy) — exposes the fit/forecast API, requires the core tier to be installed first (`make install-model`, or `pkg-config`'s `et_al.-model` which `Requires: et_al.-core`).
 
 `nn/mlp.h` implements a fully connected feedforward MLP: general architecture, arbitrary depth and per-layer width chosen at runtime via a plain size array, with pluggable hidden and output activations. It is the first file in `nn/`, the layer for network architectures - one file per architecture, mirroring `dist/`'s and `solver/`'s one-file-per-concept pattern.
 

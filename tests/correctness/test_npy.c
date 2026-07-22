@@ -35,7 +35,7 @@ static void write_test_npy(const char *path, int r, int c, const mreal *data) {
 static void test_2d_roundtrip(void) {
     puts("2D round-trip: known values survive write/read exactly");
 
-    const char *path = "/tmp/clgebra_test_2d.npy";
+    const char *path = "/tmp/et_al_test_2d.npy";
     mreal data[6] = { 1, 2, 3, 4, 5, 6 };
     write_test_npy(path, 2, 3, data);
 
@@ -57,7 +57,7 @@ static void test_2d_roundtrip(void) {
 static void test_genuine_1d_shape_string(void) {
     puts("genuine 1D shape string '(n,)' parses correctly");
 
-    const char *path = "/tmp/clgebra_test_1d_genuine.npy";
+    const char *path = "/tmp/et_al_test_1d_genuine.npy";
     mreal data[3] = { 7, 8, 9 };
 #ifdef MAT_DOUBLE
     const char *descr = "<f8";
@@ -96,7 +96,7 @@ static void test_genuine_1d_shape_string(void) {
 static void test_v2_header_format(void) {
     puts("genuine .npy v2.0 header format (4-byte header-length field, 12-byte preamble) parses correctly");
 
-    const char *path = "/tmp/clgebra_test_v2.npy";
+    const char *path = "/tmp/et_al_test_v2.npy";
     mreal data[4] = { 11, 22, 33, 44 };
 #ifdef MAT_DOUBLE
     const char *descr = "<f8";
@@ -134,7 +134,7 @@ static void test_v2_header_format(void) {
 static void test_adversarial_single_element(void) {
     puts("adversarial: single-element array");
 
-    const char *path = "/tmp/clgebra_test_single.npy";
+    const char *path = "/tmp/et_al_test_single.npy";
     mreal data[1] = { 99 };
     write_test_npy(path, 1, 1, data);
 
@@ -149,7 +149,7 @@ static void test_adversarial_single_element(void) {
 static void test_write_read_roundtrip(void) {
     puts("write/read round-trip: DataFrame -> .npy -> DataFrame preserves values exactly");
 
-    const char *path = "/tmp/clgebra_test_write_roundtrip.npy";
+    const char *path = "/tmp/et_al_test_write_roundtrip.npy";
     DataFrame df = df_new(2);
     Vec a = mat_lit(2, 1, 1.f, 3.f);
     Vec b = mat_lit(2, 1, 2.f, 4.f);
@@ -216,7 +216,7 @@ static DataFrame random_dataframe_for_npy(int max_r, int max_c) {
 static void test_random_write_read_roundtrip_stress(void) {
     puts("  random write/read round-trip fuzzing (fixed seed, fragile-biased magnitudes)");
     srand(45);
-    const char *path = "/tmp/clgebra_test_npy_fuzz.npy";
+    const char *path = "/tmp/et_al_test_npy_fuzz.npy";
     for (int trial = 0; trial < 100; trial++) {
         DataFrame original = random_dataframe_for_npy(8, 6);
         df_write_npy(&original, path);

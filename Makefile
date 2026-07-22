@@ -12,10 +12,10 @@ LDLIBS  = -lm $(BLAS_LIBS)
 #        shared name - see README's "Adding files and headers" policy for why.
 # model: core, plus nn/*.h - model architectures with fit/forecast APIs.
 # development: everything else (tests/, examples/, scripts/) - never
-#        installed, only relevant when working on Clgebra itself.
+#        installed, only relevant when working on ET_AL. itself.
 VERSION := 0.1.0
 PREFIX  ?= /usr/local
-INCDIR  := $(PREFIX)/include/clgebra
+INCDIR  := $(PREFIX)/include/et_al.
 PKGCONFIGDIR := $(PREFIX)/lib/pkgconfig
 
 CORE_HEADERS := ad.h json.h
@@ -98,27 +98,27 @@ install-core:
 	install -d $(INCDIR) $(PKGCONFIGDIR)
 	install -m 644 $(CORE_HEADERS) $(INCDIR)/
 	for d in $(CORE_SUBDIRS); do install -d $(INCDIR)/$$d; install -m 644 $$d/*.h $(INCDIR)/$$d/; done
-	printf 'prefix=%s\nincludedir=$${prefix}/include/clgebra\n\nName: clgebra-core\nDescription: Clgebra core - dense linear algebra, autodiff, and general-purpose statistics\nVersion: %s\nCflags: -I$${includedir} %s\nLibs: -lm %s\n' \
-		"$(PREFIX)" "$(VERSION)" "$(BLAS_CFLAGS)" "$(BLAS_LIBS)" > $(PKGCONFIGDIR)/clgebra-core.pc
-	@echo "installed clgebra-core to $(INCDIR) (pkg-config: clgebra-core)"
+	printf 'prefix=%s\nincludedir=$${prefix}/include/et_al.\n\nName: et_al.-core\nDescription: ET_AL. core - dense linear algebra, autodiff, and general-purpose statistics\nVersion: %s\nCflags: -I$${includedir} %s\nLibs: -lm %s\n' \
+		"$(PREFIX)" "$(VERSION)" "$(BLAS_CFLAGS)" "$(BLAS_LIBS)" > $(PKGCONFIGDIR)/et_al.-core.pc
+	@echo "installed et_al.-core to $(INCDIR) (pkg-config: et_al.-core)"
 
 install-model: install-core
 	install -d $(INCDIR)/nn
 	install -m 644 nn/*.h $(INCDIR)/nn/
-	printf 'prefix=%s\nincludedir=$${prefix}/include/clgebra\n\nName: clgebra-model\nDescription: Clgebra model layer - model architectures with fit/forecast APIs (nn/)\nVersion: %s\nRequires: clgebra-core\nCflags: -I$${includedir}\nLibs:\n' \
-		"$(PREFIX)" "$(VERSION)" > $(PKGCONFIGDIR)/clgebra-model.pc
-	@echo "installed clgebra-model to $(INCDIR) (pkg-config: clgebra-model)"
+	printf 'prefix=%s\nincludedir=$${prefix}/include/et_al.\n\nName: et_al.-model\nDescription: ET_AL. model layer - model architectures with fit/forecast APIs (nn/)\nVersion: %s\nRequires: et_al.-core\nCflags: -I$${includedir}\nLibs:\n' \
+		"$(PREFIX)" "$(VERSION)" > $(PKGCONFIGDIR)/et_al.-model.pc
+	@echo "installed et_al.-model to $(INCDIR) (pkg-config: et_al.-model)"
 
 # uninstall-core also removes model - a model install with no core underneath
 # it is broken either way, so leaving it dangling is not a safer default.
 uninstall-model:
 	rm -rf $(INCDIR)/nn
-	rm -f $(PKGCONFIGDIR)/clgebra-model.pc
+	rm -f $(PKGCONFIGDIR)/et_al.-model.pc
 
 uninstall-core: uninstall-model
 	rm -f $(addprefix $(INCDIR)/,$(CORE_HEADERS))
 	for d in $(CORE_SUBDIRS); do rm -rf $(INCDIR)/$$d; done
-	rm -f $(PKGCONFIGDIR)/clgebra-core.pc
+	rm -f $(PKGCONFIGDIR)/et_al.-core.pc
 	-rmdir $(INCDIR) 2>/dev/null || true
 
 .PHONY: test test-stress test-special install-core install-model uninstall-core uninstall-model

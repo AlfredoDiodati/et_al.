@@ -120,12 +120,12 @@ sudo make install-core PREFIX=/usr/local    # math + general-purpose statistics 
 sudo make install-model PREFIX=/usr/local   # install-core, plus nn/ (model architectures)
 ```
 
-`PREFIX` defaults to `/usr/local` if omitted. Each target installs headers to `$(PREFIX)/include/clgebra/`, preserving the repo's own relative directory structure so that, for example, `nn/mlp.h`'s `#include "../ad.h"`/`#include "../solver/optimizer.h"` still resolve correctly after installation, and writes a `pkg-config` file (`clgebra-core.pc` / `clgebra-model.pc`) to `$(PREFIX)/lib/pkgconfig/`. A consuming project then just needs:
+`PREFIX` defaults to `/usr/local` if omitted. Each target installs headers to `$(PREFIX)/include/et_al./`, preserving the repo's own relative directory structure so that, for example, `nn/mlp.h`'s `#include "../ad.h"`/`#include "../solver/optimizer.h"` still resolve correctly after installation, and writes a `pkg-config` file (`et_al.-core.pc` / `et_al.-model.pc`) to `$(PREFIX)/lib/pkgconfig/`. A consuming project then just needs:
 
 ```bash
-cc myproject.c $(pkg-config --cflags --libs clgebra-model) -o myproject
+cc myproject.c $(pkg-config --cflags --libs et_al.-model) -o myproject
 # math-only tier:
-cc myproject.c $(pkg-config --cflags --libs clgebra-core) -o myproject
+cc myproject.c $(pkg-config --cflags --libs et_al.-core) -o myproject
 ```
 
 ```c
@@ -133,9 +133,9 @@ cc myproject.c $(pkg-config --cflags --libs clgebra-core) -o myproject
 #include <nn/mlp.h>   /* only after installing the model tier */
 ```
 
-`clgebra-model.pc` declares `Requires: clgebra-core`, so referencing `clgebra-model` alone pulls in everything, including the OpenBLAS/`libm` flags baked into `clgebra-core.pc` at install time, with no need to reference both `.pc` files yourself. If `pkg-config --cflags clgebra-core` can't find it after installing to a non-default `PREFIX`, add that prefix's `lib/pkgconfig` to `PKG_CONFIG_PATH` (for example `export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig`), since most systems don't search non-standard prefixes by default.
+`et_al.-model.pc` declares `Requires: et_al.-core`, so referencing `et_al.-model` alone pulls in everything, including the OpenBLAS/`libm` flags baked into `et_al.-core.pc` at install time, with no need to reference both `.pc` files yourself. If `pkg-config --cflags et_al.-core` can't find it after installing to a non-default `PREFIX`, add that prefix's `lib/pkgconfig` to `PKG_CONFIG_PATH` (for example `export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig`), since most systems don't search non-standard prefixes by default.
 
-`make uninstall-core` / `make uninstall-model` (same `PREFIX`) reverse the corresponding install; `uninstall-core` also removes the model tier if present, since a model install with no core underneath it is broken either way and leaving it dangling isn't a safer default. There is no `install-dev`/third-tier install target: per [Installation tiers](#installation-tiers), development-tier content (tests, benchmarks, examples) is only relevant if you're working on Clgebra itself, and is available simply by having the repo cloned; it is never copied to another system.
+`make uninstall-core` / `make uninstall-model` (same `PREFIX`) reverse the corresponding install; `uninstall-core` also removes the model tier if present, since a model install with no core underneath it is broken either way and leaving it dangling isn't a safer default. There is no `install-dev`/third-tier install target: per [Installation tiers](#installation-tiers), development-tier content (tests, benchmarks, examples) is only relevant if you're working on ET_AL. itself, and is available simply by having the repo cloned; it is never copied to another system.
 
 ## Testing and benchmarking
 
@@ -196,7 +196,7 @@ void <model>_fit_free(<Model>Fit *fit);
 
 ### Installation tiers
 
-Every file added to this project belongs to exactly one of three installation tiers — see [Installation](#installation) for the practical `make install-core`/`install-model` mechanics — and a new header must state which one in its own doc file's Overview section. The core tier contains dense linear algebra, autodiff, and general-purpose statistics, with no model implementations, the analogue of `numpy` plus `scipy` in the Python ecosystem, and may depend on nothing else in this project. The model tier contains model architectures exposing the fit/forecast API described above, the analogue of `scikit-learn`/`statsmodels`, and may depend only on core. The development tier contains tests, benchmarks (including their Python drivers), usage examples, and development scripts, useful only for actively developing Clgebra itself — the analogue of a package's own test suite or CI scripts, never shipped to users — and may depend on core and/or model, but is itself never depended on by either and is never installed.
+Every file added to this project belongs to exactly one of three installation tiers — see [Installation](#installation) for the practical `make install-core`/`install-model` mechanics — and a new header must state which one in its own doc file's Overview section. The core tier contains dense linear algebra, autodiff, and general-purpose statistics, with no model implementations, the analogue of `numpy` plus `scipy` in the Python ecosystem, and may depend on nothing else in this project. The model tier contains model architectures exposing the fit/forecast API described above, the analogue of `scikit-learn`/`statsmodels`, and may depend only on core. The development tier contains tests, benchmarks (including their Python drivers), usage examples, and development scripts, useful only for actively developing ET_AL. itself — the analogue of a package's own test suite or CI scripts, never shipped to users — and may depend on core and/or model, but is itself never depended on by either and is never installed.
 
 The dependency rule is strict, in the same direction and for the same reason as every other layering rule in this file: a lower tier must never depend on a higher one. No `core` header may `#include` anything from `nn/` or any future `model`-tier file, and nothing outside `tests/`/`examples/`/`scripts/` may depend on Python or other dev-only tooling. This already falls directly out of the existing `#include` chain (`nn/mlp.h` includes `ad.h`/`solver/optimizer.h`, never the reverse) — installation tiers are a packaging view of the dependency direction the codebase already enforces, not a separate set of rules to independently maintain.
 
