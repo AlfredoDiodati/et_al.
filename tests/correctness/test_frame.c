@@ -107,6 +107,46 @@ static void test_row_names(void) {
     df_free(&df);
 }
 
+static void test_from_matrix(void) {
+    puts("df_from_matrix: builds a DataFrame directly from an existing Mat, with and without column names");
+
+    /* col_names == NULL: generated "col0", "col1", ... - the only path
+       previously exercised anywhere in this codebase (frame/npy.h's
+       df_read_npy always passes NULL) */
+    {
+        Mat m = mat_lit(2, 3, 1.f,2.f,3.f, 4.f,5.f,6.f);
+        DataFrame df = df_from_matrix(m, NULL);
+        assert(df.r == 2 && df.n_cols == 3);
+        assert(strcmp(df.columns[0].name, "col0") == 0);
+        assert(strcmp(df.columns[2].name, "col2") == 0);
+        CHECK(AT(df_col_numeric(&df, "col1"), 1, 0), 5.f);
+        df_free(&df);
+        mat_free(m);
+    }
+
+    /* col_names != NULL: caller-supplied names - previously untested
+       anywhere in this codebase, since every existing call site passes NULL */
+    {
+        Mat m = mat_lit(2, 3, 1.f,2.f,3.f, 4.f,5.f,6.f);
+        const char *names[3] = { "gdp", "population", "year" };
+        DataFrame df = df_from_matrix(m, names);
+        assert(df.r == 2 && df.n_cols == 3);
+        assert(strcmp(df.columns[0].name, "gdp") == 0);
+        assert(strcmp(df.columns[1].name, "population") == 0);
+        assert(strcmp(df.columns[2].name, "year") == 0);
+        CHECK(AT(df_col_numeric(&df, "gdp"), 0, 0), 1.f);
+        CHECK(AT(df_col_numeric(&df, "year"), 1, 0), 6.f);
+
+        /* df_from_matrix copies m (mat_copy internally) - mutating the
+           caller's original Mat afterward must not affect the DataFrame */
+        AT(m, 0, 0) = -999.f;
+        CHECK(AT(df_col_numeric(&df, "gdp"), 0, 0), 1.f);
+
+        df_free(&df);
+        mat_free(m);
+    }
+}
+
 static void test_adversarial(void) {
     puts("adversarial: zero columns, single row, df_print smoke test");
 
@@ -132,6 +172,7 @@ int main(void) {
     test_string_columns();
     test_mixed_declaration_order();
     test_row_names();
+    test_from_matrix();
     test_adversarial();
     puts("test_frame: all passed");
     return 0;

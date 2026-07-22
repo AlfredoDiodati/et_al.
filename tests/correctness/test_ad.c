@@ -103,6 +103,90 @@ static void test_dense_ops(void) {
     }
 }
 
+static void test_exp_tanh(void) {
+    puts("ad_exp / ad_tanh (elementwise activations)");
+
+    /* ad_exp: known output/gradient. f(a) = sum(exp(a)) -> df/da = exp(a).
+       Previously untested/unused anywhere in this project - see
+       docs/AD_DOCUMENTATION.md. */
+    {
+        Tape *t = tape_new();
+        Mat av = mat_lit(4, 1, -2.f, -0.3f, 0.f, 1.5f);
+        Node *a = ad_leaf(t, av);
+        Node *loss = ad_sum(t, ad_exp(t, a));
+        tape_backward(t, loss);
+        mreal expected_loss = 0;
+        for (int i = 0; i < 4; i++) {
+            mreal e = (mreal)exp((double)av.d[i]);
+            expected_loss += e;
+            CHECK(a->grad.d[i], e); /* d(exp(a))/da = exp(a) */
+        }
+        CHECK(loss->val.d[0], expected_loss);
+        mat_free(av);
+        tape_free(t);
+    }
+
+    /* ad_tanh: known output/gradient across small (near-linear), moderate,
+       and large (near-saturating) magnitudes - ad_tanh is the one
+       activation function this project actually ships (nn/mlp.h), so its
+       own formula is checked directly here rather than only indirectly
+       through a full MLP forward/backward pass, where a sign or formula
+       error could hide behind other terms. */
+    {
+        Tape *t = tape_new();
+        Mat av = mat_lit(5, 1, -4.f, -1.f, 0.f, 0.5f, 3.f);
+        Node *a = ad_leaf(t, av);
+        Node *loss = ad_sum(t, ad_tanh(t, a));
+        tape_backward(t, loss);
+        mreal expected_loss = 0;
+        for (int i = 0; i < 5; i++) {
+            mreal y = (mreal)tanh((double)av.d[i]);
+            expected_loss += y;
+            CHECK(a->grad.d[i], 1.0f - y * y); /* d(tanh(a))/da = 1 - tanh(a)^2 */
+        }
+        CHECK(loss->val.d[0], expected_loss);
+        mat_free(av);
+        tape_free(t);
+    }
+}
+
+static void test_dot(void) {
+    puts("ad_dot");
+
+    /* known output: f = dot(x,y) -> df/dx = y, df/dy = x. Previously
+       untested/unused anywhere in this project - see docs/AD_DOCUMENTATION.md. */
+    {
+        Tape *t = tape_new();
+        Mat xv = mat_lit(3, 1, 1.f, 2.f, 3.f);
+        Mat yv = mat_lit(3, 1, 4.f, -1.f, 2.f);
+        Node *x = ad_leaf(t, xv), *y = ad_leaf(t, yv);
+        Node *d = ad_dot(t, x, y); /* already 1x1 - no ad_sum needed */
+        tape_backward(t, d);
+        CHECK(d->val.d[0], 1.f * 4.f + 2.f * -1.f + 3.f * 2.f);
+        for (int i = 0; i < 3; i++) {
+            CHECK(x->grad.d[i], yv.d[i]);
+            CHECK(y->grad.d[i], xv.d[i]);
+        }
+        mat_free(xv); mat_free(yv);
+        tape_free(t);
+    }
+
+    /* adversarial: dot(x,x) - the same node feeding both of ad_dot's
+       operand slots, the same "used twice" fan-in pattern test_dense_ops
+       already exercises for ad_emul(a,a). d(x.x)/dx = 2x. */
+    {
+        Tape *t = tape_new();
+        Mat xv = mat_lit(3, 1, 1.f, -2.f, 3.f);
+        Node *x = ad_leaf(t, xv);
+        Node *d = ad_dot(t, x, x);
+        tape_backward(t, d);
+        CHECK(d->val.d[0], 1.f + 4.f + 9.f);
+        for (int i = 0; i < 3; i++) CHECK(x->grad.d[i], 2.0f * xv.d[i]);
+        mat_free(xv);
+        tape_free(t);
+    }
+}
+
 static void test_matmul(void) {
     puts("matmul");
 
@@ -388,6 +472,8 @@ static void test_inv_fd(void) {
 
 int main(void) {
     test_dense_ops();
+    test_exp_tanh();
+    test_dot();
     test_matmul();
     test_squared_error_and_identity();
     test_gauss_equivalence();

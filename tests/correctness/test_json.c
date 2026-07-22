@@ -75,12 +75,34 @@ static void test_string_escaping(void) {
 static void test_unicode_escape(void) {
     puts("\\uXXXX escape decodes to UTF-8");
 
-    /* é = 'e' with acute accent (U+00E9), UTF-8: 0xC3 0xA9 */
+    /* é = 'e' with acute accent (U+00E9) - the 2-byte UTF-8 branch
+       (codepoint < 0x800), UTF-8: 0xC3 0xA9 */
     JsonValue *v = json_parse("\"caf\\u00e9\"");
     assert(v->type == JSON_STRING);
     unsigned char expected[] = { 'c','a','f', 0xC3, 0xA9, '\0' };
     assert(strcmp(v->string, (const char*)expected) == 0);
     json_free(v);
+
+    /* the euro sign (U+20AC) - the 3-byte UTF-8 branch (codepoint >=
+       0x800), UTF-8: 0xE2 0x82 0xAC. Previously untested: the only fixed
+       case above never reaches a codepoint this large, and the STRESS
+       fuzzer can't reach it either, since json_write only ever emits
+       \u escapes for control characters (< 0x20), never round-tripping
+       a codepoint this size back through \uXXXX form. */
+    JsonValue *euro = json_parse("\"\\u20ac5\"");
+    assert(euro->type == JSON_STRING);
+    unsigned char expected_euro[] = { 0xE2, 0x82, 0xAC, '5', '\0' };
+    assert(strcmp(euro->string, (const char*)expected_euro) == 0);
+
+    /* round-trip: json_write emits the already-UTF-8-encoded bytes
+       literally (not re-escaped, per the note above), so parsing the
+       written text a second time must reproduce the identical string */
+    char *written = json_write(euro);
+    JsonValue *reparsed = json_parse(written);
+    assert(strcmp(reparsed->string, euro->string) == 0);
+    free(written);
+    json_free(euro);
+    json_free(reparsed);
 }
 
 static void test_construction_and_roundtrip(void) {

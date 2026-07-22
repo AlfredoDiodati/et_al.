@@ -233,6 +233,25 @@ static void test_arithmetic_contiguous(void) {
         CHECK(AT(r,0,0), 3.f);
         mat_free(sq); mat_free(r);
     }
+    {
+        /* tanh(0) = 0 (known output); tanh of a large-magnitude value must
+           saturate toward +-1, not overflow or diverge - the shipped
+           activation for nn/mlp.h, previously untested here despite every
+           other elementwise op in this function having a case */
+        Mat z = mat_fill(2, 3, 0.f);
+        Mat r = mat_tanh(z);
+        for (int i = 0; i < 2; i++)
+            for (int j = 0; j < 3; j++)
+                CHECK(AT(r,i,j), 0.f);
+        mat_free(z); mat_free(r);
+
+        Mat big = mat_fill(1, 2, 50.f);
+        AT(big,0,1) = -50.f;
+        Mat rbig = mat_tanh(big);
+        CHECK(AT(rbig,0,0), 1.f);
+        CHECK(AT(rbig,0,1), -1.f);
+        mat_free(big); mat_free(rbig);
+    }
 }
 
 static void test_arithmetic_strided(void) {
@@ -322,6 +341,14 @@ static void test_arithmetic_strided(void) {
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
                 CHECK(AT(r,i,j), MSQRT(AT(a,i,j)));
+        mat_free(r);
+    }
+    {
+        Mat r = mat_tanh(a);
+        assert(r.stride == r.c); /* result of any arithmetic op must be a fresh contiguous owner */
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                CHECK(AT(r,i,j), MTANH(AT(a,i,j)));
         mat_free(r);
     }
 

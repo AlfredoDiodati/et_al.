@@ -86,6 +86,51 @@ static void test_genuine_1d_shape_string(void) {
     remove(path);
 }
 
+/* write_test_npy above (and every other test in this file) hardcodes
+   format version {1, 0}, using the v1.0 2-byte header-length field
+   df_read_npy reads from bytes 8-9 with a 10-byte preamble. df_read_npy
+   also branches on major != 1 to read a genuine v2.0-style 4-byte
+   header-length field (bytes 8-11, 12-byte preamble) instead - a branch
+   no other test here ever reaches. Written by hand to match NEP 1's
+   real v2.0 format, not guessed at. */
+static void test_v2_header_format(void) {
+    puts("genuine .npy v2.0 header format (4-byte header-length field, 12-byte preamble) parses correctly");
+
+    const char *path = "/tmp/clgebra_test_v2.npy";
+    mreal data[4] = { 11, 22, 33, 44 };
+#ifdef MAT_DOUBLE
+    const char *descr = "<f8";
+#else
+    const char *descr = "<f4";
+#endif
+    char header[256];
+    int hlen = snprintf(header, sizeof header,
+        "{'descr': '%s', 'fortran_order': False, 'shape': (2, 2), }\n", descr);
+    assert(hlen > 0 && hlen < (int)sizeof header);
+
+    FILE *f = fopen(path, "wb");
+    assert(f);
+    fwrite("\x93NUMPY", 1, 6, f);
+    unsigned char ver[2] = { 2, 0 };
+    fwrite(ver, 1, 2, f);
+    unsigned char hlen_bytes[4] = {
+        (unsigned char)(hlen & 0xFF), (unsigned char)((hlen >> 8) & 0xFF),
+        (unsigned char)((hlen >> 16) & 0xFF), (unsigned char)((hlen >> 24) & 0xFF)
+    };
+    fwrite(hlen_bytes, 1, 4, f); /* 4 bytes, not 2 - the whole point of this test */
+    fwrite(header, 1, (size_t)hlen, f);
+    fwrite(data, sizeof(mreal), 4, f);
+    fclose(f);
+
+    DataFrame df = df_read_npy(path);
+    assert(df.r == 2 && df.n_cols == 2);
+    CHECK(AT(df.numeric, 0, 0), 11.f); CHECK(AT(df.numeric, 0, 1), 22.f);
+    CHECK(AT(df.numeric, 1, 0), 33.f); CHECK(AT(df.numeric, 1, 1), 44.f);
+
+    df_free(&df);
+    remove(path);
+}
+
 static void test_adversarial_single_element(void) {
     puts("adversarial: single-element array");
 
@@ -187,6 +232,7 @@ static void test_random_write_read_roundtrip_stress(void) {
 int main(void) {
     test_2d_roundtrip();
     test_genuine_1d_shape_string();
+    test_v2_header_format();
     test_adversarial_single_element();
     test_write_read_roundtrip();
 

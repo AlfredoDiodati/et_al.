@@ -5,6 +5,94 @@
 #define TOL_CONV 1e-2f /* convergence tolerance - this tests optimization behavior,
                            not exact arithmetic, so a loose tolerance is the right tool */
 
+/* --- exact single-step arithmetic - every other test in this file is
+   convergence-based, which could tolerate a formula bug that still
+   happens to converge given enough iterations; these check the m/v/
+   bias-correction formula itself against hand-computed values. --- */
+
+static void test_exact_step_arithmetic(void) {
+    puts("adam_step: exact per-step arithmetic (not just convergence)");
+
+    /* Invariant, proved by induction before writing this test: with a
+       CONSTANT gradient g applied repeatedly starting from m_0=v_0=0,
+       the bias-corrected moments m_t/bc1_t and v_t/bc2_t equal g and g^2
+       exactly at every single step t (not just in the limit), so the
+       parameter must decrease by EXACTLY lr*g/(|g|+eps) on every step -
+       a closed-form check across many steps, not just one. */
+    {
+        mreal lr = 0.1f, beta1 = 0.9f, beta2 = 0.999f, eps = 1e-8f, g = 2.0f;
+        AdamState s = adam_init(1, 1, lr, beta1, beta2, eps);
+        Mat param = mat_fill(1, 1, 5.0f);
+        Mat grad = mat_fill(1, 1, g);
+        mreal expected_step = lr * g / (MABS(g) + eps);
+
+        for (int step = 1; step <= 5; step++) {
+            mreal before = AT(param, 0, 0);
+            adam_step(&s, param, grad);
+            mreal after = AT(param, 0, 0);
+            assert(MABS((before - after) - expected_step) < 1e-5f);
+        }
+
+        mat_free(param); mat_free(grad);
+        adam_free(&s);
+    }
+
+    /* explicit hand-computed 2-step example with two DIFFERENT gradients,
+       so m/v genuinely carry a nonzero, varying state between steps
+       rather than relying only on the constant-gradient invariant above:
+       param0=5, g1=2 then g2=-1, lr=0.1, beta1=0.9, beta2=0.999, eps=1e-8.
+       step 1: m1=(1-beta1)*g1=0.2, v1=(1-beta2)*g1^2=0.004,
+               bc1=1-beta1=0.1, bc2=1-beta2=0.001 -> mhat=2, vhat=4
+       step 2: m2=beta1*m1+(1-beta1)*g2=0.9*0.2+0.1*(-1)=0.08
+               v2=beta2*v1+(1-beta2)*g2^2=0.999*0.004+0.001*1=0.004996
+               bc1=1-beta1^2=0.19, bc2=1-beta2^2=0.001999 */
+    {
+        mreal lr = 0.1f, beta1 = 0.9f, beta2 = 0.999f, eps = 1e-8f;
+        AdamState s = adam_init(1, 1, lr, beta1, beta2, eps);
+        Mat param = mat_fill(1, 1, 5.0f);
+        Mat grad1 = mat_fill(1, 1, 2.0f);
+        Mat grad2 = mat_fill(1, 1, -1.0f);
+
+        adam_step(&s, param, grad1);
+        mreal expected1 = 5.0f - lr * (2.0f / (2.0f + eps));
+        assert(MABS(AT(param,0,0) - expected1) < 1e-5f);
+
+        adam_step(&s, param, grad2);
+        mreal m2 = 0.08f, v2 = 0.004996f, bc1_2 = 0.19f, bc2_2 = 0.001999f;
+        mreal mhat2 = m2 / bc1_2, vhat2 = v2 / bc2_2;
+        mreal expected2 = expected1 - lr * mhat2 / (MSQRT(vhat2) + eps);
+        assert(MABS(AT(param,0,0) - expected2) < 1e-4f);
+
+        mat_free(param); mat_free(grad1); mat_free(grad2);
+        adam_free(&s);
+    }
+}
+
+static void test_hyperparams_default(void) {
+    puts("adam_hyperparams_default: matches the paper's recommended defaults");
+
+    /* relative tolerance, not absolute: a float literal like 0.9f isn't
+       exactly 0.9 in double precision, so an absolute tolerance tight
+       enough to mean something for eps (~1e-8) is far too tight for
+       beta1/beta2 (~0.9) once mreal is double and the two precisions'
+       roundings of the same decimal literal disagree by more than that */
+    AdamHyperparams h = adam_hyperparams_default(); /* previously never called anywhere in this codebase */
+    assert(MABS(h.lr - (mreal)0.001) < (mreal)1e-6 * (mreal)0.001);
+    assert(MABS(h.beta1 - (mreal)0.9) < (mreal)1e-6);
+    assert(MABS(h.beta2 - (mreal)0.999) < (mreal)1e-6);
+    assert(MABS(h.eps - (mreal)1e-8) < (mreal)1e-6 * (mreal)1e-8);
+
+    /* also exercise it through the real Optimizer adapter path, the same
+       shape nn/mlp.h's mlp_fit uses, not just as a standalone struct */
+    Optimizer opt = adam_optimizer_init(&h, 1, 1);
+    Mat param = mat_fill(1, 1, 0.0f);
+    Mat grad = mat_fill(1, 1, 1.0f);
+    opt.step(opt.state, param, grad);
+    assert(AT(param,0,0) != 0.0f); /* a real step was actually applied */
+    opt.free(opt.state);
+    mat_free(param); mat_free(grad);
+}
+
 /* minimize f(x) = sum((x-target)^2), gradient = 2*(x-target) */
 static void quadratic_grad(Mat x, Mat target, Mat grad_out) {
     for (int i = 0; i < x.r * x.c; i++)
@@ -168,6 +256,8 @@ static void test_mle_gauss_fit(void) {
 }
 
 int main(void) {
+    test_exact_step_arithmetic();
+    test_hyperparams_default();
     test_quadratic_bowl();
     test_illconditioned_bowl();
     test_scalar_param();
