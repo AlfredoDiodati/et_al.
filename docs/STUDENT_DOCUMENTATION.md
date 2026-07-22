@@ -76,6 +76,8 @@ Every `Mat` returned from this header is an owner and must be freed with `mat_fr
 
 `dist/broadcast.h`'s own primitives are covered by `tests/correctness/test_broadcast.c`.
 
+Separately, `tests/correctness/test_ad.c` rebuilds this file's log-pdf on `ad.h`'s tape (the `lgamma` normalization included, via `ad_lgamma`) and checks the reverse-mode gradients against all three analytic scores — a synthetic-differentiation cross-check structurally unrelated to both the closed forms here and the finite differences above.
+
 ## Known limitations and future work
 
 - A per-element (non-`1x1`) `nu` pays one double `lgamma` pair per element in `logpdf`/`pdf`, and one double digamma pair per element in `dlogpdf_nu` — inherent to the math, not an implementation shortcut, since the normalization genuinely depends on `nu`. `dlogpdf_loc`/`dlogpdf_scale` need neither.

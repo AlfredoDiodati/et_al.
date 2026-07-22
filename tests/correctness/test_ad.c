@@ -1,5 +1,7 @@
 #include "../../ad.h"
 #include "../../dist/gauss.h"
+#include "../../dist/student.h"
+#include "../../dist/mv/student.h"
 #include <stdio.h>
 
 #define TOL      1e-4f
@@ -321,6 +323,260 @@ static void test_gauss_equivalence(void) {
     }
 }
 
+/* --- ad_lgamma: forward known values, backward wiring (must be digamma),
+   and an independent finite-difference check of the same graph --- */
+
+static void test_lgamma_op(void) {
+    puts("ad_lgamma (forward + digamma backward)");
+    Tape *t = tape_new();
+    Mat av = mat_lit(4, 1, 0.5f, 1.0f, 2.5f, 7.3f);
+    Node *a = ad_leaf(t, av);
+    Node *lg = ad_lgamma(t, a);
+    Node *loss = ad_sum(t, lg);
+    tape_backward(t, loss);
+
+    /* forward: lgamma(1/2) = log(sqrt(pi)), lgamma(1) = 0 */
+    CHECK(lg->val.d[0], 0.5723649429f);
+    CHECK(lg->val.d[1], 0.0f);
+    for (int i = 0; i < 4; i++) {
+        /* wiring: d sum(lgamma(a))/da must be psi(a) elementwise */
+        CHECK(a->grad.d[i], (mreal)special_digamma((double)av.d[i]));
+        /* independence: same gradient vs a double FD of lgamma itself */
+        double h = 1e-5, x = (double)av.d[i];
+        double fd = (lgamma(x + h) - lgamma(x - h)) / (2 * h);
+        assert(MABS(a->grad.d[i] - (mreal)fd) < TOL_FD);
+    }
+    mat_free(av);
+    tape_free(t);
+}
+
+/* --- Student t: the same synthetic-vs-analytical check as
+   test_gauss_equivalence, extended to the third parameter nu - the
+   lgamma((nu+1)/2) - lgamma(nu/2) normalization sits on the tape via
+   ad_lgamma, so the nu gradient exercises the digamma backward rule
+   end-to-end against student_dlogpdf_nu's independent closed form --- */
+
+static void student_ad_gradients(Mat x, Mat loc, Mat scale, Mat nu,
+                                 Mat *loc_g, Mat *scale_g, Mat *nu_g) {
+    Tape *t = tape_new();
+    Node *xn = ad_leaf(t, x), *locn = ad_leaf(t, loc), *scalen = ad_leaf(t, scale), *nun = ad_leaf(t, nu);
+    Mat onesv = mat_ones(x.r, x.c);
+    Node *ones = ad_leaf(t, onesv); /* untracked constant 1s */
+    mat_free(onesv);
+
+    Node *z = ad_ediv(t, ad_sub(t, xn, locn), scalen);
+    Node *lg1p = ad_log(t, ad_add(t, ones, ad_ediv(t, ad_emul(t, z, z), nun)));
+    Node *coef = ad_scale(t, ad_add(t, nun, ones), 0.5f); /* (nu+1)/2 */
+    Node *kernel = ad_scale(t, ad_emul(t, coef, lg1p), -1.0f);
+    Node *lgdiff = ad_sub(t, ad_lgamma(t, coef), ad_lgamma(t, ad_scale(t, nun, 0.5f)));
+    /* -log(pi)/2 is an additive constant with zero gradient - omitted,
+       same as test_gauss_equivalence omits -0.5*log(2pi) */
+    Node *lognorm = ad_sub(t, lgdiff, ad_scale(t, ad_log(t, nun), 0.5f));
+    Node *per_obs = ad_add(t, ad_sub(t, lognorm, ad_log(t, scalen)), kernel);
+    Node *total = ad_sum(t, per_obs);
+    tape_backward(t, total);
+
+    *loc_g = mat_copy(locn->grad);
+    *scale_g = mat_copy(scalen->grad);
+    *nu_g = mat_copy(nun->grad);
+    tape_free(t);
+}
+
+static void test_student_equivalence(void) {
+    puts("ad-computed gradient vs analytical student_dlogpdf_loc/scale/nu");
+
+    /* per-element parameters (no broadcasting - ad.h requires exact
+       shapes), so each AD gradient element is exactly one score */
+    Mat x     = mat_lit(5, 1,  1.2f, -0.5f, 3.1f, 0.0f, 2.2f);
+    Mat loc   = mat_lit(5, 1,  0.3f, -0.2f, 0.5f, 0.1f, 0.0f);
+    Mat scale = mat_lit(5, 1,  1.4f,  0.8f, 2.0f, 1.1f, 0.6f);
+    Mat nu    = mat_lit(5, 1,  1.0f,  2.5f, 4.0f, 7.3f, 0.7f);
+
+    Mat g_loc, g_scale, g_nu;
+    student_ad_gradients(x, loc, scale, nu, &g_loc, &g_scale, &g_nu);
+    Mat a_loc = student_dlogpdf_loc(x, loc, scale, nu);
+    Mat a_scale = student_dlogpdf_scale(x, loc, scale, nu);
+    Mat a_nu = student_dlogpdf_nu(x, loc, scale, nu);
+
+    for (int i = 0; i < 5; i++) {
+        assert(MABS(g_loc.d[i] - a_loc.d[i]) < TOL);
+        assert(MABS(g_scale.d[i] - a_scale.d[i]) < TOL);
+        assert(MABS(g_nu.d[i] - a_nu.d[i]) < TOL);
+    }
+
+    mat_free(x); mat_free(loc); mat_free(scale); mat_free(nu);
+    mat_free(g_loc); mat_free(g_scale); mat_free(g_nu);
+    mat_free(a_loc); mat_free(a_scale); mat_free(a_nu);
+
+    if (getenv("STRESS")) {
+        puts("  ad vs analytical stress (student)");
+        srand(42);
+        for (int n = 1; n <= 64; n++) {
+            Mat xs = mat_new(n, 1), locs = mat_new(n, 1), scales = mat_new(n, 1), nus = mat_new(n, 1);
+            for (int i = 0; i < n; i++) {
+                xs.d[i] = (mreal)(rand() % 4001 - 2000) / 1000.0f;
+                locs.d[i] = (mreal)(rand() % 4001 - 2000) / 1000.0f;
+                scales.d[i] = (mreal)(rand() % 2001) / 1000.0f + 0.2f;
+                nus.d[i] = (mreal)(rand() % 10001) / 1000.0f + 0.5f;
+            }
+            Mat gl, gs, gn;
+            student_ad_gradients(xs, locs, scales, nus, &gl, &gs, &gn);
+            Mat al = student_dlogpdf_loc(xs, locs, scales, nus);
+            Mat as = student_dlogpdf_scale(xs, locs, scales, nus);
+            Mat an = student_dlogpdf_nu(xs, locs, scales, nus);
+            for (int i = 0; i < n; i++) {
+                CHECK_REL(gl.d[i], al.d[i]);
+                CHECK_REL(gs.d[i], as.d[i]);
+                CHECK_REL(gn.d[i], an.d[i]);
+            }
+            mat_free(xs); mat_free(locs); mat_free(scales); mat_free(nus);
+            mat_free(gl); mat_free(gs); mat_free(gn);
+            mat_free(al); mat_free(as); mat_free(an);
+        }
+        printf("  n=1..64 ok\n");
+    }
+}
+
+/* --- multivariate: total log-likelihood on the tape via ad_solve/ad_det/
+   ad_dot per observation (shared cov/loc/nu leaves - fan-out across
+   observations), vs the analytical mv scores. gaussian=1 drops the nu
+   terms and uses the -q/2 kernel, covering dist/mv/gauss.h; gaussian=0
+   covers dist/mv/student.h including nu. The AD path factors cov via LU
+   (vec_solve/mat_det) while the analytical path uses Cholesky
+   (potrs/potri) - numerically disjoint routes to the same gradient. --- */
+
+static void mv_ad_gradients(Mat x, Mat loc, Mat cov, mreal nu, int gaussian,
+                            Mat *loc_g, Mat *cov_g, mreal *nu_g) {
+    int n = x.r, d = x.c;
+    Tape *t = tape_new();
+
+    Mat loc_col = mat_T(loc); /* 1 x d row -> d x 1 column, ad_solve's layout */
+    Node *locn = ad_leaf(t, loc_col);
+    mat_free(loc_col);
+    Node *covn = ad_leaf(t, cov);
+    Node *ld = ad_log(t, ad_det(t, covn));
+
+    Node *nun = NULL, *one = NULL, *coef = NULL;
+    if (!gaussian) {
+        Mat num = mat_fill(1, 1, nu);
+        nun = ad_leaf(t, num);
+        mat_free(num);
+        Mat onem = mat_fill(1, 1, 1.0f);
+        one = ad_leaf(t, onem);
+        mat_free(onem);
+        Mat dm = mat_fill(1, 1, (mreal)d);
+        Node *dconst = ad_leaf(t, dm);
+        mat_free(dm);
+        coef = ad_scale(t, ad_add(t, nun, dconst), 0.5f); /* (nu+d)/2 */
+    }
+
+    Node *total = NULL;
+    for (int i = 0; i < n; i++) {
+        Mat xi = mat_new(d, 1);
+        for (int k = 0; k < d; k++)
+            AT(xi, k, 0) = AT(x, i, k);
+        Node *xn = ad_leaf(t, xi);
+        mat_free(xi);
+        Node *delta = ad_sub(t, xn, locn);
+        Node *q = ad_dot(t, delta, ad_solve(t, covn, delta));
+        Node *term = gaussian
+            ? ad_scale(t, q, -0.5f)
+            : ad_scale(t, ad_emul(t, coef, ad_log(t, ad_add(t, one, ad_ediv(t, q, nun)))), -1.0f);
+        total = total ? ad_add(t, total, term) : term;
+    }
+    total = ad_add(t, total, ad_scale(t, ld, -0.5f * (mreal)n));
+    if (!gaussian) {
+        Node *lgdiff = ad_sub(t, ad_lgamma(t, coef), ad_lgamma(t, ad_scale(t, nun, 0.5f)));
+        Node *lognorm = ad_sub(t, lgdiff, ad_scale(t, ad_log(t, nun), 0.5f * (mreal)d));
+        total = ad_add(t, total, ad_scale(t, lognorm, (mreal)n));
+    }
+    tape_backward(t, total);
+
+    *loc_g = mat_T(locn->grad); /* back to 1 x d */
+    *cov_g = mat_copy(covn->grad);
+    if (nu_g) *nu_g = gaussian ? 0 : AT(nun->grad, 0, 0);
+    tape_free(t);
+}
+
+/* column sums of a per-observation n x d score matrix -> the 1 x d
+   gradient of the total log-likelihood for a shared loc */
+static Mat colsum(Mat m) {
+    Mat s = mat_new(1, m.c);
+    for (int i = 0; i < m.r; i++)
+        for (int j = 0; j < m.c; j++)
+            AT(s, 0, j) += AT(m, i, j);
+    return s;
+}
+
+static void mv_check_one(Mat x, Mat loc, Mat cov, mreal nu, int gaussian) {
+    int d = x.c;
+    Mat g_loc, g_cov;
+    mreal g_nu;
+    mv_ad_gradients(x, loc, cov, nu, gaussian, &g_loc, &g_cov, &g_nu);
+
+    Mat per_loc = gaussian ? mvgauss_dlogpdf_loc(x, loc, cov)
+                           : mvstudent_dlogpdf_loc(x, loc, cov, nu);
+    Mat a_loc = colsum(per_loc);
+    Mat a_cov = gaussian ? mvgauss_dlogpdf_cov(x, loc, cov)
+                         : mvstudent_dlogpdf_cov(x, loc, cov, nu);
+
+    for (int j = 0; j < d; j++)
+        CHECK_REL(AT(g_loc, 0, j), AT(a_loc, 0, j));
+    for (int j = 0; j < d; j++)
+        for (int k = 0; k < d; k++)
+            CHECK_REL(AT(g_cov, j, k), AT(a_cov, j, k));
+    if (!gaussian) {
+        Mat per_nu = mvstudent_dlogpdf_nu(x, loc, cov, nu);
+        CHECK_REL(g_nu, mat_sum(per_nu));
+        mat_free(per_nu);
+    }
+
+    mat_free(g_loc); mat_free(g_cov);
+    mat_free(per_loc); mat_free(a_loc); mat_free(a_cov);
+}
+
+static void test_mv_equivalence(void) {
+    puts("ad-computed gradient vs analytical mvgauss/mvstudent scores");
+
+    Mat x = mat_lit(4, 2, 1.0f, 0.5f, -0.4f, 1.2f, 0.0f, -1.0f, 2.0f, 0.3f);
+    Mat loc = mat_lit(1, 2, 0.5f, -0.3f);
+    Mat cov = mat_lit(2, 2, 2.0f, 0.6f, 0.6f, 1.0f);
+    mv_check_one(x, loc, cov, 0, 1);      /* multivariate Gaussian */
+    mv_check_one(x, loc, cov, 3.5f, 0);   /* multivariate Student t */
+    mat_free(x); mat_free(loc); mat_free(cov);
+
+    if (getenv("STRESS")) {
+        puts("  ad vs analytical stress (mv)");
+        srand(42);
+        static const int dims[] = { 1, 2, 3 };
+        for (size_t di = 0; di < sizeof(dims) / sizeof(dims[0]); di++) {
+            int d = dims[di];
+            for (int n = 1; n <= 20; n += 2) {
+                Mat xs = mat_new(n, d), locs = mat_new(1, d);
+                for (int i = 0; i < n * d; i++)
+                    xs.d[i] = (mreal)(rand() % 4001 - 2000) / 1000.0f;
+                for (int j = 0; j < d; j++)
+                    locs.d[j] = (mreal)(rand() % 4001 - 2000) / 1000.0f;
+                Mat b = mat_new(d, d);
+                for (int i = 0; i < d * d; i++)
+                    b.d[i] = (mreal)(rand() % 2001 - 1000) / 1000.0f;
+                Mat bt = mat_T(b);
+                Mat covs = mat_mul(b, bt);
+                for (int i = 0; i < d; i++)
+                    AT(covs, i, i) += 1.0f;
+                mat_free(b); mat_free(bt);
+                mreal nuv = (mreal)(rand() % 8001) / 1000.0f + 0.8f;
+
+                mv_check_one(xs, locs, covs, 0, 1);
+                mv_check_one(xs, locs, covs, nuv, 0);
+
+                mat_free(xs); mat_free(locs); mat_free(covs);
+            }
+            printf("  d=%d, n=1..20 ok\n", d);
+        }
+    }
+}
+
 /* --- solve / chol_solve / det / inverse: verified via finite differences,
    since (unlike Gaussian) there is no pre-existing analytical formula to
    compare against - same technique test_gauss.c uses for its derivatives --- */
@@ -477,6 +733,9 @@ int main(void) {
     test_matmul();
     test_squared_error_and_identity();
     test_gauss_equivalence();
+    test_lgamma_op();
+    test_student_equivalence();
+    test_mv_equivalence();
     test_solve_fd();
     test_chol_solve_fd();
     test_det_fd();

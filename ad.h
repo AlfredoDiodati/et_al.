@@ -1,5 +1,6 @@
 #pragma once
 #include "linalg/solver.h"
+#include "special.h"
 
 /* Reverse-mode automatic differentiation (backpropagation), general-purpose:
    given any scalar expression built from the ops below, compute the exact
@@ -249,6 +250,31 @@ static void ad_log_backward(Node *self) {
 }
 static inline Node *ad_log(Tape *t, Node *a) {
     Node *n = ad_node_new(t, mat_log(a->val), ad_log_backward);
+    n->parents[0] = a; n->n_parents = 1;
+    return n;
+}
+
+/* Elementwise log-Gamma: c = lgamma(a), a > 0 elementwise.
+   d(lgamma(a))/da = psi(a), the digamma function (special.h) - the op
+   that makes gamma-family log-likelihood normalizations (Student t,
+   gamma, beta, ...) differentiable on the tape. Forward and backward
+   both evaluate in double per element (lgamma and special_digamma are
+   double-native - see special.h's header comment for why) and cast to
+   mreal; special_digamma's own x > 0 assert carries the domain
+   contract. Not from the TOMS paper - a scalar elementwise identity
+   like ad_tanh, not a matrix operation. */
+static void ad_lgamma_backward(Node *self) {
+    Node *a = self->parents[0];
+    int n = a->grad.r * a->grad.c;
+    for (int i = 0; i < n; i++)
+        a->grad.d[i] += self->grad.d[i] * (mreal)special_digamma((double)a->val.d[i]);
+}
+static inline Node *ad_lgamma(Tape *t, Node *a) {
+    Mat val = mat_new(a->val.r, a->val.c);
+    int m = val.r * val.c;
+    for (int i = 0; i < m; i++)
+        val.d[i] = (mreal)lgamma((double)a->val.d[i]);
+    Node *n = ad_node_new(t, val, ad_lgamma_backward);
     n->parents[0] = a; n->n_parents = 1;
     return n;
 }

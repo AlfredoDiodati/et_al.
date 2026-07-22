@@ -50,6 +50,7 @@ Node *ad_emul(Tape *t, Node *a, Node *b)
 Node *ad_ediv(Tape *t, Node *a, Node *b)
 Node *ad_exp(Tape *t, Node *a)
 Node *ad_log(Tape *t, Node *a)
+Node *ad_lgamma(Tape *t, Node *a)
 Node *ad_pow(Tape *t, Node *a, mreal p)
 Node *ad_tanh(Tape *t, Node *a)          /* Activation */
 Node *ad_identity(Tape *t, Node *a)      /* Activation - the "linear output" case */
@@ -69,6 +70,10 @@ Node *ad_inv(Tape *t, Node *A)
 
 `tape_backward(t, output)` seeds `output`'s gradient with `1` and runs every backward callback in reverse creation order. `output` must be `1`x`1` - a scalar loss, the standard "the gradient" convention every autodiff system uses.
 
+### `ad_lgamma`
+
+Elementwise log-Gamma with `d(lgamma(a))/da = psi(a)`, the digamma function from `special.h` — the op that makes gamma-family log-likelihood normalizations (Student t, gamma, beta, ...) differentiable on the tape; added together with `dist/student.h`'s `dlogpdf_nu`, whose AD cross-check needs the `lgamma((nu+1)/2) - lgamma(nu/2)` term in the graph. Forward and backward evaluate in double per element and cast to `mreal` (see `docs/SPECIAL_DOCUMENTATION.md` for why double), and `special_digamma`'s `x > 0` assert carries the domain contract. This is `ad.h`'s one dependency beyond `linalg/solver.h`. Not from the TOMS paper — a scalar elementwise identity like `ad_tanh`, not a matrix operation.
+
 ### `ad_solve` / `ad_chol_solve`
 
 `ad_solve(t, A, b)` differentiates `vec_solve(A, b)`: `Abar -= z*x^T`, `bbar += z`, where `z = vec_solve(A^T, xbar)` (the paper's `getrs` row, Table 7).
@@ -82,6 +87,8 @@ Node *ad_inv(Tape *t, Node *A)
 ## Testing
 
 `tests/correctness/test_ad.c` checks known hand-computed gradients for the dense ops (`sum(a*b)` → `b`,`a`; `sum(a^2)` → `2a`; a hand-verified small `matmul`), an explicit fan-out case (a leaf feeding two separate downstream nodes, confirming gradient contributions sum rather than overwrite), `ad_squared_error`'s known output/gradient and `ad_identity`'s pass-through behavior (including the invariant that it returns the same `Node*` it was given), and - the centerpiece, directly answering "does this produce a gradient equivalent to the analytical one" - rebuilds `dist/gauss.h`'s log-pdf formula using `ad_*` ops on same-shape (non-broadcast) `x`/`loc`/`scale`, runs `tape_backward`, and checks the result against `gauss_dlogpdf_loc`/`gauss_dlogpdf_scale` directly, including a `STRESS=1` randomized sweep (using a relative tolerance there, since a `scale` landing near its lower bound can push gradient magnitudes into the hundreds, where an absolute tolerance is the wrong tool). `ad_solve`, `ad_chol_solve`, `ad_det`, and `ad_inv` are verified against central finite differences of an independently-written reference loss (same technique `test_gauss.c` uses for its derivatives), perturbing every element of the relevant input matrix.
+
+The same synthetic-vs-analytical technique extends to the t distributions and the multivariate files: `ad_lgamma` is checked on known forward values, its digamma backward wiring, and a double finite difference of `lgamma` itself; the Student t log-pdf is rebuilt on the tape (including its `ad_lgamma` normalization) and its gradients checked against `student_dlogpdf_loc`/`_scale`/`_nu`; and the multivariate total log-likelihood is rebuilt per observation via `ad_solve`/`ad_det`/`ad_dot` with shared `loc`/`cov`/`nu` leaves and checked against the `mvgauss_*`/`mvstudent_*` scores. The multivariate case is a particularly strong check: the AD path factors `cov` via LU (`vec_solve`/`mat_det`) while the analytical path uses Cholesky (`?potrs`/`?potri`) — numerically disjoint routes that must land on the same gradient, for `loc` (column sums), the full `d x d` `cov` gradient, and the summed `nu` score. All of these get `STRESS=1` randomized sweeps.
 
 ## Known limitations and future work
 

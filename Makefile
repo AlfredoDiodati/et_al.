@@ -26,7 +26,7 @@ MODEL_SUBDIRS := nn
 examples/mat_example: examples/mat_example.c linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/mat_example.c $(LDLIBS) -o examples/mat_example
 
-examples/mlp_example: examples/mlp_example.c nn/mlp.h solver/adam.h solver/optimizer.h ad.h linalg/solver.h linalg/decomp.h linalg/mat.h
+examples/mlp_example: examples/mlp_example.c nn/mlp.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/mlp_example.c $(LDLIBS) -o examples/mlp_example
 
 # --- benchmarks (tests/performance/) ---
@@ -64,7 +64,7 @@ tests/correctness/test_mvgauss: tests/correctness/test_mvgauss.c dist/mv/gauss.h
 tests/correctness/test_mvstudent: tests/correctness/test_mvstudent.c dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h special.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mvstudent.c $(LDLIBS) -o tests/correctness/test_mvstudent
 
-tests/correctness/test_ad: tests/correctness/test_ad.c ad.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_ad: tests/correctness/test_ad.c ad.h dist/gauss.h dist/student.h dist/mv/gauss.h dist/mv/student.h dist/broadcast.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_ad.c $(LDLIBS) -o tests/correctness/test_ad
 
 tests/correctness/test_adam: tests/correctness/test_adam.c solver/adam.h solver/optimizer.h dist/gauss.h dist/broadcast.h linalg/mat.h
@@ -73,7 +73,7 @@ tests/correctness/test_adam: tests/correctness/test_adam.c solver/adam.h solver/
 tests/correctness/test_optimizer: tests/correctness/test_optimizer.c solver/adam.h solver/optimizer.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_optimizer.c $(LDLIBS) -o tests/correctness/test_optimizer
 
-tests/correctness/test_mlp: tests/correctness/test_mlp.c nn/mlp.h solver/adam.h solver/optimizer.h ad.h linalg/solver.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_mlp: tests/correctness/test_mlp.c nn/mlp.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mlp.c $(LDLIBS) -o tests/correctness/test_mlp
 
 tests/correctness/test_frame: tests/correctness/test_frame.c frame/frame.h linalg/mat.h
