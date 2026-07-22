@@ -1,5 +1,6 @@
 #pragma once
 #include "../linalg/mat.h"
+#include "broadcast.h"
 
 /* Gaussian (normal) distribution: pdf, log-pdf, and log-pdf derivatives
    with respect to location and scale.
@@ -28,25 +29,12 @@
 #define GAUSS_SQRT_2PI      2.5066282746310002416123552393401
 #define GAUSS_HALF_LOG_2PI  0.91893853320467274178032973640562
 
-/* a == b, or either is 1 (in which case the other wins). Contract
-   violation (assert) if neither holds - same "assert, don't return an
-   error code" convention linalg/decomp.h/linalg/solver.h use. */
-static inline int gauss_bcast_dim(int a, int b) {
-    assert(a == b || a == 1 || b == 1);
-    return a == 1 ? b : a;
-}
-
-/* Resolve the broadcast output shape of x, loc, scale together. */
+/* Resolve the broadcast output shape of x, loc, scale together. The
+   primitives (dist_bcast_dim, dist_bcast_at) live in dist/broadcast.h,
+   shared with the other element-wise distribution files. */
 static inline void gauss_bcast_shape(Mat x, Mat loc, Mat scale, int *r_out, int *c_out) {
-    *r_out = gauss_bcast_dim(gauss_bcast_dim(x.r, loc.r), scale.r);
-    *c_out = gauss_bcast_dim(gauss_bcast_dim(x.c, loc.c), scale.c);
-}
-
-/* Read m at broadcast position (i,j): a size-1 dimension always reads
-   index 0 regardless of i/j - the same "stretch a size-1 axis by
-   repeated reads, not by copying data" rule NumPy uses. */
-static inline mreal gauss_bcast_at(Mat m, int i, int j) {
-    return AT(m, m.r == 1 ? 0 : i, m.c == 1 ? 0 : j);
+    *r_out = dist_bcast_dim(dist_bcast_dim(x.r, loc.r), scale.r);
+    *c_out = dist_bcast_dim(dist_bcast_dim(x.c, loc.c), scale.c);
 }
 
 /* Return the Gaussian pdf of x at (loc, scale): exp(-z^2/2) / (scale *
@@ -75,9 +63,9 @@ static inline Mat gauss_pdf(Mat x, Mat loc, Mat scale) {
     mreal scale0 = scale_s ? AT(scale,0,0) : 0;
     for (int i = 0; i < r; i++) {
         for (int j = 0; j < c; j++) {
-            mreal xi = gauss_bcast_at(x, i, j);
-            mreal mu = loc_s ? loc0 : gauss_bcast_at(loc, i, j);
-            mreal sg = scale_s ? scale0 : gauss_bcast_at(scale, i, j);
+            mreal xi = dist_bcast_at(x, i, j);
+            mreal mu = loc_s ? loc0 : dist_bcast_at(loc, i, j);
+            mreal sg = scale_s ? scale0 : dist_bcast_at(scale, i, j);
             mreal z = (xi - mu) / sg;
             AT(o,i,j) = MEXP(-(z * z) / 2) / (sg * (mreal)GAUSS_SQRT_2PI);
         }
@@ -112,9 +100,9 @@ static inline Mat gauss_logpdf(Mat x, Mat loc, Mat scale) {
     mreal scale0 = scale_s ? AT(scale,0,0) : 0;
     for (int i = 0; i < r; i++) {
         for (int j = 0; j < c; j++) {
-            mreal xi = gauss_bcast_at(x, i, j);
-            mreal mu = loc_s ? loc0 : gauss_bcast_at(loc, i, j);
-            mreal sg = scale_s ? scale0 : gauss_bcast_at(scale, i, j);
+            mreal xi = dist_bcast_at(x, i, j);
+            mreal mu = loc_s ? loc0 : dist_bcast_at(loc, i, j);
+            mreal sg = scale_s ? scale0 : dist_bcast_at(scale, i, j);
             mreal z = (xi - mu) / sg;
             AT(o,i,j) = -(z * z) / 2 - MLOG(sg) - (mreal)GAUSS_HALF_LOG_2PI;
         }
@@ -152,9 +140,9 @@ static inline Mat gauss_dlogpdf_loc(Mat x, Mat loc, Mat scale) {
     mreal scale0 = scale_s ? AT(scale,0,0) : 0;
     for (int i = 0; i < r; i++) {
         for (int j = 0; j < c; j++) {
-            mreal xi = gauss_bcast_at(x, i, j);
-            mreal mu = loc_s ? loc0 : gauss_bcast_at(loc, i, j);
-            mreal sg = scale_s ? scale0 : gauss_bcast_at(scale, i, j);
+            mreal xi = dist_bcast_at(x, i, j);
+            mreal mu = loc_s ? loc0 : dist_bcast_at(loc, i, j);
+            mreal sg = scale_s ? scale0 : dist_bcast_at(scale, i, j);
             AT(o,i,j) = (xi - mu) / (sg * sg);
         }
     }
@@ -189,9 +177,9 @@ static inline Mat gauss_dlogpdf_scale(Mat x, Mat loc, Mat scale) {
     mreal scale0 = scale_s ? AT(scale,0,0) : 0;
     for (int i = 0; i < r; i++) {
         for (int j = 0; j < c; j++) {
-            mreal xi = gauss_bcast_at(x, i, j);
-            mreal mu = loc_s ? loc0 : gauss_bcast_at(loc, i, j);
-            mreal sg = scale_s ? scale0 : gauss_bcast_at(scale, i, j);
+            mreal xi = dist_bcast_at(x, i, j);
+            mreal mu = loc_s ? loc0 : dist_bcast_at(loc, i, j);
+            mreal sg = scale_s ? scale0 : dist_bcast_at(scale, i, j);
             mreal z = (xi - mu) / sg;
             AT(o,i,j) = (z * z - 1) / sg;
         }

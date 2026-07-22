@@ -18,8 +18,8 @@ PREFIX  ?= /usr/local
 INCDIR  := $(PREFIX)/include/et_al.
 PKGCONFIGDIR := $(PREFIX)/lib/pkgconfig
 
-CORE_HEADERS := ad.h json.h
-CORE_SUBDIRS := linalg dist solver frame
+CORE_HEADERS := ad.h json.h special.h
+CORE_SUBDIRS := linalg dist dist/mv solver frame
 MODEL_SUBDIRS := nn
 
 # --- examples ---
@@ -46,13 +46,28 @@ tests/correctness/test_decomp: tests/correctness/test_decomp.c linalg/decomp.h l
 tests/correctness/test_solver: tests/correctness/test_solver.c linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_solver.c $(LDLIBS) -o tests/correctness/test_solver
 
-tests/correctness/test_gauss: tests/correctness/test_gauss.c dist/gauss.h linalg/mat.h
+tests/correctness/test_special: tests/correctness/test_special.c special.h
+	$(CC) $(CFLAGS) tests/correctness/test_special.c $(LDLIBS) -o tests/correctness/test_special
+
+tests/correctness/test_broadcast: tests/correctness/test_broadcast.c dist/broadcast.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_broadcast.c $(LDLIBS) -o tests/correctness/test_broadcast
+
+tests/correctness/test_gauss: tests/correctness/test_gauss.c dist/gauss.h dist/broadcast.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_gauss.c $(LDLIBS) -o tests/correctness/test_gauss
 
-tests/correctness/test_ad: tests/correctness/test_ad.c ad.h dist/gauss.h linalg/solver.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_student: tests/correctness/test_student.c dist/student.h dist/gauss.h dist/broadcast.h special.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_student.c $(LDLIBS) -o tests/correctness/test_student
+
+tests/correctness/test_mvgauss: tests/correctness/test_mvgauss.c dist/mv/gauss.h dist/gauss.h dist/broadcast.h linalg/decomp.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_mvgauss.c $(LDLIBS) -o tests/correctness/test_mvgauss
+
+tests/correctness/test_mvstudent: tests/correctness/test_mvstudent.c dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h special.h linalg/decomp.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_mvstudent.c $(LDLIBS) -o tests/correctness/test_mvstudent
+
+tests/correctness/test_ad: tests/correctness/test_ad.c ad.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_ad.c $(LDLIBS) -o tests/correctness/test_ad
 
-tests/correctness/test_adam: tests/correctness/test_adam.c solver/adam.h solver/optimizer.h dist/gauss.h linalg/mat.h
+tests/correctness/test_adam: tests/correctness/test_adam.c solver/adam.h solver/optimizer.h dist/gauss.h dist/broadcast.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_adam.c $(LDLIBS) -o tests/correctness/test_adam
 
 tests/correctness/test_optimizer: tests/correctness/test_optimizer.c solver/adam.h solver/optimizer.h linalg/mat.h
@@ -79,11 +94,11 @@ tests/correctness/test_json: tests/correctness/test_json.c json.h
 tests/correctness/test_sql: tests/correctness/test_sql.c frame/sql.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_sql.c $(LDLIBS) -o tests/correctness/test_sql
 
-test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json tests/correctness/test_sql
-	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_gauss && ./tests/correctness/test_ad && ./tests/correctness/test_adam && ./tests/correctness/test_optimizer && ./tests/correctness/test_mlp && ./tests/correctness/test_frame && ./tests/correctness/test_csv && ./tests/correctness/test_txt && ./tests/correctness/test_npy && ./tests/correctness/test_json && ./tests/correctness/test_sql
+test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json tests/correctness/test_sql
+	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_special && ./tests/correctness/test_broadcast && ./tests/correctness/test_gauss && ./tests/correctness/test_student && ./tests/correctness/test_mvgauss && ./tests/correctness/test_mvstudent && ./tests/correctness/test_ad && ./tests/correctness/test_adam && ./tests/correctness/test_optimizer && ./tests/correctness/test_mlp && ./tests/correctness/test_frame && ./tests/correctness/test_csv && ./tests/correctness/test_txt && ./tests/correctness/test_npy && ./tests/correctness/test_json && ./tests/correctness/test_sql
 
-test-stress: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json tests/correctness/test_sql
-	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_gauss && STRESS=1 ./tests/correctness/test_ad && STRESS=1 ./tests/correctness/test_adam && STRESS=1 ./tests/correctness/test_optimizer && STRESS=1 ./tests/correctness/test_mlp && STRESS=1 ./tests/correctness/test_frame && STRESS=1 ./tests/correctness/test_csv && STRESS=1 ./tests/correctness/test_txt && STRESS=1 ./tests/correctness/test_npy && STRESS=1 ./tests/correctness/test_json && STRESS=1 ./tests/correctness/test_sql
+test-stress: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json tests/correctness/test_sql
+	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_special && STRESS=1 ./tests/correctness/test_broadcast && STRESS=1 ./tests/correctness/test_gauss && STRESS=1 ./tests/correctness/test_student && STRESS=1 ./tests/correctness/test_mvgauss && STRESS=1 ./tests/correctness/test_mvstudent && STRESS=1 ./tests/correctness/test_ad && STRESS=1 ./tests/correctness/test_adam && STRESS=1 ./tests/correctness/test_optimizer && STRESS=1 ./tests/correctness/test_mlp && STRESS=1 ./tests/correctness/test_frame && STRESS=1 ./tests/correctness/test_csv && STRESS=1 ./tests/correctness/test_txt && STRESS=1 ./tests/correctness/test_npy && STRESS=1 ./tests/correctness/test_json && STRESS=1 ./tests/correctness/test_sql
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754
 tests/correctness/test_mat_special: tests/correctness/test_mat_special.c linalg/mat.h

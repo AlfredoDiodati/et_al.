@@ -24,6 +24,7 @@ typedef double mreal;
 #define MLAPACK(fn) LAPACKE_d##fn
 #define MEXP  exp
 #define MLOG  log
+#define MLOG1P log1p
 #define MABS  fabs
 #define MSQRT sqrt
 #define MPOW  pow
@@ -35,6 +36,7 @@ typedef float mreal;
 #define MLAPACK(fn) LAPACKE_s##fn
 #define MEXP  expf
 #define MLOG  logf
+#define MLOG1P log1pf
 #define MABS  fabsf
 #define MSQRT sqrtf
 #define MPOW  powf
