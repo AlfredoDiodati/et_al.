@@ -1,5 +1,6 @@
 #pragma once
 #include "../mat.h"
+#include "optimizer.h"
 
 /* Adam: a first-order gradient-based stochastic optimizer with
    per-parameter adaptive learning rates, derived from running estimates
@@ -35,7 +36,10 @@
    however they were produced (a hand-derived analytical gradient like
    dist/gauss.h's, or a tape from ad.h's backward pass, or anything
    else). It does not depend on ad.h, the same way dist/ does not: all
-   three sit above solver.h independently of each other. */
+   three sit above solver.h independently of each other. It does include
+   optimizer.h (the generic pluggable Optimizer interface, also in optim/)
+   to provide adam_optimizer_init below - the adapter that lets a model's
+   fit() (see nn/mlp.h) use Adam without hardcoding it. */
 
 typedef struct {
     Mat m;    /* first moment estimate, same shape as the parameter */
@@ -78,6 +82,7 @@ static inline void adam_free(AdamState *s) {
    e.g. a log-likelihood's). param/grad may be strided views; s->m/s->v
    are always contiguous (allocated by adam_init), so only param/grad
    need the stride check. */
+
 static inline void adam_step(AdamState *s, Mat param, Mat grad) {
     assert(param.r == s->m.r && param.c == s->m.c);
     assert(grad.r == param.r && grad.c == param.c);
@@ -105,4 +110,35 @@ static inline void adam_step(AdamState *s, Mat param, Mat grad) {
             v[idx] = s->beta2 * v[idx] + (1 - s->beta2) * g * g;
             AT(param,i,j) -= s->lr * (m[idx] / bc1) / (MSQRT(v[idx] / bc2) + s->eps);
         }
+}
+
+/* --- Optimizer adapter: lets adam_step be used through the generic
+   optim/optimizer.h interface, e.g. by nn/mlp.h's mlp_fit(). --- */
+
+typedef struct { mreal lr, beta1, beta2, eps; } AdamHyperparams;
+
+/* The paper's recommended defaults (Section 2) - same values as
+   adam_init_default. */
+static inline AdamHyperparams adam_hyperparams_default(void) {
+    AdamHyperparams h = { (mreal)0.001, (mreal)0.9, (mreal)0.999, (mreal)1e-8 };
+    return h;
+}
+
+static inline void adam_optimizer_step(void *state, Mat param, Mat grad) {
+    adam_step((AdamState*)state, param, grad);
+}
+static inline void adam_optimizer_free(void *state) {
+    AdamState *s = (AdamState*)state;
+    adam_free(s);
+    free(s);
+}
+
+/* Builds an Optimizer wrapping a fresh, heap-allocated AdamState for an
+   r x c parameter. hyperparams must point to an AdamHyperparams. */
+static inline Optimizer adam_optimizer_init(const void *hyperparams, int r, int c) {
+    const AdamHyperparams *h = (const AdamHyperparams*)hyperparams;
+    AdamState *s = (AdamState*)malloc(sizeof(AdamState));
+    *s = adam_init(r, c, h->lr, h->beta1, h->beta2, h->eps);
+    Optimizer opt = { s, adam_optimizer_step, adam_optimizer_free };
+    return opt;
 }

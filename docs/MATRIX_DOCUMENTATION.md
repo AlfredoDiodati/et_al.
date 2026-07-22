@@ -2,6 +2,8 @@
 
 ## Project overview
 
+**Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy).
+
 A pure C (C11), single-header matrix library targeting econometrics research, built for the performance class of JAX/NumPy/numba without needing a Python runtime, pandas, or matplotlib. The design goals are:
 - Simple, readable API similar in spirit to numpy/R (function-call style - C does not support operator overloading)
 - Zero-copy views via stride-based slicing and reshaping

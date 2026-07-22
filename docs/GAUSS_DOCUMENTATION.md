@@ -2,6 +2,8 @@
 
 ## Overview
 
+**Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy) — pdf/log-pdf/derivatives only, no fitting procedure, the same reasoning that keeps `dist/` general-purpose-statistics rather than model-tier.
+
 `dist/gauss.h` implements the univariate Gaussian (normal) distribution: pdf, log-pdf, and the log-pdf's derivatives with respect to location and scale. It is the first file in `dist/`, the layer above `solver.h` for probability distributions - one file per distribution, each named after and prefixed with the distribution's own short name (`gauss_*` here). It includes `mat.h` only; it does not need `decomp.h`/`solver.h` since the univariate case has no matrix factorization in it. A future multivariate Gaussian would need them (Cholesky of the covariance matrix, a triangular solve for the quadratic form) and would likely live in this same file as a second function group, or a new one, once that need is concrete.
 
 Every distribution file is expected to eventually expose the same four-function shape for each of its parameters that admit a location/scale role: `<dist>_pdf`, `<dist>_logpdf`, `<dist>_dlogpdf_loc`, `<dist>_dlogpdf_scale`. Generic `_loc`/`_scale` names (not `_mu`/`_sigma`) were chosen deliberately so this pattern transfers verbatim to future location-scale families (Laplace, logistic, Student-t, ...) instead of each file inventing its own vocabulary.

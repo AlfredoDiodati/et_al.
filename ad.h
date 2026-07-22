@@ -17,8 +17,12 @@
    matmul C=AB of n x n matrices has a computation tree of ~2n^3 scalar
    nodes, but the matrix-level adjoint Abar += Cbar*B^T, Bbar += A^T*Cbar
    needs no more storage than A, B, C themselves. This file implements
-   general dense arithmetic, gemm, dot, and sum from the paper's Table 3,
-   and - because the paper derives them via differentiating the *inverse*
+   general dense arithmetic (including tanh and identity, two of the
+   activation functions currently exposed - not from the paper, standard
+   elementwise identities, see ad_tanh/ad_identity below - plus
+   ad_squared_error, a Criterion for fit-style training loops, likewise not
+   from the paper), gemm, dot, and sum from the paper's
+   Table 3, and - because the paper derives them via differentiating the *inverse*
    operation (Section 2.3) rather than from scratch - getrs/determinant/
    matrix-inverse from Table 7, all of which this library already had
    forward implementations for in decomp.h/solver.h. The one place this
@@ -59,6 +63,17 @@ typedef struct {
     Node **nodes; /* creation order == topological order, see file comment */
     int n, cap;
 } Tape;
+
+/* Activation: an elementwise nonlinearity applied inside a forward pass
+   (ad_tanh below is the first; ad_identity the second - the "linear
+   output" case). Criterion: a loss comparing a prediction to a target,
+   reducing to a 1x1 scalar (ad_squared_error below is the first). Both
+   typedefs live here, not in nn/mlp.h (their first consumer), because they
+   are plain Tape/Node-level concepts any future model header needs - per
+   README's "Model fit/forecast API" policy, a model header must not have
+   to include another, unrelated model header just to get these. */
+typedef Node *(*Activation)(Tape *t, Node *x);
+typedef Node *(*Criterion)(Tape *t, Node *pred, Node *target);
 
 static inline Tape *tape_new(void) {
     Tape *t = (Tape*)malloc(sizeof(Tape));
@@ -196,6 +211,36 @@ static inline Node *ad_exp(Tape *t, Node *a) {
     return n;
 }
 
+/* d(tanh(a))/da = 1 - tanh(a)^2 = 1 - c^2 (already computed, no need to
+   recompute MTANH). The first activation function this file exposes -
+   see nn/mlp.h, which selects it via the Activation function-pointer
+   type (Node *(*)(Tape*, Node*)) exactly matching this signature. */
+static void ad_tanh_backward(Node *self) {
+    Node *a = self->parents[0];
+    int n = a->grad.r * a->grad.c;
+    for (int i = 0; i < n; i++) {
+        mreal y = self->val.d[i];
+        a->grad.d[i] += self->grad.d[i] * (1 - y * y);
+    }
+}
+static inline Node *ad_tanh(Tape *t, Node *a) {
+    Node *n = ad_node_new(t, mat_tanh(a->val), ad_tanh_backward);
+    n->parents[0] = a; n->n_parents = 1;
+    return n;
+}
+
+/* Identity activation - the "linear output" case (e.g. a regression
+   model's out_act, where the raw pre-activation value is the prediction,
+   not something squashed into (-1,1) by tanh). No new node is needed: an
+   identity function's forward value and gradient are literally the input
+   unchanged, so returning a as-is is correct, not a shortcut - there is
+   nothing for a backward callback to do that isn't already done by a's own
+   parents accumulating directly into a->grad. */
+static inline Node *ad_identity(Tape *t, Node *a) {
+    (void)t;
+    return a;
+}
+
 /* d(log(a))/da = 1/a */
 static void ad_log_backward(Node *self) {
     Node *a = self->parents[0];
@@ -257,6 +302,17 @@ static inline Node *ad_sum(Tape *t, Node *a) {
     Node *n = ad_node_new(t, val, ad_sum_backward);
     n->parents[0] = a; n->n_parents = 1;
     return n;
+}
+
+/* --- criteria: fit-style training loops reduce a (pred, target) pair to a
+   1x1 loss via a Criterion (see typedef above) --- */
+
+/* sum((pred - target)^2) over every element - the first Criterion. Built
+   entirely from existing ops (ad_sub/ad_emul/ad_sum), so its gradient is
+   correct by construction; no new backward rule needed. */
+static inline Node *ad_squared_error(Tape *t, Node *pred, Node *target) {
+    Node *diff = ad_sub(t, pred, target);
+    return ad_sum(t, ad_emul(t, diff, diff));
 }
 
 /* --- matmul --- */

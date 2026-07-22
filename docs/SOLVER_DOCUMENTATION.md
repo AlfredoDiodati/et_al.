@@ -2,6 +2,8 @@
 
 ## Overview
 
+**Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy).
+
 `solver.h` implements the ways a caller actually wants to use the factorizations in `decomp.h`: solving a square linear system (generally, exploiting symmetry, or reusing an existing factorization), and solving an overdetermined one in the least-squares sense (assuming full column rank, or robust to rank deficiency). It includes `decomp.h` (and transitively `mat.h`); `decomp.h` never includes this file. Same `mreal`/`MLAPACK` dual-precision style as `mat.h`/`decomp.h` - see `docs/MATRIX_DOCUMENTATION.md`'s Precision section.
 
 Most functions here call LAPACKE's driver routines (`?gesv`, `?sysv`, `?gels`, `?gelsd`) directly rather than composing `decomp.h`'s `mat_lu`/`mat_chol`/`mat_qr` themselves - the driver routines do the factor-and-solve in one call, which is both simpler and avoids an extra copy. The two exceptions are `vec_lu_solve`/`vec_chol_solve`, which deliberately take an already-computed `decomp.h` factorization instead of factoring again - see their own entries below.

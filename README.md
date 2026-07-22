@@ -5,12 +5,14 @@ A pure C (C11) linear algebra and econometrics compute backend, targeting the pe
 Layers, each building on the last:
 
 ```
-                    ┌─ dist/*.h    (distributions)
-mat.h <- decomp.h <- solver.h ─┼─ ad.h         (autodiff)
-                    └─ optim/*.h  (optimizers)
+                    ┌─ dist/*.h                              (distributions)
+mat.h <- decomp.h <- solver.h ─┼─ ad.h                       (autodiff)
+                    └─ optim/optimizer.h ← optim/adam.h      (optimizers)
+
+nn/*.h ← ad.h, optim/optimizer.h   (neural nets: forward pass from ad.h, training via optim/)
 ```
 
-`mat.h` is the dense core (types, views, arithmetic, matmul). `decomp.h` adds factorizations (Cholesky, LU, QR, eigendecomposition, SVD) and quantities derived from them (determinant, inverse, condition number, rank). `solver.h` adds the two top-level things a caller actually wants: solving `Ax = b`, and least squares. Three independent layers build on top of that core, none depending on the others: `dist/` adds probability distributions (pdf, log-pdf, and hand-derived log-pdf derivatives) - one file per distribution; `ad.h` adds general-purpose reverse-mode automatic differentiation (backpropagation) - given any expression built from its ops, it computes the exact gradient with respect to any traced input, not tied to any specific loss or distribution; `optim/` adds gradient-based optimizers (Adam so far) that update a parameter given *any* gradient, however it was produced - a hand-derived one from `dist/`, a tape-computed one from `ad.h`, or anything else. They're verified against each other only in tests, not via `#include`: `ad.h`'s gradient of a hand-built Gaussian log-likelihood is checked against `dist/gauss.h`'s analytical derivative, and `optim/adam.h` is exercised end to end by using `dist/gauss.h`'s analytical gradient to fit a Gaussian's parameters via MLE.
+`mat.h` is the dense core (types, views, arithmetic, matmul). `decomp.h` adds factorizations (Cholesky, LU, QR, eigendecomposition, SVD) and quantities derived from them (determinant, inverse, condition number, rank). `solver.h` adds the two top-level things a caller actually wants: solving `Ax = b`, and least squares. Three independent layers build on top of that core, none depending on the others: `dist/` adds probability distributions (pdf, log-pdf, and hand-derived log-pdf derivatives) - one file per distribution; `ad.h` adds general-purpose reverse-mode automatic differentiation (backpropagation) - given any expression built from its ops, it computes the exact gradient with respect to any traced input, not tied to any specific loss or distribution - plus the `Activation`/`Criterion` function-pointer types any model built on top of it selects concrete ops through; `optim/` adds gradient-based optimizers (Adam so far) behind a generic pluggable `Optimizer` interface (`optim/optimizer.h`, implemented by `optim/adam.h`) that updates a parameter given *any* gradient, however it was produced - a hand-derived one from `dist/`, a tape-computed one from `ad.h`, or anything else. `nn/` builds directly on `ad.h` (a network's forward pass is just another traced expression) **and** on `optim/optimizer.h` - unlike `dist/`/`ad.h`/`optim/`, which are independent of each other, `nn/mlp.h`'s `mlp_fit` genuinely needs both gradient production and consumption in one function to implement this project's Model fit/forecast API (see Policies below), so it is the one case where a model header includes an optimizer header directly rather than only using one in tests. `dist/`, `ad.h`, and `optim/` are still verified against each other primarily in tests: `ad.h`'s gradient of a hand-built Gaussian log-likelihood is checked against `dist/gauss.h`'s analytical derivative, and `optim/adam.h` is exercised end to end by using `dist/gauss.h`'s analytical gradient to fit a Gaussian's parameters via MLE.
 
 For the full API reference of each header, see its dedicated doc:
 - [docs/MATRIX_DOCUMENTATION.md](docs/MATRIX_DOCUMENTATION.md) — `mat.h`
@@ -18,7 +20,9 @@ For the full API reference of each header, see its dedicated doc:
 - [docs/SOLVER_DOCUMENTATION.md](docs/SOLVER_DOCUMENTATION.md) — `solver.h`
 - [docs/GAUSS_DOCUMENTATION.md](docs/GAUSS_DOCUMENTATION.md) — `dist/gauss.h`
 - [docs/AD_DOCUMENTATION.md](docs/AD_DOCUMENTATION.md) — `ad.h`
+- [docs/OPTIMIZER_DOCUMENTATION.md](docs/OPTIMIZER_DOCUMENTATION.md) — `optim/optimizer.h`
 - [docs/ADAM_DOCUMENTATION.md](docs/ADAM_DOCUMENTATION.md) — `optim/adam.h`
+- [docs/MLP_DOCUMENTATION.md](docs/MLP_DOCUMENTATION.md) — `nn/mlp.h`
 
 This file covers directory structure, build instructions, and the policies/principles that govern how the codebase grows — no API documentation lives here.
 
@@ -26,11 +30,14 @@ This file covers directory structure, build instructions, and the policies/princ
 
 - [Directory structure](#directory-structure)
 - [Build](#build)
+- [Installation](#installation)
 - [Testing and benchmarking](#testing-and-benchmarking)
 - [Policies](#policies)
   - [Dependencies](#dependencies)
   - [Documentation structure](#documentation-structure)
   - [Adding files and headers](#adding-files-and-headers)
+  - [Model fit/forecast API](#model-fitforecast-api)
+  - [Installation tiers](#installation-tiers)
   - [Testing requirements](#testing-requirements)
 - [Design principles](#design-principles)
 - [Pitfalls](#pitfalls)
@@ -48,7 +55,11 @@ Clgebra/
 │   └── gauss.h                     # Gaussian: pdf, log-pdf, d(log-pdf)/d(loc, scale)
 │
 ├── optim/                          # gradient-based optimizers — one file per algorithm, above mat.h
-│   └── adam.h                      # Adam (Kingma & Ba 2015) — see docs/ADAM_DOCUMENTATION.md for the citation
+│   ├── optimizer.h                 # generic pluggable Optimizer interface — see docs/OPTIMIZER_DOCUMENTATION.md
+│   └── adam.h                      # Adam (Kingma & Ba 2015) — implements optimizer.h; see docs/ADAM_DOCUMENTATION.md for the citation
+│
+├── nn/                             # neural network architectures — one file per architecture, above ad.h
+│   └── mlp.h                       # fully connected feedforward MLP — arbitrary depth/width, one activation for now
 │
 ├── tests/
 │   ├── correctness/                # is it right? — one test_<noun>.c per header, make test
@@ -58,14 +69,17 @@ Clgebra/
 │   │   ├── test_solver.c
 │   │   ├── test_gauss.c
 │   │   ├── test_ad.c
-│   │   └── test_adam.c
+│   │   ├── test_adam.c
+│   │   ├── test_optimizer.c
+│   │   └── test_mlp.c
 │   │
 │   └── performance/                # is it fast? — one bench_<noun>.c + .py pair per header, vs NumPy
 │       ├── bench_matmul.c / bench_matmul.py
 │       └── bench_decomp.c / bench_decomp.py
 │
 ├── examples/
-│   └── mat_example.c  # usage example covering the full API
+│   ├── mat_example.c  # usage example covering the full API
+│   └── mlp_example.c  # forward pass + full training loop (nn/mlp.h + ad.h + optim/adam.h) on XOR
 │
 ├── docs/
 │   ├── MATRIX_DOCUMENTATION.md   # full reference for mat.h
@@ -73,7 +87,9 @@ Clgebra/
 │   ├── SOLVER_DOCUMENTATION.md   # full reference for solver.h
 │   ├── GAUSS_DOCUMENTATION.md    # full reference for dist/gauss.h
 │   ├── AD_DOCUMENTATION.md       # full reference for ad.h
-│   └── ADAM_DOCUMENTATION.md     # full reference for optim/adam.h
+│   ├── OPTIMIZER_DOCUMENTATION.md # full reference for optim/optimizer.h
+│   ├── ADAM_DOCUMENTATION.md     # full reference for optim/adam.h
+│   └── MLP_DOCUMENTATION.md      # full reference for nn/mlp.h
 │
 ├── scripts/
 │   └── install-hooks.sh           # installs git hooks after cloning
@@ -83,13 +99,16 @@ Clgebra/
 └── README.md                      # this file — policies, principles, build; no API docs
 ```
 
-The dependency direction is strict: `solver.h` includes `decomp.h`; `decomp.h` includes `mat.h`; `dist/*.h`, `ad.h`, and `optim/*.h` each include whichever lower layer they actually need (`dist/gauss.h` and `optim/adam.h` only need `mat.h` today; `ad.h` needs the full chain up to `solver.h` for its solve/determinant/inverse adjoints). No header includes a file above itself in that chain, and the three top layers never include each other. If you find yourself needing to, the function belongs in the lower layer.
+The dependency direction is strict: `solver.h` includes `decomp.h`; `decomp.h` includes `mat.h`; `dist/*.h` and `ad.h` each include whichever lower layer they actually need (`dist/gauss.h` only needs `mat.h`; `ad.h` needs the full chain up to `solver.h` for its solve/determinant/inverse adjoints); `optim/adam.h` includes `optim/optimizer.h` (the interface it implements) and `mat.h`; `nn/*.h` includes `ad.h` **and** `optim/optimizer.h`. No header includes a file above itself in that chain, and `dist/`/`ad.h`/`optim/` never include each other. `nn/*.h` is the one exception to "a model doesn't include an optimizer header": `mlp_fit` is training *orchestration*, which genuinely needs both gradient production (`ad.h`) and consumption (`optim/optimizer.h`'s generic `Optimizer`) in the same function to implement the Model fit/forecast API below - unlike `mlp_forward`/`mlp_init`/`mlp_free` (structure only), which stay fully decoupled from `optim/`. If you find yourself needing a dependency this paragraph doesn't already allow, the function likely belongs in a lower layer instead.
 
 ## Build
 
 ```bash
 make examples/mat_example   # build and run the usage example
 ./examples/mat_example
+
+make examples/mlp_example   # build and run the MLP training example (XOR)
+./examples/mlp_example
 
 make test                   # build and run all correctness tests
 make test-special           # special value tests (built without -ffast-math)
@@ -111,6 +130,36 @@ bash scripts/install-hooks.sh
 ```
 
 `test_report.txt` is generated output and is listed in `.gitignore`.
+
+## Installation
+
+Clgebra is header-only; "installing" it means making its headers - plus the OpenBLAS flags they need - available to *another* project's compiler, not building a `.so`/`.a` of its own. Two installable tiers exist (see [Installation tiers](#installation-tiers) under Policies for what belongs in each and why):
+
+```bash
+sudo make install-core PREFIX=/usr/local    # math + general-purpose statistics only
+sudo make install-model PREFIX=/usr/local   # install-core, plus nn/ (model architectures)
+```
+
+`PREFIX` defaults to `/usr/local` if omitted. Each target installs headers to `$(PREFIX)/include/clgebra/`, preserving the repo's own relative directory structure (so e.g. `nn/mlp.h`'s `#include "../ad.h"` still resolves correctly after installation), and writes a `pkg-config` file (`clgebra-core.pc` / `clgebra-model.pc`) to `$(PREFIX)/lib/pkgconfig/`. A consuming project then just needs:
+
+```bash
+cc myproject.c $(pkg-config --cflags --libs clgebra-model) -o myproject
+# math-only tier:
+cc myproject.c $(pkg-config --cflags --libs clgebra-core) -o myproject
+```
+
+```c
+#include <mat.h>
+#include <nn/mlp.h>   /* only after installing the model tier */
+```
+
+`clgebra-model.pc` declares `Requires: clgebra-core`, so referencing `clgebra-model` alone pulls in everything - including the OpenBLAS/`libm` flags baked into `clgebra-core.pc` at install time - with no need to reference both `.pc` files yourself.
+
+If `pkg-config --cflags clgebra-core` can't find it after installing to a non-default `PREFIX`, add that prefix's `lib/pkgconfig` to `PKG_CONFIG_PATH` (e.g. `export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig`) - most systems don't search non-standard prefixes by default.
+
+`make uninstall-core` / `make uninstall-model` (same `PREFIX`) reverse the corresponding install. `uninstall-core` also removes the model tier if present - a model install with no core underneath it is broken either way, so leaving it dangling isn't a safer default.
+
+There is no `install-dev`/third-tier install target - per [Installation tiers](#installation-tiers), development-tier content (tests, benchmarks, examples) is only relevant if you're working on Clgebra itself, and is available simply by having the repo cloned; it is never copied to another system.
 
 ## Testing and benchmarking
 
@@ -168,20 +217,63 @@ Topics that span multiple layers (memory ownership, special value behavior, row-
 
 ### Adding files and headers
 
-Create a new `.h` file only when a group of functions introduces a concept that does not belong in the current lowest layer. The test is the include direction: if the new functions call existing ones but existing ones never need to call them back, a new header is warranted. A new layer must fit into the `mat.h <- decomp.h <- solver.h` chain, extend it downward (below `mat.h`, closer to hardware), or extend it upward (above the topmost existing layer, further from hardware). Three layers currently sit above the core this way - `dist/`, `ad.h`, `optim/` - added independently of each other, each for its own new concern (distributions; general differentiation; gradient-based optimization), none depending on the others. Do not add a header at the same level as an existing one that duplicates its role — merge into it instead. That's why eigendecomposition and SVD live in `decomp.h` rather than a new file: they're the same conceptual role (decomposition) as Cholesky/LU/QR. `dist/`/`optim/` are new directories for the same reason a new layer sometimes needs one: each covers a wholly new concern that doesn't belong inside `tests/`, `examples/`, or the `mat.h`/`decomp.h`/`solver.h` chain's existing files - and `optim/` specifically was named to avoid colliding with `solver.h`'s already-established meaning ("solving `Ax=b`") even though both are, in the loose sense, "solvers."
+Create a new `.h` file only when a group of functions introduces a concept that does not belong in the current lowest layer. The test is the include direction: if the new functions call existing ones but existing ones never need to call them back, a new header is warranted. A new layer must fit into the `mat.h <- decomp.h <- solver.h` chain, extend it downward (below `mat.h`, closer to hardware), or extend it upward (above the topmost existing layer, further from hardware). Four layers currently sit above the core this way - `dist/`, `ad.h`, `optim/`, `nn/` - each for its own new concern (distributions; general differentiation; gradient-based optimization; network architectures). The first three are independent of each other; `nn/` is the exception, building directly on `ad.h` rather than the core (see the layer diagram above) - a valid "extend upward" move all the same, just from a point higher up the chain than `solver.h`. Do not add a header at the same level as an existing one that duplicates its role — merge into it instead. That's why eigendecomposition and SVD live in `decomp.h` rather than a new file: they're the same conceptual role (decomposition) as Cholesky/LU/QR. `dist/`/`optim/`/`nn/` are new directories for the same reason a new layer sometimes needs one: each covers a wholly new concern that doesn't belong inside `tests/`, `examples/`, or the existing chain's files - and `optim/` specifically was named to avoid colliding with `solver.h`'s already-established meaning ("solving `Ax=b`") even though both are, in the loose sense, "solvers."
 
 | What | Pattern | Example |
 |---|---|---|
 | Core compute layer | `<noun>.h` | `mat.h`, `decomp.h`, `ad.h` |
 | Distribution | `dist/<noun>.h` | `dist/gauss.h` |
 | Optimizer | `optim/<noun>.h` | `optim/adam.h` |
+| Network architecture | `nn/<noun>.h` | `nn/mlp.h` |
 | Correctness test | `tests/correctness/test_<noun>.c` | `tests/correctness/test_decomp.c` |
 | Benchmark wrapper + driver | `tests/performance/bench_<noun>.c` + `tests/performance/bench_<noun>.py` | `tests/performance/bench_decomp.c` + `.py` |
 | Usage example | `examples/<noun>_example.c` | `examples/mat_example.c` |
 
 Every new `.h` file gets a corresponding `tests/correctness/test_<name>.c` created immediately, even if it only contains a `main` that prints "no tests yet" — a header without a test file is a signal that the test was skipped, not that correctness was verified. Add a target to the Makefile for every new binary (test, example, benchmark), and add new test binaries to the `test` phony target's dependency list; `make test` must stay green before any commit.
 
-What does *not* get a new file: a single new function that fits naturally in an existing header; a private helper (e.g. `clamp`) used only inside one header, which stays `static inline` there rather than in a shared `utils.h`/`common.h` (if two headers need the same helper, it belongs in the lower of the two - `dist/gauss.h`'s broadcasting helpers are private to it for now on exactly this reasoning, since no second distribution file exists yet to actually share them with); a new top-level directory beyond `tests/`, `examples/`, `dist/`, and `optim/`, or a new subfolder under `tests/` beyond `correctness/` and `performance/`, unless a wholly new concern arrives (GPU kernels, sparse storage) that cannot fit into the existing categories.
+What does *not* get a new file: a single new function that fits naturally in an existing header; a private helper (e.g. `clamp`) used only inside one header, which stays `static inline` there rather than in a shared `utils.h`/`common.h` (if two headers need the same helper, it belongs in the lower of the two - `dist/gauss.h`'s broadcasting helpers are private to it for now on exactly this reasoning, since no second distribution file exists yet to actually share them with); a new top-level directory beyond `tests/`, `examples/`, `dist/`, `optim/`, and `nn/`, or a new subfolder under `tests/` beyond `correctness/` and `performance/`, unless a wholly new concern arrives (GPU kernels, sparse storage) that cannot fit into the existing categories.
+
+### Model fit/forecast API
+
+Every statistical/ML model header (currently `nn/mlp.h`; any future `dist/`-based regression, GLM, etc.) exposes training and prediction through the same shape, not a bespoke training loop per model:
+
+```c
+<Model>Fit <model>_fit(Mat train_X, Mat train_Y, Criterion criterion,
+                        OptimizerInit solver_init, const void *solver_hyperparams,
+                        <Model>Hyperparams hyperparams, <Model>FitOptions options);
+Mat <model>_forecast(const <Model>Fit *fit, Mat test_X);
+void <model>_fit_free(<Model>Fit *fit);
+```
+
+- `train_X`/`test_X` are `d_in x n` (one column per sample); `train_Y` is `d_out x n` — `mat_slice` gives per-sample access with no copy, so `fit`/`forecast` loop columns rather than requiring a batched forward pass.
+- `criterion` (`Criterion`, `ad.h`) and `solver_init`/`solver_hyperparams` (`OptimizerInit`, `optim/optimizer.h`) are swappable independently of the model and of each other — a model's `fit()` must not hardcode a specific loss or optimizer.
+- `<Model>Hyperparams` is model-structural (architecture — e.g. `nn/mlp.h`'s layer sizes and hidden/output activations); `<Model>FitOptions` is training-procedural (epochs, seed, verbosity) and must never affect the trained model's architecture.
+- `<Model>Fit` bundles the trained model with fit diagnostics (at minimum the final loss) and owns the model's memory — free it with `<model>_fit_free`, never by reaching into its fields directly.
+- A model's lower-level structural primitives (e.g. `mlp_init`/`mlp_forward`/`mlp_free`) stay public for a custom training loop; `fit()` is convenience built on top of them, not a replacement.
+
+`nn/mlp.h`'s `mlp_fit`/`mlp_forecast` is the reference implementation — see `docs/MLP_DOCUMENTATION.md`.
+
+### Installation tiers
+
+Every file added to this project belongs to exactly one of three installation tiers (see [Installation](#installation) for the practical `make install-core`/`install-model` mechanics), and a new header must state which one in its own doc file's Overview section:
+
+| Tier | Contains | Python analogy | May depend on |
+|---|---|---|---|
+| **core** | Dense linear algebra, autodiff, general-purpose statistics — no model implementations | `numpy` + `scipy` | nothing else in this project |
+| **model** | Model architectures exposing the fit/forecast API (see [Model fit/forecast API](#model-fitforecast-api) above) | `scikit-learn` / `statsmodels` | core only |
+| **development** | Tests, benchmarks (including their Python drivers), usage examples, dev scripts — useful only for actively developing Clgebra itself | a package's own test suite / CI scripts, never shipped to users | core and/or model — but is itself never depended on by either, and is never installed |
+
+The dependency rule is strict, in the same direction and for the same reason as every other layering rule in this file: **a lower tier must never depend on a higher one.** No `core` header may `#include` anything from `nn/` (or any future `model`-tier file), and nothing outside `tests/`/`examples/`/`scripts/` may depend on Python or other dev-only tooling. This already falls directly out of the existing `#include` chain (`nn/mlp.h` includes `ad.h`/`optim/optimizer.h`, never the reverse) — installation tiers are a packaging view of the dependency direction the codebase already enforces, not a separate set of rules to independently maintain.
+
+Current tier assignments:
+
+| Tier | Files |
+|---|---|
+| core | `mat.h`, `decomp.h`, `solver.h`, `ad.h`, `dist/gauss.h`, `optim/optimizer.h`, `optim/adam.h` |
+| model | `nn/mlp.h` |
+| development | everything under `tests/`, `examples/`, `scripts/` |
+
+Tier is about what a file *does*, not which directory it happens to sit in. `dist/gauss.h` is core, not model, despite being exactly the kind of directory a future fit/forecast-style file might also live in (e.g. a hypothetical `dist/`-based regression) — `gauss.h` itself only computes pdf/log-pdf/derivatives (the `scipy.stats` equivalent), with no fitting procedure. `ad.h` and `optim/adam.h` are core rather than model for the same reason: both are general-purpose numerical tools (autodiff; gradient-based optimization) usable independently of any model architecture — `optim/adam.h` fitting a Gaussian's `loc`/`scale` via `dist/gauss.h`'s analytical gradient (`tests/correctness/test_adam.c`) is exactly this in action, with no model in sight. When adding a new file, classify it by what it does, then update both this table and the file's own doc.
 
 ### Testing requirements
 

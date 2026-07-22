@@ -26,6 +26,7 @@ typedef double mreal;
 #define MABS  fabs
 #define MSQRT sqrt
 #define MPOW  pow
+#define MTANH tanh
 #define MEPS  DBL_EPSILON
 #else
 typedef float mreal;
@@ -36,6 +37,7 @@ typedef float mreal;
 #define MABS  fabsf
 #define MSQRT sqrtf
 #define MPOW  powf
+#define MTANH tanhf
 #define MEPS  FLT_EPSILON
 #endif
 
@@ -273,6 +275,20 @@ static inline Mat mat_sqrt(Mat a) {
         for (int i = 0; i < a.r; i++)
             for (int j = 0; j < a.c; j++)
                 AT(o,i,j) = MSQRT(AT(a,i,j));
+    }
+    return o;
+}
+/* Return tanh(x) for every element x. */
+static inline Mat mat_tanh(Mat a) {
+    Mat o = mat_new(a.r, a.c);
+    if (a.stride == a.c) {
+        int n = a.r * a.c;
+        mreal *restrict pa = a.d, *restrict po = o.d;
+        for (int i = 0; i < n; i++) po[i] = MTANH(pa[i]);
+    } else {
+        for (int i = 0; i < a.r; i++)
+            for (int j = 0; j < a.c; j++)
+                AT(o,i,j) = MTANH(AT(a,i,j));
     }
     return o;
 }

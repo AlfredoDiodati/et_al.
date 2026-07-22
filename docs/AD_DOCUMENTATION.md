@@ -2,6 +2,8 @@
 
 ## Overview
 
+**Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy) — a general-purpose numerical tool, not a model implementation.
+
 `ad.h` implements general-purpose reverse-mode automatic differentiation: given any scalar expression built from the ops below, it computes the exact gradient with respect to every traced input in a single backward pass. It is not tied to any specific loss function, distribution, or solver - it differentiates whatever computation graph is built with its ops, the same way any autodiff engine (PyTorch's autograd, JAX's grad) does, just without operator overloading (C has none) and at the granularity of whole matrix operations rather than individual scalars.
 
 Adjoint (backward / vector-Jacobian-product) formulae are taken, wherever they apply as literally stated, from:
@@ -12,7 +14,9 @@ That paper's contribution - and the reason it's a good fit here - is deriving re
 
 ## Scope
 
-Implemented: general dense arithmetic (`add`, `sub`, `scale` by a constant, elementwise `mul`/`div`, `exp`, `log`, `pow` by a constant exponent), `sum` and `dot` reductions, `matmul`, and - the part that needed `decomp.h`/`solver.h` - `solve`, a Cholesky-factor solve, `det`, and matrix `inv`.
+Implemented: general dense arithmetic (`add`, `sub`, `scale` by a constant, elementwise `mul`/`div`, `exp`, `log`, `pow` by a constant exponent, `tanh`, `identity`), `sum` and `dot` reductions, `matmul`, `squared_error` (a `Criterion`), and - the part that needed `decomp.h`/`solver.h` - `solve`, a Cholesky-factor solve, `det`, and matrix `inv`.
+
+`Activation` (`Node *(*)(Tape*, Node*)`) and `Criterion` (`Node *(*)(Tape*, Node *pred, Node *target)`) are two function-pointer types declared here, not in their first consumer (`nn/mlp.h`). Both are plain Tape/Node-level concepts - any future model header needs them the same way `nn/mlp.h` does, and per README's "Model fit/forecast API" policy, a model header must not have to include another, unrelated model header just to get a shared type. `ad_tanh`/`ad_identity` are the two concrete `Activation`s so far; `ad_squared_error` is the one concrete `Criterion`.
 
 Deferred: raw LU/Cholesky *factorization* adjoints (differentiating `mat_lu`/`mat_chol` themselves, as opposed to a solve or determinant that happens to use a factorization internally). The paper's formulae for these are a bottom-up, right-to-left triangular back-substitution procedure, not a single BLAS/LAPACK call - meaningfully more implementation work, and not needed as long as solves and determinants are differentiated directly, which covers the common MLE case (a quadratic form and a log-determinant, both expressible via `ad_solve`/`ad_chol_solve` and `ad_det` without ever needing the bare factorization's own adjoint).
 
@@ -36,6 +40,9 @@ void tape_free(Tape *t)
 Node *ad_leaf(Tape *t, Mat val)
 void tape_backward(Tape *t, Node *output)
 
+typedef Node *(*Activation)(Tape *t, Node *x);
+typedef Node *(*Criterion)(Tape *t, Node *pred, Node *target);
+
 Node *ad_add(Tape *t, Node *a, Node *b)
 Node *ad_sub(Tape *t, Node *a, Node *b)
 Node *ad_scale(Tape *t, Node *a, mreal s)
@@ -44,14 +51,19 @@ Node *ad_ediv(Tape *t, Node *a, Node *b)
 Node *ad_exp(Tape *t, Node *a)
 Node *ad_log(Tape *t, Node *a)
 Node *ad_pow(Tape *t, Node *a, mreal p)
+Node *ad_tanh(Tape *t, Node *a)          /* Activation */
+Node *ad_identity(Tape *t, Node *a)      /* Activation - the "linear output" case */
 Node *ad_dot(Tape *t, Node *x, Node *y)
 Node *ad_sum(Tape *t, Node *a)
 Node *ad_matmul(Tape *t, Node *a, Node *b)
+Node *ad_squared_error(Tape *t, Node *pred, Node *target)  /* Criterion */
 Node *ad_solve(Tape *t, Node *A, Node *b)
 Node *ad_chol_solve(Tape *t, Node *L, Node *b)
 Node *ad_det(Tape *t, Node *A)
 Node *ad_inv(Tape *t, Node *A)
 ```
+
+`ad_identity` returns its argument unchanged - literally the same `Node*`, not a copy or a new node - since an identity function's forward value and backward gradient are both just the input as-is; there is nothing for a dedicated backward callback to do. `ad_squared_error(t, pred, target)` is `ad_sum(t, ad_emul(t, diff, diff))` where `diff = ad_sub(t, pred, target)` - built entirely from existing ops, so its gradient is correct by construction, needing no new backward rule of its own.
 
 `ad_leaf` wraps a `Mat` as an untracked input (a graph root) - it copies `val`, matching this library's usual "functions own new memory, never the caller's" convention for the copy itself, even though the copy then becomes tape-owned rather than caller-owned. Every other `ad_*` function both computes the forward value (by calling the corresponding `mat_*`/`vec_*`/LAPACKE-wrapping function) and records a backward rule on the tape.
 
@@ -69,7 +81,7 @@ Node *ad_inv(Tape *t, Node *A)
 
 ## Testing
 
-`tests/correctness/test_ad.c` checks known hand-computed gradients for the dense ops (`sum(a*b)` → `b`,`a`; `sum(a^2)` → `2a`; a hand-verified small `matmul`), an explicit fan-out case (a leaf feeding two separate downstream nodes, confirming gradient contributions sum rather than overwrite), and - the centerpiece, directly answering "does this produce a gradient equivalent to the analytical one" - rebuilds `dist/gauss.h`'s log-pdf formula using `ad_*` ops on same-shape (non-broadcast) `x`/`loc`/`scale`, runs `tape_backward`, and checks the result against `gauss_dlogpdf_loc`/`gauss_dlogpdf_scale` directly, including a `STRESS=1` randomized sweep (using a relative tolerance there, since a `scale` landing near its lower bound can push gradient magnitudes into the hundreds, where an absolute tolerance is the wrong tool). `ad_solve`, `ad_chol_solve`, `ad_det`, and `ad_inv` are verified against central finite differences of an independently-written reference loss (same technique `test_gauss.c` uses for its derivatives), perturbing every element of the relevant input matrix.
+`tests/correctness/test_ad.c` checks known hand-computed gradients for the dense ops (`sum(a*b)` → `b`,`a`; `sum(a^2)` → `2a`; a hand-verified small `matmul`), an explicit fan-out case (a leaf feeding two separate downstream nodes, confirming gradient contributions sum rather than overwrite), `ad_squared_error`'s known output/gradient and `ad_identity`'s pass-through behavior (including the invariant that it returns the same `Node*` it was given), and - the centerpiece, directly answering "does this produce a gradient equivalent to the analytical one" - rebuilds `dist/gauss.h`'s log-pdf formula using `ad_*` ops on same-shape (non-broadcast) `x`/`loc`/`scale`, runs `tape_backward`, and checks the result against `gauss_dlogpdf_loc`/`gauss_dlogpdf_scale` directly, including a `STRESS=1` randomized sweep (using a relative tolerance there, since a `scale` landing near its lower bound can push gradient magnitudes into the hundreds, where an absolute tolerance is the wrong tool). `ad_solve`, `ad_chol_solve`, `ad_det`, and `ad_inv` are verified against central finite differences of an independently-written reference loss (same technique `test_gauss.c` uses for its derivatives), perturbing every element of the relevant input matrix.
 
 ## Known limitations and future work
 

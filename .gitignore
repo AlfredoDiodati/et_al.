@@ -1,9 +1,23 @@
 test_report.txt
-tests/correctness/test_mat
-tests/correctness/test_mat_special
-tests/correctness/test_decomp
-tests/correctness/test_solver
-examples/mat_example
+
+# generic C build artifacts
+*.o
+*.a
+*.so
+
+# Python benchmark driver artifacts (tests/performance/*.py)
+__pycache__/
+*.pyc
+
+# compiled test binaries: one per tests/correctness/test_<noun>.c source.
+# Pattern-based (not one line per binary) so a new test_<noun> added later
+# is automatically ignored - see README's "every new .h gets a test file"
+# policy, which means this list grows with every new header.
+tests/correctness/test_*
+!tests/correctness/*.c
+
+# compiled example binaries: one per examples/<noun>_example.c source, same
+# auto-covering reasoning as above.
+examples/*_example
+!examples/*_example.c
 mat_example
-libmat.so
-libdecomp.so

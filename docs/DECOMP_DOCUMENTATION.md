@@ -2,6 +2,8 @@
 
 ## Overview
 
+**Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy).
+
 `decomp.h` implements the core dense factorizations - Cholesky, LU, QR, symmetric eigendecomposition, SVD - as thin wrappers over LAPACKE, plus derived quantities built on top of them (determinant, inverse, condition number, rank, general eigenvalues) that don't need a separate conceptual home. It includes `mat.h` and is included by `solver.h`; `mat.h` never includes this file. Like `mat.h`, every function is `static inline` in a single header, and uses `mreal`/`MLAPACK` so it builds correctly under both the default `float` and `-DMAT_DOUBLE` precisions (see `docs/MATRIX_DOCUMENTATION.md`'s Precision section).
 
 Every function here copies its input(s) with `mat_copy` before calling into LAPACKE, because LAPACKE factorizes in place but functions in this library return new matrices and never mutate their arguments. This also means inputs may be views (non-contiguous slices) - `mat_copy` handles the strided case, so a sliced submatrix works exactly like a freshly allocated owner.

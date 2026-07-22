@@ -126,6 +126,47 @@ static void test_matmul(void) {
     tape_free(t);
 }
 
+static void test_squared_error_and_identity(void) {
+    puts("ad_squared_error / ad_identity");
+
+    /* ad_squared_error: known output/gradient.
+       f(pred,target) = sum((pred-target)^2)
+       df/dpred = 2*(pred-target), df/dtarget = -2*(pred-target) */
+    {
+        Tape *t = tape_new();
+        Mat pv = mat_lit(3, 1, 1.f, 2.f, 3.f);
+        Mat tv = mat_lit(3, 1, 0.f, 2.f, 5.f);
+        Node *pred = ad_leaf(t, pv), *target = ad_leaf(t, tv);
+        Node *loss = ad_squared_error(t, pred, target);
+        tape_backward(t, loss);
+        CHECK(loss->val.d[0], 1.f + 0.f + 4.f); /* 1^2 + 0^2 + (-2)^2 */
+        for (int i = 0; i < 3; i++) {
+            mreal diff = pv.d[i] - tv.d[i];
+            CHECK(pred->grad.d[i], 2.0f * diff);
+            CHECK(target->grad.d[i], -2.0f * diff);
+        }
+        mat_free(pv); mat_free(tv);
+        tape_free(t);
+    }
+
+    /* ad_identity: returns its argument unchanged - literally the same
+       Node*, not a copy - so its gradient is just a->grad accumulating
+       directly from whatever uses idn. Verified the same way as any other
+       op, via f(a)=sum(a^2), df/da=2a. */
+    {
+        Tape *t = tape_new();
+        Mat av = mat_lit(3, 1, 1.f, 2.f, 3.f);
+        Node *a = ad_leaf(t, av);
+        Node *idn = ad_identity(t, a);
+        assert(idn == a);
+        Node *loss = ad_sum(t, ad_emul(t, idn, idn));
+        tape_backward(t, loss);
+        for (int i = 0; i < 3; i++) CHECK(a->grad.d[i], 2.0f * av.d[i]);
+        mat_free(av);
+        tape_free(t);
+    }
+}
+
 /* --- verification against the analytical Gaussian gradient - the whole
    point of this file: a synthetic (AD) gradient equivalent to the
    analytical one, per the user's original ask --- */
@@ -348,6 +389,7 @@ static void test_inv_fd(void) {
 int main(void) {
     test_dense_ops();
     test_matmul();
+    test_squared_error_and_identity();
     test_gauss_equivalence();
     test_solve_fd();
     test_chol_solve_fd();
