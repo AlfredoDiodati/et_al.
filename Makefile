@@ -18,7 +18,7 @@ PREFIX  ?= /usr/local
 INCDIR  := $(PREFIX)/include/clgebra
 PKGCONFIGDIR := $(PREFIX)/lib/pkgconfig
 
-CORE_HEADERS := ad.h
+CORE_HEADERS := ad.h json.h
 CORE_SUBDIRS := linalg dist solver frame
 MODEL_SUBDIRS := nn
 
@@ -64,11 +64,23 @@ tests/correctness/test_mlp: tests/correctness/test_mlp.c nn/mlp.h solver/adam.h 
 tests/correctness/test_frame: tests/correctness/test_frame.c frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_frame.c $(LDLIBS) -o tests/correctness/test_frame
 
-test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame
-	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_gauss && ./tests/correctness/test_ad && ./tests/correctness/test_adam && ./tests/correctness/test_optimizer && ./tests/correctness/test_mlp && ./tests/correctness/test_frame
+tests/correctness/test_csv: tests/correctness/test_csv.c frame/csv.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_csv.c $(LDLIBS) -o tests/correctness/test_csv
 
-test-stress: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame
-	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_gauss && STRESS=1 ./tests/correctness/test_ad && STRESS=1 ./tests/correctness/test_adam && STRESS=1 ./tests/correctness/test_optimizer && STRESS=1 ./tests/correctness/test_mlp && STRESS=1 ./tests/correctness/test_frame
+tests/correctness/test_txt: tests/correctness/test_txt.c frame/txt.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_txt.c $(LDLIBS) -o tests/correctness/test_txt
+
+tests/correctness/test_npy: tests/correctness/test_npy.c frame/npy.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_npy.c $(LDLIBS) -o tests/correctness/test_npy
+
+tests/correctness/test_json: tests/correctness/test_json.c json.h
+	$(CC) $(CFLAGS) tests/correctness/test_json.c $(LDLIBS) -o tests/correctness/test_json
+
+test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json
+	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_gauss && ./tests/correctness/test_ad && ./tests/correctness/test_adam && ./tests/correctness/test_optimizer && ./tests/correctness/test_mlp && ./tests/correctness/test_frame && ./tests/correctness/test_csv && ./tests/correctness/test_txt && ./tests/correctness/test_npy && ./tests/correctness/test_json
+
+test-stress: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_gauss tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json
+	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_gauss && STRESS=1 ./tests/correctness/test_ad && STRESS=1 ./tests/correctness/test_adam && STRESS=1 ./tests/correctness/test_optimizer && STRESS=1 ./tests/correctness/test_mlp && STRESS=1 ./tests/correctness/test_frame && STRESS=1 ./tests/correctness/test_csv && STRESS=1 ./tests/correctness/test_txt && STRESS=1 ./tests/correctness/test_npy && STRESS=1 ./tests/correctness/test_json
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754
 tests/correctness/test_mat_special: tests/correctness/test_mat_special.c linalg/mat.h

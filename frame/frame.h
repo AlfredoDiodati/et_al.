@@ -1,6 +1,7 @@
 #pragma once
 #include "../linalg/mat.h"
 #include <string.h>
+#include <ctype.h>
 
 /* DataFrame: a matrix plus optional column and row labels - the shape
    pandas/polars users expect, minus anything this project's actual use
@@ -66,6 +67,39 @@ static inline DataFrame df_new(int r) {
     df.n_string = 0;
     df.columns = NULL;
     df.n_cols = 0;
+    df.row_names = NULL;
+    return df;
+}
+
+/* Builds a DataFrame directly from an existing r x c Mat in one allocation
+   (mat_copy, then column metadata pointing straight at columns 0..c-1) -
+   unlike c calls to df_add_numeric_col, this does not pay the repeated
+   copy-and-replace cost of growing `numeric` one column at a time (see
+   df_add_numeric_col's own comment below). col_names may be NULL, in
+   which case columns are named "col0", "col1", .... Used by
+   frame/npy.h's loader, and generally useful for any caller that already
+   has a Mat and wants to wrap it in a DataFrame. */
+static inline DataFrame df_from_matrix(Mat m, const char *const *col_names) {
+    DataFrame df;
+    df.r = m.r;
+    df.numeric = mat_copy(m);
+    df.string_cols = NULL;
+    df.n_string = 0;
+    df.n_cols = m.c;
+    df.columns = (ColumnMeta*)malloc((size_t)m.c * sizeof(ColumnMeta));
+    for (int j = 0; j < m.c; j++) {
+        char generated[16];
+        const char *name;
+        if (col_names) {
+            name = col_names[j];
+        } else {
+            snprintf(generated, sizeof generated, "col%d", j);
+            name = generated;
+        }
+        df.columns[j].type = COL_NUMERIC;
+        df.columns[j].name = frame_strdup(name);
+        df.columns[j].index = j;
+    }
     df.row_names = NULL;
     return df;
 }
@@ -178,6 +212,150 @@ static inline void df_print(const DataFrame *df) {
         }
         printf("\n");
     }
+}
+
+/* --- shared plumbing for frame/csv.h and frame/txt.h - both need "read a
+   whole file", "grow a list of strings", and "infer a column's type from
+   its string values", so it lives here rather than being duplicated - per
+   this project's "a shared helper belongs in the lower of the two" rule
+   (see dist/gauss.h's broadcasting helpers for the same reasoning applied
+   while only one file needed them; here, a second loader actually does).
+   Not part of the public API - frame_-prefixed, not df_-prefixed. --- */
+
+/* Reads path fully into a newly malloc'd, null-terminated buffer. Caller
+   must free() it. Asserts on any I/O failure - file loading follows the
+   same "assert on contract violation, not error codes" convention as the
+   rest of this library (see linalg/decomp.h's "Contract" section) rather
+   than introducing a new recoverable-error pattern found nowhere else in
+   the codebase. */
+static inline char *frame_read_file(const char *path, long *out_size) {
+    FILE *f = fopen(path, "rb");
+    assert(f && "frame: could not open file");
+    assert(fseek(f, 0, SEEK_END) == 0);
+    long size = ftell(f);
+    assert(size >= 0);
+    assert(fseek(f, 0, SEEK_SET) == 0);
+    char *buf = (char*)malloc((size_t)size + 1);
+    size_t got = fread(buf, 1, (size_t)size, f);
+    assert(got == (size_t)size);
+    buf[size] = '\0';
+    fclose(f);
+    if (out_size) *out_size = size;
+    return buf;
+}
+
+/* A growable array of owned strings - one row's fields, or one file's
+   rows, depending on how a loader uses it. */
+typedef struct { char **items; int n, cap; } StrList;
+
+static inline void strlist_init(StrList *l) { l->items = NULL; l->n = 0; l->cap = 0; }
+static inline void strlist_push(StrList *l, char *s) {
+    if (l->n == l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 8;
+        l->items = (char**)realloc(l->items, (size_t)l->cap * sizeof(char*));
+    }
+    l->items[l->n++] = s;
+}
+static inline void strlist_free(StrList *l) {
+    for (int i = 0; i < l->n; i++) free(l->items[i]);
+    free(l->items);
+}
+
+/* Trims leading/trailing ASCII whitespace from s in place, returning s. */
+static inline char *frame_trim(char *s) {
+    char *start = s;
+    while (*start && isspace((unsigned char)*start)) start++;
+    size_t len = strlen(start);
+    while (len > 0 && isspace((unsigned char)start[len - 1])) len--;
+    memmove(s, start, len);
+    s[len] = '\0';
+    return s;
+}
+
+/* Tries to parse s as a number, requiring it to consume the entire
+   string - "123abc" is rejected even though strtod happily parses the
+   "123" prefix, since a partial parse means this is not actually a
+   numeric value. Returns 1 and writes *out on success, 0 (leaving *out
+   untouched) otherwise. */
+static inline int frame_try_parse_numeric(const char *s, mreal *out) {
+    if (s[0] == '\0') return 0;
+    char *end;
+    double v = strtod(s, &end);
+    if (end == s || *end != '\0') return 0;
+    *out = (mreal)v;
+    return 1;
+}
+
+/* Builds a DataFrame from n_rows rows of n_cols raw string fields each
+   (rows[i].items[j] is row i, column j) plus n_cols column names -
+   inferring each column's type by checking every value against
+   frame_try_parse_numeric: numeric if every value parses as a plain
+   number, string otherwise (including a column with an "NA"/empty/etc.
+   marker anywhere in it - see the note on missing values in
+   docs/FRAME_DOCUMENTATION.md for why this project does not represent
+   missing numeric values as NaN by default). Shared by frame/csv.h and
+   frame/txt.h - each loader's only job is turning its file format into
+   this rows/col_names shape; the inference itself is written once. */
+static inline DataFrame frame_build_from_rows(int n_rows, int n_cols, const StrList *rows, char *const *col_names) {
+    DataFrame df = df_new(n_rows);
+    for (int j = 0; j < n_cols; j++) {
+        int all_numeric = 1;
+        for (int i = 0; i < n_rows; i++) {
+            mreal tmp;
+            if (!frame_try_parse_numeric(rows[i].items[j], &tmp)) { all_numeric = 0; break; }
+        }
+        if (all_numeric) {
+            Vec col = mat_new(n_rows, 1);
+            for (int i = 0; i < n_rows; i++) {
+                mreal val = 0;
+                frame_try_parse_numeric(rows[i].items[j], &val); /* already validated above */
+                col.d[i] = val;
+            }
+            df_add_numeric_col(&df, col_names[j], col);
+            mat_free(col);
+        } else {
+            char **col = (char**)malloc((size_t)n_rows * sizeof(char*));
+            for (int i = 0; i < n_rows; i++) col[i] = rows[i].items[j];
+            df_add_string_col(&df, col_names[j], (const char *const *)col);
+            free(col);
+        }
+    }
+    return df;
+}
+
+/* Turns n_rows_total tokenized rows (rows[0] is the header row if
+   has_header, otherwise the first data row) into a DataFrame - extracting
+   or generating column names, validating every data row has exactly as
+   many fields as the header, then handing off to frame_build_from_rows
+   for type inference. Shared by frame/csv.h and frame/txt.h: each
+   loader's own code is only its tokenizer (frame_parse_csv/
+   frame_parse_txt) plus a thin call to this. */
+static inline DataFrame frame_rows_to_dataframe(StrList *rows, int n_rows_total, int has_header) {
+    assert(n_rows_total > 0 && "frame: empty file");
+    int n_cols = rows[0].n;
+
+    char **col_names = (char**)malloc((size_t)n_cols * sizeof(char*));
+    int data_start;
+    if (has_header) {
+        for (int j = 0; j < n_cols; j++) col_names[j] = rows[0].items[j]; /* borrowed, not copied */
+        data_start = 1;
+    } else {
+        for (int j = 0; j < n_cols; j++) {
+            char generated[16];
+            snprintf(generated, sizeof generated, "col%d", j);
+            col_names[j] = frame_strdup(generated);
+        }
+        data_start = 0;
+    }
+
+    for (int i = data_start; i < n_rows_total; i++)
+        assert(rows[i].n == n_cols && "frame: ragged row (inconsistent column count)");
+
+    DataFrame df = frame_build_from_rows(n_rows_total - data_start, n_cols, rows + data_start, col_names);
+
+    if (!has_header) for (int j = 0; j < n_cols; j++) free(col_names[j]);
+    free(col_names);
+    return df;
 }
 
 /* Frees every column, both storage backings, column metadata, and row

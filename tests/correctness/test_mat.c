@@ -452,6 +452,37 @@ static void test_reductions(void) {
     }
 }
 
+/* This whole file is built with -ffast-math (this project's default
+   CFLAGS - see the Makefile). mat_max/mat_min must still propagate NaN
+   correctly under it - their internal check uses MISNAN (bit-level
+   detection, see linalg/mat.h), not isnan()/__builtin_isnan(), both of
+   which were verified to silently return false on an actual NaN once
+   -ffast-math's -ffinite-math-only is in effect. This is the gap
+   test_mat_special.c's own (correct, but non-fast-math-built) NaN
+   propagation check doesn't cover: it never ran under the flags this
+   project's `make test` actually uses. Checking the result here with
+   MISNAN too, not isnan() - same reason, this file has the same flags. */
+static void test_nan_propagation_under_fast_math(void) {
+    puts("mat_max/mat_min propagate NaN correctly even under -ffast-math");
+
+    {
+        Mat a = mat_lit(1, 3, 1.f, NAN, 3.f);
+        assert(MISNAN(mat_max(a)));
+        assert(MISNAN(mat_min(a)));
+        mat_free(a);
+    }
+
+    /* strided path */
+    {
+        Mat wide = mat_lit(2, 4, 1,2,3,4, 5,NAN,7,8);
+        Mat s = mat_slice(wide, 0, 2, 0, 2); /* [[1,2],[5,NaN]] */
+        assert(s.stride == 4);
+        assert(MISNAN(mat_max(s)));
+        assert(MISNAN(mat_min(s)));
+        mat_free(wide);
+    }
+}
+
 static void test_concatenation(void) {
     puts("concatenation");
 
@@ -618,6 +649,7 @@ int main(void) {
     test_arithmetic_strided();
     test_matmul();
     test_reductions();
+    test_nan_propagation_under_fast_math();
     test_concatenation();
     test_linalg();
     puts("test_mat: all passed");

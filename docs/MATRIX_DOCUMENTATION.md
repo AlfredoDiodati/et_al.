@@ -76,6 +76,10 @@ typedef Mat Vec;
 
 Dispatch is a small set of macros near the top of `linalg/mat.h` (`MBLAS(fn)` -> `cblas_s##fn` or `cblas_d##fn`, `MLAPACK(fn)` similarly, `MEXP`/`MLOG`/`MABS`/`MSQRT`/`MPOW` for libm) so call sites read the same regardless of which precision is active. Do not call `cblas_s*`/`cblas_d*` or an `f`-suffixed/unsuffixed libm function directly in library code - always go through the macro, so the file stays correct under both builds. 32-byte alignment in `mat_new` holds under both precisions (one AVX2 register: 8 `float`s or 4 `double`s).
 
+### `MISNAN`/`MISINF` - NaN/infinity detection that survives `-ffast-math`
+
+Same dispatch pattern (`MISNAN(x)`/`MISINF(x)` resolve to `mat_isnan_f32`/`mat_isinf_f32` or the `f64` versions depending on `-DMAT_DOUBLE`), but for a different reason than the others: this project's own default `CFLAGS` includes `-ffast-math` (`-ffinite-math-only`), under which `isnan()`, `isinf()`, `__builtin_isnan()`, and `__builtin_isinf()` were all verified directly to silently return false on an actual NaN/Inf value - the compiler assumes neither can occur and folds the check accordingly. `MISNAN`/`MISINF` sidestep this entirely: `memcpy` the value's bits into a `uint32_t`/`uint64_t` and inspect the IEEE754 exponent/mantissa fields directly, with no floating-point comparison or libm call for `-ffinite-math-only` to have any purchase on. `mat_max`/`mat_min` use `MISNAN` internally for exactly this reason (return `NAN` if any element is NaN); `tests/correctness/test_mat.c`'s `test_nan_propagation_under_fast_math` proves this holds under the project's actual default build, not just `test-special`'s separate non-fast-math target. Use `MISNAN`/`MISINF`, not the four functions named above, in any new code that needs to detect NaN/Inf - see the root `README.md`'s Pitfalls section.
+
 ## Ownership and memory model
 
 There are two kinds of `Mat` values:

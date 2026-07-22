@@ -11,9 +11,11 @@ linalg: mat.h <- decomp.h <- solver.h ─┼─ ad.h                            
 
 linalg/mat.h ← frame/*.h              (DataFrame: data loading/wrangling)
 nn/*.h ← ad.h, solver/optimizer.h     (neural nets: forward pass from ad.h, training via solver/)
+
+json.h                                (JSON parse/build/write - standalone, no dependency on anything above)
 ```
 
-`linalg/` is the dense core chain (`mat.h` - types, views, arithmetic, matmul; `decomp.h` - Cholesky, LU, QR, eigendecomposition, SVD, and quantities derived from them; `solver.h` - solving `Ax = b` and least squares), tucked into its own directory specifically so the bare name "solver" is free for `solver/` (below) to mean something else without colliding. Four independent layers build on top of that core, none depending on the others: `dist/` adds probability distributions (pdf, log-pdf, and hand-derived log-pdf derivatives) - one file per distribution; `ad.h` adds general-purpose reverse-mode automatic differentiation (backpropagation) - given any expression built from its ops, it computes the exact gradient with respect to any traced input, not tied to any specific loss or distribution - plus the `Activation`/`Criterion` function-pointer types any model built on top of it selects concrete ops through; `solver/` adds gradient-based optimizers (Adam so far) behind a generic pluggable `Optimizer` interface (`solver/optimizer.h`, implemented by `solver/adam.h`) that updates a parameter given *any* gradient, however it was produced - a hand-derived one from `dist/`, a tape-computed one from `ad.h`, or anything else (this directory's own name and `linalg/solver.h`'s are a deliberate, disambiguated-by-path reuse of "solver" - see [Adding files and headers](#adding-files-and-headers)); `frame/` adds `DataFrame` (`frame/frame.h`) - a matrix plus optional column/row labels and typed (numeric or string) columns, needing only `linalg/mat.h`, for loading and wrangling data before it becomes a `Mat` fed to the rest of the stack. `nn/` builds directly on `ad.h` (a network's forward pass is just another traced expression) **and** on `solver/optimizer.h` - unlike `dist/`/`ad.h`/`solver/`/`frame/`, which are independent of each other, `nn/mlp.h`'s `mlp_fit` genuinely needs both gradient production and consumption in one function to implement this project's Model fit/forecast API (see Policies below), so it is the one case where a model header includes an optimizer header directly rather than only using one in tests. `dist/`, `ad.h`, and `solver/` are still verified against each other primarily in tests: `ad.h`'s gradient of a hand-built Gaussian log-likelihood is checked against `dist/gauss.h`'s analytical derivative, and `solver/adam.h` is exercised end to end by using `dist/gauss.h`'s analytical gradient to fit a Gaussian's parameters via MLE.
+`linalg/` is the dense core chain (`mat.h` - types, views, arithmetic, matmul; `decomp.h` - Cholesky, LU, QR, eigendecomposition, SVD, and quantities derived from them; `solver.h` - solving `Ax = b` and least squares), tucked into its own directory specifically so the bare name "solver" is free for `solver/` (below) to mean something else without colliding. Five independent layers build on top of (or, for one of them, entirely outside) that core, none depending on the others: `dist/` adds probability distributions (pdf, log-pdf, and hand-derived log-pdf derivatives) - one file per distribution; `ad.h` adds general-purpose reverse-mode automatic differentiation (backpropagation) - given any expression built from its ops, it computes the exact gradient with respect to any traced input, not tied to any specific loss or distribution - plus the `Activation`/`Criterion` function-pointer types any model built on top of it selects concrete ops through; `solver/` adds gradient-based optimizers (Adam so far) behind a generic pluggable `Optimizer` interface (`solver/optimizer.h`, implemented by `solver/adam.h`) that updates a parameter given *any* gradient, however it was produced - a hand-derived one from `dist/`, a tape-computed one from `ad.h`, or anything else (this directory's own name and `linalg/solver.h`'s are a deliberate, disambiguated-by-path reuse of "solver" - see [Adding files and headers](#adding-files-and-headers)); `frame/` adds `DataFrame` (`frame/frame.h`) - a matrix plus optional column/row labels and typed (numeric or string) columns, needing only `linalg/mat.h`, for loading and wrangling data before it becomes a `Mat` fed to the rest of the stack; `json.h` adds a JSON value tree (parse/build/write) for saving and loading parameters (hyperparameters, fit diagnostics, config) - the one layer genuinely outside the core chain, with zero dependency on `linalg/mat.h` at all, since a parameter is typically a standalone scalar rather than part of a `Mat` computation. `nn/` builds directly on `ad.h` (a network's forward pass is just another traced expression) **and** on `solver/optimizer.h` - unlike `dist/`/`ad.h`/`solver/`/`frame/`/`json.h`, which are independent of each other, `nn/mlp.h`'s `mlp_fit` genuinely needs both gradient production and consumption in one function to implement this project's Model fit/forecast API (see Policies below), so it is the one case where a model header includes an optimizer header directly rather than only using one in tests. `dist/`, `ad.h`, and `solver/` are still verified against each other primarily in tests: `ad.h`'s gradient of a hand-built Gaussian log-likelihood is checked against `dist/gauss.h`'s analytical derivative, and `solver/adam.h` is exercised end to end by using `dist/gauss.h`'s analytical gradient to fit a Gaussian's parameters via MLE.
 
 For the full API reference of each header, see its dedicated doc:
 - [docs/MATRIX_DOCUMENTATION.md](docs/MATRIX_DOCUMENTATION.md) — `linalg/mat.h`
@@ -24,6 +26,10 @@ For the full API reference of each header, see its dedicated doc:
 - [docs/OPTIMIZER_DOCUMENTATION.md](docs/OPTIMIZER_DOCUMENTATION.md) — `solver/optimizer.h`
 - [docs/ADAM_DOCUMENTATION.md](docs/ADAM_DOCUMENTATION.md) — `solver/adam.h`
 - [docs/FRAME_DOCUMENTATION.md](docs/FRAME_DOCUMENTATION.md) — `frame/frame.h`
+- [docs/CSV_DOCUMENTATION.md](docs/CSV_DOCUMENTATION.md) — `frame/csv.h`
+- [docs/TXT_DOCUMENTATION.md](docs/TXT_DOCUMENTATION.md) — `frame/txt.h`
+- [docs/NPY_DOCUMENTATION.md](docs/NPY_DOCUMENTATION.md) — `frame/npy.h`
+- [docs/JSON_DOCUMENTATION.md](docs/JSON_DOCUMENTATION.md) — `json.h`
 - [docs/MLP_DOCUMENTATION.md](docs/MLP_DOCUMENTATION.md) — `nn/mlp.h`
 
 This file covers directory structure, build instructions, and the policies/principles that govern how the codebase grows — no API documentation lives here.
@@ -54,6 +60,7 @@ Clgebra/
 │   └── solver.h                    # Ax=b, least squares — LAPACKE wrappers; includes decomp.h; decomp.h never includes this
 │
 ├── ad.h               # reverse-mode autodiff (backprop) — general-purpose; includes linalg/solver.h
+├── json.h             # JSON value tree (parse/build/write) — general-purpose, no dependency on linalg/mat.h; see docs/JSON_DOCUMENTATION.md
 │
 ├── dist/                           # probability distributions — one file per distribution, above linalg/solver.h
 │   └── gauss.h                     # Gaussian: pdf, log-pdf, d(log-pdf)/d(loc, scale)
@@ -63,7 +70,11 @@ Clgebra/
 │   └── adam.h                      # Adam (Kingma & Ba 2015) — implements optimizer.h; see docs/ADAM_DOCUMENTATION.md for the citation
 │
 ├── frame/                          # DataFrame: data loading/wrangling — above linalg/mat.h
-│   └── frame.h                     # DataFrame type — matrix + optional labels + typed columns; see docs/FRAME_DOCUMENTATION.md
+│   ├── frame.h                     # DataFrame type — matrix + optional labels + typed columns; see docs/FRAME_DOCUMENTATION.md
+│   ├── csv.h                       # CSV loader + writer (RFC4180 quoting) — see docs/CSV_DOCUMENTATION.md
+│   ├── txt.h                       # whitespace-delimited loader + writer (numpy.loadtxt/savetxt scope) — see docs/TXT_DOCUMENTATION.md
+│   └── npy.h                       # NumPy .npy loader + writer — see docs/NPY_DOCUMENTATION.md
+│                                    # (json.h, at repo root, is not here - it's for parameters, not DataFrame data)
 │
 ├── nn/                             # neural network architectures — one file per architecture, above ad.h
 │   └── mlp.h                       # fully connected feedforward MLP — arbitrary depth/width, one activation for now
@@ -79,7 +90,11 @@ Clgebra/
 │   │   ├── test_adam.c
 │   │   ├── test_optimizer.c
 │   │   ├── test_mlp.c
-│   │   └── test_frame.c
+│   │   ├── test_frame.c
+│   │   ├── test_json.c
+│   │   ├── test_csv.c
+│   │   ├── test_txt.c
+│   │   └── test_npy.c
 │   │
 │   └── performance/                # is it fast? — one bench_<noun>.c + .py pair per header, vs NumPy
 │       ├── bench_matmul.c / bench_matmul.py
@@ -95,10 +110,14 @@ Clgebra/
 │   ├── SOLVER_DOCUMENTATION.md   # full reference for linalg/solver.h
 │   ├── GAUSS_DOCUMENTATION.md    # full reference for dist/gauss.h
 │   ├── AD_DOCUMENTATION.md       # full reference for ad.h
+│   ├── JSON_DOCUMENTATION.md     # full reference for json.h
 │   ├── OPTIMIZER_DOCUMENTATION.md # full reference for solver/optimizer.h
 │   ├── ADAM_DOCUMENTATION.md     # full reference for solver/adam.h
 │   ├── MLP_DOCUMENTATION.md      # full reference for nn/mlp.h
-│   └── FRAME_DOCUMENTATION.md    # full reference for frame/frame.h
+│   ├── FRAME_DOCUMENTATION.md    # full reference for frame/frame.h
+│   ├── CSV_DOCUMENTATION.md      # full reference for frame/csv.h
+│   ├── TXT_DOCUMENTATION.md      # full reference for frame/txt.h
+│   └── NPY_DOCUMENTATION.md      # full reference for frame/npy.h
 │
 ├── scripts/
 │   └── install-hooks.sh           # installs git hooks after cloning
@@ -108,7 +127,7 @@ Clgebra/
 └── README.md                      # this file — policies, principles, build; no API docs
 ```
 
-The dependency direction is strict: `linalg/solver.h` includes `linalg/decomp.h`; `linalg/decomp.h` includes `linalg/mat.h` (same-directory includes, unaffected by where `linalg/` itself sits); `dist/*.h` and `ad.h` each include whichever lower layer they actually need (`dist/gauss.h` only needs `linalg/mat.h`; `ad.h` needs the full chain up to `linalg/solver.h` for its solve/determinant/inverse adjoints); `solver/adam.h` includes `solver/optimizer.h` (the interface it implements) and `linalg/mat.h`; `frame/frame.h` includes only `linalg/mat.h`; `nn/*.h` includes `ad.h` **and** `solver/optimizer.h`. No header includes a file above itself in that chain, and `dist/`/`ad.h`/`solver/`/`frame/` never include each other. `nn/*.h` is the one exception to "a model doesn't include an optimizer header": `mlp_fit` is training *orchestration*, which genuinely needs both gradient production (`ad.h`) and consumption (`solver/optimizer.h`'s generic `Optimizer`) in the same function to implement the Model fit/forecast API below - unlike `mlp_forward`/`mlp_init`/`mlp_free` (structure only), which stay fully decoupled from `solver/`. If you find yourself needing a dependency this paragraph doesn't already allow, the function likely belongs in a lower layer instead.
+The dependency direction is strict: `linalg/solver.h` includes `linalg/decomp.h`; `linalg/decomp.h` includes `linalg/mat.h` (same-directory includes, unaffected by where `linalg/` itself sits); `dist/*.h` and `ad.h` each include whichever lower layer they actually need (`dist/gauss.h` only needs `linalg/mat.h`; `ad.h` needs the full chain up to `linalg/solver.h` for its solve/determinant/inverse adjoints); `solver/adam.h` includes `solver/optimizer.h` (the interface it implements) and `linalg/mat.h`; `frame/frame.h` includes only `linalg/mat.h`; `frame/csv.h`/`frame/txt.h`/`frame/npy.h` each include only `frame/frame.h` (which pulls in `linalg/mat.h` transitively); `nn/*.h` includes `ad.h` **and** `solver/optimizer.h`; `json.h` includes nothing from this project at all - it has zero dependency on `linalg/mat.h`, since a parameter (its own actual use case) is typically a standalone scalar, not part of a `Mat` computation. No header includes a file above itself in that chain, and `dist/`/`ad.h`/`solver/`/`frame/`/`json.h` never include each other. `nn/*.h` is the one exception to "a model doesn't include an optimizer header": `mlp_fit` is training *orchestration*, which genuinely needs both gradient production (`ad.h`) and consumption (`solver/optimizer.h`'s generic `Optimizer`) in the same function to implement the Model fit/forecast API below - unlike `mlp_forward`/`mlp_init`/`mlp_free` (structure only), which stay fully decoupled from `solver/`. If you find yourself needing a dependency this paragraph doesn't already allow, the function likely belongs in a lower layer instead.
 
 ## Build
 
@@ -226,14 +245,14 @@ Topics that span multiple layers (memory ownership, special value behavior, row-
 
 ### Adding files and headers
 
-Create a new `.h` file only when a group of functions introduces a concept that does not belong in the current lowest layer. The test is the include direction: if the new functions call existing ones but existing ones never need to call them back, a new header is warranted. A new layer must fit into the `linalg/mat.h <- linalg/decomp.h <- linalg/solver.h` chain, extend it downward (below `linalg/mat.h`, closer to hardware), or extend it upward (above the topmost existing layer, further from hardware). Five layers currently sit above the core this way - `dist/`, `ad.h`, `solver/`, `frame/`, `nn/` - each for its own new concern (distributions; general differentiation; gradient-based optimization; data loading/wrangling; network architectures). The first four are independent of each other; `nn/` is the exception, building directly on `ad.h` rather than the core (see the layer diagram above) - a valid "extend upward" move all the same, just from a point higher up the chain than `linalg/solver.h`. Do not add a header at the same level as an existing one that duplicates its role — merge into it instead. That's why eigendecomposition and SVD live in `linalg/decomp.h` rather than a new file: they're the same conceptual role (decomposition) as Cholesky/LU/QR. `dist/`/`solver/`/`frame/`/`nn/` are new directories for the same reason a new layer sometimes needs one: each covers a wholly new concern that doesn't belong inside `tests/`, `examples/`, or the existing chain's files.
+Create a new `.h` file only when a group of functions introduces a concept that does not belong in the current lowest layer. The test is the include direction: if the new functions call existing ones but existing ones never need to call them back, a new header is warranted. A new layer must fit into the `linalg/mat.h <- linalg/decomp.h <- linalg/solver.h` chain, extend it downward (below `linalg/mat.h`, closer to hardware), or extend it upward (above the topmost existing layer, further from hardware). Six layers currently sit above (or, for `json.h`, entirely outside) the core this way - `dist/`, `ad.h`, `json.h`, `solver/`, `frame/`, `nn/` - each for its own new concern (distributions; general differentiation; JSON serialization; gradient-based optimization; data loading/wrangling; network architectures). The first five are independent of each other; `nn/` is the exception, building directly on `ad.h` rather than the core (see the layer diagram above) - a valid "extend upward" move all the same, just from a point higher up the chain than `linalg/solver.h`. Do not add a header at the same level as an existing one that duplicates its role — merge into it instead. That's why eigendecomposition and SVD live in `linalg/decomp.h` rather than a new file: they're the same conceptual role (decomposition) as Cholesky/LU/QR. `dist/`/`solver/`/`frame/`/`nn/` are new directories for the same reason a new layer sometimes needs one: each covers a wholly new concern that doesn't belong inside `tests/`, `examples/`, or the existing chain's files - `json.h`, by contrast, is one cohesive concept (not a family of interchangeable files the way `dist/`'s distributions or `solver/`'s algorithms are), so it stays a single root file rather than getting its own directory, the same reasoning `ad.h` already follows.
 
 `solver/` (gradient-based optimizers) and `linalg/solver.h` (solving `Ax = b`) deliberately share the word "solver" despite meaning unrelated things - this used to be avoided (the optimizer directory was originally named `optim/` specifically to dodge the collision, back when `solver.h` sat bare at the repository root), but once the whole `mat.h`/`decomp.h`/`solver.h` chain moved into its own `linalg/` directory, the bare top-level name "solver" stopped referring to the linalg meaning at all - it only appears now as the qualified, unambiguous `linalg/solver.h`. That freed the prominent, unqualified top-level name for the optimizer directory instead, which is the more natural name for what it holds. Context (the path prefix) disambiguates the two cleanly; do not add a third, unrelated thing also named "solver" anywhere in the tree - two is the limit this reasoning supports.
 
 | What | Pattern | Example |
 |---|---|---|
 | Dense linalg chain | `linalg/<noun>.h` | `linalg/mat.h`, `linalg/decomp.h`, `linalg/solver.h` |
-| Standalone core layer | `<noun>.h` | `ad.h` |
+| Standalone core layer | `<noun>.h` | `ad.h`, `json.h` |
 | Distribution | `dist/<noun>.h` | `dist/gauss.h` |
 | Optimizer | `solver/<noun>.h` | `solver/adam.h` |
 | Data loading/wrangling | `frame/<noun>.h` | `frame/frame.h` |
@@ -282,11 +301,11 @@ Current tier assignments:
 
 | Tier | Files |
 |---|---|
-| core | `linalg/mat.h`, `linalg/decomp.h`, `linalg/solver.h`, `ad.h`, `dist/gauss.h`, `solver/optimizer.h`, `solver/adam.h`, `frame/frame.h` |
+| core | `linalg/mat.h`, `linalg/decomp.h`, `linalg/solver.h`, `ad.h`, `json.h`, `dist/gauss.h`, `solver/optimizer.h`, `solver/adam.h`, `frame/frame.h`, `frame/csv.h`, `frame/txt.h`, `frame/npy.h` |
 | model | `nn/mlp.h` |
 | development | everything under `tests/`, `examples/`, `scripts/` |
 
-Tier is about what a file *does*, not which directory it happens to sit in. `dist/gauss.h` is core, not model, despite being exactly the kind of directory a future fit/forecast-style file might also live in (e.g. a hypothetical `dist/`-based regression) — `gauss.h` itself only computes pdf/log-pdf/derivatives (the `scipy.stats` equivalent), with no fitting procedure. `ad.h` and `solver/adam.h` are core rather than model for the same reason: both are general-purpose numerical tools (autodiff; gradient-based optimization) usable independently of any model architecture — `solver/adam.h` fitting a Gaussian's `loc`/`scale` via `dist/gauss.h`'s analytical gradient (`tests/correctness/test_adam.c`) is exactly this in action, with no model in sight. `frame/frame.h` (`DataFrame`) is core for the same reason a Python data stack's `numpy`/`scipy`/`pandas` all ship independently of any model package: loading and wrangling data is a prerequisite to fitting a model, not part of one — a `DataFrame` never appears in a model's `fit`/`forecast` signature (see [Model fit/forecast API](#model-fitforecast-api) above), which takes a plain `Mat`. When adding a new file, classify it by what it does, then update both this table and the file's own doc.
+Tier is about what a file *does*, not which directory it happens to sit in. `dist/gauss.h` is core, not model, despite being exactly the kind of directory a future fit/forecast-style file might also live in (e.g. a hypothetical `dist/`-based regression) — `gauss.h` itself only computes pdf/log-pdf/derivatives (the `scipy.stats` equivalent), with no fitting procedure. `ad.h` and `solver/adam.h` are core rather than model for the same reason: both are general-purpose numerical tools (autodiff; gradient-based optimization) usable independently of any model architecture — `solver/adam.h` fitting a Gaussian's `loc`/`scale` via `dist/gauss.h`'s analytical gradient (`tests/correctness/test_adam.c`) is exactly this in action, with no model in sight. `frame/frame.h` (`DataFrame`) is core for the same reason a Python data stack's `numpy`/`scipy`/`pandas` all ship independently of any model package: loading and wrangling data is a prerequisite to fitting a model, not part of one — a `DataFrame` never appears in a model's `fit`/`forecast` signature (see [Model fit/forecast API](#model-fitforecast-api) above), which takes a plain `Mat`. `json.h` is core for the same reason as a Python stdlib `json` module being independent of every package built on it: it's a general-purpose serialization utility, not itself a model, and nothing about it is specific to any one model's parameters. When adding a new file, classify it by what it does, then update both this table and the file's own doc.
 
 ### Testing requirements
 
@@ -367,6 +386,6 @@ These are mistakes that are easy to make and hard to debug. Treat this list as a
 
 **Do not optimize everything at once.** Profile first. The bottleneck is almost always `mat_mul` or whichever LAPACK call dominates; micro-optimizing an element-wise op before that's confirmed and benchmarked is wasted effort.
 
-**Do not use `isnan()` or `isinf()` in functions compiled with `-ffast-math`.** That flag includes `-ffinite-math-only`, which allows the compiler to optimize `isnan()` to always return false. Use `__builtin_isnan()`/`__builtin_isinf()` instead — immune to the flag. `mat_max`/`mat_min` demonstrate the correct pattern; special-value tests must be built in a separate target without `-ffast-math` (`make test-special`).
+**Do not use `isnan()`, `isinf()`, `__builtin_isnan()`, or `__builtin_isinf()` in functions compiled with `-ffast-math`.** That flag includes `-ffinite-math-only`, which allows the compiler to optimize all four to always return false — verified directly (not assumed): a standalone program printed `__builtin_isnan(NAN) == 0` and `__builtin_isinf(1.0f/0.0f) == 0` when built with this project's actual `-ffast-math -march=native -O3`. (This corrects an earlier version of this guidance, which claimed the `__builtin_` forms were immune — they are not, at least not for the full `-ffast-math` superset this project's `CFLAGS` uses.) Use `linalg/mat.h`'s `MISNAN`/`MISINF` macros instead — bit-level detection via `memcpy` into an integer and inspecting the IEEE754 exponent/mantissa fields directly, which no floating-point-specific compiler optimization can affect. `mat_max`/`mat_min` demonstrate the correct pattern, and `tests/correctness/test_mat.c`'s `test_nan_propagation_under_fast_math` proves it under this project's actual default (fast-math) build, not just `test-special`'s separate non-fast-math target (`make test-special`) — the two together cover both "does the library propagate special values correctly" and "does that hold under the flags it's actually shipped with."
 
 **Do not add sparse matrices to this library.** Sparse and dense matrices require different storage formats, algorithms, and testing strategies. Adding sparse support here would break the single-purpose design — it belongs in a separate header if it's ever needed.

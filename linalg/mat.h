@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <float.h>
+#include <stdint.h>
 #include <cblas.h>
 #include <lapacke.h>
 
@@ -39,6 +40,46 @@ typedef float mreal;
 #define MPOW  powf
 #define MTANH tanhf
 #define MEPS  FLT_EPSILON
+#endif
+
+/* MISNAN/MISINF: bit-level NaN/infinity detection that survives
+   -ffast-math (this project's own default CFLAGS - see the Makefile).
+   Do NOT use isnan()/isinf()/__builtin_isnan()/__builtin_isinf() anywhere
+   in this codebase - all four were verified directly (not assumed) to
+   silently return false on an actual NaN/Inf value once -ffast-math's
+   -ffinite-math-only is in effect, since that flag tells the compiler no
+   NaN/Inf can ever occur and it folds the check accordingly. (An earlier
+   version of this file's own Pitfalls guidance recommended
+   __builtin_isnan/__builtin_isinf as "immune to the flag" - that turned
+   out to be wrong for the actual -ffast-math superset this project's
+   CFLAGS uses; discovered while adding frame/csv.h's missing-value
+   handling, see docs/FRAME_DOCUMENTATION.md.) These bypass floating-point
+   comparison semantics entirely: memcpy the value's bits into an integer
+   and inspect the IEEE754 exponent/mantissa fields directly - the
+   compiler has no floating-point-specific optimization to apply to plain
+   integer bitwise ops, so -ffinite-math-only cannot affect them. */
+static inline int mat_isnan_f32(float x) {
+    uint32_t bits; memcpy(&bits, &x, sizeof(bits));
+    return ((bits >> 23) & 0xFFu) == 0xFFu && (bits & 0x7FFFFFu) != 0;
+}
+static inline int mat_isnan_f64(double x) {
+    uint64_t bits; memcpy(&bits, &x, sizeof(bits));
+    return ((bits >> 52) & 0x7FFu) == 0x7FFu && (bits & 0xFFFFFFFFFFFFFull) != 0;
+}
+static inline int mat_isinf_f32(float x) {
+    uint32_t bits; memcpy(&bits, &x, sizeof(bits));
+    return ((bits >> 23) & 0xFFu) == 0xFFu && (bits & 0x7FFFFFu) == 0;
+}
+static inline int mat_isinf_f64(double x) {
+    uint64_t bits; memcpy(&bits, &x, sizeof(bits));
+    return ((bits >> 52) & 0x7FFu) == 0x7FFu && (bits & 0xFFFFFFFFFFFFFull) == 0;
+}
+#ifdef MAT_DOUBLE
+#define MISNAN(x) mat_isnan_f64(x)
+#define MISINF(x) mat_isinf_f64(x)
+#else
+#define MISNAN(x) mat_isnan_f32(x)
+#define MISINF(x) mat_isinf_f32(x)
 #endif
 
 /* Row-major matrix of mreal. stride is the number of mreal elements between the
@@ -318,13 +359,13 @@ static inline mreal mat_max(Mat m) {
         int n = m.r * m.c;
         mreal *restrict p = m.d;
         for (int i = 0; i < n; i++) {
-            if (__builtin_isnan(p[i])) return NAN;
+            if (MISNAN(p[i])) return NAN;
             if (p[i] > v) v = p[i];
         }
     } else {
         for (int i = 0; i < m.r; i++)
             for (int j = 0; j < m.c; j++) {
-                if (__builtin_isnan(AT(m,i,j))) return NAN;
+                if (MISNAN(AT(m,i,j))) return NAN;
                 if (AT(m,i,j) > v) v = AT(m,i,j);
             }
     }
@@ -337,13 +378,13 @@ static inline mreal mat_min(Mat m) {
         int n = m.r * m.c;
         mreal *restrict p = m.d;
         for (int i = 0; i < n; i++) {
-            if (__builtin_isnan(p[i])) return NAN;
+            if (MISNAN(p[i])) return NAN;
             if (p[i] < v) v = p[i];
         }
     } else {
         for (int i = 0; i < m.r; i++)
             for (int j = 0; j < m.c; j++) {
-                if (__builtin_isnan(AT(m,i,j))) return NAN;
+                if (MISNAN(AT(m,i,j))) return NAN;
                 if (AT(m,i,j) < v) v = AT(m,i,j);
             }
     }
