@@ -120,10 +120,29 @@ Under `STRESS=1`, seven fixed-seed fuzz tests each attack a different slice of t
 
 `test_random_sql_try_stress` is what actually proves the parser's arena-cleanup path (see "Error handling" above) is leak-free under every truncation point a query can be cut off at — a crash-only check would miss a leak that happens not to corrupt anything; this test only has teeth run under ASan/UBSan (mandatory for this file, like every malloc-heavy addition to `frame/`), which is exactly how the arena's own bookkeeping array leaking on the success path (a real bug caught during development, not a hypothetical) was actually found.
 
-## Known limitations and future work
+## What's supported vs. not (v1)
 
-- No `JOIN`, no subqueries — the grammar is deliberately scoped to grow into these without a rewrite (see the Overview), not scoped them out permanently.
-- `GROUP BY`/`ORDER BY` take column/alias names only, never a computed expression (`GROUP BY gdp / population` is not supported — alias it in `SELECT` and group by the alias instead, or `ORDER BY` an aliased computed column, which is supported).
-- Reserved words (`SELECT`, `FROM`, `AND`, ...) cannot be used as column names — there is no quoting mechanism to escape a column name that collides with a keyword.
-- No `LIKE`, no `IN`, no `NULL`/`IS NULL` (see "No NULL semantics" above), no `DISTINCT`, no `LIMIT`.
-- `SELECT *` cannot be combined with `GROUP BY` — this is a contract violation (`assert`), not silently interpreted one way or another.
+**Supported:**
+
+- `SELECT` — column list, `*`, `AS` aliases, arithmetic (`+ - * /`, unary `-`, parentheses)
+- `FROM <name>` — a single table only; the name is parsed but discarded, since `df_sql`/`df_sql_try` always operate on the one `DataFrame` passed in
+- `WHERE` — comparisons (`= != <> < <= > >=`), `AND`/`OR`/`NOT`, parenthesized grouping of either arithmetic or boolean sub-expressions
+- `GROUP BY` — multiple columns; `SUM`/`AVG`/`MIN`/`MAX`/`COUNT`; composing several aggregates arithmetically (`SUM(gdp)/SUM(population)`); an aggregate against a plain literal
+- `ORDER BY` — multiple keys, `ASC`/`DESC` per key; may reference a column not in the `SELECT` list, or a `SELECT` alias
+- String literals (`'...'`, with `''` as an escaped literal quote) and numeric literals
+- Two entry points: `df_sql` (crashes via `assert` on any bad query) and `df_sql_try` (returns `SQL_ERR_SYNTAX` vs `SQL_ERR_DATA` — see "Error handling" above)
+
+**Not supported (v1):**
+
+- `JOIN` (any kind) or subqueries — the grammar is deliberately scoped to grow into these without a rewrite (see the Overview's design rationale for why this is a hand-written parser rather than Lemon), not scoped them out permanently. `FROM` also has no multi-table/table-alias support yet, for the same reason.
+- `HAVING` — no way to filter on an aggregate result after grouping; only `WHERE`, which runs before aggregation.
+- `LIKE`, `IN`, `BETWEEN`.
+- `NULL`/`IS NULL` (see "No NULL semantics" above) — this project does not represent missing values as `NaN` by default, so there is no `NULL` concept here at all.
+- `DISTINCT`, `LIMIT`/`OFFSET`.
+- `CASE WHEN`, window functions (`OVER`/`PARTITION BY`).
+- Functions beyond the five aggregates: no string functions (`UPPER`, `LENGTH`, `CONCAT`, ...), no math functions beyond `+ - * /` (no `SQRT`, `ABS`, `ROUND`, `POWER`, ...), no `CAST`.
+- `UNION`/`INTERSECT`/`EXCEPT`.
+- Any DML/DDL (`INSERT`/`UPDATE`/`DELETE`/`CREATE TABLE`) — this is read-only querying of an existing `DataFrame`, not a database.
+- `GROUP BY`/`ORDER BY` on a computed expression, never just a column/alias name (`GROUP BY gdp / population` is not supported — alias it in `SELECT` and group by the alias instead; `ORDER BY` on an aliased computed column *is* supported, since that's just an alias reference).
+- Quoted identifiers — reserved words (`SELECT`, `FROM`, `AND`, ...) cannot be used as column names, since there is no quoting mechanism to escape a column name that collides with a keyword.
+- `SELECT *` cannot be combined with `GROUP BY` — this is a contract violation (`assert`/`SQL_ERR_DATA`), not silently interpreted one way or another.
