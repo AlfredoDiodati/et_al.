@@ -6,6 +6,8 @@
 
 `random.h` is the general randomization engine every `dist/` sampler draws from: an explicit-state generator plus the scalar variate primitives (uniform, standard normal, gamma) that distribution-shaped sampling is built out of. It is a standalone root-level header like `special.h` — no dependency on `linalg/mat.h` — and the `Mat`-valued, parameterized samplers (`gauss_sample`, `student_sample`, `mvgauss_sample`, `mvstudent_sample`) live in the `dist/` files, which call down into this one: the same include direction as every other layer, and the same split as "the engine knows nothing about `loc`/`scale`/`cov`". The `Rng` type with `rng_*` function prefixes follows `ad.h`'s `Tape`/`tape_*` precedent of naming functions after the type they operate on.
 
+`nn/mlp.h` (model tier) also draws from it directly, not just `dist/`: `mlp_init`'s Glorot-uniform weight initialization takes an `Rng *` the same way `dist/`'s samplers do, replacing an earlier `rand()`-seeded implementation that had exactly the problems described below (see `docs/MLP_DOCUMENTATION.md`).
+
 ## Why not the C standard library's `rand()`
 
 Three reasons, all fatal for library-shipped simulation (as opposed to the test files' use of `rand()` for arbitrary test inputs, which is fine and unchanged):

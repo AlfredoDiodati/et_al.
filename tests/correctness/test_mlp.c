@@ -102,8 +102,8 @@ static void test_gradient_fd(void) {
     puts("gradient (finite-difference) vs independent reference forward pass");
 
     int sizes[] = {3, 4, 2};
-    srand(123);
-    MLP net = mlp_init(3, sizes, ad_tanh, ad_tanh);
+    Rng rng = rng_new(123, 0);
+    MLP net = mlp_init(&rng, 3, sizes, ad_tanh, ad_tanh);
     Mat x = mat_lit(3, 1, 0.4f, -0.6f, 0.2f);
 
     check_gradient_fd(&net, x);
@@ -113,13 +113,17 @@ static void test_gradient_fd(void) {
 
     if (getenv("STRESS")) {
         puts("  gradient stress: random architectures");
+        /* rand()/srand() here is test-only input randomization (architecture
+           depth/width, x values) - fine and unchanged per README's policy;
+           mlp_init's own Glorot init below draws from a separate Rng. */
         srand(99);
+        Rng stress_rng = rng_new(99, 0);
         for (int trial = 0; trial < 15; trial++) {
             int depth = 1 + rand() % 3; /* 1..3 hidden layers */
             int n_sizes = depth + 2;
             int *rsizes = (int*)malloc((size_t)n_sizes * sizeof(int));
             for (int i = 0; i < n_sizes; i++) rsizes[i] = 1 + rand() % 5;
-            MLP rnet = mlp_init(n_sizes, rsizes, ad_tanh, ad_tanh);
+            MLP rnet = mlp_init(&stress_rng, n_sizes, rsizes, ad_tanh, ad_tanh);
             Mat rx = mat_new(rsizes[0], 1);
             for (int i = 0; i < rsizes[0]; i++) rx.d[i] = (mreal)(rand() % 2001 - 1000) / 1000.0f;
 
@@ -139,8 +143,8 @@ static void test_adversarial_shapes(void) {
     /* direct input -> output, no hidden layer at all */
     {
         int sizes[] = {3, 2};
-        srand(5);
-        MLP net = mlp_init(2, sizes, ad_tanh, ad_tanh);
+        Rng rng = rng_new(5, 0);
+        MLP net = mlp_init(&rng, 2, sizes, ad_tanh, ad_tanh);
         assert(net.n_layers == 1);
         Mat x = mat_lit(3, 1, 0.1f, -0.2f, 0.3f);
         Mat ref = ref_forward(&net, x);
@@ -160,8 +164,8 @@ static void test_adversarial_shapes(void) {
     /* every layer, including input, is a single neuron */
     {
         int sizes[] = {1, 1, 1, 1};
-        srand(6);
-        MLP net = mlp_init(4, sizes, ad_tanh, ad_tanh);
+        Rng rng = rng_new(6, 0);
+        MLP net = mlp_init(&rng, 4, sizes, ad_tanh, ad_tanh);
         assert(net.n_layers == 3);
         Mat x = mat_lit(1, 1, 0.7f);
         Mat ref = ref_forward(&net, x);
@@ -260,8 +264,8 @@ static void test_save_load_roundtrip(void) {
     puts("persistence: mlp_save + mlp_load round-trip matches original forecast exactly");
 
     int sizes[] = {3, 5, 4, 2};
-    srand(42);
-    MLP net = mlp_init(4, sizes, ad_tanh, ad_identity);
+    Rng rng = rng_new(42, 0);
+    MLP net = mlp_init(&rng, 4, sizes, ad_tanh, ad_identity);
 
     Mat x = mat_lit(3, 2,
         0.5f, -0.2f,

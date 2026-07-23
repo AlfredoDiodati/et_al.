@@ -2,6 +2,7 @@
 #include "../ad.h"
 #include "../solver/optimizer.h"
 #include "../json.h"
+#include "../random.h"
 
 /* Fully connected feedforward multilayer perceptron: general architecture
    (arbitrary depth and per-layer width, chosen per use case via a plain
@@ -48,13 +49,18 @@ typedef struct {
     Activation out_act;     /* applied after the last layer - the model's link function */
 } MLP;
 
-/* Uniform random value in [-a, a]. Not seeded here - like the rest of
-   this codebase's randomized code (see tests/), seeding is the caller's
-   responsibility via srand() (mlp_fit does this itself, see below; direct
-   mlp_init callers must srand() first for reproducible runs). */
-static inline mreal mlp_rand_uniform(mreal a) {
-    mreal u = (mreal)rand() / (mreal)RAND_MAX; /* [0,1] */
-    return a * (2 * u - 1);                     /* [-a,a] */
+/* Uniform random value in [-a, a), drawn from the library's own
+   explicit-state generator (random.h) rather than libc's rand() - see
+   random.h's own rationale (implementation-defined quality, no
+   cross-platform reproducibility, and one hidden global state with
+   neither independent streams nor thread safety - all fatal for
+   library-shipped, as opposed to test-only, randomness). The caller
+   supplies rng (mlp_init takes it directly; mlp_fit builds one internally
+   from opts.seed), so seeding, reproducibility, and thread safety are
+   never mediated by any hidden global state in this file. */
+static inline mreal mlp_rand_uniform(Rng *rng, mreal a) {
+    double u = rng_uniform(rng); /* [0,1) */
+    return (mreal)(a * (2 * u - 1)); /* [-a,a) */
 }
 
 /* Build a network from a size array: sizes[0] is the input dimension,
@@ -62,9 +68,13 @@ static inline mreal mlp_rand_uniform(mreal a) {
    n_sizes-2 hidden layers, n_sizes-1 weight/bias layers total, and
    arbitrary depth/width - the whole point being that this is chosen per
    use case, not fixed by this file). Weights are Glorot-uniform
-   initialized per layer (limit = sqrt(6/(fan_in+fan_out))); biases start
-   at zero, the standard default. Caller must mlp_free(). */
-static inline MLP mlp_init(int n_sizes, const int *sizes, Activation hidden_act, Activation out_act) {
+   initialized per layer (limit = sqrt(6/(fan_in+fan_out))) via rng
+   (random.h's explicit-state PCG64 generator - the caller constructs it,
+   e.g. rng_new(seed, stream), so seeding, reproducibility, and any number
+   of independent streams - one per concurrent thread/run, say - are the
+   caller's to control with no hidden global state anywhere in this file);
+   biases start at zero, the standard default. Caller must mlp_free(). */
+static inline MLP mlp_init(Rng *rng, int n_sizes, const int *sizes, Activation hidden_act, Activation out_act) {
     assert(n_sizes >= 2);
     MLP net;
     net.n_layers = n_sizes - 1;
@@ -80,7 +90,7 @@ static inline MLP mlp_init(int n_sizes, const int *sizes, Activation hidden_act,
         mreal limit = MSQRT((mreal)6 / (mreal)(fan_in + fan_out));
         net.W[l] = mat_new(fan_out, fan_in);
         for (int i = 0; i < fan_out * fan_in; i++)
-            net.W[l].d[i] = mlp_rand_uniform(limit);
+            net.W[l].d[i] = mlp_rand_uniform(rng, limit);
         net.b[l] = mat_new(fan_out, 1); /* zero-initialized by mat_new */
     }
     return net;
@@ -231,8 +241,13 @@ typedef struct {
 } MLPHyperparams;
 
 /* Training-procedural options: must never affect the trained model's
-   architecture, only how training runs. verbose: 0 = silent, N > 0 =
-   print the mean training loss every N epochs. */
+   architecture, only how training runs. seed feeds rng_new(seed, 0)
+   (random.h) to build the Rng mlp_init's Glorot init draws from - not
+   libc's srand()/rand(), so two mlp_fit calls with the same seed give
+   bit-for-bit identical initial weights regardless of what else is
+   running concurrently, and different opts.seed values are the caller's
+   independent streams. verbose: 0 = silent, N > 0 = print the mean
+   training loss every N epochs. */
 typedef struct {
     int epochs;
     unsigned seed;
@@ -264,8 +279,8 @@ static inline MLPFit mlp_fit(Mat train_X, Mat train_Y, Criterion criterion,
     assert(hp.sizes[0] == train_X.r);                   /* input dim matches data */
     assert(hp.sizes[hp.n_sizes - 1] == train_Y.r);       /* output dim matches data */
 
-    srand(opts.seed);
-    MLP net = mlp_init(hp.n_sizes, hp.sizes, hp.hidden_act, hp.out_act);
+    Rng rng = rng_new(opts.seed, 0);
+    MLP net = mlp_init(&rng, hp.n_sizes, hp.sizes, hp.hidden_act, hp.out_act);
 
     Optimizer *optW = (Optimizer*)malloc((size_t)net.n_layers * sizeof(Optimizer));
     Optimizer *optb = (Optimizer*)malloc((size_t)net.n_layers * sizeof(Optimizer));

@@ -35,12 +35,12 @@ Two concrete `Activation`s exist so far, both in `ad.h`: `ad_tanh` (the hidden d
 ## API reference: structure
 
 ```c
-MLP mlp_init(int n_sizes, const int *sizes, Activation hidden_act, Activation out_act)
+MLP mlp_init(Rng *rng, int n_sizes, const int *sizes, Activation hidden_act, Activation out_act)
 void mlp_free(MLP *net)
 Node *mlp_forward(Tape *t, const MLP *net, Node *x, Node **W_out, Node **b_out)
 ```
 
-`mlp_init`: `sizes[0]` is the input dimension, `sizes[1..n_sizes-1]` are each layer's output dimension in order - so `n_sizes-2` hidden layers and `n_sizes-1` weight/bias layers total. E.g. `{10, 32, 16, 1}` is 10 inputs, two hidden layers (32 then 16 units), 1 output. Caller must `mlp_free()`.
+`mlp_init`: `sizes[0]` is the input dimension, `sizes[1..n_sizes-1]` are each layer's output dimension in order - so `n_sizes-2` hidden layers and `n_sizes-1` weight/bias layers total. E.g. `{10, 32, 16, 1}` is 10 inputs, two hidden layers (32 then 16 units), 1 output. Weights are Glorot-uniform-initialized by drawing from `rng` (`random.h`'s explicit-state PCG64 generator, `docs/RANDOM_DOCUMENTATION.md`) - the caller constructs it (`rng_new(seed, stream)`), so there is no hidden global RNG state anywhere in this file: seeding, reproducibility, and independent streams (one per concurrent thread/run, say) are entirely the caller's to control. Caller must `mlp_free()`.
 
 `mlp_forward`: runs the forward pass for a single input `x` (`net->sizes[0]`x`1`) through tape `t`, applying `net->hidden_act` after every layer except the last and `net->out_act` after the last. `net`'s *current* `W[l]`/`b[l]` values are wrapped as fresh leaves on `t` for this call - call it again with a new tape for the next input or training step. `net` is not modified (`ad_leaf` copies its argument), hence `const`. `W_out`/`b_out` must each point to a caller-allocated array of `net->n_layers` `Node*`; they receive the leaf nodes so their `->grad` can be read after `tape_backward()` and fed to an optimizer, one `.step` per layer - `mlp_fit` does this internally; for a bespoke training loop, see the pattern in `tests/correctness/test_mlp.c`'s lower-level tests. Returns the network's output node.
 
@@ -64,7 +64,7 @@ void mlp_fit_free(MLPFit *fit)
 
 `MLPHyperparams` is model-structural (architecture only); `MLPFitOptions` is training-procedural and must never affect the trained model's shape - `epochs`/`seed` control the training run, `verbose` (0 = silent, N > 0 = print the mean training loss every N epochs) is purely informational.
 
-`mlp_fit` seeds `rand()` with `opts.seed` itself (for `mlp_init`'s Glorot init), trains for `opts.epochs` epochs looping every sample each epoch with a fresh `Tape` per sample, and returns an `MLPFit` bundling the trained model with `final_loss` (the mean criterion value over the last epoch) and `epochs_run`. Free it with `mlp_fit_free`, not by reaching into `.model` directly.
+`mlp_fit` builds `Rng rng = rng_new(opts.seed, 0)` and passes `&rng` to `mlp_init` for its Glorot init - not libc's `srand()`/`rand()`, which `mlp_fit` used before this file's `Rng` (`random.h`) migration. Two `mlp_fit` calls with the same `opts.seed` now give bit-for-bit identical initial weights regardless of what else runs concurrently (no shared global state), and different `opts.seed` values are the caller's independent streams - see `docs/RANDOM_DOCUMENTATION.md`'s rationale for why this matters for a library rather than a one-off script. `mlp_fit` then trains for `opts.epochs` epochs looping every sample each epoch with a fresh `Tape` per sample, and returns an `MLPFit` bundling the trained model with `final_loss` (the mean criterion value over the last epoch) and `epochs_run`. Free it with `mlp_fit_free`, not by reaching into `.model` directly.
 
 `mlp_forecast` predicts on `test_X` (`fit->model.sizes[0]` x `n_test`), returning a `fit->model.sizes[last]` x `n_test` matrix the caller must `mat_free()`. It reuses `mlp_forward` through a throwaway tape per sample (gradients computed and discarded) rather than a second, duplicate untraced forward implementation - forecasting is not a hot path this project currently optimizes for.
 
