@@ -31,6 +31,7 @@ Mat student_logpdf(Mat x, Mat loc, Mat scale, Mat nu)
 Mat student_dlogpdf_loc(Mat x, Mat loc, Mat scale, Mat nu)
 Mat student_dlogpdf_scale(Mat x, Mat loc, Mat scale, Mat nu)
 Mat student_dlogpdf_nu(Mat x, Mat loc, Mat scale, Mat nu)
+Mat student_sample(Rng *rng, Mat loc, Mat scale, Mat nu, int r, int c)
 ```
 
 All four return a new owner sized to the broadcast shape of the four inputs; caller must `mat_free()`. None of the inputs are modified. With `z = (x - loc)/scale`:
@@ -66,6 +67,10 @@ The score with respect to the degrees of freedom — the piece that makes `nu` f
 
 At `nu = infinity` the score is exactly zero — the Gaussian limit does not depend on `nu` — so a `1x1` infinite `nu` returns an all-zero matrix and an infinite element yields zero for that element (there is no `gauss_*` function to delegate to; zero *is* the limit value). Same per-element convention, broadcasting, and fast/general path split as the other four functions.
 
+### `student_sample`
+
+Returns an `r x c` matrix of independent draws `o_ij ~ loc_ij + scale_ij * t(nu_ij)` — same explicit-output-shape, broadcast-into-it contract as `gauss_sample` (see `docs/GAUSS_DOCUMENTATION.md`), extended with `nu`. Each standard t variate is the definitional `z * sqrt(nu / chi2_nu)` with `chi2_nu = 2*rng_gamma(rng, nu/2)` (`student_draw`, one normal + one gamma per element), computed in double and cast at the end. The family's infinity rules carry over exactly: a `1x1` infinite `nu` delegates the whole call to `gauss_sample` — bit-identical draws for the same generator state — and an infinite *element* draws from the Gaussian (one normal, no gamma, so the stream consumption differs per element by design).
+
 ## Memory ownership
 
 Every `Mat` returned from this header is an owner and must be freed with `mat_free`, same as everywhere else in the library.
@@ -76,9 +81,11 @@ Every `Mat` returned from this header is an owner and must be freed with `mat_fr
 
 `dist/broadcast.h`'s own primitives are covered by `tests/correctness/test_broadcast.c`.
 
+`student_sample` is checked statistically at fixed seeds: mean/variance against `loc`/`scale^2 * nu/(nu-2)` at `nu=5`; serial independence of the draws in levels *and* squares (a chi-square accidentally shared across elements would leave levels uncorrelated but correlate the squares, so the squares are the check that each element consumes its own mixing draw; `nu=5 > 4` keeps the squares' variance finite); bit-identical delegation to `gauss_sample` at a `1x1` infinite `nu`; and a mixed finite/infinite `nu` row whose columns must show the t and Gaussian variances respectively.
+
 Separately, `tests/correctness/test_ad.c` rebuilds this file's log-pdf on `ad.h`'s tape (the `lgamma` normalization included, via `ad_lgamma`) and checks the reverse-mode gradients against all three analytic scores — a synthetic-differentiation cross-check structurally unrelated to both the closed forms here and the finite differences above.
 
 ## Known limitations and future work
 
 - A per-element (non-`1x1`) `nu` pays one double `lgamma` pair per element in `logpdf`/`pdf`, and one double digamma pair per element in `dlogpdf_nu` — inherent to the math, not an implementation shortcut, since the normalization genuinely depends on `nu`. `dlogpdf_loc`/`dlogpdf_scale` need neither.
-- No CDF, quantile function, or sampling — same deliberate scope as `dist/gauss.h`.
+- No CDF or quantile function — same deliberate scope as `dist/gauss.h` (sampling exists via `student_sample`).

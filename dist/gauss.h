@@ -1,6 +1,7 @@
 #pragma once
 #include "../linalg/mat.h"
 #include "broadcast.h"
+#include "../random.h"
 
 /* Gaussian (normal) distribution: pdf, log-pdf, and log-pdf derivatives
    with respect to location and scale.
@@ -182,6 +183,38 @@ static inline Mat gauss_dlogpdf_scale(Mat x, Mat loc, Mat scale) {
             mreal sg = scale_s ? scale0 : dist_bcast_at(scale, i, j);
             mreal z = (xi - mu) / sg;
             AT(o,i,j) = (z * z - 1) / sg;
+        }
+    }
+    return o;
+}
+
+/* Return an r x c matrix of independent draws o_ij ~ N(loc_ij, scale_ij).
+   The output shape is given explicitly (it cannot be inferred when
+   loc/scale are scalars - the common "n iid draws from one Gaussian"
+   case), and loc/scale must broadcast *to* it: each of their dimensions
+   equal to the output's or 1 (assert otherwise) - NumPy's
+   np.random.normal(loc, scale, size) contract. rng is the caller's
+   generator (see random.h): draws are generated in double and cast to
+   mreal, so a given (seed, stream) yields the same underlying sequence
+   under both precision builds. Consumes exactly one rng_normal per
+   element, row-major order. No fast/general path split, unlike the
+   density functions above - generation is inherently sequential through
+   the generator state, so there is no vectorizable flat loop to
+   preserve; the 1x1-parameter hoisting is kept since it still saves a
+   broadcast read per element. Caller must mat_free(). */
+static inline Mat gauss_sample(Rng *rng, Mat loc, Mat scale, int r, int c) {
+    assert(dist_bcast_dim(loc.r, r) == r && dist_bcast_dim(loc.c, c) == c);
+    assert(dist_bcast_dim(scale.r, r) == r && dist_bcast_dim(scale.c, c) == c);
+    Mat o = mat_new(r, c);
+    int loc_s = (loc.r == 1 && loc.c == 1);
+    int scale_s = (scale.r == 1 && scale.c == 1);
+    mreal loc0 = loc_s ? AT(loc,0,0) : 0;
+    mreal scale0 = scale_s ? AT(scale,0,0) : 0;
+    for (int i = 0; i < r; i++) {
+        for (int j = 0; j < c; j++) {
+            mreal mu = loc_s ? loc0 : dist_bcast_at(loc, i, j);
+            mreal sg = scale_s ? scale0 : dist_bcast_at(scale, i, j);
+            AT(o,i,j) = mu + sg * (mreal)rng_normal(rng);
         }
     }
     return o;

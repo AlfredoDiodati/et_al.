@@ -1,4 +1,5 @@
 #include "../../dist/student.h"
+#include "../../stats.h"
 #include <stdio.h>
 
 #define TOL     2e-3f
@@ -362,11 +363,69 @@ static void test_stress(void) {
     printf("  n=1..64 (3 cols, inf-mixed nu) vs independent reference ok\n");
 }
 
+static void test_sampling(void) {
+    puts("sampling: moments + independence + Gaussian-limit delegation (fixed seed)");
+
+    /* nu=5, scalar params: mean = loc, variance = scale^2 * nu/(nu-2)
+       (nu > 4 so the sample-variance estimator itself has finite
+       variance and the tolerance is meaningful) */
+    {
+        Rng rng = rng_new(2024, 0);
+        Mat loc = mat_lit(1, 1, 1.0f);
+        Mat scale = mat_lit(1, 1, 1.5f);
+        Mat nu = mat_lit(1, 1, 5.0f);
+        Mat s = student_sample(&rng, loc, scale, nu, 50000, 1);
+        assert(fabs((double)stats_mean(s) - 1.0) < 0.1);
+        assert(fabs((double)stats_var(s) - 2.25 * 5.0 / 3.0) < 0.4); /* 3.75; se ~ 0.05 */
+
+        /* consecutive draws are independent - levels and squares (each
+           element must consume its own chi-square: a shared mixing
+           variable would leave levels uncorrelated but correlate the
+           squares; nu = 5 > 4 keeps the squares' variance finite) */
+        for (int lag = 1; lag <= 3; lag++)
+            assert(MABS(stats_autocorr(s, lag)) < 0.03f);
+        Mat sq = mat_emul(s, s);
+        for (int lag = 1; lag <= 2; lag++)
+            assert(MABS(stats_autocorr(sq, lag)) < 0.05f);
+        mat_free(sq);
+        mat_free(loc); mat_free(scale); mat_free(nu); mat_free(s);
+    }
+
+    /* 1x1 infinite nu: bit-identical to gauss_sample from the same
+       generator state - delegation, not approximation */
+    {
+        Rng r1 = rng_new(5, 0), r2 = rng_new(5, 0);
+        Mat loc = mat_lit(1, 1, 0.3f);
+        Mat scale = mat_lit(1, 1, 1.2f);
+        Mat nu = mat_lit(1, 1, INFINITY);
+        Mat a = student_sample(&r1, loc, scale, nu, 32, 3);
+        Mat b = gauss_sample(&r2, loc, scale, 32, 3);
+        for (int i = 0; i < 32 * 3; i++)
+            assert(a.d[i] == b.d[i]);
+        mat_free(loc); mat_free(scale); mat_free(nu); mat_free(a); mat_free(b);
+    }
+
+    /* per-element nu mixing finite and infinite: column 0 is t(6)
+       (variance factor 6/4 = 1.5), column 1 is Gaussian (factor 1) */
+    {
+        Rng rng = rng_new(2024, 1);
+        Mat loc = mat_lit(1, 1, 0.0f);
+        Mat scale = mat_lit(1, 1, 1.0f);
+        Mat nu = mat_lit(1, 2, 6.0f, INFINITY);
+        Mat s = student_sample(&rng, loc, scale, nu, 40000, 2);
+        Mat c0 = mat_slice(s, 0, s.r, 0, 1), c1 = mat_slice(s, 0, s.r, 1, 2);
+        assert(fabs((double)stats_mean(c0)) < 0.05 && fabs((double)stats_var(c0) - 1.5) < 0.15);
+        assert(fabs((double)stats_mean(c1)) < 0.05 && fabs((double)stats_var(c1) - 1.0) < 0.1);
+        mat_free(loc); mat_free(scale); mat_free(nu); mat_free(s);
+    }
+}
+
 int main(void) {
     test_known_values();
     test_vs_ref();
     test_fd_derivatives();
     test_gaussian_limit();
+    test_sampling();
     test_stress();
     puts("test_student: all passed");
     return 0;

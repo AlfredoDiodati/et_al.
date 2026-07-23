@@ -28,9 +28,10 @@ Mat gauss_pdf(Mat x, Mat loc, Mat scale)
 Mat gauss_logpdf(Mat x, Mat loc, Mat scale)
 Mat gauss_dlogpdf_loc(Mat x, Mat loc, Mat scale)
 Mat gauss_dlogpdf_scale(Mat x, Mat loc, Mat scale)
+Mat gauss_sample(Rng *rng, Mat loc, Mat scale, int r, int c)
 ```
 
-All four return a new owner sized to the broadcast shape of the three inputs; caller must `mat_free()`. None of the inputs are modified.
+The first four return a new owner sized to the broadcast shape of the three inputs; caller must `mat_free()`. None of the inputs are modified.
 
 ### `gauss_pdf` / `gauss_logpdf`
 
@@ -40,16 +41,20 @@ All four return a new owner sized to the broadcast shape of the three inputs; ca
 
 Return `z/scale` and `(z^2 - 1)/scale` respectively - the per-observation score contribution with respect to each parameter. These intentionally return the per-element contributions, not a pre-aggregated gradient: for the common case of one shared `loc`/`scale` across a whole sample, the gradient of the total log-likelihood is `mat_sum` of the result, which is one line either way, and returning the unsummed vector keeps the function usable for cases where `loc`/`scale` are themselves per-observation (where "the gradient" is just this vector, with no sum to take).
 
+### `gauss_sample`
+
+Returns an `r x c` matrix of independent draws `o_ij ~ N(loc_ij, scale_ij)`. Unlike the density functions, the output shape is a parameter — it cannot be inferred when `loc`/`scale` are scalars, the common "n iid draws from one Gaussian" case — and `loc`/`scale` must broadcast *to* it (each dimension equal to the output's or 1, assert otherwise): `np.random.normal(loc, scale, size)`'s contract. `rng` is the caller's explicit generator from `random.h` (this file's one dependency beyond `linalg/mat.h`/`dist/broadcast.h`); draws are generated in double and cast to `mreal`, so a `(seed, stream)` yields the same underlying sequence under both precision builds. Consumes exactly one `rng_normal` per element in row-major order. There is deliberately no fast/general path split here: generation is inherently sequential through the generator state, so the flat-loop idiom buys nothing.
+
 ## Memory ownership
 
 Every `Mat` returned from this header is an owner and must be freed with `mat_free`, same as everywhere else in the library.
 
 ## Testing
 
-`tests/correctness/test_gauss.c` checks known hand-computed values (standard normal at `x=0`; `N(2,3)` at `x=5`, chosen so `z=1` exactly and `dlogpdf_scale` comes out to exactly `0`), cross-checks every value against an independent reference implementation written directly in the test file (re-derives the same formulas by hand rather than calling into `gauss.h`, so a shared bug can't hide from the comparison), and separately verifies the two derivatives against central finite differences of that same independent reference - a formula or sign error in the analytic derivative would need to also be present in the finite-difference computation to slip through, which is very unlikely since they're structurally unrelated. Broadcasting is exercised directly: scalar `loc`/`scale` against a vector `x`, no broadcasting at all (same-shape fast path), and genuine 2D broadcasting (a row-vector `loc` against a column-vector `scale` against a matrix `x`). Views (non-contiguous slices of `x`) are tested to confirm they correctly fall through to the general path even when `loc`/`scale` are plain scalars. `STRESS=1` adds randomized runs with a fixed seed, comparing every element against the independent reference at increasing sizes.
+`tests/correctness/test_gauss.c` checks known hand-computed values (standard normal at `x=0`; `N(2,3)` at `x=5`, chosen so `z=1` exactly and `dlogpdf_scale` comes out to exactly `0`), cross-checks every value against an independent reference implementation written directly in the test file (re-derives the same formulas by hand rather than calling into `gauss.h`, so a shared bug can't hide from the comparison), and separately verifies the two derivatives against central finite differences of that same independent reference - a formula or sign error in the analytic derivative would need to also be present in the finite-difference computation to slip through, which is very unlikely since they're structurally unrelated. Broadcasting is exercised directly: scalar `loc`/`scale` against a vector `x`, no broadcasting at all (same-shape fast path), and genuine 2D broadcasting (a row-vector `loc` against a column-vector `scale` against a matrix `x`). Views (non-contiguous slices of `x`) are tested to confirm they correctly fall through to the general path even when `loc`/`scale` are plain scalars. `STRESS=1` adds randomized runs with a fixed seed, comparing every element against the independent reference at increasing sizes. `gauss_sample` is checked statistically at fixed seeds (see `docs/RANDOM_DOCUMENTATION.md`'s Testing section for the tolerance rationale): sample mean/variance against `loc`/`scale^2` for scalar and broadcast parameters; serial independence of the draw sequence and of its squares (autocorrelation at small lags within a few standard errors of zero — the squares would expose the polar method's shared-radius pairing leaking through the sampler); plus sampler-level reproducibility (same `(seed, stream)` gives identical draws).
 
 ## Known limitations and future work
 
 - Univariate only - the multivariate Gaussian (vector-valued `x`, full covariance matrix) is a materially different computation (a quadratic form via Cholesky + a log-determinant, not an elementwise formula) and lives in its own file, `dist/mv/gauss.h` - see `docs/MVGAUSS_DOCUMENTATION.md`.
 - The broadcasting primitives (`dist_bcast_dim`, `dist_bcast_at`) were extracted into the shared `dist/broadcast.h` exactly when the planned trigger fired: `dist/student.h` became the second caller (per the root `README.md`'s "if two headers need the same helper, it belongs in the lower of the two" rule). Only the three-input shape resolution `gauss_bcast_shape` remains here, since it is specific to this file's parameter list.
-- No CDF, inverse CDF (quantile function), or sampling (random variate generation) - this file covers exactly what `mat_lstsq_rd`-style MLE fitting needs (density and its score), not a full distribution toolkit.
+- No CDF or inverse CDF (quantile function) - this file covers what MLE fitting and simulation need (density, score, and now sampling via `gauss_sample`), not a full distribution toolkit.

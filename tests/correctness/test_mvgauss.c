@@ -1,5 +1,6 @@
 #include "../../dist/mv/gauss.h"
 #include "../../dist/gauss.h"
+#include "../../stats.h"
 #include <stdio.h>
 
 #define TOL     2e-3f
@@ -390,6 +391,66 @@ static void test_stress(void) {
     }
 }
 
+static void test_sampling(void) {
+    puts("sampling: empirical mean/covariance + row independence (fixed seed)");
+
+    Rng rng = rng_new(2024, 0);
+    Mat loc = mat_lit(1, 2, 1.0f, -2.0f);
+    Mat cov = mat_lit(2, 2, 2.0f, 0.6f, 0.6f, 1.0f);
+    Mat s = mvgauss_sample(&rng, loc, cov, 40000);
+    assert(s.r == 40000 && s.c == 2);
+
+    Mat mean = stats_vec_mean(s);
+    Mat ecov = stats_autocov(s, 0);
+    for (int j = 0; j < 2; j++)
+        assert(MABS(AT(mean, 0, j) - AT(loc, 0, j)) < 0.05f);
+    for (int j = 0; j < 2; j++)
+        for (int k = 0; k < 2; k++)
+            assert(MABS(AT(ecov, j, k) - AT(cov, j, k)) < 0.08f);
+
+    /* rows are independent draws: every entry of the lag-1/lag-2
+       autocovariance matrix near zero (per-entry se ~
+       sqrt(var_a * var_b / n) ~ 0.007) - the one shared Cholesky/gemm
+       across all rows must not couple them */
+    for (int k = 1; k <= 2; k++) {
+        Mat ac = stats_autocov(s, k);
+        for (int t = 0; t < 4; t++)
+            assert(MABS(ac.d[t]) < 0.06f);
+        mat_free(ac);
+    }
+    /* and beyond second moments: the per-row squared norm is also
+       serially uncorrelated */
+    {
+        Mat u = mat_new(s.r, 1);
+        for (int i = 0; i < s.r; i++) {
+            double a = (double)AT(s, i, 0) - (double)AT(mean, 0, 0);
+            double b = (double)AT(s, i, 1) - (double)AT(mean, 0, 1);
+            u.d[i] = (mreal)(a * a + b * b);
+        }
+        assert(MABS(stats_autocorr(u, 1)) < 0.03f);
+        mat_free(u);
+    }
+    mat_free(mean); mat_free(ecov);
+    mat_free(s);
+
+    /* per-observation loc: row i centered at its own mean */
+    Mat locs = mat_lit(2, 2, 10.0f, 0.0f, -10.0f, 5.0f);
+    Mat s2 = mvgauss_sample(&rng, locs, cov, 2);
+    for (int i = 0; i < 2; i++)
+        for (int k = 0; k < 2; k++)
+            assert(MABS(AT(s2, i, k) - AT(locs, i, k)) < 8.0f); /* within ~5 sigma */
+    mat_free(locs); mat_free(s2);
+
+    /* reproducibility */
+    Rng r1 = rng_new(5, 0), r2 = rng_new(5, 0);
+    Mat a = mvgauss_sample(&r1, loc, cov, 16);
+    Mat b = mvgauss_sample(&r2, loc, cov, 16);
+    for (int i = 0; i < 16 * 2; i++)
+        assert(a.d[i] == b.d[i]);
+    mat_free(a); mat_free(b);
+    mat_free(loc); mat_free(cov);
+}
+
 int main(void) {
     test_univariate_consistency();
     test_known_values();
@@ -398,6 +459,7 @@ int main(void) {
     test_fd_derivatives();
     test_per_observation_loc();
     test_views();
+    test_sampling();
     test_stress();
     puts("test_mvgauss: all passed");
     return 0;

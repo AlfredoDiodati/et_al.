@@ -25,6 +25,7 @@ Mat mvgauss_pdf(Mat x, Mat loc, Mat cov)          /* n x 1 */
 Mat mvgauss_logpdf(Mat x, Mat loc, Mat cov)       /* n x 1 */
 Mat mvgauss_dlogpdf_loc(Mat x, Mat loc, Mat cov)  /* n x d */
 Mat mvgauss_dlogpdf_cov(Mat x, Mat loc, Mat cov)  /* d x d */
+Mat mvgauss_sample(Rng *rng, Mat loc, Mat cov, int n)  /* n x d */
 ```
 
 All four return a new owner; caller must `mat_free()`. None of the inputs are modified. Strided views are accepted for `x` and `loc` (inputs are read through `AT`, then repacked contiguously before any BLAS/LAPACK call).
@@ -58,6 +59,10 @@ Entry `(j,k)` is the partial derivative with respect to `cov[j][k]` treated as a
 
 This is the one function in `dist/` that returns an aggregated gradient instead of per-observation contributions, a deliberate deviation from the `dist/gauss.h` convention: each observation's contribution is itself a `d x d` matrix, and `n` of them would need a third axis `Mat` does not have. The summed gradient is also the object MLE fitting actually consumes; for per-observation detail, call it with a single row of `x`. `cov^-1` is obtained from the Cholesky factor already in hand (`?potri`, lower triangle mirrored to upper) rather than a fresh LU-based `mat_inv`.
 
+### `mvgauss_sample`
+
+Returns an `n x d` matrix whose row `i` is an independent draw from `N_d(loc_i, cov)`, via the standard construction `x = loc + L*z` with `L = mat_chol(cov)` and `z` standard normals — one Cholesky and one gemm (`Z * L^T`) for all `n` rows. `loc` is `1 x d` or `n x d` as usual; `rng` is the caller's explicit generator from `random.h` (see `docs/RANDOM_DOCUMENTATION.md`). Consumes exactly `n*d` `rng_normal` draws in row-major order; draws are generated in double and cast to `mreal`.
+
 ## Relationship to dist/gauss.h
 
 `d = 1` collapses exactly to the univariate file with `cov = scale^2`: `mvgauss_logpdf == gauss_logpdf`, `mvgauss_dlogpdf_loc == gauss_dlogpdf_loc`, and by the chain rule `mvgauss_dlogpdf_cov == sum(gauss_dlogpdf_scale) / (2*scale)`. A diagonal `cov` factorizes: the joint log-pdf is the sum of the per-component univariate log-pdfs with `scale = sqrt(diag)`. Both identities are enforced by tests (see below), so the two files cannot silently drift apart.
@@ -70,11 +75,11 @@ Every `Mat` returned from this header is an owner and must be freed with `mat_fr
 
 ## Testing
 
-`tests/correctness/test_mvgauss.c` checks, in order: exact collapse to `dist/gauss.h` at `d=1` (through that file's own public API, including the chain-rule identity for the cov gradient); known hand-computed values (standard bivariate normal at the origin: `pdf = 1/(2*pi)`; at `(1,1)`: `q = 2` exactly); the diagonal-cov factorization identity against `gauss_logpdf`; a correlated `2 x 2` covariance against an independent reference implementation written directly in the test file — Gauss-Jordan inverse + determinant in `double`, no Cholesky and no BLAS, so a bug shared with the header's factorization path cannot hide from the comparison; both analytic derivatives against central finite differences of that reference (with symmetric off-diagonal perturbations checked against `2*G[j][k]`, pinning down the independent-entry convention); the per-observation `n x d` `loc` path; and strided views of `x` and `loc`. `STRESS=1` adds randomized runs with a fixed seed over `d` in {1, 2, 3, 5} and `n` up to 40, with a random well-conditioned SPD covariance (`B*B^T + I`), comparing every output element against the double-precision reference.
+`tests/correctness/test_mvgauss.c` checks, in order: exact collapse to `dist/gauss.h` at `d=1` (through that file's own public API, including the chain-rule identity for the cov gradient); known hand-computed values (standard bivariate normal at the origin: `pdf = 1/(2*pi)`; at `(1,1)`: `q = 2` exactly); the diagonal-cov factorization identity against `gauss_logpdf`; a correlated `2 x 2` covariance against an independent reference implementation written directly in the test file — Gauss-Jordan inverse + determinant in `double`, no Cholesky and no BLAS, so a bug shared with the header's factorization path cannot hide from the comparison; both analytic derivatives against central finite differences of that reference (with symmetric off-diagonal perturbations checked against `2*G[j][k]`, pinning down the independent-entry convention); the per-observation `n x d` `loc` path; and strided views of `x` and `loc`. `STRESS=1` adds randomized runs with a fixed seed over `d` in {1, 2, 3, 5} and `n` up to 40, with a random well-conditioned SPD covariance (`B*B^T + I`), comparing every output element against the double-precision reference. `mvgauss_sample` is checked statistically at fixed seeds: the empirical mean (`stats_vec_mean`) and full empirical covariance matrix (`stats_autocov` at lag 0) of a 40000-draw sample against `loc`/`cov`; row independence — every entry of the lag-1/lag-2 sample autocovariance matrix within a few standard errors of zero (the one shared Cholesky/gemm across rows must not couple them), and the per-row squared norm serially uncorrelated (dependence beyond second moments); per-observation `loc` placement; and sampler-level reproducibility.
 
 ## Known limitations and future work
 
 - One shared covariance per call — no per-observation `cov` (e.g. a GARCH-style time-varying covariance), which needs either a third axis or an array-of-`Mat` API. Defer until a concrete model needs it; a loop over single-row calls is the workaround (refactoring per observation, which is also what the math requires).
-- No CDF, quantile function, or sampling — same deliberate scope as `dist/gauss.h`: exactly what MLE-style fitting needs (density and score), not a full distribution toolkit.
+- No CDF or quantile function — same deliberate scope as `dist/gauss.h`: what MLE-style fitting and simulation need (density, score, and sampling via `mvgauss_sample`), not a full distribution toolkit.
 - `mvgauss_dlogpdf_cov` returns the independent-entry gradient. Optimizers that update only a lower-triangular or log-Cholesky parameterization must chain-rule through their own parameterization; that transformation belongs to the optimizer/model layer, not here.
 - The Cholesky is re-computed inside each of the four functions. A caller evaluating several of them at the same `cov` pays the factorization up to four times; a factor-reusing variant (mirroring `vec_chol_solve`'s relationship to `vec_solve`) is the obvious extension once a profiled caller actually needs it.

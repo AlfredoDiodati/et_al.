@@ -237,6 +237,51 @@ static inline Mat student_dlogpdf_nu(Mat x, Mat loc, Mat scale, Mat nu) {
     return o;
 }
 
+/* One standard t_nu variate: z * sqrt(nu / chi2_nu) with z ~ N(0,1)
+   and chi2_nu = 2*Gamma(nu/2) - the definitional construction, built
+   on random.h's normal and gamma. Double throughout, cast at the end,
+   same cross-build-reproducibility policy as random.h itself. Consumes
+   one rng_normal + one rng_gamma. */
+static inline mreal student_draw(Rng *rng, mreal nu) {
+    double z = rng_normal(rng);
+    double chi2 = 2.0 * rng_gamma(rng, (double)nu / 2);
+    return (mreal)(z * sqrt((double)nu / chi2));
+}
+
+/* Return an r x c matrix of independent draws
+   o_ij ~ loc_ij + scale_ij * t(nu_ij): same explicit-output-shape,
+   broadcast-into-it contract as gauss_sample, extended with nu. The
+   same infinity rules as every other function here apply: a 1x1
+   infinite nu delegates the whole call to gauss_sample (so the draw
+   sequence is bit-identical to the Gaussian's for the same rng state),
+   and an infinite element draws that element from the Gaussian (one
+   rng_normal, no gamma draw). Caller must mat_free(). */
+static inline Mat student_sample(Rng *rng, Mat loc, Mat scale, Mat nu, int r, int c) {
+    assert(dist_bcast_dim(loc.r, r) == r && dist_bcast_dim(loc.c, c) == c);
+    assert(dist_bcast_dim(scale.r, r) == r && dist_bcast_dim(scale.c, c) == c);
+    assert(dist_bcast_dim(nu.r, r) == r && dist_bcast_dim(nu.c, c) == c);
+    if (nu.r == 1 && nu.c == 1 && MISINF(AT(nu,0,0)))
+        return gauss_sample(rng, loc, scale, r, c);
+    Mat o = mat_new(r, c);
+    int loc_s = (loc.r == 1 && loc.c == 1);
+    int scale_s = (scale.r == 1 && scale.c == 1);
+    int nu_s = (nu.r == 1 && nu.c == 1);
+    mreal loc0 = loc_s ? AT(loc,0,0) : 0;
+    mreal scale0 = scale_s ? AT(scale,0,0) : 0;
+    mreal nu0 = nu_s ? AT(nu,0,0) : 0;
+    for (int i = 0; i < r; i++) {
+        for (int j = 0; j < c; j++) {
+            mreal mu = loc_s ? loc0 : dist_bcast_at(loc, i, j);
+            mreal sg = scale_s ? scale0 : dist_bcast_at(scale, i, j);
+            mreal nv = nu_s ? nu0 : dist_bcast_at(nu, i, j);
+            mreal draw = (!nu_s && MISINF(nv)) ? (mreal)rng_normal(rng)
+                                               : student_draw(rng, nv);
+            AT(o,i,j) = mu + sg * draw;
+        }
+    }
+    return o;
+}
+
 /* Return d(log-pdf)/d(scale) = ((nu+1)*z^2/(nu+z^2) - 1) / scale,
    z = (x-loc)/scale - the score contribution of each observation with
    respect to the scale parameter (Gaussian (z^2-1)/scale at an infinite

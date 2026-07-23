@@ -227,3 +227,41 @@ static inline Mat mvstudent_dlogpdf_cov(Mat x, Mat loc, Mat cov, mreal nu) {
     mat_free(s);
     return o;
 }
+
+/* Return an n x d matrix whose row i is an independent draw from
+   t_nu(loc_i, cov): the definitional construction
+   x = loc + (L*z) * sqrt(nu/chi2_nu) - the Gaussian part exactly as
+   mvgauss_sample builds it (one gemm for all rows), then each row
+   scaled by its own chi-square mixing factor (one factor per
+   *observation*, shared across that row's d components - that shared
+   mixing is precisely what makes the multivariate t different from d
+   independent univariate t's). loc is 1 x d or n x d as usual. An
+   infinite nu delegates to mvgauss_sample (bit-identical draws for the
+   same rng state). Consumes n*d rng_normal + n rng_gamma draws: all
+   normals first, then the n mixing gammas row by row. Caller must
+   mat_free(). */
+static inline Mat mvstudent_sample(Rng *rng, Mat loc, Mat cov, mreal nu, int n) {
+    if (MISINF(nu))
+        return mvgauss_sample(rng, loc, cov, n);
+    int d = cov.r;
+    assert(n >= 1 && cov.c == d);
+    assert(loc.c == d && (loc.r == 1 || loc.r == n));
+
+    Mat l = mat_chol(cov);
+    Mat z = mat_new(n, d);
+    for (int i = 0; i < n * d; i++)
+        z.d[i] = (mreal)rng_normal(rng);
+    Mat lt = mat_T(l);
+    Mat o = mat_mul(z, lt);
+    for (int i = 0; i < n; i++) {
+        double chi2 = 2.0 * rng_gamma(rng, (double)nu / 2);
+        mreal s = (mreal)sqrt((double)nu / chi2);
+        int li = loc.r == 1 ? 0 : i;
+        for (int k = 0; k < d; k++)
+            AT(o, i, k) = AT(loc, li, k) + s * AT(o, i, k);
+    }
+    mat_free(l);
+    mat_free(z);
+    mat_free(lt);
+    return o;
+}

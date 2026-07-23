@@ -1,5 +1,6 @@
 #pragma once
 #include "../../linalg/decomp.h"
+#include "../../random.h"
 
 /* Multivariate Gaussian (normal) distribution: pdf, log-pdf, and log-pdf
    derivatives with respect to the mean vector and the covariance matrix.
@@ -164,5 +165,34 @@ static inline Mat mvgauss_dlogpdf_cov(Mat x, Mat loc, Mat cov) {
     mat_free(p);
     mat_free(w);
     mat_free(s);
+    return o;
+}
+
+/* Return an n x d matrix whose row i is an independent draw from
+   N_d(loc_i, cov) - the standard construction x = loc + L*z with
+   L = mat_chol(cov) and z a vector of standard normals, done for all n
+   rows in one gemm (Z * L^T, since the rows here are x^T). loc is
+   1 x d (shared mean) or n x d (per-observation mean), same contract
+   as every other function in this file. Consumes exactly n*d
+   rng_normal draws, row-major order. Caller must mat_free(). */
+static inline Mat mvgauss_sample(Rng *rng, Mat loc, Mat cov, int n) {
+    int d = cov.r;
+    assert(n >= 1 && cov.c == d);
+    assert(loc.c == d && (loc.r == 1 || loc.r == n));
+
+    Mat l = mat_chol(cov);
+    Mat z = mat_new(n, d);
+    for (int i = 0; i < n * d; i++)
+        z.d[i] = (mreal)rng_normal(rng);
+    Mat lt = mat_T(l);
+    Mat o = mat_mul(z, lt);
+    for (int i = 0; i < n; i++) {
+        int li = loc.r == 1 ? 0 : i;
+        for (int k = 0; k < d; k++)
+            AT(o, i, k) += AT(loc, li, k);
+    }
+    mat_free(l);
+    mat_free(z);
+    mat_free(lt);
     return o;
 }

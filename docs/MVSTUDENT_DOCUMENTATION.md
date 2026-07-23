@@ -27,6 +27,7 @@ Mat mvstudent_logpdf(Mat x, Mat loc, Mat cov, mreal nu)       /* n x 1 */
 Mat mvstudent_dlogpdf_loc(Mat x, Mat loc, Mat cov, mreal nu)  /* n x d */
 Mat mvstudent_dlogpdf_cov(Mat x, Mat loc, Mat cov, mreal nu)  /* d x d */
 Mat mvstudent_dlogpdf_nu(Mat x, Mat loc, Mat cov, mreal nu)   /* n x 1 */
+Mat mvstudent_sample(Rng *rng, Mat loc, Mat cov, mreal nu, int n)  /* n x d */
 ```
 
 All four return a new owner; caller must `mat_free()`. None of the inputs are modified. Strided views of `x`/`loc` are accepted. With `q_i` the Mahalanobis quadratic form `(x_i - loc)^T cov^-1 (x_i - loc)`:
@@ -63,6 +64,10 @@ dlogpdf_nu_i = (psi((nu+d)/2) - psi(nu/2))/2 - d/(2*nu)
 
 The score with respect to the degrees of freedom, per observation as an `n x 1` column (like `dlogpdf_loc`; `nu` is one shared scalar, so the gradient of the total log-likelihood is `mat_sum` of the result — this makes `nu` fittable by gradient alongside `loc`/`cov`). `psi` is `special_digamma` from `special.h`; the `nu`-only part (`mvstudent_dlognorm_dnu`) is computed in double for the same cancellation reason as the lognorm (see `docs/SPECIAL_DOCUMENTATION.md`). At `nu = infinity` the score is exactly zero — the Gaussian limit does not depend on `nu` — returned as an all-zero column rather than delegated, since there is no `mvgauss_*` counterpart; zero *is* the limit value.
 
+### `mvstudent_sample`
+
+Returns an `n x d` matrix whose row `i` is an independent draw from `t_nu(loc_i, cov)`: the Gaussian part exactly as `mvgauss_sample` builds it (one Cholesky, one gemm for all rows), then each row scaled by its own `sqrt(nu / chi2_nu)` mixing factor — one chi-square draw per *observation*, shared across that row's `d` components, which is precisely what makes the multivariate t different from `d` independent univariate t's. An infinite `nu` delegates to `mvgauss_sample` (bit-identical draws for the same generator state). Consumes `n*d` `rng_normal` + `n` `rng_gamma` draws: all normals first, then the mixing gammas row by row.
+
 ## Memory ownership
 
 Every `Mat` returned from this header is an owner and must be freed with `mat_free`, same as everywhere else in the library.
@@ -71,10 +76,12 @@ Every `Mat` returned from this header is an owner and must be freed with `mat_fr
 
 `tests/correctness/test_mvstudent.c` mirrors `test_mvgauss.c`'s structure with `nu` threaded through: exact `d=1` collapse onto `dist/student.h` through its public API (including the chain-rule identity `dcov = sum(dscale)/(2*scale)`, and `dlogpdf_nu` matching the univariate score row for row); a known value chosen so the normalization collapses (`nu=2`, `d=2`, identity `cov` at the origin: `lgamma(2)-lgamma(1)-log(2pi) = -log(2pi)`, so `pdf = 1/(2pi)` exactly); a correlated `cov` against an independent all-double Gauss-Jordan reference written in the test file; all three derivatives against central finite differences of that reference (symmetric off-diagonal `cov` perturbations checked against `2*G[j][k]`; the `nu` FD reference is digamma-free, so a `special_digamma` bug cannot hide); `nu = INFINITY` bit-identical to all four `mvgauss_*` outputs (proving delegation) with `dlogpdf_nu` exactly zero, alongside `nu = 1e6` merely *close* with `|dlogpdf_nu| < 1e-4` (proving the finite path and the double-precision lognorm/digamma); per-observation `loc` combined with strided views; and `STRESS=1` randomized runs over `d` in {1, 2, 3, 5}, `n` up to 40, random SPD `cov` and random `nu` per run, `dlogpdf_nu` included via the FD reference.
 
+`mvstudent_sample` is checked statistically at fixed seeds: empirical mean against `loc` and the full empirical covariance against `nu/(nu-2) * cov` at `nu=8`; row independence — lag-1/lag-2 sample autocovariance matrices near zero, and, the sharper check for this sampler, serially uncorrelated per-row squared norms, since a single chi-square mixing draw shared across rows would leave the levels uncorrelated yet strongly correlate the squared norms (`nu=8 > 4` keeps their variance finite); bit-identical delegation to `mvgauss_sample` at an infinite `nu`; and the structural check tying the sampler to the already-triangulated scores — the mean of each of `dlogpdf_loc`/`dlogpdf_cov`/`dlogpdf_nu` over a 40000-draw sample evaluated at the true parameters must be near zero (the score identity `E[score] = 0`), which a bias in either the sampler or any score function would break.
+
 Separately, `tests/correctness/test_ad.c` rebuilds the total log-likelihood on `ad.h`'s tape — per observation via `ad_solve`/`ad_det`/`ad_dot` with shared `loc`/`cov`/`nu` leaves, the normalization via `ad_lgamma` — and checks the reverse-mode gradients against this file's analytic scores (and `dist/mv/gauss.h`'s, via the same graph with the Gaussian kernel). The AD path factors `cov` by LU while this file uses Cholesky, so the two routes to the gradient share no numerical code.
 
 ## Known limitations and future work
 
 - One shared `cov` and one shared `nu` per call — per-observation versions of either are a different model (and, for `cov`, need a third axis); deferred until concrete need, same as `dist/mv/gauss.h`.
-- No CDF, quantile function, or sampling — same deliberate scope as every other `dist/` file.
+- No CDF or quantile function — same deliberate scope as every other `dist/` file (sampling exists via `mvstudent_sample`).
 - The Cholesky is re-computed inside each of the four functions, same trade-off as `dist/mv/gauss.h`; a factor-reusing variant is the obvious extension once a profiled caller needs it.

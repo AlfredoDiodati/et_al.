@@ -1,4 +1,5 @@
 #include "../../dist/gauss.h"
+#include "../../stats.h"
 #include <stdio.h>
 
 #define TOL     1e-4f
@@ -263,10 +264,65 @@ static void test_broadcast_shape(void) {
     }
 }
 
+static void test_sampling(void) {
+    puts("sampling: moments + broadcast + independence (fixed seed)");
+
+    /* scalar loc/scale: n iid draws, sample mean/variance near truth
+       (tolerances are many standard errors at n=50000) */
+    {
+        Rng rng = rng_new(2024, 0);
+        Mat loc = mat_lit(1, 1, 2.0f);
+        Mat scale = mat_lit(1, 1, 3.0f);
+        Mat s = gauss_sample(&rng, loc, scale, 50000, 1);
+        assert(s.r == 50000 && s.c == 1);
+        assert(MABS(stats_mean(s) - 2.0f) < 0.1f);   /* se ~ 0.013 */
+        assert(MABS(stats_var(s) - 9.0f) < 0.5f);    /* se ~ 0.057 */
+
+        /* consecutive draws are independent: autocorrelation of the
+           draw sequence and of its squares near zero at small lags
+           (se ~ 1/sqrt(n) ~ 0.0045; the squares would expose the polar
+           method's shared-radius pairing leaking through the sampler) */
+        for (int lag = 1; lag <= 3; lag++)
+            assert(MABS(stats_autocorr(s, lag)) < 0.03f);
+        Mat sq = mat_emul(s, s);
+        for (int lag = 1; lag <= 2; lag++)
+            assert(MABS(stats_autocorr(sq, lag)) < 0.03f);
+        mat_free(sq);
+        mat_free(loc); mat_free(scale); mat_free(s);
+    }
+
+    /* broadcast: per-column loc/scale row vectors */
+    {
+        Rng rng = rng_new(2024, 1);
+        Mat loc = mat_lit(1, 2, -1.0f, 4.0f);
+        Mat scale = mat_lit(1, 2, 1.0f, 0.5f);
+        Mat s = gauss_sample(&rng, loc, scale, 20000, 2);
+        for (int j = 0; j < 2; j++) {
+            Mat cj = mat_slice(s, 0, s.r, j, j + 1);
+            assert(MABS(stats_mean(cj) - AT(loc,0,j)) < 0.05f);
+            assert(MABS(stats_var(cj) - AT(scale,0,j) * AT(scale,0,j)) < 0.1f);
+        }
+        mat_free(loc); mat_free(scale); mat_free(s);
+    }
+
+    /* reproducibility at the sampler level: same (seed, stream), same draws */
+    {
+        Rng r1 = rng_new(5, 0), r2 = rng_new(5, 0);
+        Mat loc = mat_lit(1, 1, 0.0f);
+        Mat scale = mat_lit(1, 1, 1.0f);
+        Mat a = gauss_sample(&r1, loc, scale, 32, 3);
+        Mat b = gauss_sample(&r2, loc, scale, 32, 3);
+        for (int i = 0; i < 32 * 3; i++)
+            assert(a.d[i] == b.d[i]);
+        mat_free(loc); mat_free(scale); mat_free(a); mat_free(b);
+    }
+}
+
 int main(void) {
     test_pdf_logpdf();
     test_derivatives();
     test_broadcast_shape();
+    test_sampling();
     puts("test_gauss: all passed");
     return 0;
 }

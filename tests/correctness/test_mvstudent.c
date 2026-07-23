@@ -1,5 +1,6 @@
 #include "../../dist/mv/student.h"
 #include "../../dist/student.h"
+#include "../../stats.h"
 #include <stdio.h>
 
 #define TOL     2e-3f
@@ -390,6 +391,87 @@ static void test_stress(void) {
     }
 }
 
+static void test_sampling(void) {
+    puts("sampling: moments + row independence + zero-score at truth (fixed seed)");
+
+    Mat loc = mat_lit(1, 2, 1.0f, -2.0f);
+    Mat cov = mat_lit(2, 2, 2.0f, 0.6f, 0.6f, 1.0f);
+    mreal nu = 8.0f;
+
+    /* empirical covariance of a t sample is nu/(nu-2) * cov (nu > 4 so
+       the estimator's own variance is finite) */
+    {
+        Rng rng = rng_new(2024, 0);
+        Mat s = mvstudent_sample(&rng, loc, cov, nu, 40000);
+        double factor = 8.0 / 6.0;
+        int n = s.r;
+        Mat mean = stats_vec_mean(s);
+        Mat ecov = stats_autocov(s, 0);
+        for (int j = 0; j < 2; j++)
+            assert(MABS(AT(mean, 0, j) - AT(loc, 0, j)) < 0.05f);
+        for (int j = 0; j < 2; j++)
+            for (int k = 0; k < 2; k++)
+                assert(fabs((double)AT(ecov, j, k) - factor * (double)AT(cov, j, k)) < 0.15);
+
+        /* rows are independent draws: lag-1/lag-2 autocovariance near
+           zero (per-entry se ~ sqrt(var_a * var_b / n) ~ 0.01) */
+        for (int k = 1; k <= 2; k++) {
+            Mat ac = stats_autocov(s, k);
+            for (int t = 0; t < 4; t++)
+                assert(MABS(ac.d[t]) < 0.1f);
+            mat_free(ac);
+        }
+        /* the sharper check for this sampler: each row must consume its
+           own chi-square. A single mixing draw shared across rows would
+           leave the levels above uncorrelated yet strongly correlate
+           the per-row squared norms (nu = 8 > 4 keeps their variance
+           finite). */
+        {
+            Mat u = mat_new(n, 1);
+            for (int i = 0; i < n; i++) {
+                double a = (double)AT(s, i, 0) - (double)AT(mean, 0, 0);
+                double b = (double)AT(s, i, 1) - (double)AT(mean, 0, 1);
+                u.d[i] = (mreal)(a * a + b * b);
+            }
+            assert(MABS(stats_autocorr(u, 1)) < 0.05f);
+            mat_free(u);
+        }
+        mat_free(mean); mat_free(ecov);
+
+        /* the structural check tying the sampler to the (already
+           triangulated) scores: at the true parameters, the mean score
+           must be near zero for every parameter - loc (column means of
+           the per-observation scores), cov (summed gradient / n), and
+           nu (mean per-observation score) */
+        Mat dl = mvstudent_dlogpdf_loc(s, loc, cov, nu);
+        for (int j = 0; j < 2; j++) {
+            double m = 0;
+            for (int i = 0; i < n; i++) m += (double)AT(dl, i, j);
+            assert(fabs(m / n) < 0.03);
+        }
+        Mat dc = mvstudent_dlogpdf_cov(s, loc, cov, nu);
+        for (int j = 0; j < 2; j++)
+            for (int k = 0; k < 2; k++)
+                assert(fabs((double)AT(dc, j, k) / n) < 0.03);
+        Mat dn = mvstudent_dlogpdf_nu(s, loc, cov, nu);
+        assert(fabs((double)mat_sum(dn) / n) < 0.01);
+        mat_free(s); mat_free(dl); mat_free(dc); mat_free(dn);
+    }
+
+    /* infinite nu: bit-identical to mvgauss_sample from the same
+       generator state */
+    {
+        Rng r1 = rng_new(5, 0), r2 = rng_new(5, 0);
+        Mat a = mvstudent_sample(&r1, loc, cov, INFINITY, 16);
+        Mat b = mvgauss_sample(&r2, loc, cov, 16);
+        for (int i = 0; i < 16 * 2; i++)
+            assert(a.d[i] == b.d[i]);
+        mat_free(a); mat_free(b);
+    }
+
+    mat_free(loc); mat_free(cov);
+}
+
 int main(void) {
     test_univariate_consistency();
     test_known_values();
@@ -397,6 +479,7 @@ int main(void) {
     test_fd_derivatives();
     test_gaussian_limit();
     test_per_obs_loc_and_views();
+    test_sampling();
     test_stress();
     puts("test_mvstudent: all passed");
     return 0;
