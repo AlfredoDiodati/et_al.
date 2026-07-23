@@ -26,15 +26,36 @@ MODEL_SUBDIRS := nn
 examples/mat_example: examples/mat_example.c linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/mat_example.c $(LDLIBS) -o examples/mat_example
 
-examples/mlp_example: examples/mlp_example.c nn/mlp.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
+examples/mlp_example: examples/mlp_example.c nn/mlp.h json.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/mlp_example.c $(LDLIBS) -o examples/mlp_example
 
+examples/standardize_example: examples/standardize_example.c frame/csv.h frame/frame.h stats.h linalg/mat.h
+	$(CC) $(CFLAGS) -I. examples/standardize_example.c $(LDLIBS) -o examples/standardize_example
+
+examples/encoder: examples/encoder.c frame/csv.h frame/frame.h stats.h nn/mlp.h json.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
+	$(CC) $(CFLAGS) -I. examples/encoder.c $(LDLIBS) -o examples/encoder
+
 # --- benchmarks (tests/performance/) ---
-libmat.so: tests/performance/bench_matmul.c linalg/mat.h
-	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_matmul.c $(LDLIBS) -o libmat.so
+libmat.so: tests/performance/bench_mat.c linalg/mat.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_mat.c $(LDLIBS) -o libmat.so
 
 libdecomp.so: tests/performance/bench_decomp.c linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_decomp.c $(LDLIBS) -o libdecomp.so
+
+libdist.so: tests/performance/bench_dist.c dist/student.h dist/gauss.h dist/mv/student.h dist/mv/gauss.h dist/broadcast.h special.h random.h linalg/decomp.h linalg/mat.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_dist.c $(LDLIBS) -o libdist.so
+
+libad.so: tests/performance/bench_ad.c ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_ad.c $(LDLIBS) -o libad.so
+
+libframe.so: tests/performance/bench_frame.c frame/sql.h frame/csv.h frame/txt.h frame/npy.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_frame.c $(LDLIBS) -o libframe.so
+
+librandom.so: tests/performance/bench_random.c random.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_random.c $(LDLIBS) -o librandom.so
+
+libstats.so: tests/performance/bench_stats.c stats.h linalg/mat.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_stats.c $(LDLIBS) -o libstats.so
 
 # --- correctness tests (tests/correctness/) ---
 tests/correctness/test_mat: tests/correctness/test_mat.c linalg/mat.h
@@ -79,7 +100,7 @@ tests/correctness/test_adam: tests/correctness/test_adam.c solver/adam.h solver/
 tests/correctness/test_optimizer: tests/correctness/test_optimizer.c solver/adam.h solver/optimizer.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_optimizer.c $(LDLIBS) -o tests/correctness/test_optimizer
 
-tests/correctness/test_mlp: tests/correctness/test_mlp.c nn/mlp.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_mlp: tests/correctness/test_mlp.c nn/mlp.h json.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mlp.c $(LDLIBS) -o tests/correctness/test_mlp
 
 tests/correctness/test_frame: tests/correctness/test_frame.c frame/frame.h linalg/mat.h

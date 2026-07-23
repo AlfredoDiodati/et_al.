@@ -1,6 +1,7 @@
 #pragma once
 #include "../ad.h"
 #include "../solver/optimizer.h"
+#include "../json.h"
 
 /* Fully connected feedforward multilayer perceptron: general architecture
    (arbitrary depth and per-layer width, chosen per use case via a plain
@@ -93,6 +94,99 @@ static inline void mlp_free(MLP *net) {
     free(net->W);
     free(net->b);
     free(net->sizes);
+}
+
+/* --- persistence: save/load a fitted MLP's architecture and weights via
+   json.h, this project's designated layer for parameter (as opposed to
+   bulk-data) persistence (see docs/JSON_DOCUMENTATION.md). Only sizes/W/b
+   are serialized - hidden_act/out_act are function pointers with no
+   portable JSON representation, so mlp_from_json/mlp_load take them as
+   arguments, the same way mlp_init does, rather than trying to round-trip
+   them by name. sizes alone already captures the hidden layer structure
+   (widths and count), so a caller reloading with the same activations
+   used to fit gets back a bit-for-bit equivalent network. */
+
+static inline JsonValue *mlp_to_json(const MLP *net) {
+    JsonValue *root = json_object();
+
+    JsonValue *sizes = json_array();
+    for (int i = 0; i <= net->n_layers; i++) json_array_push(sizes, json_number(net->sizes[i]));
+    json_object_set(root, "sizes", sizes);
+
+    JsonValue *layers = json_array();
+    for (int l = 0; l < net->n_layers; l++) {
+        JsonValue *W = json_array();
+        for (int i = 0; i < net->W[l].r; i++)
+            for (int j = 0; j < net->W[l].c; j++)
+                json_array_push(W, json_number((double)AT(net->W[l], i, j)));
+        JsonValue *b = json_array();
+        for (int i = 0; i < net->b[l].r; i++)
+            json_array_push(b, json_number((double)AT(net->b[l], i, 0)));
+
+        JsonValue *layer = json_object();
+        json_object_set(layer, "W", W);
+        json_object_set(layer, "b", b);
+        json_array_push(layers, layer);
+    }
+    json_object_set(root, "layers", layers);
+    return root;
+}
+
+/* Rebuilds an MLP from a tree produced by mlp_to_json (or mlp_load's
+   json_parse_file). hidden_act/out_act are supplied by the caller, not
+   read from the tree - see the note above. Caller must mlp_free(). */
+static inline MLP mlp_from_json(const JsonValue *root, Activation hidden_act, Activation out_act) {
+    JsonValue *sizes_j = json_object_get(root, "sizes");
+    int n_sizes = json_array_len(sizes_j);
+    assert(n_sizes >= 2);
+
+    MLP net;
+    net.n_layers = n_sizes - 1;
+    net.sizes = (int*)malloc((size_t)n_sizes * sizeof(int));
+    for (int i = 0; i < n_sizes; i++) net.sizes[i] = (int)json_as_number(json_array_get(sizes_j, i));
+    net.W = (Mat*)malloc((size_t)net.n_layers * sizeof(Mat));
+    net.b = (Mat*)malloc((size_t)net.n_layers * sizeof(Mat));
+    net.hidden_act = hidden_act;
+    net.out_act = out_act;
+
+    JsonValue *layers_j = json_object_get(root, "layers");
+    assert(json_array_len(layers_j) == net.n_layers);
+    for (int l = 0; l < net.n_layers; l++) {
+        int fan_in = net.sizes[l], fan_out = net.sizes[l + 1];
+        JsonValue *layer_j = json_array_get(layers_j, l);
+        JsonValue *W_j = json_object_get(layer_j, "W");
+        JsonValue *b_j = json_object_get(layer_j, "b");
+        assert(json_array_len(W_j) == fan_out * fan_in);
+        assert(json_array_len(b_j) == fan_out);
+
+        net.W[l] = mat_new(fan_out, fan_in);
+        for (int i = 0; i < fan_out; i++)
+            for (int j = 0; j < fan_in; j++)
+                AT(net.W[l], i, j) = (mreal)json_as_number(json_array_get(W_j, i * fan_in + j));
+
+        net.b[l] = mat_new(fan_out, 1);
+        for (int i = 0; i < fan_out; i++)
+            AT(net.b[l], i, 0) = (mreal)json_as_number(json_array_get(b_j, i));
+    }
+    return net;
+}
+
+/* Writes net's architecture and weights to path as JSON. Overwrites path
+   if it exists (json_write_file's behavior). */
+static inline void mlp_save(const MLP *net, const char *path) {
+    JsonValue *root = mlp_to_json(net);
+    json_write_file(root, path);
+    json_free(root);
+}
+
+/* Loads an MLP previously written by mlp_save. hidden_act/out_act must
+   match what the model was fit with - see mlp_from_json's note; there is
+   no way to recover them from the file. Caller must mlp_free(). */
+static inline MLP mlp_load(const char *path, Activation hidden_act, Activation out_act) {
+    JsonValue *root = json_parse_file(path);
+    MLP net = mlp_from_json(root, hidden_act, out_act);
+    json_free(root);
+    return net;
 }
 
 /* Run the forward pass for a single input x (net->sizes[0] x 1) through

@@ -21,7 +21,7 @@ A pure C (C11), single-header matrix library targeting econometrics research, bu
 | `tests/correctness/test_mat.c` | Correctness tests for linalg/mat.h |
 | `tests/correctness/test_decomp.c` | Correctness tests for linalg/decomp.h |
 | `tests/correctness/test_solver.c` | Correctness tests for linalg/solver.h |
-| `tests/performance/bench_matmul.c` + `bench_matmul.py` | matmul vs NumPy, via a `libmat.so` ctypes shared library |
+| `tests/performance/bench_mat.c` + `bench_mat.py` | matmul + element-wise/reduction kernels vs NumPy, via a `libmat.so` ctypes shared library |
 | `tests/performance/bench_decomp.c` + `bench_decomp.py` | linalg/decomp.h/linalg/solver.h functions vs NumPy, via `libdecomp.so` |
 | `Makefile` | Builds examples, tests, and the benchmark shared libraries |
 
@@ -38,7 +38,7 @@ make test-special           # special value tests (built without -ffast-math)
 make test-stress            # stress tests with larger inputs
 
 make libmat.so              # shared library for benchmarking
-python tests/performance/bench_matmul.py
+python tests/performance/bench_mat.py
 ```
 
 Production compiler flags: `-O3 -march=native -ffast-math -lm $(pkg-config --cflags --libs openblas)` (falls back to `-lopenblas` if `pkg-config` cannot find it). Add `-DMAT_DOUBLE` to build against `double`/`cblas_d*`/`LAPACKE_d*` instead of the `float` default.
@@ -192,7 +192,7 @@ See the corresponding pitfall in `README.md` ("Do not hand-write a kernel for so
 
 ### Benchmark results
 
-Measured with `tests/performance/bench_matmul.py` (float32, both C and NumPy using pre-allocated output buffers):
+Measured with `tests/performance/bench_mat.py` (float32, both C and NumPy using pre-allocated output buffers):
 
 | Shape | C ms | NumPy ms | C GF/s | NumPy GF/s | max err |
 |---|---|---|---|---|---|
@@ -200,7 +200,9 @@ Measured with `tests/performance/bench_matmul.py` (float32, both C and NumPy usi
 | 512x512x512 | 0.623 | 0.884 | 430.6 | 303.7 | 0 |
 | 1024x1024x1024 | 7.435 | 7.445 | 288.8 | 288.5 | 0 |
 
-`max err` is exactly `0` at every shape tested, not just small - `mat_mul` and NumPy call the literal same `cblas_?gemm` on the same input, so there is no floating-point reordering difference to produce one. At and above 256x256, C GF/s tracks NumPy's GF/s within measurement noise (occasionally faster, since `mat_mul` has one fewer indirection than NumPy's dispatch path); below that, per-call overhead (mostly the `mat_new` allocation) dominates and the two diverge more. Run `tests/performance/bench_matmul.py` to reproduce; expect run-to-run variance from CPU turbo state.
+`max err` is exactly `0` at every shape tested, not just small - `mat_mul` and NumPy call the literal same `cblas_?gemm` on the same input, so there is no floating-point reordering difference to produce one. At and above 256x256, C GF/s tracks NumPy's GF/s within measurement noise (occasionally faster, since `mat_mul` has one fewer indirection than NumPy's dispatch path); below that, per-call overhead (mostly the `mat_new` allocation) dominates and the two diverge more. Run `tests/performance/bench_mat.py` to reproduce; expect run-to-run variance from CPU turbo state.
+
+The same script also benchmarks the hand-rolled element-wise kernels and reductions - the loops where this library's own code, not OpenBLAS, is what's being measured - contiguous and through a strided view. Headline results (float32, n x n): `mat_exp`/`mat_tanh` run at ~0.4-0.5x NumPy's time (the `-ffast-math` vectorized `expf`/`tanhf` beating NumPy's SIMD loops), `mat_sum` at ~0.8x contiguous and ~0.5x strided, and every op beats NumPy on strided views (NumPy pays more for non-contiguous access than the stride-aware fallback does). Two honest losses the benchmark exposes: allocating `mat_add`/`mat_emul` on contiguous data trails NumPy's `a + b` by ~1.1-1.9x (NumPy's allocator caches; `mat_new`'s aligned_alloc pays page faults every call - in-place variants would close this if it ever matters), and `mat_max`/`mat_min` run 3-6x slower than `np.max`, the cost of the bit-level `MISNAN` NaN-propagation check on every element (see Special value behavior) - correct-by-design, but the first candidate if a profiler ever shows a reduction hot.
 
 ## Conventions
 
@@ -208,7 +210,7 @@ Measured with `tests/performance/bench_matmul.py` (float32, both C and NumPy usi
 - Functions return new matrices (owners). There are no in-place operation variants yet.
 - `Vec` is always a column vector (`c == 1`). Row vectors are `Mat` with `r == 1`.
 - The library uses `mreal` (an alias for `float` or `double`, chosen at build time by `MAT_DOUBLE`) everywhere a numeric type is needed - do not write `float` or `double` directly in new code.
-- The `stride` field must be preserved correctly when constructing `Mat` literals by hand (as done in `tests/performance/bench_matmul.c`), and matches the `lda`/`ldb`/`ldc` passed to every CBLAS/LAPACKE call.
+- The `stride` field must be preserved correctly when constructing `Mat` literals by hand (as done in `tests/performance/bench_mat.c`), and matches the `lda`/`ldb`/`ldc` passed to every CBLAS/LAPACKE call.
 
 ## Special value behavior
 

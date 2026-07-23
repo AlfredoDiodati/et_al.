@@ -253,12 +253,56 @@ static void test_out_act_identity(void) {
     mlp_free(&net);
 }
 
+/* mlp_save/mlp_load round-trip: a fitted network's forecast on held-out
+   inputs must be bit-for-bit unchanged after writing to disk and reloading
+   into a fresh MLP, since sizes/W/b are exactly what mlp_to_json stores. */
+static void test_save_load_roundtrip(void) {
+    puts("persistence: mlp_save + mlp_load round-trip matches original forecast exactly");
+
+    int sizes[] = {3, 5, 4, 2};
+    srand(42);
+    MLP net = mlp_init(4, sizes, ad_tanh, ad_identity);
+
+    Mat x = mat_lit(3, 2,
+        0.5f, -0.2f,
+       -0.7f,  0.3f,
+        0.1f,  0.9f);
+
+    MLPFit fit;
+    fit.model = net;
+    fit.final_loss = 0;
+    fit.epochs_run = 0;
+    Mat before = mlp_forecast(&fit, x);
+
+    const char *path = "/tmp/test_mlp_roundtrip.json";
+    mlp_save(&fit.model, path);
+    MLP loaded = mlp_load(path, ad_tanh, ad_identity);
+    remove(path);
+
+    assert(loaded.n_layers == net.n_layers);
+    for (int i = 0; i <= loaded.n_layers; i++) assert(loaded.sizes[i] == net.sizes[i]);
+
+    MLPFit loaded_fit;
+    loaded_fit.model = loaded;
+    loaded_fit.final_loss = 0;
+    loaded_fit.epochs_run = 0;
+    Mat after = mlp_forecast(&loaded_fit, x);
+
+    assert(before.r == after.r && before.c == after.c);
+    for (int i = 0; i < before.r * before.c; i++)
+        assert(before.d[i] == after.d[i]);
+
+    mat_free(before); mat_free(after); mat_free(x);
+    mlp_free(&net); mlp_free(&loaded);
+}
+
 int main(void) {
     test_forward_known();
     test_gradient_fd();
     test_adversarial_shapes();
     test_out_act_identity();
     test_fit_forecast_xor();
+    test_save_load_roundtrip();
     puts("test_mlp: all passed");
     return 0;
 }

@@ -49,3 +49,34 @@ void c_lstsq(int m, int n, mreal *a, mreal *b, mreal *out) {
     memcpy(out, x.d, (size_t)n * sizeof(mreal));
     mat_free(x);
 }
+
+void c_eig_sym(int n, mreal *a, mreal *w_out, mreal *v_out) {
+    Mat ma = { n, n, n, a };
+    Vec w;
+    Mat v;
+    mat_eig_sym(ma, &w, &v);
+    memcpy(w_out, w.d, (size_t)n * sizeof(mreal));
+    memcpy(v_out, v.d, (size_t)n * n * sizeof(mreal));
+    mat_free(w);
+    mat_free(v);
+}
+
+void c_svd(int m, int n, mreal *a, mreal *u_out, mreal *s_out, mreal *vt_out) {
+    Mat ma = { m, n, n, a };
+    Mat u, vt;
+    Vec s;
+    mat_svd(ma, &u, &s, &vt);
+    memcpy(u_out, u.d, (size_t)u.r * u.c * sizeof(mreal));
+    memcpy(s_out, s.d, (size_t)s.r * sizeof(mreal));
+    memcpy(vt_out, vt.d, (size_t)vt.r * vt.c * sizeof(mreal));
+    mat_free(u);
+    mat_free(s);
+    mat_free(vt);
+}
+
+void c_inv(int n, mreal *a, mreal *out) {
+    Mat ma = { n, n, n, a };
+    Mat inv = mat_inv(ma);
+    memcpy(out, inv.d, (size_t)n * n * sizeof(mreal));
+    mat_free(inv);
+}

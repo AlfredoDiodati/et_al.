@@ -68,6 +68,21 @@ void mlp_fit_free(MLPFit *fit)
 
 `mlp_forecast` predicts on `test_X` (`fit->model.sizes[0]` x `n_test`), returning a `fit->model.sizes[last]` x `n_test` matrix the caller must `mat_free()`. It reuses `mlp_forward` through a throwaway tape per sample (gradients computed and discarded) rather than a second, duplicate untraced forward implementation - forecasting is not a hot path this project currently optimizes for.
 
+## API reference: persistence
+
+```c
+JsonValue *mlp_to_json(const MLP *net)
+MLP mlp_from_json(const JsonValue *root, Activation hidden_act, Activation out_act)
+void mlp_save(const MLP *net, const char *path)
+MLP mlp_load(const char *path, Activation hidden_act, Activation out_act)
+```
+
+`mlp_save`/`mlp_load` persist a fitted (or unfitted) `MLP` through `json.h` (`docs/JSON_DOCUMENTATION.md`), this project's designated layer for parameter persistence - the same use case its own docs cite ("a layer width"). The stored document has `sizes` (the full `n_layers+1` array, which already encodes the hidden layer count and widths) and `layers` (each entry's `W`/`b` values, row-major). `hidden_act`/`out_act` are **not** stored - they are function pointers with no portable JSON representation - so `mlp_load`/`mlp_from_json` take them as arguments, the same way `mlp_init` does; the caller must pass the same activations the model was fit with to get back an equivalent network. Loading with mismatched activations does not fail loudly (there is nothing in the file to check it against) - it silently produces a network that behaves differently from the one that was saved.
+
+To persist a trained `MLPFit`, save/load `fit.model` directly (`mlp_save(&fit.model, path)`) - `final_loss`/`epochs_run` are fit diagnostics, not part of the model, and are not part of the saved document.
+
+`mlp_save`/`mlp_load` round-trip `sizes`/`W`/`b` exactly (`tests/correctness/test_mlp.c`'s `test_save_load_roundtrip` checks a loaded model's `mlp_forecast` output is bit-for-bit identical to the original's, not just close).
+
 ## Memory ownership
 
 `MLP` owns `sizes`/`W`/`b` (plain `malloc`/`mat_new`), freed together by `mlp_free`. `MLPFit` owns its `MLP` the same way, freed by `mlp_fit_free`. The `Node*`s `mlp_forward` writes into `W_out`/`b_out` are tape-owned like every other node the tape produces - freed by `tape_free(t)`, not individually; `W_out`/`b_out` themselves are just plain caller-managed arrays holding pointers into the tape.
@@ -78,6 +93,8 @@ void mlp_fit_free(MLPFit *fit)
 
 The centerpiece (`test_fit_forecast_xor`) trains and predicts XOR - not linearly separable, so it genuinely exercises the hidden layer and nonlinearity - entirely through `mlp_fit`/`mlp_forecast`/`mlp_fit_free`, the same public API a real caller uses, checked against correct classification and reasonable closeness to target. Green in both precisions and under ASan/UBSan with `STRESS=1`.
 
+`test_save_load_roundtrip` writes a Glorot-initialized network to a temp file via `mlp_save`, reloads it via `mlp_load` with the same activations, and checks `mlp_forecast` on held-out inputs is bit-for-bit identical between the original and the reloaded network - not just architecture-equal.
+
 ## Known limitations and future work
 
 - One hidden activation for every layer but the last (see Activation selection above) - per-layer selection is a natural next step once a third activation exists to make it worth choosing between.
@@ -85,3 +102,4 @@ The centerpiece (`test_fit_forecast_xor`) trains and predicts XOR - not linearly
 - No regularization (weight decay, dropout).
 - No early stopping / validation-set monitoring - `mlp_fit` always runs exactly `opts.epochs` epochs.
 - No layer types beyond fully connected (no convolution, no recurrence) - out of scope for `nn/mlp.h` specifically; a different architecture would be a different file in `nn/`, per this project's one-file-per-architecture pattern.
+- No performance benchmarks - deliberate, not an oversight, per the README's benchmarking policy across installation tiers: only the core tier is benchmarked against external packages (its functions have direct NumPy/SciPy/JAX equivalents), while model-tier wall-clock is dominated by training-procedure configuration and is meant to be compared between versions of this package itself. That version-to-version harness does not exist yet, so this file currently has no speed tests at all and no model-tier speed claims should be made; the core layers `mlp_fit` spends its time in (`ad.h`, `linalg/mat.h`) are benchmarked in `tests/performance/`.

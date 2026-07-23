@@ -235,6 +235,25 @@ static void test_squared_error_and_identity(void) {
         tape_free(t);
     }
 
+    /* ad_mean_squared_error: known output/gradient, exactly
+       ad_squared_error / n_elements (n=3 here). */
+    {
+        Tape *t = tape_new();
+        Mat pv = mat_lit(3, 1, 1.f, 2.f, 3.f);
+        Mat tv = mat_lit(3, 1, 0.f, 2.f, 5.f);
+        Node *pred = ad_leaf(t, pv), *target = ad_leaf(t, tv);
+        Node *loss = ad_mean_squared_error(t, pred, target);
+        tape_backward(t, loss);
+        CHECK(loss->val.d[0], (1.f + 0.f + 4.f) / 3.f);
+        for (int i = 0; i < 3; i++) {
+            mreal diff = pv.d[i] - tv.d[i];
+            CHECK(pred->grad.d[i], 2.0f * diff / 3.f);
+            CHECK(target->grad.d[i], -2.0f * diff / 3.f);
+        }
+        mat_free(pv); mat_free(tv);
+        tape_free(t);
+    }
+
     /* ad_identity: returns its argument unchanged - literally the same
        Node*, not a copy - so its gradient is just a->grad accumulating
        directly from whatever uses idn. Verified the same way as any other

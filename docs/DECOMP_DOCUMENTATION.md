@@ -91,6 +91,8 @@ Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_q
 | 256 | 0.561 | 1.297 | 1.9e-6 | 0.403 | 7.06 | 11.05 |
 | 512 | 2.744 | 7.607 | 3.8e-6 | 2.964 | - | - |
 
+`bench_decomp.py` also covers `mat_eig_sym` vs `numpy.linalg.eigh` (~1.6-2.5x ahead across n=64..512), `mat_svd` vs `numpy.linalg.svd` (~1.4-1.6x ahead), and `mat_inv` vs `numpy.linalg.inv` (at parity to ~2.6x ahead at n=512) - same LAPACK underneath, shorter dispatch path here.
+
 `mat_chol` and `mat_qr` are consistently at or ahead of `numpy.linalg.cholesky`/`numpy.linalg.qr` - both call the same OpenBLAS/LAPACK under the hood, and this library's wrapper (one `mat_copy` plus the LAPACKE call) has less overhead than NumPy's dispatch path. `mat_lu` has no direct NumPy equivalent to compare against (NumPy does not expose raw `getrf`); its absolute timings sit in the same range as `mat_chol`'s, which is the expected relationship since both are O(n^3) with similar constants. Errors against NumPy (`max err`, and reconstruction error for QR) stay in the 1e-6 to 1e-7 range at every size tested - both floating-point roundoff, not an algorithmic discrepancy. Reproduce with `python tests/performance/bench_decomp.py`.
 
 ## Known limitations and future work

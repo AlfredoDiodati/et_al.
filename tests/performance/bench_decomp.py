@@ -16,7 +16,11 @@ lib.c_lu.argtypes = [ctypes.c_int, F, F]
 lib.c_qr.argtypes = [ctypes.c_int, ctypes.c_int, F, F, F]
 lib.c_solve.argtypes = [ctypes.c_int, F, F, F]
 lib.c_lstsq.argtypes = [ctypes.c_int, ctypes.c_int, F, F, F]
-for fn in (lib.c_chol, lib.c_lu, lib.c_qr, lib.c_solve, lib.c_lstsq):
+lib.c_eig_sym.argtypes = [ctypes.c_int, F, F, F]
+lib.c_svd.argtypes = [ctypes.c_int, ctypes.c_int, F, F, F, F]
+lib.c_inv.argtypes = [ctypes.c_int, F, F]
+for fn in (lib.c_chol, lib.c_lu, lib.c_qr, lib.c_solve, lib.c_lstsq,
+           lib.c_eig_sym, lib.c_svd, lib.c_inv):
     fn.restype = None
 
 
@@ -131,6 +135,50 @@ def bench_lstsq(sizes):
         print(f"{n:>8}  {ours_ms:>12.4f}  {np_ms:>12.4f}  {err:>12.2e}")
 
 
+def bench_eig_sym(sizes):
+    print_header("Symmetric eig (c_eig_sym vs numpy.linalg.eigh)", ["ours ms", "numpy ms", "eigval err"])
+    rng = np.random.default_rng(42)
+    for n in sizes:
+        a = spd(n, rng)
+        w = np.zeros(n, dtype=np.float32)
+        v = np.zeros((n, n), dtype=np.float32)
+        lib.c_eig_sym(n, ptr(a), ptr(w), ptr(v))
+        ref_w = np.linalg.eigh(a)[0]
+        err = float(np.max(np.abs(np.sort(w) - np.sort(ref_w))) / np.max(np.abs(ref_w)))
+        ours_ms = bench(lambda: lib.c_eig_sym(n, ptr(a), ptr(w), ptr(v)))
+        np_ms = bench(lambda: np.linalg.eigh(a))
+        print(f"{n:>8}  {ours_ms:>12.4f}  {np_ms:>12.4f}  {err:>12.2e}")
+
+
+def bench_svd(sizes):
+    print_header("SVD (c_svd vs numpy.linalg.svd, square)", ["ours ms", "numpy ms", "sv err"])
+    rng = np.random.default_rng(42)
+    for n in sizes:
+        a = np.ascontiguousarray(rng.standard_normal((n, n)).astype(np.float32))
+        u = np.zeros((n, n), dtype=np.float32)
+        s = np.zeros(n, dtype=np.float32)
+        vt = np.zeros((n, n), dtype=np.float32)
+        lib.c_svd(n, n, ptr(a), ptr(u), ptr(s), ptr(vt))
+        ref_s = np.linalg.svd(a, compute_uv=False)
+        err = float(np.max(np.abs(s - ref_s)) / np.max(ref_s))
+        ours_ms = bench(lambda: lib.c_svd(n, n, ptr(a), ptr(u), ptr(s), ptr(vt)))
+        np_ms = bench(lambda: np.linalg.svd(a))
+        print(f"{n:>8}  {ours_ms:>12.4f}  {np_ms:>12.4f}  {err:>12.2e}")
+
+
+def bench_inv(sizes):
+    print_header("Inverse (c_inv vs numpy.linalg.inv)", ["ours ms", "numpy ms", "|AX-I| err"])
+    rng = np.random.default_rng(42)
+    for n in sizes:
+        a = diag_dominant(n, rng)
+        out = np.zeros((n, n), dtype=np.float32)
+        lib.c_inv(n, ptr(a), ptr(out))
+        err = float(np.max(np.abs(a @ out - np.eye(n, dtype=np.float32))))
+        ours_ms = bench(lambda: lib.c_inv(n, ptr(a), ptr(out)))
+        np_ms = bench(lambda: np.linalg.inv(a))
+        print(f"{n:>8}  {ours_ms:>12.4f}  {np_ms:>12.4f}  {err:>12.2e}")
+
+
 square_sizes = [64, 128, 256, 512]
 rect_sizes = [64, 128, 256]
 
@@ -139,3 +187,6 @@ bench_lu(square_sizes)
 bench_solve(square_sizes)
 bench_qr(rect_sizes)
 bench_lstsq(rect_sizes)
+bench_eig_sym(square_sizes)
+bench_svd(square_sizes[:3])
+bench_inv(square_sizes)

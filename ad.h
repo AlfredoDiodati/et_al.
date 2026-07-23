@@ -341,6 +341,16 @@ static inline Node *ad_squared_error(Tape *t, Node *pred, Node *target) {
     return ad_sum(t, ad_emul(t, diff, diff));
 }
 
+/* mean((pred - target)^2) over every element - ad_squared_error scaled by
+   1/n_elements (built on it directly, so its gradient is correct by
+   construction too). Unlike ad_squared_error, this does not grow with
+   pred/target's element count, which matters once a criterion is compared
+   across models with different output widths. */
+static inline Node *ad_mean_squared_error(Tape *t, Node *pred, Node *target) {
+    mreal n = (mreal)(pred->val.r * pred->val.c);
+    return ad_scale(t, ad_squared_error(t, pred, target), (mreal)1 / n);
+}
+
 /* --- matmul --- */
 
 /* C=AB. Abar += Cbar*B^T, Bbar += A^T*Cbar (table 3 "matrix product") */

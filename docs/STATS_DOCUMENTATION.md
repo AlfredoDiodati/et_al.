@@ -43,9 +43,13 @@ Contracts, enforced by `assert` per the project's fail-loudly principle:
 
 The statistics' detection power was verified by mutation when they were introduced (as test-local helpers, before being promoted here): an AR(1)-filtered stream with `rho = 0.05` and a Student t stream with a mixing chi-square shared across draws both fail the independence tolerances that iid streams pass — see `docs/RANDOM_DOCUMENTATION.md`'s Testing section, where those independence tests are described.
 
+## Benchmark results
+
+`tests/performance/bench_stats.py` (wrappers in `bench_stats.c`) vs NumPy, float32 data with double accumulation on both sides. Scalar statistics on long vectors are well ahead: `stats_mean` at ~0.5x of `np.mean`'s time, `stats_var` at ~0.1-0.3x of `np.var`, `stats_autocorr` at ~0.03-0.04x of the `np.corrcoef` route (which allocates a 2x2 matrix pipeline per call). The lag-k autocovariance comparison against NumPy's gemm formulation (`centered X0.T @ X1 / (n-k)`) directly answers this file's design question: the hand-rolled `O(n d^2)` loop wins below d~8 (0.3-0.7x of NumPy's time), crosses over around d~16-32 (2.8x slower at d=32), and loses badly at d=128 (9x) - see the limitation below.
+
 ## Known limitations and future work
 
 - No weighted variants, no NaN-skipping variants — callers with missing data clean it first (`frame/` is the layer for that).
-- `stats_autocov` is a hand-rolled `O((n-lag) * d^2)` loop, not a gemm — correct and cache-reasonable at current scales, but a `d`-large workload would want the centered-data `X0^T X1 / (n-lag)` gemm formulation via `mat_mul`. Measure in `tests/performance/` before switching, per the profiling pitfall.
+- `stats_autocov` is a hand-rolled `O((n-lag) * d^2)` loop, not a gemm. Now measured (see Benchmark results): the loop wins below d~8 and loses ~3x at d=32, ~9x at d=128, so the centered-data `X0^T X1 / (n-lag)` `mat_mul` formulation is worth switching to for `d` beyond ~16 — either unconditionally (the gemm's constant is small) or behind a `d` threshold — when a workload with wide samples actually appears.
 - No higher-order sample moments (skewness, kurtosis) yet — each is a few lines on this file's accumulation pattern, added when something concretely needs them (the RNG tests currently compute raw moments inline where needed).
 - No cross-covariance of two different matrix samples (`stats_autocov` is one sample against its own lagged self) — add `stats_cross_cov(Mat x, Mat y, int lag)` when a concrete consumer appears.

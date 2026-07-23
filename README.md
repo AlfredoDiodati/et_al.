@@ -24,9 +24,6 @@ This software is developed with strong assistance from Claude Fable and with hum
 ```
 ET_AL./
 ├── linalg/                         # dense linear algebra core chain — tucked into its own dir so "solver" is free for solver/ below
-│   ├── mat.h                       # dense core — types, views, arithmetic, matmul
-│   ├── decomp.h                    # Cholesky, LU, QR, eig, SVD — LAPACKE wrappers; includes mat.h; mat.h never includes this
-│   └── solver.h                    # Ax=b, least squares — LAPACKE wrappers; includes decomp.h; decomp.h never includes this
 │
 ├── ad.h               # reverse-mode autodiff (backprop) — general-purpose; includes linalg/solver.h + special.h (ad_lgamma)
 ├── json.h             # JSON value tree (parse/build/write) — general-purpose, no dependency on linalg/mat.h; see docs/JSON_DOCUMENTATION.md
@@ -34,90 +31,31 @@ ET_AL./
 ├── random.h           # PCG64 RNG engine (uniform/normal/gamma) — explicit-state, reproducible streams; dist/ samplers build on it; see docs/RANDOM_DOCUMENTATION.md
 ├── stats.h            # sample statistics (mean/variance/correlation, autocorrelation, vector mean, lag-k autocovariance) — above linalg/mat.h; see docs/STATS_DOCUMENTATION.md
 │
-├── dist/                           # probability distributions — one file per distribution, above linalg/solver.h
+├── dist/                           # probability distributions — one file per distribution, above linalg/solver.h univariates are in the root
 │   ├── broadcast.h                 # shared NumPy-style 2D broadcasting primitives for the element-wise distribution files
-│   ├── gauss.h                     # Gaussian: pdf, log-pdf, d(log-pdf)/d(loc, scale)
-│   ├── student.h                   # Student t: same four functions + broadcast nu; nu=INFINITY delegates to gauss.h
 │   └── mv/                         # multivariate distributions — need linalg/decomp.h (factorizations), not just mat.h
-│       ├── gauss.h                 # multivariate Gaussian: pdf, log-pdf, d(log-pdf)/d(loc, cov)
-│       └── student.h               # multivariate Student t: + scalar nu; nu=INFINITY delegates to mv/gauss.h
 │
 ├── solver/                         # gradient-based optimizers — one file per algorithm, above linalg/mat.h
-│   ├── optimizer.h                 # generic pluggable Optimizer interface — see docs/OPTIMIZER_DOCUMENTATION.md
-│   └── adam.h                      # Adam (Kingma & Ba 2015) — implements optimizer.h; see docs/ADAM_DOCUMENTATION.md for the citation
 │
 ├── frame/                          # DataFrame: data loading/wrangling/querying — above linalg/mat.h
-│   ├── frame.h                     # DataFrame type — matrix + optional labels + typed columns; see docs/FRAME_DOCUMENTATION.md
-│   ├── csv.h                       # CSV loader + writer (RFC4180 quoting) — see docs/CSV_DOCUMENTATION.md
-│   ├── txt.h                       # whitespace-delimited loader + writer (numpy.loadtxt/savetxt scope) — see docs/TXT_DOCUMENTATION.md
-│   ├── npy.h                       # NumPy .npy loader + writer — see docs/NPY_DOCUMENTATION.md
-│   └── sql.h                       # df_sql/df_sql_try: a SQL subset (SELECT/FROM/WHERE/GROUP BY/ORDER BY) — see docs/SQL_DOCUMENTATION.md
-│                                    # (json.h, at repo root, is not here - it's for parameters, not DataFrame data)
 │
 ├── nn/                             # neural network architectures — one file per architecture, above ad.h
-│   └── mlp.h                       # fully connected feedforward MLP — arbitrary depth/width, one activation for now
 │
 ├── tests/
 │   ├── correctness/                # is it right? — one test_<noun>.c per header, make test
-│   │   ├── test_mat.c
-│   │   ├── test_mat_special.c
-│   │   ├── test_decomp.c
-│   │   ├── test_solver.c
-│   │   ├── test_special.c
-│   │   ├── test_stats.c
-│   │   ├── test_random.c
-│   │   ├── test_broadcast.c
-│   │   ├── test_gauss.c
-│   │   ├── test_student.c
-│   │   ├── test_mvgauss.c
-│   │   ├── test_mvstudent.c
-│   │   ├── test_ad.c
-│   │   ├── test_adam.c
-│   │   ├── test_optimizer.c
-│   │   ├── test_mlp.c
-│   │   ├── test_frame.c
-│   │   ├── test_json.c
-│   │   ├── test_csv.c
-│   │   ├── test_txt.c
-│   │   ├── test_npy.c
-│   │   └── test_sql.c
 │   │
-│   └── performance/                # is it fast? — one bench_<noun>.c + .py pair per header, vs NumPy
-│       ├── bench_matmul.c / bench_matmul.py
-│       └── bench_decomp.c / bench_decomp.py
+│   └── performance/                # is it fast? — one bench_<noun>.c + .py pair per core-tier header, vs external packages (NumPy/SciPy/pandas/JAX)
 │
 ├── examples/
-│   ├── mat_example.c  # usage example covering the full API
-│   └── mlp_example.c  # forward pass + full training loop (nn/mlp.h + ad.h + solver/adam.h) on XOR
 │
-├── docs/
-│   ├── MATRIX_DOCUMENTATION.md   # full reference for linalg/mat.h
-│   ├── DECOMP_DOCUMENTATION.md   # full reference for linalg/decomp.h
-│   ├── SOLVER_DOCUMENTATION.md   # full reference for linalg/solver.h
-│   ├── GAUSS_DOCUMENTATION.md    # full reference for dist/gauss.h (and dist/broadcast.h, documented at its first point of use)
-│   ├── STUDENT_DOCUMENTATION.md  # full reference for dist/student.h
-│   ├── MVGAUSS_DOCUMENTATION.md  # full reference for dist/mv/gauss.h
-│   ├── MVSTUDENT_DOCUMENTATION.md # full reference for dist/mv/student.h
-│   ├── AD_DOCUMENTATION.md       # full reference for ad.h
-│   ├── JSON_DOCUMENTATION.md     # full reference for json.h
-│   ├── SPECIAL_DOCUMENTATION.md  # full reference for special.h
-│   ├── RANDOM_DOCUMENTATION.md   # full reference for random.h
-│   ├── STATS_DOCUMENTATION.md    # full reference for stats.h
-│   ├── OPTIMIZER_DOCUMENTATION.md # full reference for solver/optimizer.h
-│   ├── ADAM_DOCUMENTATION.md     # full reference for solver/adam.h
-│   ├── MLP_DOCUMENTATION.md      # full reference for nn/mlp.h
-│   ├── FRAME_DOCUMENTATION.md    # full reference for frame/frame.h
-│   ├── CSV_DOCUMENTATION.md      # full reference for frame/csv.h
-│   ├── TXT_DOCUMENTATION.md      # full reference for frame/txt.h
-│   ├── NPY_DOCUMENTATION.md      # full reference for frame/npy.h
-│   └── SQL_DOCUMENTATION.md      # full reference for frame/sql.h
+├── docs/ # Documentation
 │
 ├── scripts/
 │   └── install-hooks.sh           # installs git hooks after cloning
 │
 ├── Makefile
 ├── check.sh                       # runs all tests and writes test_report.txt
-└── README.md                      # this file — policies, principles, build; no API docs
+└── README.md                      # this file — policies, principles, build
 ```
 
 ## Build
@@ -170,14 +108,21 @@ cc myproject.c $(pkg-config --cflags --libs et_al.-core) -o myproject
 
 ## Testing and benchmarking
 
-Both live under `tests/`, split into two subfolders that answer two different questions and are deliberately kept separate — a function can be fast and wrong, or correct and unusably slow, and merging the two obscures both (see the "do not mix correctness tests and speed tests" pitfall below). `tests/correctness/` answers "is it correct?" via `make test`/`test-stress`/`test-special`, with no comparison to any other library required; see [Testing requirements](#testing-requirements) for what a test file must cover. `tests/performance/` answers "is it fast enough?": one `bench_<noun>.c`, a thin ctypes-exposing wrapper around the real library functions, plus a matching `bench_<noun>.py` that drives it against the NumPy equivalent, per header that has one. Build the shared library the `.c` file compiles into, then run the matching script:
+Both live under `tests/`, split into two subfolders that answer two different questions and are deliberately kept separate — a function can be fast and wrong, or correct and unusably slow, and merging the two obscures both (see the "do not mix correctness tests and speed tests" pitfall below). `tests/correctness/` answers "is it correct?" via `make test`/`test-stress`/`test-special`, with no comparison to any other library required; see [Testing requirements](#testing-requirements) for what a test file must cover. `tests/performance/` answers "is it fast enough?": one `bench_<noun>.c`, a thin ctypes-exposing wrapper around the real library functions, plus a matching `bench_<noun>.py` that drives it against the external-package equivalent, per header that has one. Every pair follows the same shape — build the shared library the `.c` file compiles into, then run the matching script (each script also rebuilds its own `.so` via `make` before timing):
 
 ```bash
-make libmat.so && python tests/performance/bench_matmul.py       # mat_mul vs numpy.matmul
-make libdecomp.so && python tests/performance/bench_decomp.py     # linalg/decomp.h + linalg/solver.h vs numpy.linalg
+python tests/performance/bench_mat.py      # matmul + element-wise/reductions vs NumPy
+python tests/performance/bench_decomp.py   # linalg/decomp.h + linalg/solver.h vs numpy.linalg
+python tests/performance/bench_dist.py     # dist/ vs scipy.stats + numpy.random
+python tests/performance/bench_ad.py       # ad.h vs jax.grad
+python tests/performance/bench_frame.py    # frame/ loaders + sql vs pandas/NumPy
+python tests/performance/bench_random.py   # random.h vs numpy.random.Generator
+python tests/performance/bench_stats.py    # stats.h vs NumPy
 ```
 
-Both currently show this library at or ahead of NumPy for every operation measured — expected, since past `linalg/mat.h`'s own element-wise/reduction loops, this library and NumPy call the same OpenBLAS routines, and this library's call path has less dispatch overhead. See each header's own doc file for the actual numbers.
+The overall picture these show: wherever this library and NumPy call the same OpenBLAS routine, this library is at or ahead thanks to a shorter dispatch path; the hand-rolled transcendentals (`mat_exp`/`mat_tanh`), reductions on strided views, `stats.h`, `random.h`, and the `dist/` log-densities (up to two orders of magnitude ahead of `scipy.stats` at large `n`) all beat their external counterparts; and the benchmarks also honestly expose the places the library currently trails — `mat_max`'s NaN-propagating scan, allocating element-wise arithmetic on contiguous data, and `stats_autocov` at large `d` — see each header's own doc file for numbers and the open items they imply. Benchmarks exist to find exactly those, not to flatter the library.
+
+**Benchmarking policy across installation tiers.** Performance testing benchmarks the **core tier against external packages** (NumPy, SciPy, pandas, JAX; numba when available), because core-tier functions have direct external equivalents and "performance class of NumPy/JAX" is a claim about exactly those functions. The **model tier is deliberately not benchmarked against external packages**: a fitted model's wall-clock is dominated by training-procedure choices (epochs, optimizer, per-sample vs batched passes) that differ structurally between libraries, so cross-package model timings compare configurations, not implementations. Model-tier performance is instead compared **between versions of this package itself** — the same model, same hyperparameters, previous release vs current. Known limitation: that version-to-version harness does not exist yet, so the model tier (`nn/`) currently has no performance tests at all; until it exists, model-tier speed claims should not be made.
 
 ## Policies
 
@@ -286,8 +231,6 @@ Every function in this project enforces its own preconditions with `assert`, not
 ## Pitfalls
 
 These are mistakes that are easy to make and hard to debug anywhere in this project, not only in the dense linear algebra core. Treat this list as a checklist before opening a pull request.
-
-**Do not build a replacement for an entire ecosystem.** The goal of any single layer in this project is a correct, testable piece of a larger stack, not a comprehensive replacement for the tool it happens to resemble. `linalg/` is not a NumPy replacement — NumPy's scope includes broadcasting, fancy indexing, dtype polymorphism, and a Python runtime, none of which is this project's scope. `frame/sql.h` is not a SQL-engine replacement — see `docs/SQL_DOCUMENTATION.md` for exactly what subset of SQL it supports and why. "What would NumPy/pandas/SQLite do" is the wrong question to ask when extending a layer; "what does this specific layer need to do its one job well" is the right one.
 
 **Do not duplicate a lower layer instead of calling into it.** Before writing a new loop or algorithm, check whether the layer below already provides it. `linalg/mat.h` and `linalg/decomp.h` delegate their heaviest operations to OpenBLAS rather than hand-writing a competing kernel, since OpenBLAS's hand-tuned, per-architecture assembly will beat portable C by a wide margin on anything it covers. The same discipline holds further up the stack even with no OpenBLAS routine in the picture: `frame/sql.h`'s evaluator reuses `mat.h`'s arithmetic and reductions instead of a second implementation, and `nn/mlp.h`'s training loop reuses `ad.h` and `solver/optimizer.h` instead of a bespoke one. If you find yourself reimplementing something a lower layer already does, the new code belongs in that lower layer, or should simply call it.
 
