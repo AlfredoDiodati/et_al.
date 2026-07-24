@@ -100,6 +100,77 @@ static void test_known_values(void) {
     }
 }
 
+/* Unlike gauss.h, student_pdf is *always* exp(student_logpdf(...)) - it
+   has no separate direct formula - so there is no pdf-vs-logpdf sign
+   inconsistency to find here the way test_gauss.c found one. What is
+   true is that nu (degrees of freedom) has no positivity guard at all:
+   student_lognorm's log(nu*pi) term goes NaN for any nu <= 0, and that
+   NaN just propagates cleanly through the rest of the formula rather
+   than tripping an assert the way a singular matrix would elsewhere in
+   this library. This pins down that "propagates cleanly to NaN, no
+   crash" is what actually happens today for nu <= 0 and for nu == NaN,
+   and that scale <= 0 behaves like gauss.h's logpdf (NaN via log of a
+   non-positive scale), not like gauss.h's pdf (no sign-flip case here). */
+static void test_degenerate_params(void) {
+    puts("degenerate nu/scale (undocumented, unguarded - pinning current behavior)");
+
+    /* nu < 0, not landing on an integer (no lgamma pole to worry about):
+       log(nu*pi) is NaN, and that NaN propagates through lognorm into
+       both logpdf and pdf - no crash, just a clean NaN */
+    {
+        Mat x = mat_lit(1, 1, 0.3f);
+        Mat loc = mat_lit(1, 1, 0.0f);
+        Mat scale = mat_lit(1, 1, 1.0f);
+        Mat nu = mat_lit(1, 1, -1.5f);
+        Mat lp = student_logpdf(x, loc, scale, nu);
+        Mat p = student_pdf(x, loc, scale, nu);
+        assert(MISNAN(AT(lp,0,0)));
+        assert(MISNAN(AT(p,0,0)));
+        mat_free(x); mat_free(loc); mat_free(scale); mat_free(nu); mat_free(p); mat_free(lp);
+    }
+
+    /* nu == 0: nu/2 is lgamma's pole (+inf) and log(nu*pi) is -inf -
+       an inf-inf indeterminate form, NaN either way, still no crash */
+    {
+        Mat x = mat_lit(1, 1, 0.3f);
+        Mat loc = mat_lit(1, 1, 0.0f);
+        Mat scale = mat_lit(1, 1, 1.0f);
+        Mat nu = mat_lit(1, 1, 0.0f);
+        Mat lp = student_logpdf(x, loc, scale, nu);
+        assert(MISNAN(AT(lp,0,0)));
+        mat_free(x); mat_free(loc); mat_free(scale); mat_free(nu); mat_free(lp);
+    }
+
+    /* nu == NaN: MISINF(NaN) is false, so this does NOT take the
+       infinite-nu Gaussian-delegation shortcut - it falls into ordinary
+       arithmetic, where NaN propagates exactly as any other NaN operand
+       would. Confirms that path is inert, not a special silent case. */
+    {
+        Mat x = mat_lit(1, 1, 0.3f);
+        Mat loc = mat_lit(1, 1, 0.0f);
+        Mat scale = mat_lit(1, 1, 1.0f);
+        Mat nu = mat_lit(1, 1, (mreal)NAN);
+        Mat lp = student_logpdf(x, loc, scale, nu);
+        assert(MISNAN(AT(lp,0,0)));
+        mat_free(x); mat_free(loc); mat_free(scale); mat_free(nu); mat_free(lp);
+    }
+
+    /* scale <= 0: same failure shape as gauss_logpdf - log(scale) is NaN
+       for scale<=0, and since student_pdf is defined as exp(logpdf) here
+       (no separate direct formula), pdf goes NaN too, never sign-flips */
+    {
+        Mat x = mat_lit(1, 1, 5.0f);
+        Mat loc = mat_lit(1, 1, 2.0f);
+        Mat scale = mat_lit(1, 1, -3.0f);
+        Mat nu = mat_lit(1, 1, 4.0f);
+        Mat lp = student_logpdf(x, loc, scale, nu);
+        Mat p = student_pdf(x, loc, scale, nu);
+        assert(MISNAN(AT(lp,0,0)));
+        assert(MISNAN(AT(p,0,0)));
+        mat_free(x); mat_free(loc); mat_free(scale); mat_free(nu); mat_free(p); mat_free(lp);
+    }
+}
+
 static void test_vs_ref(void) {
     puts("vs independent reference (broadcast + fast path)");
 
@@ -422,6 +493,7 @@ static void test_sampling(void) {
 
 int main(void) {
     test_known_values();
+    test_degenerate_params();
     test_vs_ref();
     test_fd_derivatives();
     test_gaussian_limit();

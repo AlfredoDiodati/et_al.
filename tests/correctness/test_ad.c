@@ -3,6 +3,9 @@
 #include "../../dist/student.h"
 #include "../../dist/mv/student.h"
 #include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define TOL      1e-4f
 #define TOL_FD   1e-2f  /* finite-difference truncation/roundoff, same as test_gauss.c */
@@ -865,6 +868,92 @@ static void test_inv_fd(void) {
     tape_free(t);
 }
 
+/* ad_solve/ad_det/ad_inv all evaluate their forward pass eagerly (inside
+   the ad_* constructor call itself, before any node exists), by calling
+   straight into vec_solve/mat_det(->mat_lu)/mat_inv - each of which
+   treats a singular A as a contract violation (assert), same convention
+   as linalg/decomp.h and linalg/solver.h. Nothing in test_solve_fd/
+   test_det_fd/test_inv_fd ever exercises that path (their fixture A is
+   always nonsingular by construction). Confirm the guard actually fires
+   for each, the same way test_mvgauss.c/test_mvstudent.c confirm
+   mat_chol's guard fires for a non-SPD covariance. */
+static Mat g_bad_A, g_bad_b;
+
+static void call_ad_solve(void) {
+    Tape *t = tape_new();
+    Node *An = ad_leaf(t, g_bad_A), *bn = ad_leaf(t, g_bad_b);
+    Node *x = ad_solve(t, An, bn);
+    (void)x;
+}
+static void call_ad_det(void) {
+    Tape *t = tape_new();
+    Node *An = ad_leaf(t, g_bad_A);
+    Node *d = ad_det(t, An);
+    (void)d;
+}
+static void call_ad_inv(void) {
+    Tape *t = tape_new();
+    Node *An = ad_leaf(t, g_bad_A);
+    Node *C = ad_inv(t, An);
+    (void)C;
+}
+
+static void expect_abort(void (*fn)(void)) {
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
+        fn();
+        _exit(111); /* fn() must never return - reaching here is itself a failure */
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+static void test_singular_matrix_aborts(void) {
+    puts("ad_solve/ad_det/ad_inv on a singular A abort (fork + expect SIGABRT)");
+
+    /* singular: row 2 is exactly twice row 1 - rank 1, not rank 2 */
+    g_bad_A = mat_lit(2, 2, 1.0f, 2.0f, 2.0f, 4.0f);
+    g_bad_b = mat_lit(2, 1, 1.0f, 2.0f);
+
+    expect_abort(call_ad_solve);
+    expect_abort(call_ad_det);
+    expect_abort(call_ad_inv);
+
+    mat_free(g_bad_A); mat_free(g_bad_b);
+}
+
+/* ad_chol_solve/vec_chol_solve take an already-factored L and *trust* it
+   (documented in linalg/solver.h: "l must be exactly what mat_chol(a)
+   returned" - LAPACK's potrs has no way to detect a bogus factor, its
+   info code only flags illegal arguments, never numerical ones). A real
+   caller only ever gets L from mat_chol, which would itself have
+   asserted on a non-PD input before ever handing back a bad L - so
+   there's no way to *reach* ad_chol_solve with a degenerate factor
+   through the front door. This test goes through the side door (handing
+   ad_chol_solve a hand-built matrix that merely looks lower-triangular)
+   specifically to pin down that the failure mode there is silent
+   NaN/Inf, not a crash - the opposite of the singular-A cases above,
+   and worth knowing about explicitly rather than assuming it matches
+   them. */
+static void test_chol_solve_bogus_factor(void) {
+    puts("ad_chol_solve given a non-Cholesky L (zero diagonal): silent NaN/Inf, not a crash (documents the 'trusts the factor' contract)");
+
+    Mat L = mat_lit(2, 2, 0.0f, 0.0f, 1.0f, 2.0f); /* zero diagonal entry - never producible by mat_chol */
+    Mat b = mat_lit(2, 1, 1.0f, 1.0f);
+
+    Tape *t = tape_new();
+    Node *Ln = ad_leaf(t, L), *bn = ad_leaf(t, b);
+    Node *x = ad_chol_solve(t, Ln, bn);
+    assert(MISNAN(x->val.d[0]) || MISINF(x->val.d[0]));
+    assert(MISNAN(x->val.d[1]) || MISINF(x->val.d[1]));
+
+    mat_free(L); mat_free(b);
+    tape_free(t);
+}
+
 int main(void) {
     test_dense_ops();
     test_exp_tanh();
@@ -881,6 +970,8 @@ int main(void) {
     test_chol_solve_fd();
     test_det_fd();
     test_inv_fd();
+    test_singular_matrix_aborts();
+    test_chol_solve_bogus_factor();
     puts("test_ad: all passed");
     return 0;
 }

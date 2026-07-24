@@ -3,53 +3,91 @@
 #include <math.h>
 #include <stdio.h>
 
-/* print every element of m, then free it */
-static void report_mat(const char *label, Mat m) {
-    printf("%s:", label);
-    for (int i = 0; i < m.r; i++)
-        for (int j = 0; j < m.c; j++) {
-            float v = AT(m,i,j);
-            if (isnan(v))      printf(" NaN");
-            else if (isinf(v)) printf(" %sinf", v > 0 ? "+" : "-");
-            else               printf(" %.4g", v);
-        }
-    printf("\n");
+/* print the single element of a 1x1 m, free it, and return the value -
+   so callers can assert on it instead of just eyeballing the printout.
+   (Every call site below is a 1x1 result - the NaN/inf propagation
+   section further down checks its own multi-element matrices directly.) */
+static float report_mat(const char *label, Mat m) {
+    assert(m.r == 1 && m.c == 1);
+    float v = AT(m,0,0);
+    if (isnan(v))      printf("%s: NaN\n", label);
+    else if (isinf(v)) printf("%s: %sinf\n", label, v > 0 ? "+" : "-");
+    else               printf("%s: %.4g\n", label, v);
     mat_free(m);
+    return v;
 }
 
 int main(void) {
     puts("--- overflow ---");
-    report_mat("exp(200)",       mat_exp(mat_fill(1, 1, 200.f)));
-    report_mat("exp(-200)",      mat_exp(mat_fill(1, 1, -200.f)));
-    report_mat("pow(FLT_MAX,2)", mat_pow(mat_fill(1, 1, FLT_MAX), 2.f));
+    /* e^200 (~7.2e86) is far past FLT_MAX (~3.4e38, or past DBL_MAX in a
+       MAT_DOUBLE build then narrowed to float by report_mat) - must
+       overflow to +inf, not wrap or silently clamp */
+    {
+        float v = report_mat("exp(200)", mat_exp(mat_fill(1, 1, 200.f)));
+        assert(isinf(v) && v > 0);
+    }
+    /* e^-200 (~1.4e-87) is below the smallest representable float
+       subnormal (~1.4e-45) - must flush to exactly 0, not underflow to
+       some spurious nonzero value */
+    assert(report_mat("exp(-200)", mat_exp(mat_fill(1, 1, -200.f))) == 0.f);
+    /* FLT_MAX^2 (~1.2e77) overflows the same way exp(200) does */
+    {
+        float v = report_mat("pow(FLT_MAX,2)", mat_pow(mat_fill(1, 1, FLT_MAX), 2.f));
+        assert(isinf(v) && v > 0);
+    }
     {
         Mat big = mat_fill(1, 1, 1e20f);
         Mat r = mat_mul(big, big);
-        report_mat("1e20 * 1e20 (1x1 matmul)", r);
+        /* 1e20 * 1e20 = 1e40, past FLT_MAX - the BLAS-backed mat_mul path
+           must overflow to +inf exactly like the elementwise ops above,
+           not produce a wrapped/garbage finite value */
+        float v = report_mat("1e20 * 1e20 (1x1 matmul)", r);
+        assert(isinf(v) && v > 0);
         mat_free(big);
     }
 
     puts("--- underflow ---");
-    report_mat("exp(-200)",          mat_exp(mat_fill(1, 1, -200.f)));
-    report_mat("pow(FLT_MIN/2, 1)",  mat_pow(mat_fill(1, 1, FLT_MIN / 2.f), 1.f));
+    assert(report_mat("exp(-200)", mat_exp(mat_fill(1, 1, -200.f))) == 0.f);
+    /* pow(x,1) is the identity - FLT_MIN/2 (~5.9e-39) is a subnormal
+       float, representable and nonzero (subnormal floor is ~1.4e-45), so
+       unlike the -200 cases above this must survive as a small but
+       genuinely nonzero finite value */
+    {
+        float v = report_mat("pow(FLT_MIN/2, 1)", mat_pow(mat_fill(1, 1, FLT_MIN / 2.f), 1.f));
+        assert(!isnan(v) && !isinf(v) && v > 0.f);
+        assert(MABS(v - (float)(FLT_MIN / 2.0)) < (float)(FLT_MIN / 2.0) * 0.01f);
+    }
     {
         Mat tiny = mat_fill(1, 1, 1e-40f);
-        report_mat("1e-40 (stored)",   mat_scale(tiny, 1.f));
-        report_mat("1e-40 * 1e-40",    mat_emul(tiny, tiny));
+        /* 1e-40 is likewise a representable subnormal float - a bare
+           mat_scale(., 1) must preserve it exactly, not flush it */
+        assert(report_mat("1e-40 (stored)", mat_scale(tiny, 1.f)) == 1e-40f);
+        /* 1e-40 * 1e-40 = 1e-80, below the subnormal floor - must flush
+           to exactly 0 */
+        assert(report_mat("1e-40 * 1e-40", mat_emul(tiny, tiny)) == 0.f);
         mat_free(tiny);
     }
 
     puts("--- NaN production ---");
-    report_mat("log(-1)",            mat_log(mat_fill(1, 1, -1.f)));
-    report_mat("sqrt(-1)",           mat_sqrt(mat_fill(1, 1, -1.f)));
-    report_mat("0 / 0 (ediv)",       mat_ediv(mat_fill(1, 1, 0.f), mat_fill(1, 1, 0.f)));
-    report_mat("pow(-1, 0.5)",       mat_pow(mat_fill(1, 1, -1.f), 0.5f));
-    report_mat("inf - inf (sub)",    mat_sub(mat_fill(1, 1, INFINITY), mat_fill(1, 1, INFINITY)));
+    assert(isnan(report_mat("log(-1)", mat_log(mat_fill(1, 1, -1.f)))));
+    assert(isnan(report_mat("sqrt(-1)", mat_sqrt(mat_fill(1, 1, -1.f)))));
+    assert(isnan(report_mat("0 / 0 (ediv)", mat_ediv(mat_fill(1, 1, 0.f), mat_fill(1, 1, 0.f)))));
+    assert(isnan(report_mat("pow(-1, 0.5)", mat_pow(mat_fill(1, 1, -1.f), 0.5f))));
+    assert(isnan(report_mat("inf - inf (sub)", mat_sub(mat_fill(1, 1, INFINITY), mat_fill(1, 1, INFINITY)))));
 
     puts("--- infinity production ---");
-    report_mat("log(0)",             mat_log(mat_fill(1, 1, 0.f)));
-    report_mat("1 / 0 (ediv)",       mat_ediv(mat_fill(1, 1, 1.f), mat_fill(1, 1, 0.f)));
-    report_mat("exp(200)",           mat_exp(mat_fill(1, 1, 200.f)));
+    {
+        float v = report_mat("log(0)", mat_log(mat_fill(1, 1, 0.f)));
+        assert(isinf(v) && v < 0);
+    }
+    {
+        float v = report_mat("1 / 0 (ediv)", mat_ediv(mat_fill(1, 1, 1.f), mat_fill(1, 1, 0.f)));
+        assert(isinf(v) && v > 0);
+    }
+    {
+        float v = report_mat("exp(200)", mat_exp(mat_fill(1, 1, 200.f)));
+        assert(isinf(v) && v > 0);
+    }
 
     puts("--- NaN propagation ---");
     {

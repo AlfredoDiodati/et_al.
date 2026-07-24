@@ -1,4 +1,7 @@
 #include "../../json.h"
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 /* Deep structural equality, used as the round-trip oracle throughout this
    file: no independent reference JSON implementation exists in C to
@@ -183,6 +186,52 @@ static void test_file_roundtrip(void) {
     remove(path);
 }
 
+/* json_parse treats any malformed input as a contract violation (assert),
+   not a recoverable error - see json_parse's own comment ("a contract
+   violation, not a recoverable error path"). Every test above only ever
+   feeds well-formed JSON, so that rejection path has never actually been
+   exercised. Confirm each kind of malformed input really does abort,
+   the same fork+expect-SIGABRT technique test_mvgauss.c/test_ad.c use for
+   their own assert-guarded contract violations. */
+static void expect_abort(void (*fn)(void)) {
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
+        fn();
+        _exit(111); /* fn() must never return - reaching here is itself a failure */
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+static const char *g_bad_json;
+static void call_json_parse(void) {
+    JsonValue *v = json_parse(g_bad_json);
+    (void)v;
+}
+
+static void test_malformed_json_aborts(void) {
+    puts("malformed JSON aborts (fork + expect SIGABRT)");
+
+    static const char *cases[] = {
+        "\"unterminated string",     /* no closing quote */
+        "[1, 2, ]",                  /* trailing comma in an array */
+        "{\"a\": 1, }",              /* trailing comma in an object */
+        "-",                        /* bare minus sign, not a valid number */
+        "",                         /* unexpected EOF - nothing to parse at all */
+        "123 abc",                  /* trailing characters after a valid top-level value */
+        "{\"a\" 1}",                /* missing ':' after an object key */
+        "[1, 2",                    /* missing closing ']' */
+        "tru",                     /* truncated literal */
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        g_bad_json = cases[i];
+        expect_abort(call_json_parse);
+    }
+}
+
 /* --- STRESS=1: fixed-seed randomized round-trip fuzzing, per this
    project's testing policy (see README's Testing requirements: "use
    randomized/fuzz inputs heavily, but fix the seed... bias them toward
@@ -259,6 +308,7 @@ int main(void) {
     test_duplicate_key_last_wins();
     test_adversarial();
     test_file_roundtrip();
+    test_malformed_json_aborts();
 
     if (getenv("STRESS")) test_random_roundtrip_stress();
 

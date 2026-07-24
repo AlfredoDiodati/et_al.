@@ -1,5 +1,8 @@
 #include "../../frame/csv.h"
 #include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define TOL 1e-5f
 #define CHECK(got, exp) assert(MABS((got) - (exp)) < TOL)
@@ -224,6 +227,64 @@ static void test_adversarial(void) {
     remove(path);
 }
 
+/* frame_rows_to_dataframe (shared by csv.h and txt.h - see frame/frame.h)
+   treats an empty file and a ragged row (one whose field count doesn't
+   match the header) as contract violations (assert), never a
+   recoverable error - no test in this file has ever fed it either one.
+   Confirm both actually abort. */
+static void expect_abort(void (*fn)(void)) {
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
+        fn();
+        _exit(111); /* fn() must never return - reaching here is itself a failure */
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+static const char *g_bad_csv_path = "/tmp/et_al_test_bad.csv";
+static void call_df_read_csv(void) {
+    DataFrame df = df_read_csv(g_bad_csv_path, csv_read_options_default());
+    (void)df;
+}
+
+static void test_ragged_row_and_empty_file_abort(void) {
+    puts("ragged row / empty file abort (fork + expect SIGABRT)");
+
+    /* second data row has 3 fields, header/first row have 2 */
+    write_file(g_bad_csv_path, "a,b\n1,2\n3,4,5\n");
+    expect_abort(call_df_read_csv);
+
+    /* completely empty file - not even a header row */
+    write_file(g_bad_csv_path, "");
+    expect_abort(call_df_read_csv);
+
+    remove(g_bad_csv_path);
+}
+
+/* frame_parse_csv has no rejection path at all for an unterminated quote
+   (unlike the assert-guarded cases above) - reaching EOF while still
+   in_quotes just ends the current field/row with whatever was
+   accumulated so far, silently, instead of erroring. This pins down
+   that "silently tolerated, no error" is what actually happens today -
+   not previously exercised anywhere in this file. */
+static void test_unterminated_quote_tolerated(void) {
+    puts("unterminated quote at EOF: silently tolerated, not rejected (pinning current behavior)");
+
+    const char *path = "/tmp/et_al_test_unterminated_quote.csv";
+    write_file(path, "name\n\"abc"); /* opening quote, no closing quote, no trailing newline */
+
+    DataFrame df = df_read_csv(path, csv_read_options_default());
+    assert(df.r == 1 && df.n_cols == 1);
+    assert(strcmp(df_col_string(&df, "name")[0], "abc") == 0);
+
+    df_free(&df);
+    remove(path);
+}
+
 static void test_write_read_roundtrip(void) {
     puts("write/read round-trip: mixed numeric+string columns, values needing quoting");
 
@@ -285,6 +346,8 @@ int main(void) {
     test_blank_lines_skipped();
     test_custom_delimiter();
     test_adversarial();
+    test_ragged_row_and_empty_file_abort();
+    test_unterminated_quote_tolerated();
     test_write_read_roundtrip();
     test_write_no_header();
 

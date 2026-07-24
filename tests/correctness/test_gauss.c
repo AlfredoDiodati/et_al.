@@ -233,6 +233,84 @@ static void test_derivatives(void) {
     }
 }
 
+/* gauss.h asserts nothing about scale's sign - unlike mat_chol/mat_lu/
+   vec_solve elsewhere in this library, an invalid scale is not treated
+   as a contract violation here, it just flows through the formula. This
+   pins down what actually happens today so a future change to that
+   formula can't silently swap one kind of garbage for another without a
+   test noticing:
+
+   - scale == 0: both pdf and logpdf agree with each other (NaN either
+     way - z is +-inf or 0/0, and log(0) is -inf), so at least that pair
+     stays consistent.
+   - scale < 0: pdf and logpdf DISAGREE. gauss_pdf has its own direct
+     formula (exp(...)/(scale*sqrt(2pi))) and a negative scale flips its
+     sign, producing a finite *negative* "density" - not a NaN, an
+     actually-wrong-looking finite number. gauss_logpdf takes the log(x)
+     route instead (log(scale) with scale<0 is NaN in libm), so it comes
+     out NaN for the exact same input. Two public functions on the same
+     invalid input, two different failure shapes - worth knowing about
+     even if nobody chooses to guard it. */
+static void test_degenerate_scale(void) {
+    puts("degenerate scale (undocumented, unguarded - pinning current behavior)");
+
+    /* scale == 0, x != loc: z = +-inf, pdf and logpdf both NaN */
+    {
+        Mat x = mat_lit(1, 1, 5.0f);
+        Mat loc = mat_lit(1, 1, 2.0f);
+        Mat scale = mat_lit(1, 1, 0.0f);
+        Mat p = gauss_pdf(x, loc, scale);
+        Mat lp = gauss_logpdf(x, loc, scale);
+        assert(MISNAN(AT(p,0,0)));
+        assert(MISNAN(AT(lp,0,0)));
+        mat_free(x); mat_free(loc); mat_free(scale); mat_free(p); mat_free(lp);
+    }
+
+    /* scale == 0, x == loc: z = 0/0 = NaN from the start, same result */
+    {
+        Mat x = mat_lit(1, 1, 2.0f);
+        Mat loc = mat_lit(1, 1, 2.0f);
+        Mat scale = mat_lit(1, 1, 0.0f);
+        Mat p = gauss_pdf(x, loc, scale);
+        Mat lp = gauss_logpdf(x, loc, scale);
+        assert(MISNAN(AT(p,0,0)));
+        assert(MISNAN(AT(lp,0,0)));
+        mat_free(x); mat_free(loc); mat_free(scale); mat_free(p); mat_free(lp);
+    }
+
+    /* scale < 0: pdf silently flips sign (negative "density"), logpdf
+       goes NaN (log of a negative number) - the two public entry points
+       disagree about how an invalid scale should fail */
+    {
+        Mat x = mat_lit(1, 1, 5.0f);
+        Mat loc = mat_lit(1, 1, 2.0f);
+        Mat scale_neg = mat_lit(1, 1, -3.0f);
+        Mat scale_pos = mat_lit(1, 1, 3.0f);
+        Mat p_neg = gauss_pdf(x, loc, scale_neg);
+        Mat p_pos = gauss_pdf(x, loc, scale_pos);
+        Mat lp_neg = gauss_logpdf(x, loc, scale_neg);
+        assert(AT(p_neg,0,0) < 0);
+        CHECK(AT(p_neg,0,0), -AT(p_pos,0,0));
+        assert(MISNAN(AT(lp_neg,0,0)));
+        mat_free(x); mat_free(loc); mat_free(scale_neg); mat_free(scale_pos);
+        mat_free(p_neg); mat_free(p_pos); mat_free(lp_neg);
+    }
+
+    /* scale == 0 propagates into the derivatives too: dlogpdf_loc divides
+       by scale^2 (Inf, or NaN when x==loc), dlogpdf_scale divides by
+       scale directly (Inf/-Inf, or NaN when z is itself NaN) */
+    {
+        Mat x = mat_lit(1, 1, 5.0f);
+        Mat loc = mat_lit(1, 1, 2.0f);
+        Mat scale = mat_lit(1, 1, 0.0f);
+        Mat dl = gauss_dlogpdf_loc(x, loc, scale);
+        Mat ds = gauss_dlogpdf_scale(x, loc, scale);
+        assert(MISINF(AT(dl,0,0)));
+        assert(MISNAN(AT(ds,0,0)) || MISINF(AT(ds,0,0)));
+        mat_free(x); mat_free(loc); mat_free(scale); mat_free(dl); mat_free(ds);
+    }
+}
+
 static void test_broadcast_shape(void) {
     puts("broadcast shape resolution");
 
@@ -321,6 +399,7 @@ static void test_sampling(void) {
 int main(void) {
     test_pdf_logpdf();
     test_derivatives();
+    test_degenerate_scale();
     test_broadcast_shape();
     test_sampling();
     puts("test_gauss: all passed");

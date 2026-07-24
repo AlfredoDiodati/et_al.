@@ -2,6 +2,9 @@
 #include "../../dist/gauss.h"
 #include "../../stats.h"
 #include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define TOL     2e-3f
 #define TOL_FD  1e-2f /* looser: finite-difference truncation + float/double gap */
@@ -347,6 +350,60 @@ static void test_views(void) {
     mat_free(lp); mat_free(dl);
 }
 
+/* mvgauss_check/mat_chol treat a non-SPD or dimension-mismatched cov as
+   a contract violation (assert), never a recoverable error - same
+   convention as linalg/decomp.h. That assert is never actually
+   exercised anywhere else in this suite: every random covariance this
+   file builds is guaranteed SPD by construction (rand_spd = B*B^T + I).
+   Run the offending call in a forked child and check it dies of
+   SIGABRT, so the guard is confirmed to actually fire instead of just
+   being assumed to. */
+static void expect_abort(void (*fn)(void)) {
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
+        fn();
+        _exit(111); /* fn() must never return - reaching here is itself a failure */
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+static Mat g_bad_x, g_bad_loc, g_bad_cov;
+
+static void call_mvgauss_logpdf(void) {
+    Mat lp = mvgauss_logpdf(g_bad_x, g_bad_loc, g_bad_cov);
+    (void)lp;
+}
+
+static void test_degenerate_covariance(void) {
+    puts("non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)");
+
+    g_bad_x = mat_lit(1, 2, 1.0f, -1.0f);
+    g_bad_loc = mat_lit(1, 2, 0.0f, 0.0f);
+
+    /* indefinite: symmetric but not positive-definite (one negative
+       eigenvalue) */
+    g_bad_cov = mat_lit(2, 2, 1.0f, 0.0f, 0.0f, -1.0f);
+    expect_abort(call_mvgauss_logpdf);
+    mat_free(g_bad_cov);
+
+    /* singular: positive-semidefinite but rank-deficient (a zero row/col) */
+    g_bad_cov = mat_lit(2, 2, 1.0f, 0.0f, 0.0f, 0.0f);
+    expect_abort(call_mvgauss_logpdf);
+    mat_free(g_bad_cov);
+
+    /* dimension mismatch: cov is 3x3 but x/loc are 2-dimensional -
+       mvgauss_check's own assert, not mat_chol's */
+    g_bad_cov = mat_eye(3);
+    expect_abort(call_mvgauss_logpdf);
+    mat_free(g_bad_cov);
+
+    mat_free(g_bad_x); mat_free(g_bad_loc);
+}
+
 static void test_stress(void) {
     if (!getenv("STRESS")) return;
     puts("  stress");
@@ -459,6 +516,7 @@ int main(void) {
     test_fd_derivatives();
     test_per_observation_loc();
     test_views();
+    test_degenerate_covariance();
     test_sampling();
     test_stress();
     puts("test_mvgauss: all passed");

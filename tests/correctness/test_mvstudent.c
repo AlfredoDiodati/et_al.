@@ -2,6 +2,9 @@
 #include "../../dist/student.h"
 #include "../../stats.h"
 #include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define TOL     2e-3f
 #define TOL_FD  1e-2f /* looser: finite-difference truncation + float/double gap */
@@ -341,6 +344,96 @@ static void test_per_obs_loc_and_views(void) {
     mat_free(lp); mat_free(dl); mat_free(dc);
 }
 
+/* Same contract-violation convention as dist/mv/gauss.h: mvgauss_check
+   and mat_chol assert on a mismatched/non-SPD/singular cov, and that
+   assert is never confirmed to fire anywhere in this suite otherwise -
+   every rand_spd() covariance here is SPD by construction. Mirrors
+   test_mvgauss.c's fork+expect-SIGABRT check for the t-distribution
+   entry points (nu is finite here, so this exercises the same
+   mat_chol(cov) call the Gaussian path takes, not something t-specific). */
+static void expect_abort(void (*fn)(void)) {
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        freopen("/dev/null", "w", stderr);
+        fn();
+        _exit(111);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+static Mat g_bad_x, g_bad_loc, g_bad_cov;
+
+static void call_mvstudent_logpdf(void) {
+    Mat lp = mvstudent_logpdf(g_bad_x, g_bad_loc, g_bad_cov, 5.0f);
+    (void)lp;
+}
+
+static void test_degenerate_covariance(void) {
+    puts("non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)");
+
+    g_bad_x = mat_lit(1, 2, 1.0f, -1.0f);
+    g_bad_loc = mat_lit(1, 2, 0.0f, 0.0f);
+
+    g_bad_cov = mat_lit(2, 2, 1.0f, 0.0f, 0.0f, -1.0f); /* indefinite */
+    expect_abort(call_mvstudent_logpdf);
+    mat_free(g_bad_cov);
+
+    g_bad_cov = mat_lit(2, 2, 1.0f, 0.0f, 0.0f, 0.0f); /* singular */
+    expect_abort(call_mvstudent_logpdf);
+    mat_free(g_bad_cov);
+
+    g_bad_cov = mat_eye(3); /* dimension mismatch vs x/loc's d=2 */
+    expect_abort(call_mvstudent_logpdf);
+    mat_free(g_bad_cov);
+
+    mat_free(g_bad_x); mat_free(g_bad_loc);
+}
+
+/* nu has no positivity guard, unlike cov: mvstudent_lognorm's log(nu*pi)
+   term goes NaN for nu <= 0 and just propagates through the rest of the
+   formula - no crash, unlike the covariance case above. Same story as
+   dist/student.h's test_degenerate_params, one dimension up: cov here is
+   a normal SPD matrix (only nu is being pushed out of its valid range),
+   so this isolates nu's own missing guard from cov's assert-guarded one. */
+static void test_degenerate_nu(void) {
+    puts("degenerate nu (undocumented, unguarded - pinning current behavior)");
+
+    Mat x = mat_lit(1, 2, 0.3f, -0.2f);
+    Mat loc = mat_lit(1, 2, 0.0f, 0.0f);
+    Mat cov = mat_lit(2, 2, 1.5f, 0.3f, 0.3f, 2.0f); /* ordinary SPD cov */
+
+    /* nu < 0, off any lgamma pole */
+    {
+        Mat lp = mvstudent_logpdf(x, loc, cov, -1.5f);
+        Mat p = mvstudent_pdf(x, loc, cov, -1.5f);
+        assert(MISNAN(AT(lp,0,0)));
+        assert(MISNAN(AT(p,0,0)));
+        mat_free(lp); mat_free(p);
+    }
+
+    /* nu == 0: inf-inf indeterminate form in lognorm */
+    {
+        Mat lp = mvstudent_logpdf(x, loc, cov, 0.0f);
+        assert(MISNAN(AT(lp,0,0)));
+        mat_free(lp);
+    }
+
+    /* nu == NaN: MISINF(NaN) is false, so this skips the infinite-nu
+       Gaussian delegation and falls into ordinary arithmetic, where NaN
+       propagates like any other NaN operand - confirms no special/silent
+       mishandling of a NaN nu specifically */
+    {
+        Mat lp = mvstudent_logpdf(x, loc, cov, (mreal)NAN);
+        assert(MISNAN(AT(lp,0,0)));
+        mat_free(lp);
+    }
+
+    mat_free(x); mat_free(loc); mat_free(cov);
+}
+
 static void test_stress(void) {
     if (!getenv("STRESS")) return;
     puts("  stress");
@@ -479,6 +572,8 @@ int main(void) {
     test_fd_derivatives();
     test_gaussian_limit();
     test_per_obs_loc_and_views();
+    test_degenerate_covariance();
+    test_degenerate_nu();
     test_sampling();
     test_stress();
     puts("test_mvstudent: all passed");

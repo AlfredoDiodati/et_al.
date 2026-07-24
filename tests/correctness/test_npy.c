@@ -1,5 +1,8 @@
 #include "../../frame/npy.h"
 #include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define TOL 1e-5f
 #define CHECK(got, exp) assert(MABS((got) - (exp)) < TOL)
@@ -29,6 +32,28 @@ static void write_test_npy(const char *path, int r, int c, const mreal *data) {
     fwrite(hlen_bytes, 1, 2, f);
     fwrite(header, 1, (size_t)hlen, f);
     fwrite(data, sizeof(mreal), (size_t)(r * c), f);
+    fclose(f);
+}
+
+/* Like write_test_npy, but lets the caller override the dtype string and
+   truncate the data payload - the two knobs needed to hand-craft a
+   malformed .npy file for test_malformed_npy_aborts below. */
+static void write_test_npy_ex(const char *path, const char *descr, int r, int c,
+                               const mreal *data, size_t data_bytes_to_write) {
+    char header[256];
+    int hlen = snprintf(header, sizeof header,
+        "{'descr': '%s', 'fortran_order': False, 'shape': (%d, %d), }\n", descr, r, c);
+    assert(hlen > 0 && hlen < (int)sizeof header);
+
+    FILE *f = fopen(path, "wb");
+    assert(f);
+    fwrite("\x93NUMPY", 1, 6, f);
+    unsigned char ver[2] = { 1, 0 };
+    fwrite(ver, 1, 2, f);
+    unsigned char hlen_bytes[2] = { (unsigned char)(hlen & 0xFF), (unsigned char)((hlen >> 8) & 0xFF) };
+    fwrite(hlen_bytes, 1, 2, f);
+    fwrite(header, 1, (size_t)hlen, f);
+    fwrite(data, 1, data_bytes_to_write, f);
     fclose(f);
 }
 
@@ -146,6 +171,71 @@ static void test_adversarial_single_element(void) {
     remove(path);
 }
 
+/* frame_npy_check_descr/df_read_npy treat a dtype mismatch, a truncated
+   file, and a bad magic number as contract violations (assert), never a
+   recoverable error - explicitly the single most dangerous silent-
+   corruption risk this file's own header comment names, since bypassing
+   that assert would mean reinterpreting raw bytes at the wrong width.
+   Every other test here only ever feeds a file this same suite just
+   wrote, so the rejection path has never been exercised. Confirm each
+   kind of malformed file actually aborts. */
+static void expect_abort(void (*fn)(void)) {
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
+        fn();
+        _exit(111); /* fn() must never return - reaching here is itself a failure */
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+static const char *g_bad_npy_path = "/tmp/et_al_test_bad.npy";
+static void call_df_read_npy(void) {
+    DataFrame df = df_read_npy(g_bad_npy_path);
+    (void)df;
+}
+
+static void test_malformed_npy_aborts(void) {
+    puts("malformed .npy aborts (fork + expect SIGABRT)");
+    mreal data[6] = { 1, 2, 3, 4, 5, 6 };
+#ifdef MAT_DOUBLE
+    const char *descr = "<f8";
+#else
+    const char *descr = "<f4";
+#endif
+
+    /* dtype mismatch: descr names a type that is never this build's mreal */
+    write_test_npy_ex(g_bad_npy_path, "<i4", 2, 3, data, sizeof data);
+    expect_abort(call_df_read_npy);
+
+    /* truncated: header declares a 2x3 array but far fewer data bytes follow */
+    write_test_npy_ex(g_bad_npy_path, descr, 2, 3, data, sizeof(mreal));
+    expect_abort(call_df_read_npy);
+
+    /* bad magic bytes - not a .npy file at all */
+    {
+        FILE *f = fopen(g_bad_npy_path, "wb");
+        assert(f);
+        fwrite("NOTNUMPY!!", 1, 10, f);
+        fclose(f);
+    }
+    expect_abort(call_df_read_npy);
+
+    /* far too small to even contain the fixed-size preamble */
+    {
+        FILE *f = fopen(g_bad_npy_path, "wb");
+        assert(f);
+        fwrite("\x93NUM", 1, 4, f);
+        fclose(f);
+    }
+    expect_abort(call_df_read_npy);
+
+    remove(g_bad_npy_path);
+}
+
 static void test_write_read_roundtrip(void) {
     puts("write/read round-trip: DataFrame -> .npy -> DataFrame preserves values exactly");
 
@@ -234,6 +324,7 @@ int main(void) {
     test_genuine_1d_shape_string();
     test_v2_header_format();
     test_adversarial_single_element();
+    test_malformed_npy_aborts();
     test_write_read_roundtrip();
 
     if (getenv("STRESS")) test_random_write_read_roundtrip_stress();

@@ -1,6 +1,8 @@
 #include "../../frame/frame.h"
 #include <stdio.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define TOL 1e-5f
 #define CHECK(got, exp) assert(MABS((got) - (exp)) < TOL)
@@ -168,6 +170,77 @@ static void test_adversarial(void) {
     df_free(&single);
 }
 
+/* frame_col_lookup asserts when a name isn't found (contract violation,
+   same convention as decomp.h/solver.h) - never exercised anywhere else
+   in this file, every lookup so far has been for a column that was just
+   added. Confirm it actually aborts. */
+static void expect_abort(void (*fn)(void)) {
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
+        fn();
+        _exit(111); /* fn() must never return - reaching here is itself a failure */
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+static DataFrame g_df_for_lookup;
+static void call_df_col_numeric_missing(void) {
+    Mat m = df_col_numeric(&g_df_for_lookup, "does_not_exist");
+    (void)m;
+}
+static void call_df_col_string_missing(void) {
+    char **s = df_col_string(&g_df_for_lookup, "does_not_exist");
+    (void)s;
+}
+static void call_df_col_type_missing(void) {
+    ColType t = df_col_type(&g_df_for_lookup, "does_not_exist");
+    (void)t;
+}
+
+static void test_missing_column_aborts(void) {
+    puts("looking up a nonexistent column aborts (fork + expect SIGABRT)");
+
+    g_df_for_lookup = df_new(2);
+    Vec v = mat_lit(2, 1, 1.f, 2.f);
+    df_add_numeric_col(&g_df_for_lookup, "a", v);
+    mat_free(v);
+
+    expect_abort(call_df_col_numeric_missing);
+    expect_abort(call_df_col_string_missing);
+    expect_abort(call_df_col_type_missing);
+
+    df_free(&g_df_for_lookup);
+}
+
+/* Neither df_add_numeric_col nor df_add_string_col check for a name
+   already in use - nothing stops a caller from adding two columns with
+   the same name. frame_col_lookup (df_col_numeric/df_col_string/
+   df_col_type's shared helper) returns the *first* match, so the second
+   column becomes permanently unreachable by name, silently - not an
+   error, just a column you can never look up again except by knowing
+   its position. Pins down that this is what actually happens today. */
+static void test_duplicate_column_name(void) {
+    puts("duplicate column name: silently shadowed, first one wins on lookup (pinning current behavior)");
+
+    DataFrame df = df_new(2);
+    Vec first = mat_lit(2, 1, 1.f, 2.f);
+    Vec second = mat_lit(2, 1, 100.f, 200.f);
+    df_add_numeric_col(&df, "x", first);
+    df_add_numeric_col(&df, "x", second); /* same name again - no error */
+
+    assert(df.n_cols == 2); /* both columns really were added */
+    Mat looked_up = df_col_numeric(&df, "x");
+    for (int i = 0; i < 2; i++)
+        CHECK(AT(looked_up, i, 0), AT(first, i, 0)); /* lookup always finds the first "x", never the second */
+
+    mat_free(first); mat_free(second);
+    df_free(&df);
+}
+
 static void test_mkdir_p(void) {
     puts("frame_mkdir_p: recursive directory creation");
 
@@ -207,6 +280,8 @@ int main(void) {
     test_row_names();
     test_from_matrix();
     test_adversarial();
+    test_missing_column_aborts();
+    test_duplicate_column_name();
     test_mkdir_p();
     puts("test_frame: all passed");
     return 0;
