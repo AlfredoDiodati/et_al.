@@ -70,6 +70,7 @@ void df_print(const DataFrame *df)
 
 ```c
 char *frame_read_file(const char *path, long *out_size);      /* whole-file read, asserts on I/O failure */
+void frame_mkdir_p(const char *path);                          /* recursive directory creation, mkdir -p semantics */
 typedef struct { char **items; int n, cap; } StrList;          /* growable owned-string array */
 int frame_try_parse_numeric(const char *s, mreal *out);        /* whole-string numeric parse, no partial matches */
 DataFrame frame_build_from_rows(int n_rows, int n_cols, const StrList *rows, char *const *col_names);
@@ -77,6 +78,8 @@ DataFrame frame_rows_to_dataframe(StrList *rows, int n_rows_total, int has_heade
 ```
 
 Each loader's own code is only its tokenizer (`frame_parse_csv`/`frame_parse_txt`) plus a thin call to `frame_rows_to_dataframe`.
+
+`frame_mkdir_p` is the odd one out here - not loader plumbing, just a small standalone filesystem utility (create every directory component of a path, `mkdir -p` style) that a caller preparing an output location for `df_write_csv`/`df_write_txt` needs often enough to be worth not reimplementing per caller. Unlike `frame_read_file`'s "assert on I/O failure" contract, it reports nothing - an already-existing component (including the whole path) is silently fine, matching `mkdir -p`'s own idempotence; a directory that genuinely can't be created surfaces on its own the moment a subsequent `fopen("w")`/`df_write_csv` call fails.
 
 ### A note on missing values (no NaN sentinel)
 
@@ -88,7 +91,7 @@ Column type inference (`frame_build_from_rows`) is strict: a column is numeric o
 
 ## Testing
 
-`tests/correctness/test_frame.c` checks numeric columns added one at a time (verifying earlier columns stay intact after each subsequent grow-and-copy, the fragile part of the append implementation), that `df_col_numeric` is a genuine zero-copy view (mutate through it, confirm the DataFrame changes) while the caller's original `Vec` remains independent (confirm the DataFrame does *not* change when the caller's copy is mutated afterward), that string columns are deep-copied (mutate the caller's array after adding, confirm the DataFrame's copy is unaffected), that mixed numeric/string columns preserve declaration order regardless of interleaving, that row names are optional (`df_new`+`df_free` with no row names set must not crash) and correctly freed on replacement (verified under ASan/UBSan, not by inspection), and adversarial shapes (zero columns ever added, a single row, plus a `df_print` smoke test).
+`tests/correctness/test_frame.c` checks numeric columns added one at a time (verifying earlier columns stay intact after each subsequent grow-and-copy, the fragile part of the append implementation), that `df_col_numeric` is a genuine zero-copy view (mutate through it, confirm the DataFrame changes) while the caller's original `Vec` remains independent (confirm the DataFrame does *not* change when the caller's copy is mutated afterward), that string columns are deep-copied (mutate the caller's array after adding, confirm the DataFrame's copy is unaffected), that mixed numeric/string columns preserve declaration order regardless of interleaving, that row names are optional (`df_new`+`df_free` with no row names set must not crash) and correctly freed on replacement (verified under ASan/UBSan, not by inspection), adversarial shapes (zero columns ever added, a single row, plus a `df_print` smoke test), and `frame_mkdir_p` creating every intermediate component of a multi-level path (checked via `stat`, not just the leaf), being idempotent when called again on a path that already fully exists, and handling a second, disjoint multi-level tree under the same already-existing root.
 
 ## Known limitations and future work
 

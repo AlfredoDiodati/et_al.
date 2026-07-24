@@ -1,5 +1,6 @@
 #include "../../frame/frame.h"
 #include <stdio.h>
+#include <unistd.h>
 
 #define TOL 1e-5f
 #define CHECK(got, exp) assert(MABS((got) - (exp)) < TOL)
@@ -167,6 +168,38 @@ static void test_adversarial(void) {
     df_free(&single);
 }
 
+static void test_mkdir_p(void) {
+    puts("frame_mkdir_p: recursive directory creation");
+
+    const char *leaf = "/tmp/et_al_test_frame_mkdirp/a/b/c";
+    frame_mkdir_p(leaf);
+    struct stat st;
+    assert(stat(leaf, &st) == 0 && S_ISDIR(st.st_mode));
+    /* every intermediate component was created too, not just the leaf */
+    assert(stat("/tmp/et_al_test_frame_mkdirp/a", &st) == 0 && S_ISDIR(st.st_mode));
+    assert(stat("/tmp/et_al_test_frame_mkdirp/a/b", &st) == 0 && S_ISDIR(st.st_mode));
+
+    /* idempotent: calling it again on an already-fully-existing path
+       (including the leaf itself) must not crash or fail */
+    frame_mkdir_p(leaf);
+    assert(stat(leaf, &st) == 0 && S_ISDIR(st.st_mode));
+
+    /* adversarial: a path whose parent didn't exist yet either, and a
+       single-level relative-feeling path under an existing root */
+    frame_mkdir_p("/tmp/et_al_test_frame_mkdirp/x/y/z/w");
+    assert(stat("/tmp/et_al_test_frame_mkdirp/x/y/z/w", &st) == 0 && S_ISDIR(st.st_mode));
+
+    /* cleanup - remove deepest-first, both trees created above */
+    rmdir("/tmp/et_al_test_frame_mkdirp/x/y/z/w");
+    rmdir("/tmp/et_al_test_frame_mkdirp/x/y/z");
+    rmdir("/tmp/et_al_test_frame_mkdirp/x/y");
+    rmdir("/tmp/et_al_test_frame_mkdirp/x");
+    rmdir("/tmp/et_al_test_frame_mkdirp/a/b/c");
+    rmdir("/tmp/et_al_test_frame_mkdirp/a/b");
+    rmdir("/tmp/et_al_test_frame_mkdirp/a");
+    rmdir("/tmp/et_al_test_frame_mkdirp");
+}
+
 int main(void) {
     test_numeric_columns();
     test_string_columns();
@@ -174,6 +207,7 @@ int main(void) {
     test_row_names();
     test_from_matrix();
     test_adversarial();
+    test_mkdir_p();
     puts("test_frame: all passed");
     return 0;
 }

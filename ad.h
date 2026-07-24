@@ -21,7 +21,8 @@
    general dense arithmetic (including tanh, identity, and swish, three of
    the activation functions currently exposed - not from the paper,
    standard elementwise identities, see ad_tanh/ad_identity/ad_swish below
-   - plus ad_squared_error, a Criterion for fit-style training loops,
+   - plus ad_squared_error/ad_mean_squared_error/ad_huber_error/
+   ad_logcosh_error, four Criterions for fit-style training loops,
    likewise not from the paper), gemm, dot, and sum from the paper's
    Table 3, and - because the paper derives them via differentiating the *inverse*
    operation (Section 2.3) rather than from scratch - getrs/determinant/
@@ -68,8 +69,10 @@ typedef struct {
 /* Activation: an elementwise nonlinearity applied inside a forward pass
    (ad_tanh below is the first; ad_identity the second - the "linear
    output" case; ad_swish the third). Criterion: a loss comparing a prediction to a target,
-   reducing to a 1x1 scalar (ad_squared_error below is the first). Both
-   typedefs live here, not in nn/mlp.h (their first consumer), because they
+   reducing to a 1x1 scalar (ad_squared_error below is the first; ad_mean_squared_error,
+   ad_huber_error, and ad_logcosh_error follow it - see each one's own comment
+   for why ad_huber_error alone does not literally match this typedef).
+   Both typedefs live here, not in nn/mlp.h (their first consumer), because they
    are plain Tape/Node-level concepts any future model header needs - per
    README's "Model fit/forecast API" policy, a model header must not have
    to include another, unrelated model header just to get these. */
@@ -381,6 +384,92 @@ static inline Node *ad_squared_error(Tape *t, Node *pred, Node *target) {
 static inline Node *ad_mean_squared_error(Tape *t, Node *pred, Node *target) {
     mreal n = (mreal)(pred->val.r * pred->val.c);
     return ad_scale(t, ad_squared_error(t, pred, target), (mreal)1 / n);
+}
+
+/* Huber loss (Criterion): mean over elements of 0.5*e^2 where |e| <=
+   delta, else delta*(|e| - 0.5*delta), e = pred - target. Quadratic like
+   ad_mean_squared_error for small errors, linear beyond delta - the
+   standard robust compromise between a squared and an absolute
+   criterion, with a per-element gradient magnitude capped at delta so no
+   single outlier can dominate a gradient step the way it can under
+   ad_mean_squared_error. Not built from existing ops (the piecewise case
+   needs its own backward rule, the same way ad_tanh needs one). delta is
+   a fixed (untracked) hyperparameter, stored in aux the same way
+   ad_scale's factor is - and precisely because of that extra argument,
+   this does *not* match the plain Criterion function-pointer signature
+   (Tape*, Node*, Node*) mlp_fit's criterion parameter requires; use it
+   directly in a custom training loop (see nn/mlp.h's "structural
+   primitives stay public" policy, and test_mlp.c's own hand-rolled
+   pattern), or wrap a fixed delta in a small 3-argument function if you
+   need literal Criterion-compatibility. ad_logcosh_error below has no
+   such restriction. */
+static void ad_huber_backward(Node *self) {
+    Node *pred = self->parents[0], *target = self->parents[1];
+    mreal delta = self->aux;
+    int n = pred->grad.r * pred->grad.c;
+    mreal g = self->grad.d[0] / n;
+    for (int i = 0; i < n; i++) {
+        mreal e = pred->val.d[i] - target->val.d[i];
+        mreal ae = MABS(e);
+        mreal de = (ae <= delta) ? e : (e > 0 ? delta : -delta);
+        pred->grad.d[i] += g * de;
+        target->grad.d[i] -= g * de;
+    }
+}
+static inline Node *ad_huber_error(Tape *t, Node *pred, Node *target, mreal delta) {
+    assert(pred->val.r == target->val.r && pred->val.c == target->val.c);
+    assert(delta > 0);
+    int n = pred->val.r * pred->val.c;
+    mreal s = 0;
+    for (int i = 0; i < n; i++) {
+        mreal e = pred->val.d[i] - target->val.d[i];
+        mreal ae = MABS(e);
+        s += (ae <= delta) ? (mreal)0.5 * e * e : delta * (ae - (mreal)0.5 * delta);
+    }
+    Mat val = mat_new(1, 1);
+    val.d[0] = s / n;
+    Node *node = ad_node_new(t, val, ad_huber_backward);
+    node->parents[0] = pred; node->parents[1] = target; node->n_parents = 2;
+    node->aux = delta;
+    return node;
+}
+
+/* Log-cosh loss (Criterion): mean over elements of log(cosh(pred -
+   target)). A smooth approximation to a mean-absolute criterion -
+   quadratic near zero like ad_mean_squared_error, linear for large |e|
+   like ad_huber_error beyond its delta - but with one closed-form
+   gradient everywhere (d/de[log(cosh(e))] = tanh(e)), no piecewise case,
+   no delta hyperparameter to choose, and (like ad_huber_error) a bounded
+   per-element gradient magnitude. Matches the plain Criterion signature
+   exactly, so unlike ad_huber_error it plugs directly into mlp_fit's
+   criterion parameter. Forward uses the numerically stable identity
+   log(cosh(e)) = |e| + log1p(exp(-2|e|)) - log(2), since cosh(e) itself
+   overflows once |e| reaches double digits. */
+static void ad_logcosh_backward(Node *self) {
+    Node *pred = self->parents[0], *target = self->parents[1];
+    int n = pred->grad.r * pred->grad.c;
+    mreal g = self->grad.d[0] / n;
+    for (int i = 0; i < n; i++) {
+        mreal e = pred->val.d[i] - target->val.d[i];
+        mreal de = MTANH(e);
+        pred->grad.d[i] += g * de;
+        target->grad.d[i] -= g * de;
+    }
+}
+static inline Node *ad_logcosh_error(Tape *t, Node *pred, Node *target) {
+    assert(pred->val.r == target->val.r && pred->val.c == target->val.c);
+    int n = pred->val.r * pred->val.c;
+    mreal s = 0;
+    for (int i = 0; i < n; i++) {
+        mreal e = pred->val.d[i] - target->val.d[i];
+        mreal ae = MABS(e);
+        s += ae + MLOG1P(MEXP(-2 * ae)) - (mreal)0.6931471805599453; /* log(2) */
+    }
+    Mat val = mat_new(1, 1);
+    val.d[0] = s / n;
+    Node *node = ad_node_new(t, val, ad_logcosh_backward);
+    node->parents[0] = pred; node->parents[1] = target; node->n_parents = 2;
+    return node;
 }
 
 /* --- matmul --- */

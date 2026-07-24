@@ -240,6 +240,21 @@ typedef struct {
     Activation out_act;
 } MLPHyperparams;
 
+/* Optional per-epoch hook, called after each epoch's mean training loss
+   is computed: epoch is 0-based, train_loss is that epoch's mean
+   criterion value, net is the model's current (still-training) state -
+   read-only here, but a caller wanting mlp_forecast/mlp_save on it can
+   wrap it locally (MLPFit tmp = { *net, train_loss, epoch + 1 };
+   mlp_forecast(&tmp, valid_X)), since mlp_fit itself hasn't built the
+   final MLPFit yet. user_data is opts.callback_data, passed through
+   unchanged - the caller's own way to reach a validation set, a
+   best-so-far checkpoint, etc. without global state. Return nonzero to
+   stop training after this epoch; the returned MLPFit's epochs_run then
+   reflects how many epochs actually ran, not opts.epochs. This is what
+   closes the gap this file's own "Known limitations" used to note (no
+   early stopping / validation-set monitoring) - see docs/MLP_DOCUMENTATION.md. */
+typedef int (*MLPEpochCallback)(int epoch, mreal train_loss, const MLP *net, void *user_data);
+
 /* Training-procedural options: must never affect the trained model's
    architecture, only how training runs. seed feeds rng_new(seed, 0)
    (random.h) to build the Rng mlp_init's Glorot init draws from - not
@@ -247,11 +262,18 @@ typedef struct {
    bit-for-bit identical initial weights regardless of what else is
    running concurrently, and different opts.seed values are the caller's
    independent streams. verbose: 0 = silent, N > 0 = print the mean
-   training loss every N epochs. */
+   training loss every N epochs. on_epoch_end/callback_data: NULL/unused
+   by default - a partial or positional struct initializer (the existing
+   `{ epochs, seed, verbose }` triples throughout this codebase) leaves
+   trailing members zero-initialized in C, so every existing MLPFitOptions
+   literal keeps working unchanged; NULL means no hook and no early
+   stopping, mlp_fit's exact prior behavior. */
 typedef struct {
     int epochs;
     unsigned seed;
     int verbose;
+    MLPEpochCallback on_epoch_end;
+    void *callback_data;
 } MLPFitOptions;
 
 /* The trained model plus fit diagnostics. Owns model's memory; free with
@@ -293,6 +315,7 @@ static inline MLPFit mlp_fit(Mat train_X, Mat train_Y, Criterion criterion,
 
     int n = train_X.c;
     mreal mean_loss = 0;
+    int epochs_run = 0;
     for (int epoch = 0; epoch < opts.epochs; epoch++) {
         mean_loss = 0;
         for (int k = 0; k < n; k++) {
@@ -313,8 +336,11 @@ static inline MLPFit mlp_fit(Mat train_X, Mat train_Y, Criterion criterion,
             tape_free(t);
         }
         mean_loss /= (mreal)n;
+        epochs_run = epoch + 1;
         if (opts.verbose && (epoch % opts.verbose == 0))
             printf("mlp_fit: epoch %d: mean loss = %g\n", epoch, (double)mean_loss);
+        if (opts.on_epoch_end && opts.on_epoch_end(epoch, mean_loss, &net, opts.callback_data))
+            break;
     }
 
     for (int l = 0; l < net.n_layers; l++) {
@@ -327,7 +353,7 @@ static inline MLPFit mlp_fit(Mat train_X, Mat train_Y, Criterion criterion,
     MLPFit fit;
     fit.model = net;
     fit.final_loss = mean_loss;
-    fit.epochs_run = opts.epochs;
+    fit.epochs_run = epochs_run;
     return fit;
 }
 

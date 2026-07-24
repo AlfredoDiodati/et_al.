@@ -19,7 +19,7 @@ int main(void) {
        for a regression-style linear output); here both are tanh. */
     int sizes[] = {2, 4, 1};
     MLPHyperparams hp = { 3, sizes, ad_tanh, ad_tanh };
-    MLPFitOptions opts = { 3000, 1, 500 }; /* 3000 epochs, seed 1, print every 500 */
+    MLPFitOptions opts = { .epochs = 3000, .seed = 1, .verbose = 500 }; /* print every 500 epochs */
     AdamHyperparams ahp = { (mreal)0.05, (mreal)0.9, (mreal)0.999, (mreal)1e-8 };
 
     printf("network: %d -> %d -> %d, activation = tanh\n\n",

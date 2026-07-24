@@ -2,6 +2,7 @@
 #include "../linalg/mat.h"
 #include <string.h>
 #include <ctype.h>
+#include <sys/stat.h>
 
 /* DataFrame: a matrix plus optional column and row labels - the shape
    pandas/polars users expect, minus anything this project's actual use
@@ -242,6 +243,28 @@ static inline char *frame_read_file(const char *path, long *out_size) {
     fclose(f);
     if (out_size) *out_size = size;
     return buf;
+}
+
+/* Recursively creates every directory component of path, the same
+   "mkdir -p" a shell would do - pass a directory, not a file (to prepare
+   a directory for df_write_csv/df_write_txt et al., pass the containing
+   directory of the file you're about to write, not the file path
+   itself). Unlike frame_read_file's "assert on I/O failure" contract,
+   this does not report failure at all, matching mkdir -p's own
+   idempotence: a component that already exists (including the whole path
+   already existing) is silently fine, not an error, since "the directory
+   is there" is exactly the postcondition either way. A path whose
+   directory genuinely could not be created (permissions, a component
+   that exists as a plain file, ...) surfaces on its own the moment a
+   caller's own fopen("w")/df_write_csv fails - this project's usual
+   "the actual operation fails loudly, not a preflight check" pattern. */
+static inline void frame_mkdir_p(const char *path) {
+    char tmp[4096];
+    snprintf(tmp, sizeof tmp, "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') { *p = '\0'; mkdir(tmp, 0755); *p = '/'; }
+    }
+    mkdir(tmp, 0755);
 }
 
 /* A growable array of owned strings - one row's fields, or one file's

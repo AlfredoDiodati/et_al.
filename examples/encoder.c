@@ -161,7 +161,7 @@ int main(void) {
        variance: lr=0.001/1500 epochs is the smallest budget that avoids a
        dead unit and gets reconstruction R^2 (0.799) close to PCA's linear
        optimum (0.808), vs. lr=0.01/300's 0.587 with a fully dead unit. */
-    MLPFitOptions opts = { 1500, 42, 0 };
+    MLPFitOptions opts = { .epochs = 1500, .seed = 42, .verbose = 0 };
     AdamHyperparams ahp = { (mreal)0.001, (mreal)0.9, (mreal)0.999, (mreal)1e-8 };
 
     Mat train_X = mat_T(z); /* d x n, one column per sample */

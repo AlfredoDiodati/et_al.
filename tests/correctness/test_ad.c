@@ -306,6 +306,92 @@ static void test_squared_error_and_identity(void) {
     }
 }
 
+static void test_huber_logcosh(void) {
+    puts("ad_huber_error / ad_logcosh_error");
+
+    Mat pv = mat_lit(3, 1, 1.f, 2.f, 3.f);
+    Mat tv = mat_lit(3, 1, 0.f, 2.f, 5.f); /* e = pred-target = [1, 0, -2] */
+
+    /* ad_huber_error, delta=0.5: |e|=1 and |e|=2 fall in the linear
+       branch, |e|=0 in the quadratic one - known output/gradient computed
+       independently from the piecewise definition, not by calling
+       ad_huber_error itself. */
+    {
+        Tape *t = tape_new();
+        Node *pred = ad_leaf(t, pv), *target = ad_leaf(t, tv);
+        mreal delta = 0.5f;
+        Node *loss = ad_huber_error(t, pred, target, delta);
+        tape_backward(t, loss);
+
+        mreal expected = 0;
+        for (int i = 0; i < 3; i++) {
+            mreal e = pv.d[i] - tv.d[i];
+            mreal ae = MABS(e);
+            mreal li = (ae <= delta) ? 0.5f * e * e : delta * (ae - 0.5f * delta);
+            expected += li;
+        }
+        expected /= 3;
+        CHECK(loss->val.d[0], expected);
+        for (int i = 0; i < 3; i++) {
+            mreal e = pv.d[i] - tv.d[i];
+            mreal ae = MABS(e);
+            mreal de = (ae <= delta) ? e : (e > 0 ? delta : -delta);
+            CHECK(pred->grad.d[i], de / 3.0f);
+            CHECK(target->grad.d[i], -de / 3.0f);
+        }
+        tape_free(t);
+    }
+
+    /* ad_logcosh_error: known output/gradient against an independent
+       log(cosh(e))/tanh(e) reference computed via plain libm calls (the
+       same "reference via the underlying math library function, checking
+       the autodiff wiring rather than the function itself" convention
+       ad_exp/ad_tanh's own tests use above). */
+    {
+        Tape *t = tape_new();
+        Node *pred = ad_leaf(t, pv), *target = ad_leaf(t, tv);
+        Node *loss = ad_logcosh_error(t, pred, target);
+        tape_backward(t, loss);
+
+        mreal expected = 0;
+        for (int i = 0; i < 3; i++) {
+            double e = (double)(pv.d[i] - tv.d[i]);
+            expected += (mreal)log(cosh(e));
+        }
+        expected /= 3;
+        CHECK(loss->val.d[0], expected);
+        for (int i = 0; i < 3; i++) {
+            double e = (double)(pv.d[i] - tv.d[i]);
+            mreal de = (mreal)tanh(e);
+            CHECK(pred->grad.d[i], de / 3.0f);
+            CHECK(target->grad.d[i], -de / 3.0f);
+        }
+        tape_free(t);
+    }
+
+    /* invariant: with delta larger than every |e|, ad_huber_error falls
+       entirely in its quadratic branch and must equal exactly half of
+       ad_mean_squared_error */
+    {
+        Tape *t1 = tape_new();
+        Node *pred1 = ad_leaf(t1, pv), *target1 = ad_leaf(t1, tv);
+        Node *huber = ad_huber_error(t1, pred1, target1, 100.0f);
+        tape_backward(t1, huber);
+
+        Tape *t2 = tape_new();
+        Node *pred2 = ad_leaf(t2, pv), *target2 = ad_leaf(t2, tv);
+        Node *mse = ad_mean_squared_error(t2, pred2, target2);
+        tape_backward(t2, mse);
+
+        CHECK(huber->val.d[0], 0.5f * mse->val.d[0]);
+        for (int i = 0; i < 3; i++) CHECK(pred1->grad.d[i], 0.5f * pred2->grad.d[i]);
+        tape_free(t1);
+        tape_free(t2);
+    }
+
+    mat_free(pv); mat_free(tv);
+}
+
 /* --- verification against the analytical Gaussian gradient - the whole
    point of this file: a synthetic (AD) gradient equivalent to the
    analytical one, per the user's original ask --- */
@@ -786,6 +872,7 @@ int main(void) {
     test_dot();
     test_matmul();
     test_squared_error_and_identity();
+    test_huber_logcosh();
     test_gauss_equivalence();
     test_lgamma_op();
     test_student_equivalence();

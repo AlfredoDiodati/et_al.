@@ -197,7 +197,7 @@ static void test_fit_forecast_xor(void) {
 
     int sizes[] = {2, 4, 1};
     MLPHyperparams hp = { 3, sizes, ad_tanh, ad_tanh };
-    MLPFitOptions opts = { 3000, 1, 0 };
+    MLPFitOptions opts = { .epochs = 3000, .seed = 1, .verbose = 0 };
     AdamHyperparams ahp = { (mreal)0.05, (mreal)0.9, (mreal)0.999, (mreal)1e-8 };
 
     MLPFit fit = mlp_fit(train_X, train_Y, ad_squared_error,
@@ -215,6 +215,65 @@ static void test_fit_forecast_xor(void) {
     mat_free(train_X);
     mat_free(train_Y);
     mlp_fit_free(&fit);
+}
+
+typedef struct { int calls; int last_epoch; mreal last_loss; int stop_at; } CallbackState;
+
+static int record_and_maybe_stop(int epoch, mreal train_loss, const MLP *net, void *user_data) {
+    CallbackState *cs = (CallbackState*)user_data;
+    cs->calls++;
+    cs->last_epoch = epoch;
+    cs->last_loss = train_loss;
+    (void)net; /* a real caller would wrap it in a temporary MLPFit here to mlp_forecast a validation set */
+    return epoch >= cs->stop_at;
+}
+
+/* Integration test: MLPFitOptions.on_epoch_end - the epoch-end hook this
+   file's own "Known limitations" used to admit was missing (no early
+   stopping / validation-set monitoring). Checks both halves: a callback
+   that always returns 0 lets every requested epoch run and gets called
+   exactly that many times, and one that signals a stop partway through
+   both truncates training and reports the truncated count via
+   epochs_run/final_loss. */
+static void test_fit_epoch_callback(void) {
+    puts("integration: MLPFitOptions.on_epoch_end monitors and early-stops mlp_fit");
+
+    Mat train_X = mat_lit(2, 4,
+        -1.f, -1.f, 1.f, 1.f,
+        -1.f,  1.f, -1.f, 1.f);
+    Mat train_Y = mat_lit(1, 4, -1.f, 1.f, 1.f, -1.f);
+    int sizes[] = {2, 4, 1};
+    MLPHyperparams hp = { 3, sizes, ad_tanh, ad_tanh };
+    AdamHyperparams ahp = { (mreal)0.05, (mreal)0.9, (mreal)0.999, (mreal)1e-8 };
+
+    /* never stops: called once per epoch, exactly opts.epochs times */
+    {
+        CallbackState cs = { 0, -1, 0, 1000000 }; /* stop_at never reached within 5 epochs */
+        MLPFitOptions opts = { 5, 1, 0, record_and_maybe_stop, &cs };
+        MLPFit fit = mlp_fit(train_X, train_Y, ad_squared_error,
+                             adam_optimizer_init, &ahp, hp, opts);
+        assert(fit.epochs_run == 5);
+        assert(cs.calls == 5);
+        assert(cs.last_epoch == 4);
+        CHECK(fit.final_loss, cs.last_loss);
+        mlp_fit_free(&fit);
+    }
+
+    /* stops at epoch index 9 (the 10th epoch), well before opts.epochs=3000 */
+    {
+        CallbackState cs = { 0, -1, 0, 9 };
+        MLPFitOptions opts = { 3000, 1, 0, record_and_maybe_stop, &cs };
+        MLPFit fit = mlp_fit(train_X, train_Y, ad_squared_error,
+                             adam_optimizer_init, &ahp, hp, opts);
+        assert(fit.epochs_run == 10); /* epochs 0..9 ran, then the callback said stop */
+        assert(cs.calls == 10);
+        assert(cs.last_epoch == 9);
+        CHECK(fit.final_loss, cs.last_loss);
+        mlp_fit_free(&fit);
+    }
+
+    mat_free(train_X);
+    mat_free(train_Y);
 }
 
 /* Known-output test that out_act genuinely takes effect: with out_act =
@@ -306,6 +365,7 @@ int main(void) {
     test_adversarial_shapes();
     test_out_act_identity();
     test_fit_forecast_xor();
+    test_fit_epoch_callback();
     test_save_load_roundtrip();
     puts("test_mlp: all passed");
     return 0;
