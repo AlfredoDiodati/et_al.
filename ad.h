@@ -18,11 +18,11 @@
    matmul C=AB of n x n matrices has a computation tree of ~2n^3 scalar
    nodes, but the matrix-level adjoint Abar += Cbar*B^T, Bbar += A^T*Cbar
    needs no more storage than A, B, C themselves. This file implements
-   general dense arithmetic (including tanh and identity, two of the
-   activation functions currently exposed - not from the paper, standard
-   elementwise identities, see ad_tanh/ad_identity below - plus
-   ad_squared_error, a Criterion for fit-style training loops, likewise not
-   from the paper), gemm, dot, and sum from the paper's
+   general dense arithmetic (including tanh, identity, and swish, three of
+   the activation functions currently exposed - not from the paper,
+   standard elementwise identities, see ad_tanh/ad_identity/ad_swish below
+   - plus ad_squared_error, a Criterion for fit-style training loops,
+   likewise not from the paper), gemm, dot, and sum from the paper's
    Table 3, and - because the paper derives them via differentiating the *inverse*
    operation (Section 2.3) rather than from scratch - getrs/determinant/
    matrix-inverse from Table 7, all of which this library already had
@@ -67,7 +67,7 @@ typedef struct {
 
 /* Activation: an elementwise nonlinearity applied inside a forward pass
    (ad_tanh below is the first; ad_identity the second - the "linear
-   output" case). Criterion: a loss comparing a prediction to a target,
+   output" case; ad_swish the third). Criterion: a loss comparing a prediction to a target,
    reducing to a 1x1 scalar (ad_squared_error below is the first). Both
    typedefs live here, not in nn/mlp.h (their first consumer), because they
    are plain Tape/Node-level concepts any future model header needs - per
@@ -240,6 +240,38 @@ static inline Node *ad_tanh(Tape *t, Node *a) {
 static inline Node *ad_identity(Tape *t, Node *a) {
     (void)t;
     return a;
+}
+
+/* Swish/SiLU: x * sigmoid(x) - self-gated, unbounded above (unlike tanh),
+   and its negative regime decays towards 0 rather than saturating at a
+   hard -1, so it does not zero out the gradient of a strongly negative
+   input the way tanh's saturation does. The third activation this file
+   exposes (nn/mlp.h selects it via the same Activation function-pointer
+   type ad_tanh/ad_identity already use - nothing there needs to change
+   to add a new one, exactly as this file's own header comment says).
+   Backward recomputes sigmoid(x) from the parent's own forward value
+   rather than caching it, the same "cheap to recompute, no need to
+   store" choice ad_log_backward makes for 1/a. */
+static void ad_swish_backward(Node *self) {
+    Node *a = self->parents[0];
+    int n = a->grad.r * a->grad.c;
+    for (int i = 0; i < n; i++) {
+        mreal x = a->val.d[i];
+        mreal s = (mreal)1 / (1 + MEXP(-x));
+        a->grad.d[i] += self->grad.d[i] * (s + x * s * (1 - s));
+    }
+}
+static inline Node *ad_swish(Tape *t, Node *a) {
+    Mat val = mat_new(a->val.r, a->val.c);
+    int n = val.r * val.c;
+    for (int i = 0; i < n; i++) {
+        mreal x = a->val.d[i];
+        mreal s = (mreal)1 / (1 + MEXP(-x));
+        val.d[i] = x * s;
+    }
+    Node *node = ad_node_new(t, val, ad_swish_backward);
+    node->parents[0] = a; node->n_parents = 1;
+    return node;
 }
 
 /* d(log(a))/da = 1/a */

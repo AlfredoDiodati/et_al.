@@ -152,6 +152,40 @@ static void test_exp_tanh(void) {
     }
 }
 
+static void test_swish(void) {
+    puts("ad_swish (x * sigmoid(x))");
+
+    /* known output/gradient across negative, zero, and positive
+       magnitudes, including a strongly negative one where swish must
+       decay towards (not saturate at) 0, unlike ad_tanh's hard -1 bound -
+       exactly the property swish is added for. Reference sigmoid/gradient
+       computed independently via plain exp(), not by calling ad_swish
+       itself, so a formula bug in the op can't hide behind its own test. */
+    {
+        Tape *t = tape_new();
+        Mat av = mat_lit(5, 1, -4.f, -1.f, 0.f, 0.5f, 3.f);
+        Node *a = ad_leaf(t, av);
+        Node *loss = ad_sum(t, ad_swish(t, a));
+        tape_backward(t, loss);
+        mreal expected_loss = 0;
+        for (int i = 0; i < 5; i++) {
+            double x = (double)av.d[i];
+            double s = 1.0 / (1.0 + exp(-x));
+            double y = x * s;
+            expected_loss += (mreal)y;
+            double dswish = s + x * s * (1 - s);
+            CHECK(a->grad.d[i], (mreal)dswish);
+            /* the point of swish over tanh: a strongly negative input's
+               output decays towards 0 rather than saturating at a hard
+               bound the way tanh(-4) clamps near -1 */
+            if (i == 0) assert(fabs(y) < 0.2);
+        }
+        CHECK(loss->val.d[0], expected_loss);
+        mat_free(av);
+        tape_free(t);
+    }
+}
+
 static void test_dot(void) {
     puts("ad_dot");
 
@@ -748,6 +782,7 @@ static void test_inv_fd(void) {
 int main(void) {
     test_dense_ops();
     test_exp_tanh();
+    test_swish();
     test_dot();
     test_matmul();
     test_squared_error_and_identity();

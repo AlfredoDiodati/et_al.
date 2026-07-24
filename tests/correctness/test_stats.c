@@ -58,6 +58,66 @@ static void to_dbl(Mat m, double *out) {
             out[i * m.c + j] = (double)AT(m, i, j);
 }
 
+/* --- independent references for the order-statistic/prediction-quality
+   additions, same "written from the definition, not by calling the
+   header" policy as the ref_* functions above --- */
+
+static int ref_cmp_dbl(const void *a, const void *b) {
+    double da = *(const double*)a, db = *(const double*)b;
+    return (da > db) - (da < db);
+}
+static double ref_median(const double *x, int n) {
+    double *tmp = (double*)malloc((size_t)n * sizeof *tmp);
+    memcpy(tmp, x, (size_t)n * sizeof *tmp);
+    qsort(tmp, (size_t)n, sizeof *tmp, ref_cmp_dbl);
+    double m = (n % 2) ? tmp[n / 2] : (tmp[n / 2 - 1] + tmp[n / 2]) / 2.0;
+    free(tmp);
+    return m;
+}
+/* O(n^2) but obviously correct: for each element, 1 + (count strictly
+   less) + (count equal, other than itself)/2 - the average-rank-across-
+   ties definition, derived independently of stats_rank's sort-based one. */
+static void ref_rank(const double *x, int n, double *out) {
+    for (int i = 0; i < n; i++) {
+        int less = 0, equal = 0;
+        for (int j = 0; j < n; j++) {
+            if (x[j] < x[i]) less++;
+            else if (x[j] == x[i]) equal++;
+        }
+        out[i] = less + (equal + 1) / 2.0;
+    }
+}
+static double ref_mae(const double *a, const double *p, int n) {
+    double s = 0; for (int i = 0; i < n; i++) s += fabs(a[i] - p[i]); return s / n;
+}
+static double ref_mse(const double *a, const double *p, int n) {
+    double s = 0; for (int i = 0; i < n; i++) { double d = a[i] - p[i]; s += d * d; } return s / n;
+}
+static double ref_r2(const double *a, const double *p, int n) {
+    double ma = ref_mean(a, n), ss_res = 0, ss_tot = 0;
+    for (int i = 0; i < n; i++) {
+        double e = a[i] - p[i]; ss_res += e * e;
+        double d = a[i] - ma; ss_tot += d * d;
+    }
+    return 1.0 - ss_res / ss_tot;
+}
+static double ref_rmsle(const double *a, const double *p, int n) {
+    double s = 0;
+    for (int i = 0; i < n; i++) { double d = log(a[i]) - log(p[i]); s += d * d; }
+    return sqrt(s / n);
+}
+static double ref_mape(const double *a, const double *p, int n) {
+    double s = 0; for (int i = 0; i < n; i++) s += fabs(a[i] - p[i]) / fabs(a[i]); return s / n;
+}
+static double ref_huber(const double *a, const double *p, int n, double delta) {
+    double s = 0;
+    for (int i = 0; i < n; i++) {
+        double e = a[i] - p[i], ae = fabs(e);
+        s += (ae <= delta) ? 0.5 * e * e : delta * (ae - 0.5 * delta);
+    }
+    return s / n;
+}
+
 static void test_known_values(void) {
     puts("known values (hand-computed)");
 
@@ -279,6 +339,240 @@ static void test_stress(void) {
     printf("  400 randomized strided runs (n up to ~300, d up to 4) ok\n");
 }
 
+static void test_pred_known_values(void) {
+    puts("prediction-quality metrics: known values (hand-computed)");
+
+    /* actual=[3,-0.5,2,7], predicted=[2.5,0.0,2,8]: errors [0.5,-0.5,0,-1] */
+    Mat a = mat_lit(4, 1, 3.0f, -0.5f, 2.0f, 7.0f);
+    Mat p = mat_lit(4, 1, 2.5f, 0.0f, 2.0f, 8.0f);
+    CHECK(stats_mae(a, p), 0.5f);            /* mean(|e|) = (0.5+0.5+0+1)/4 */
+    CHECK(stats_mse(a, p), 0.375f);           /* mean(e^2) = (0.25+0.25+0+1)/4 */
+    CHECK(stats_rmse(a, p), (mreal)sqrt(0.375));
+    CHECK(stats_medae(a, p), 0.5f);          /* median of [0.5,0.5,0,1] */
+    mat_free(a); mat_free(p);
+
+    /* R^2: actual=[1,2,3,4], predicted=[1,2,3,4] (perfect) -> 1;
+       predicted = mean(actual) everywhere -> 0 */
+    Mat a2 = mat_lit(4, 1, 1.0f, 2.0f, 3.0f, 4.0f);
+    CHECK(stats_r2(a2, a2), 1.0f);
+    Mat p2 = mat_lit(4, 1, 2.5f, 2.5f, 2.5f, 2.5f);
+    CHECK(stats_r2(a2, p2), 0.0f);
+    mat_free(a2); mat_free(p2);
+
+    /* MAPE: actual=[100,200], predicted=[110,180] -> |10|/100, |20|/200 -> mean(0.1,0.1)=0.1 */
+    Mat a3 = mat_lit(2, 1, 100.0f, 200.0f);
+    Mat p3 = mat_lit(2, 1, 110.0f, 180.0f);
+    CHECK(stats_mape(a3, p3), 0.1f);
+    mat_free(a3); mat_free(p3);
+
+    /* RMSLE: actual=[e,e^2] (e=2.71828...), predicted=[1,1] -> log(actual)=[1,2],
+       log(predicted)=[0,0] -> errors [1,2] -> sqrt(mean(1,4)) = sqrt(2.5) */
+    Mat a4 = mat_lit(2, 1, (mreal)exp(1.0), (mreal)exp(2.0));
+    Mat p4 = mat_lit(2, 1, 1.0f, 1.0f);
+    CHECK(stats_rmsle(a4, p4), (mreal)sqrt(2.5));
+    mat_free(a4); mat_free(p4);
+
+    /* Huber: e=[0.5,-0.5,0,-1], delta=0.75 -> two |e|<=delta (quadratic),
+       two |e|>delta (linear): 0.5*0.25 + 0.5*0.25 + 0 + 0.75*(1-0.375)
+       = 0.125+0.125+0+0.46875 = 0.71875, mean over 4 = 0.1796875 */
+    Mat a5 = mat_lit(4, 1, 3.0f, -0.5f, 2.0f, 7.0f);
+    Mat p5 = mat_lit(4, 1, 2.5f, 0.0f, 2.0f, 8.0f);
+    CHECK(stats_huber_loss(a5, p5, 0.75f), 0.1796875f);
+    mat_free(a5); mat_free(p5);
+
+    /* median: even count averages the two middle values, odd count picks
+       the exact middle of the sorted order (not the storage order) */
+    Mat odd = mat_lit(5, 1, 5.0f, 1.0f, 3.0f, 2.0f, 4.0f);
+    CHECK(stats_median(odd), 3.0f);
+    mat_free(odd);
+    Mat even = mat_lit(4, 1, 5.0f, 1.0f, 3.0f, 2.0f);
+    CHECK(stats_median(even), 2.5f); /* sorted [1,2,3,5] -> (2+3)/2 */
+    mat_free(even);
+
+    /* rank: [10,20,10,30] -> the two 10s tie for ranks 1,2 -> average 1.5
+       each; 20 is rank 3; 30 is rank 4 */
+    Mat rv = mat_lit(4, 1, 10.0f, 20.0f, 10.0f, 30.0f);
+    Mat rk = stats_rank(rv);
+    CHECK(AT(rk, 0, 0), 1.5f);
+    CHECK(AT(rk, 1, 0), 3.0f);
+    CHECK(AT(rk, 2, 0), 1.5f);
+    CHECK(AT(rk, 3, 0), 4.0f);
+    mat_free(rv); mat_free(rk);
+
+    /* Spearman: y is a monotonic (but nonlinear) transform of x, so rho
+       must be exactly 1 even though Pearson corr on the raw values is not */
+    Mat sx = mat_lit(5, 1, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f);
+    Mat sy = mat_lit(5, 1, 1.0f, 8.0f, 27.0f, 64.0f, 125.0f); /* x^3 */
+    CHECK(stats_spearman(sx, sy), 1.0f);
+    assert(stats_corr(sx, sy) < 0.99f); /* Pearson sees the nonlinearity */
+    mat_free(sx); mat_free(sy);
+}
+
+/* every prediction-quality function must see through a non-contiguous
+   view, the same property test_views checks for the descriptive stats */
+static void test_pred_views(void) {
+    puts("prediction-quality metrics: views (stride != c)");
+    srand(46);
+
+    Mat parent_a = mat_new(10, 4);
+    Mat parent_p = mat_new(10, 4);
+    for (int i = 0; i < 40; i++) {
+        parent_a.d[i] = (mreal)(1000 + rand() % 5000) / 10.0f; /* strictly positive, for rmsle/mape */
+        parent_p.d[i] = (mreal)(1000 + rand() % 5000) / 10.0f;
+    }
+    Mat va = mat_slice(parent_a, 1, 9, 1, 3), vp = mat_slice(parent_p, 1, 9, 1, 3);
+    assert(va.stride != va.c);
+    Mat wa = mat_copy(va), wp = mat_copy(vp);
+
+    CHECK(stats_mae(va, vp), stats_mae(wa, wp));
+    CHECK(stats_mse(va, vp), stats_mse(wa, wp));
+    CHECK(stats_rmse(va, vp), stats_rmse(wa, wp));
+    CHECK(stats_medae(va, vp), stats_medae(wa, wp));
+    CHECK(stats_mape(va, vp), stats_mape(wa, wp));
+    CHECK(stats_rmsle(va, vp), stats_rmsle(wa, wp));
+    CHECK(stats_r2(va, vp), stats_r2(wa, wp));
+    CHECK(stats_huber_loss(va, vp, 50.0f), stats_huber_loss(wa, wp, 50.0f));
+    CHECK(stats_median(va), stats_median(wa));
+    Mat rva = stats_rank(va), rwa = stats_rank(wa);
+    for (int i = 0; i < va.r * va.c; i++) CHECK(rva.d[i], rwa.d[i]);
+    CHECK(stats_spearman(va, vp), stats_spearman(wa, wp));
+
+    mat_free(parent_a); mat_free(parent_p); mat_free(wa); mat_free(wp);
+    mat_free(rva); mat_free(rwa);
+}
+
+static void test_pred_invariants(void) {
+    puts("prediction-quality metrics: invariants");
+    srand(47);
+
+    Mat a = mat_new(15, 1), p = mat_new(15, 1);
+    for (int i = 0; i < 15; i++) {
+        a.d[i] = (mreal)(100 + rand() % 400) / 100.0f; /* [1, 5), small enough that
+                                                            float32 roundoff stays
+                                                            well under TOL even
+                                                            after scaling by k below */
+        p.d[i] = (mreal)(100 + rand() % 400) / 100.0f;
+    }
+
+    /* rmse is exactly sqrt(mse) by construction */
+    CHECK(stats_rmse(a, p), (mreal)sqrt((double)stats_mse(a, p)));
+
+    /* perfect predictions: every error metric collapses to its
+       zero/best value */
+    CHECK(stats_mae(a, a), 0.0f);
+    CHECK(stats_mse(a, a), 0.0f);
+    CHECK(stats_medae(a, a), 0.0f);
+    CHECK(stats_mape(a, a), 0.0f);
+    CHECK(stats_rmsle(a, a), 0.0f);
+    CHECK(stats_r2(a, a), 1.0f);
+    CHECK(stats_huber_loss(a, a, 1.0f), 0.0f);
+
+    /* scaling both actual and predicted by the same positive constant
+       scales every absolute-error metric by that constant (MAE/RMSE/
+       MedAE), leaves every scale-free metric unchanged (MAPE/R^2/
+       Spearman), and RMSLE is invariant too (log(kx)-log(kp) = log(x)-log(p)) */
+    mreal k = 3.0f;
+    Mat ka = mat_scale(a, k), kp = mat_scale(p, k);
+    assert(MABS(stats_mae(ka, kp) - k * stats_mae(a, p)) < TOL * (k * stats_mae(a, p) + 1));
+    assert(MABS(stats_rmse(ka, kp) - k * stats_rmse(a, p)) < TOL * (k * stats_rmse(a, p) + 1));
+    assert(MABS(stats_medae(ka, kp) - k * stats_medae(a, p)) < TOL * (k * stats_medae(a, p) + 1));
+    CHECK(stats_mape(ka, kp), stats_mape(a, p));
+    CHECK(stats_r2(ka, kp), stats_r2(a, p));
+    CHECK(stats_rmsle(ka, kp), stats_rmsle(a, p));
+    CHECK(stats_spearman(ka, kp), stats_spearman(a, p));
+    mat_free(ka); mat_free(kp);
+
+    /* Huber with delta larger than every |error| falls entirely in the
+       quadratic branch, so it must equal exactly half of MSE */
+    Mat diff = mat_sub(a, p);
+    Mat absdiff = mat_abs(diff);
+    mreal huge_delta = mat_max(absdiff) * 2 + 1;
+    assert(MABS(stats_huber_loss(a, p, huge_delta) - 0.5f * stats_mse(a, p)) < TOL);
+    mat_free(diff); mat_free(absdiff);
+
+    /* spearman(x,x) = 1, same identity property as stats_corr(x,x) */
+    CHECK(stats_spearman(a, a), 1.0f);
+
+    mat_free(a); mat_free(p);
+}
+
+static void test_pred_adversarial(void) {
+    puts("prediction-quality metrics: adversarial (minimal sizes, ties, badly scaled)");
+
+    /* single pair: every metric collapses to a trivial closed form */
+    Mat a1 = mat_lit(1, 1, 100.0f);
+    Mat p1 = mat_lit(1, 1, 90.0f);
+    CHECK(stats_mae(a1, p1), 10.0f);
+    CHECK(stats_mse(a1, p1), 100.0f);
+    CHECK(stats_median(a1), 100.0f);
+    mat_free(a1); mat_free(p1);
+
+    /* all values identical: median is that value, rank is the same
+       (average) rank for every element */
+    Mat tie = mat_lit(4, 1, 7.0f, 7.0f, 7.0f, 7.0f);
+    CHECK(stats_median(tie), 7.0f);
+    Mat rk = stats_rank(tie);
+    for (int i = 0; i < 4; i++) CHECK(rk.d[i], 2.5f); /* avg of ranks 1..4 */
+    mat_free(tie); mat_free(rk);
+
+    /* badly scaled magnitudes: MAPE/RMSLE/R^2/Spearman stay scale-free */
+    Mat big_a = mat_lit(4, 1, 1e6f, 2e6f, 3e6f, 4e6f);
+    Mat big_p = mat_lit(4, 1, 1.1e6f, 1.9e6f, 3.2e6f, 3.8e6f);
+    mreal mape_big = stats_mape(big_a, big_p);
+    Mat sml_a = mat_scale(big_a, 1e-9f), sml_p = mat_scale(big_p, 1e-9f);
+    CHECK(stats_mape(sml_a, sml_p), mape_big);
+    mat_free(big_a); mat_free(big_p); mat_free(sml_a); mat_free(sml_p);
+}
+
+static void run_pred_ref_comparison(int reps, int nmax) {
+    for (int rep = 0; rep < reps; rep++) {
+        int n = 2 + rand() % nmax;
+        Mat parent_a = mat_new(n, 3), parent_p = mat_new(n, 3);
+        for (int i = 0; i < n * 3; i++) {
+            parent_a.d[i] = (mreal)(1000 + rand() % 90000) / 10.0f; /* strictly positive */
+            parent_p.d[i] = (mreal)(1000 + rand() % 90000) / 10.0f;
+        }
+        /* interior strided view, same as run_ref_comparison's policy */
+        Mat sa = mat_slice(parent_a, 0, n, 1, 2), sp = mat_slice(parent_p, 0, n, 1, 2);
+        assert(sa.stride != sa.c);
+
+        double *ad = (double*)malloc((size_t)n * sizeof *ad);
+        double *pd = (double*)malloc((size_t)n * sizeof *pd);
+        to_dbl(sa, ad); to_dbl(sp, pd);
+
+        assert(MABS(stats_mae(sa, sp) - (mreal)ref_mae(ad, pd, n)) < TOL);
+        assert(MABS(stats_mse(sa, sp) - (mreal)ref_mse(ad, pd, n)) < TOL);
+        assert(MABS(stats_r2(sa, sp) - (mreal)ref_r2(ad, pd, n)) < TOL);
+        assert(MABS(stats_rmsle(sa, sp) - (mreal)ref_rmsle(ad, pd, n)) < TOL);
+        assert(MABS(stats_mape(sa, sp) - (mreal)ref_mape(ad, pd, n)) < TOL);
+        assert(MABS(stats_huber_loss(sa, sp, 500.0f) - (mreal)ref_huber(ad, pd, n, 500.0)) < TOL);
+        assert(MABS(stats_median(sa) - (mreal)ref_median(ad, n)) < TOL);
+
+        double *rref = (double*)malloc((size_t)n * sizeof *rref);
+        ref_rank(ad, n, rref);
+        Mat rk = stats_rank(sa);
+        for (int i = 0; i < n; i++) assert(MABS(rk.d[i] - (mreal)rref[i]) < TOL);
+        mat_free(rk); free(rref);
+
+        free(ad); free(pd);
+        mat_free(parent_a); mat_free(parent_p);
+    }
+}
+
+static void test_pred_vs_reference(void) {
+    puts("prediction-quality metrics: randomized vs independent reference (fixed seed)");
+    srand(48);
+    run_pred_ref_comparison(200, 40);
+}
+
+static void test_pred_stress(void) {
+    if (!getenv("STRESS")) return;
+    puts("  prediction-quality metrics stress");
+    srand(49);
+    run_pred_ref_comparison(400, 300);
+    printf("  400 randomized strided runs (n up to ~300) ok\n");
+}
+
 int main(void) {
     test_known_values();
     test_invariants();
@@ -286,6 +580,12 @@ int main(void) {
     test_adversarial();
     test_vs_reference();
     test_stress();
+    test_pred_known_values();
+    test_pred_views();
+    test_pred_invariants();
+    test_pred_adversarial();
+    test_pred_vs_reference();
+    test_pred_stress();
     puts("test_stats: all passed");
     return 0;
 }

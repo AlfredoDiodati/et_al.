@@ -28,7 +28,7 @@ Activation hidden_act;  /* applied after every layer except the last */
 Activation out_act;     /* applied after the last layer - the model's link function */
 ```
 
-Two concrete `Activation`s exist so far, both in `ad.h`: `ad_tanh` (the hidden default) and `ad_identity` (a true no-op - the "linear output" case, e.g. for a regression-style model where the raw pre-activation value is the prediction, not something squashed into `(-1,1)`). Adding a third (sigmoid, ReLU, ...) is a matter of writing another `Activation`-shaped function next to them and passing it to `mlp_init`/`mlp_fit` - nothing in this file changes.
+Three concrete `Activation`s exist so far, all in `ad.h`: `ad_tanh` (the hidden default), `ad_identity` (a true no-op - the "linear output" case, e.g. for a regression-style model where the raw pre-activation value is the prediction, not something squashed into `(-1,1)`), and `ad_swish` (`x * sigmoid(x)` - unbounded above and non-saturating for strongly negative inputs, unlike `ad_tanh`). Adding a fourth (sigmoid, ReLU, ...) is a matter of writing another `Activation`-shaped function next to them and passing it to `mlp_init`/`mlp_fit` - nothing in this file changes.
 
 `Activation` (and `Criterion`, see below) are declared in `ad.h`, not here, even though `nn/mlp.h` is their first consumer - both are plain Tape/Node-level concepts any future model header needs, and per this project's fit/forecast policy, a model header must not have to include another, unrelated model header just to get a shared type.
 
