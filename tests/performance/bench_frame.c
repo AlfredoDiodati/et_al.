@@ -51,3 +51,45 @@ void c_frame_close(void) {
     if (g_loaded) df_free(&g_df);
     g_loaded = 0;
 }
+
+/* Write-path timing reuses g_df (already loaded by c_frame_load_csv) -
+   same "load once, time the operation alone" split as c_sql_query. */
+void c_csv_write(const char *path) { df_write_csv(&g_df, path, csv_write_options_default()); }
+void c_txt_write(const char *path) { df_write_txt(&g_df, path, txt_write_options_default()); }
+void c_npy_write(const char *path) { df_write_npy(&g_df, path); }
+
+static DataFrame g_mixed_df;
+static int g_mixed_loaded = 0;
+
+/* Builds a numeric+string DataFrame directly in C (the string column is
+   synthetic, generated from the row index) rather than marshalling a
+   string array over ctypes - the point is timing df_write_csv's string
+   code path, not exercising ctypes string-array passing. */
+void c_frame_build_mixed(int n, const mreal *num_col, int n_categories) {
+    if (g_mixed_loaded) df_free(&g_mixed_df);
+    DataFrame df = df_new(n);
+    Vec v = { n, 1, 1, (mreal*)num_col };
+    df_add_numeric_col(&df, "n0", v);
+
+    char **cats = (char**)malloc((size_t)n * sizeof(char*));
+    char buf[32];
+    for (int i = 0; i < n; i++) {
+        snprintf(buf, sizeof buf, "cat_%d", i % n_categories);
+        cats[i] = frame_strdup(buf);
+    }
+    df_add_string_col(&df, "s0", (const char *const *)cats);
+    for (int i = 0; i < n; i++) free(cats[i]);
+    free(cats);
+
+    g_mixed_df = df;
+    g_mixed_loaded = 1;
+}
+
+void c_mixed_write_csv(const char *path) {
+    df_write_csv(&g_mixed_df, path, csv_write_options_default());
+}
+
+void c_mixed_close(void) {
+    if (g_mixed_loaded) df_free(&g_mixed_df);
+    g_mixed_loaded = 0;
+}

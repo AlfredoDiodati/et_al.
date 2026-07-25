@@ -888,45 +888,49 @@ static char *sql_row_key(const DataFrame *df, char *const *cols, int n_cols, int
     return buf;
 }
 
-/* Stable insertion sort of (key, row) pairs by key, then a single pass
-   collects each run of equal keys into one group. Insertion sort rather
-   than qsort: qsort's comparator has no portable way to carry the
-   "which columns, in what order" context short of a nonstandard
-   qsort_r or a fragile static-global workaround - row/group counts here
-   are the same modest econometrics-panel scale as the rest of frame/,
-   so O(n^2) costs nothing in practice. */
+/* Sort (key, row) pairs by key with qsort, then a single pass collects
+   each run of equal keys into one group. This used to be a hand-rolled
+   insertion sort, on the reasoning that qsort's comparator has no
+   portable way to carry the "which columns, in what order" context
+   short of a nonstandard qsort_r - that reasoning doesn't actually apply
+   here: the key for every row is built once, up front, into a plain
+   string before any comparison happens, so the comparator below needs
+   nothing beyond the two SqlKeyOrder elements it's given. Measured via
+   tests/performance/bench_frame.py: the insertion sort's O(n^2) cost was
+   real, not "nothing in practice" - a GROUP BY at n=30,000 took ~40x
+   longer than at n=10,000 (matching the O(n^2) exponent, not O(n log n)
+   scaling). qsort is not required to be stable, but within-group row
+   order genuinely doesn't matter here: SUM/AVG/MIN/MAX/COUNT are all
+   order-independent, and every group-producing query in this codebase
+   pairs GROUP BY with an explicit ORDER BY to pin down final row order
+   regardless (see docs/SQL_DOCUMENTATION.md). */
+typedef struct { char *key; int order; } SqlKeyOrder;
+static int sql_cmp_key_order(const void *a, const void *b) {
+    return strcmp(((const SqlKeyOrder*)a)->key, ((const SqlKeyOrder*)b)->key);
+}
 static SqlGroup *sql_build_groups(const DataFrame *df, char *const *group_cols, int n_group_cols, int *n_groups_out) {
     int n = df->r;
-    char **keys = (char**)malloc((size_t)n * sizeof(char*));
-    int *order = (int*)malloc((size_t)n * sizeof(int));
-    for (int i = 0; i < n; i++) { keys[i] = sql_row_key(df, group_cols, n_group_cols, i); order[i] = i; }
+    SqlKeyOrder *ko = (SqlKeyOrder*)malloc((size_t)n * sizeof(SqlKeyOrder));
+    for (int i = 0; i < n; i++) { ko[i].key = sql_row_key(df, group_cols, n_group_cols, i); ko[i].order = i; }
 
-    for (int i = 1; i < n; i++) {
-        char *k = keys[i]; int o = order[i];
-        int j = i - 1;
-        while (j >= 0 && strcmp(keys[j], k) > 0) {
-            keys[j + 1] = keys[j]; order[j + 1] = order[j];
-            j--;
-        }
-        keys[j + 1] = k; order[j + 1] = o;
-    }
+    qsort(ko, (size_t)n, sizeof(SqlKeyOrder), sql_cmp_key_order);
 
     SqlGroup *groups = NULL; int n_groups = 0, cap = 0;
     int i = 0;
     while (i < n) {
         int j = i;
-        while (j < n && strcmp(keys[j], keys[i]) == 0) j++;
+        while (j < n && strcmp(ko[j].key, ko[i].key) == 0) j++;
         if (n_groups == cap) { cap = cap ? cap * 2 : 4; groups = (SqlGroup*)realloc(groups, (size_t)cap * sizeof(SqlGroup)); }
         int cnt = j - i;
         groups[n_groups].rows = (int*)malloc((size_t)cnt * sizeof(int));
-        for (int k = 0; k < cnt; k++) groups[n_groups].rows[k] = order[i + k];
+        for (int k = 0; k < cnt; k++) groups[n_groups].rows[k] = ko[i + k].order;
         groups[n_groups].n = cnt;
         n_groups++;
         i = j;
     }
 
-    for (int k = 0; k < n; k++) free(keys[k]);
-    free(keys); free(order);
+    for (int k = 0; k < n; k++) free(ko[k].key);
+    free(ko);
     *n_groups_out = n_groups;
     return groups;
 }
@@ -1062,20 +1066,239 @@ static DataFrame sql_project(const SqlQuery *q, const DataFrame *df) {
    qsort comparator without a nonstandard extension or a fragile
    global). --- */
 
-static int sql_compare_rows(const DataFrame *df, char *const *cols, const int *desc, int n_keys, int a, int b) {
+/* One ORDER BY key, resolved once before sorting starts rather than by
+   name on every comparison - see sql_resolve_sort_keys/sql_order_
+   permutation below for why. */
+typedef struct { int is_string; int desc; Mat num; char *const *str; } SqlSortKey;
+
+/* Resolves every ORDER BY column's type/data once, up front - the column-
+   name -> index/type lookup (df_col_type/df_col_string/df_col_numeric,
+   each a linear scan over df->columns comparing names) no longer happens
+   per comparison. */
+static void sql_resolve_sort_keys(const DataFrame *df, char *const *cols, const int *desc,
+                                   int n_keys, SqlSortKey *keys) {
+    for (int k = 0; k < n_keys; k++) {
+        keys[k].desc = desc[k];
+        if (df_col_type(df, cols[k]) == COL_STRING) {
+            keys[k].is_string = 1;
+            keys[k].str = df_col_string(df, cols[k]);
+        } else {
+            keys[k].is_string = 0;
+            keys[k].num = df_col_numeric(df, cols[k]);
+        }
+    }
+}
+
+static int sql_compare_rows(const SqlSortKey *keys, int n_keys, int a, int b) {
     for (int k = 0; k < n_keys; k++) {
         int cmp;
-        if (df_col_type(df, cols[k]) == COL_STRING) {
-            cmp = strcmp(df_col_string(df, cols[k])[a], df_col_string(df, cols[k])[b]);
+        if (keys[k].is_string) {
+            cmp = strcmp(keys[k].str[a], keys[k].str[b]);
         } else {
-            mreal av = AT(df_col_numeric(df, cols[k]), a, 0);
-            mreal bv = AT(df_col_numeric(df, cols[k]), b, 0);
+            mreal av = AT(keys[k].num, a, 0);
+            mreal bv = AT(keys[k].num, b, 0);
             cmp = (av > bv) - (av < bv);
         }
-        if (desc[k]) cmp = -cmp;
+        if (keys[k].desc) cmp = -cmp;
         if (cmp != 0) return cmp;
     }
     return 0;
+}
+
+/* sql_compare_rows plus an index tiebreak: when every key ties, compare
+   the original row indices directly. A smaller original index is, by
+   definition, the one that came first - so this makes an *unstable*
+   partitioning algorithm land on exactly the same final order a stable
+   one would, without the algorithm itself needing to be stable. This is
+   what lets the code below use quicksort (in-place, no extra buffer,
+   better cache behavior than a merge sort's copy-back) while keeping the
+   same "ties preserve original row order" guarantee test_sql.c's
+   stability test checks for. */
+static inline int sql_cmp_order(const SqlSortKey *keys, int n_keys, int a, int b) {
+    int cmp = sql_compare_rows(keys, n_keys, a, b);
+    return cmp != 0 ? cmp : (a > b) - (a < b);
+}
+
+static inline void sql_swap_int(int *a, int *b) { int t = *a; *a = *b; *b = t; }
+
+/* Below this many elements, quicksort's own overhead (recursion, pivot
+   selection) costs more than a plain insertion sort's - the standard
+   quicksort/insertion-sort hybrid every serious general-purpose sort
+   uses (this project's own stats_quickselect and mat.h's small-size
+   considerations follow the same idea). */
+#define SQL_SORT_CUTOFF 24
+
+static void sql_insertion_sort_order(const SqlSortKey *keys, int n_keys, int *order, int lo, int hi) {
+    for (int i = lo + 1; i <= hi; i++) {
+        int cur = order[i];
+        int j = i - 1;
+        while (j >= lo && sql_cmp_order(keys, n_keys, order[j], cur) > 0) {
+            order[j + 1] = order[j];
+            j--;
+        }
+        order[j + 1] = cur;
+    }
+}
+
+/* Median-of-three Lomuto partition - the same deterministic defense
+   against quicksort's O(n^2) worst case on already-sorted/reverse-sorted
+   input that stats.h's stats_quickselect uses (median-of-three rather
+   than a random pivot, deliberately: no dependency on libc's global
+   rand() state - see that function's own comment for why that matters
+   in this codebase). */
+static int sql_partition_order(const SqlSortKey *keys, int n_keys, int *order, int lo, int hi) {
+    int mid = lo + (hi - lo) / 2;
+    if (sql_cmp_order(keys, n_keys, order[lo], order[mid]) > 0) sql_swap_int(&order[lo], &order[mid]);
+    if (sql_cmp_order(keys, n_keys, order[mid], order[hi]) > 0) sql_swap_int(&order[mid], &order[hi]);
+    if (sql_cmp_order(keys, n_keys, order[lo], order[mid]) > 0) sql_swap_int(&order[lo], &order[mid]);
+    sql_swap_int(&order[mid], &order[hi]);
+    int pivot = order[hi];
+    int i = lo;
+    for (int j = lo; j < hi; j++)
+        if (sql_cmp_order(keys, n_keys, order[j], pivot) <= 0) { sql_swap_int(&order[i], &order[j]); i++; }
+    sql_swap_int(&order[i], &order[hi]);
+    return i;
+}
+
+/* Quicksort over order[lo:hi] in place - recurses into the smaller side
+   and loops into the larger, bounding the call stack to O(log n)
+   regardless of which side each partition happens to favor. */
+static void sql_quicksort_order(const SqlSortKey *keys, int n_keys, int *order, int lo, int hi) {
+    while (hi - lo + 1 > SQL_SORT_CUTOFF) {
+        int p = sql_partition_order(keys, n_keys, order, lo, hi);
+        if (p - lo < hi - p) { sql_quicksort_order(keys, n_keys, order, lo, p - 1); lo = p + 1; }
+        else                 { sql_quicksort_order(keys, n_keys, order, p + 1, hi); hi = p - 1; }
+    }
+    sql_insertion_sort_order(keys, n_keys, order, lo, hi);
+}
+
+/* Single-numeric-key ORDER BY fast path - by far the common shape (one
+   numeric column, e.g. "ORDER BY gdp") - sorts flat (key, original row
+   index) pairs directly instead of an order[] index array plus a
+   separate AT(Mat, order[i], 0) lookup per comparison: every compare and
+   swap touches one contiguous pair, not order[i] chased through an extra
+   indirection into the column. Same idx-tiebreak trick as sql_cmp_order,
+   same median-of-three quicksort shape, just specialized to avoid the
+   SqlSortKey/multi-key machinery entirely when there's only one numeric
+   key to sort by. */
+typedef struct { mreal key; int idx; } SqlNumPair;
+
+static inline void sql_swap_pair(SqlNumPair *a, SqlNumPair *b) { SqlNumPair t = *a; *a = *b; *b = t; }
+
+static inline int sql_cmp_pair(SqlNumPair a, SqlNumPair b, int desc) {
+    int cmp = (a.key > b.key) - (a.key < b.key);
+    if (desc) cmp = -cmp;
+    return cmp != 0 ? cmp : (a.idx > b.idx) - (a.idx < b.idx);
+}
+
+static void sql_insertion_sort_pairs(SqlNumPair *a, int lo, int hi, int desc) {
+    for (int i = lo + 1; i <= hi; i++) {
+        SqlNumPair cur = a[i];
+        int j = i - 1;
+        while (j >= lo && sql_cmp_pair(a[j], cur, desc) > 0) {
+            a[j + 1] = a[j];
+            j--;
+        }
+        a[j + 1] = cur;
+    }
+}
+
+static int sql_partition_pairs(SqlNumPair *a, int lo, int hi, int desc) {
+    int mid = lo + (hi - lo) / 2;
+    if (sql_cmp_pair(a[lo], a[mid], desc) > 0) sql_swap_pair(&a[lo], &a[mid]);
+    if (sql_cmp_pair(a[mid], a[hi], desc) > 0) sql_swap_pair(&a[mid], &a[hi]);
+    if (sql_cmp_pair(a[lo], a[mid], desc) > 0) sql_swap_pair(&a[lo], &a[mid]);
+    sql_swap_pair(&a[mid], &a[hi]);
+    SqlNumPair pivot = a[hi];
+    int i = lo;
+    for (int j = lo; j < hi; j++)
+        if (sql_cmp_pair(a[j], pivot, desc) <= 0) { sql_swap_pair(&a[i], &a[j]); i++; }
+    sql_swap_pair(&a[i], &a[hi]);
+    return i;
+}
+
+static void sql_quicksort_pairs(SqlNumPair *a, int lo, int hi, int desc) {
+    while (hi - lo + 1 > SQL_SORT_CUTOFF) {
+        int p = sql_partition_pairs(a, lo, hi, desc);
+        if (p - lo < hi - p) { sql_quicksort_pairs(a, lo, p - 1, desc); lo = p + 1; }
+        else                 { sql_quicksort_pairs(a, p + 1, hi, desc); hi = p - 1; }
+    }
+    sql_insertion_sort_pairs(a, lo, hi, desc);
+}
+
+/* Reinterprets an mreal's IEEE754 bits as an unsigned integer whose plain
+   unsigned ordering exactly matches the float's numeric ordering - the
+   standard "flip trick" for radix-sorting floating point (see e.g.
+   Michael Herf's "Radix Tricks" - a well-established technique, not
+   invented here): a negative value has its sign bit set, so flipping
+   every bit both reverses its otherwise-backwards raw-bit ordering and
+   pushes it below every non-negative value, which only has its sign bit
+   flipped (0 -> 1) to sit above them. Complementing the whole result
+   (~u) exactly reverses that ordering, so sorting ascending by ~key for
+   desc rows is the same as sorting descending by key - including on
+   ties, since equal keys produce equal ~keys too, so DESC still resolves
+   ties by original row order the same way ASC does (no separate
+   after-the-fact reversal, which would get tie order backwards). */
+#ifdef MAT_DOUBLE
+typedef uint64_t SqlURadix;
+#else
+typedef uint32_t SqlURadix;
+#endif
+
+static inline SqlURadix sql_radix_key(mreal x, int desc) {
+    SqlURadix u;
+    memcpy(&u, &x, sizeof(u));
+    SqlURadix top = (SqlURadix)1 << (sizeof(SqlURadix) * 8 - 1);
+    SqlURadix mask = (u & top) ? (SqlURadix)~(SqlURadix)0 : top;
+    u ^= mask;
+    return desc ? ~u : u;
+}
+
+/* LSD radix sort of (key, row index) pairs, one byte of sql_radix_key at
+   a time from least to most significant - O(n) per byte pass (a stable
+   counting sort), O(n) overall for a fixed-width key instead of a
+   comparison sort's O(n log n). Measured via tests/performance/
+   bench_frame.py and a standalone comparison against raw NumPy
+   array.sort(): sql_quicksort_pairs above was 13-21x slower than NumPy's
+   sort at n=100,000/1,000,000 despite matching its O(n log n) complexity
+   class - a SIMD-vectorized, cache-tuned comparison sort's constant
+   factor versus a scalar one, not something closable by tuning the
+   comparison sort further. A fixed-width numeric key sidesteps the
+   comparison-sort lower bound entirely. Every pass is a stable counting
+   sort, so the whole sort is stable by construction (equal keys keep
+   their original relative order) - no idx-tiebreak needed here, unlike
+   sql_quicksort_pairs/_order above. Also immune to quicksort's classic
+   already-sorted/reverse-sorted worst case: every pass costs the same
+   regardless of input order. Used above SQL_RADIX_MIN_N; below that, the
+   fixed cost of a full counting pass over the whole array for every byte
+   of the key (4 passes for float, 8 for double) costs more than
+   sql_quicksort_pairs' comparison sort does. */
+#define SQL_RADIX_MIN_N 512
+#define SQL_RADIX_BUCKETS 256
+
+static void sql_radix_sort_pairs(SqlNumPair *a, int n, int desc) {
+    SqlNumPair *tmp = (SqlNumPair*)malloc((size_t)n * sizeof(SqlNumPair));
+    SqlNumPair *src = a, *dst = tmp;
+    int count[SQL_RADIX_BUCKETS];
+
+    for (size_t byte = 0; byte < sizeof(SqlURadix); byte++) {
+        int shift = (int)byte * 8;
+        memset(count, 0, sizeof(count));
+        for (int i = 0; i < n; i++)
+            count[(sql_radix_key(src[i].key, desc) >> shift) & 0xFF]++;
+        int total = 0;
+        for (int b = 0; b < SQL_RADIX_BUCKETS; b++) { int c = count[b]; count[b] = total; total += c; }
+        for (int i = 0; i < n; i++) {
+            unsigned b = (unsigned)((sql_radix_key(src[i].key, desc) >> shift) & 0xFF);
+            dst[count[b]++] = src[i];
+        }
+        SqlNumPair *t = src; src = dst; dst = t;
+    }
+    /* sizeof(SqlURadix) is always even (4 for float, 8 for double), so
+       src/dst have swapped back to their starting roles - the sorted
+       result is always already in a itself, never in tmp. */
+    assert(src == a);
+    free(tmp);
 }
 
 /* Computes the sort permutation against key_source rather than sorting a
@@ -1086,21 +1309,55 @@ static int sql_compare_rows(const DataFrame *df, char *const *cols, const int *d
    GROUP BY/aggregate query, ORDER BY can only sensibly reference the
    grouped result's own columns/aliases (the source rows no longer
    correspond 1:1 to output rows), so df_sql passes the grouped result
-   itself as key_source in that case instead. */
+   itself as key_source in that case instead.
+
+   Three fixes stacked on top of each other here, in the order they were
+   found (see docs/SQL_DOCUMENTATION.md / docs/FRAME_DOCUMENTATION.md's
+   Benchmark results for the full measured history):
+   1. O(n^2) hand-rolled insertion sort -> O(n log n) stable merge sort -
+      306x/1500x slower than pandas at n=10,000/30,000 (confirmed
+      quadratic), the single largest gap found in this project's entire
+      benchmark suite.
+   2. sql_compare_rows re-resolving every ORDER BY column by name (a
+      linear scan over df->columns) on *every comparison* instead of
+      once - fixed by sql_resolve_sort_keys, still used below.
+   3. The merge sort itself - an extra tmp buffer and a copy-back pass at
+      every merge level, plus chasing order[i] through an
+      AT(Mat, order[i], 0) indirection on every comparison. Replaced with
+      the in-place quicksort above (median-of-three pivot, insertion-sort
+      cutoff for small runs, idx-tiebreak instead of relying on
+      algorithmic stability) and, for the common single-numeric-key case,
+      the tighter sql_quicksort_pairs fast path that sorts flat (key, idx)
+      pairs with no external Mat lookup or SqlSortKey indirection at all.
+   4. sql_quicksort_pairs is still a comparison sort, O(n log n) with a
+      scalar (non-SIMD) constant factor - 13-21x slower than NumPy's
+      array.sort() at n=100,000/1,000,000 despite matching its complexity
+      class. Above SQL_RADIX_MIN_N, sql_radix_sort_pairs (see its own
+      comment) sorts the same single-numeric-key case in O(n) instead,
+      sidestepping the comparison-sort lower bound entirely - the fixed-
+      width numeric key makes that possible in a way the general
+      multi-key/string path below can't use. */
 static int *sql_order_permutation(const SqlQuery *q, const DataFrame *key_source) {
     int n = key_source->r;
     int *order = (int*)malloc((size_t)n * sizeof(int));
     for (int i = 0; i < n; i++) order[i] = i;
+    if (n <= 1) return order;
 
-    for (int i = 1; i < n; i++) {
-        int cur = order[i];
-        int j = i - 1;
-        while (j >= 0 && sql_compare_rows(key_source, q->order_by, q->order_desc, q->n_order_by, order[j], cur) > 0) {
-            order[j + 1] = order[j];
-            j--;
-        }
-        order[j + 1] = cur;
+    if (q->n_order_by == 1 && df_col_type(key_source, q->order_by[0]) != COL_STRING) {
+        SqlNumPair *pairs = (SqlNumPair*)malloc((size_t)n * sizeof(SqlNumPair));
+        Mat col = df_col_numeric(key_source, q->order_by[0]);
+        for (int i = 0; i < n; i++) { pairs[i].key = AT(col, i, 0); pairs[i].idx = i; }
+        if (n >= SQL_RADIX_MIN_N) sql_radix_sort_pairs(pairs, n, q->order_desc[0]);
+        else                      sql_quicksort_pairs(pairs, 0, n - 1, q->order_desc[0]);
+        for (int i = 0; i < n; i++) order[i] = pairs[i].idx;
+        free(pairs);
+        return order;
     }
+
+    SqlSortKey *keys = (SqlSortKey*)malloc((size_t)q->n_order_by * sizeof(SqlSortKey));
+    sql_resolve_sort_keys(key_source, q->order_by, q->order_desc, q->n_order_by, keys);
+    sql_quicksort_order(keys, q->n_order_by, order, 0, n - 1);
+    free(keys);
     return order;
 }
 

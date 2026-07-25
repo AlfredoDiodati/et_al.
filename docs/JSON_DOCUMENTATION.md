@@ -93,6 +93,10 @@ Fixed cases cover: a known hand-written document (nested object/array/bool/null)
 
 Under `STRESS=1`, `test_random_roundtrip_stress` generates 200 random JSON trees (fixed seed `42`, depth capped at 4) and round-trips each — per this project's testing policy of fixing the seed for reproducibility while biasing generation toward fragile regions rather than uniform noise: numbers deliberately include zero, negative, fractional, and very large/small (`1e300`/`1e-300`) magnitudes; strings are built from a pool weighted toward characters that need escaping (`"`, `\`, newline, tab, CR, and raw control bytes `\x01`/`\x1f`) rather than plain alphanumeric text. Verified clean under ASan/UBSan (default and stress) given how much manual `malloc`/`realloc`/`free` this file's tokenizer and tree-builder do.
 
+## Benchmark results
+
+`tests/performance/bench_json.py` (wrapper in `bench_json.c`: `json_parse`/`json_free` timed alone, `json_write` timed alone against an already-parsed tree - the same "load once, time the operation alone" split `bench_frame.c` uses for its SQL query benchmark) vs Python's built-in `json` module (`json.loads`/`json.dumps`, itself a C-accelerated parser/encoder - a fair, natural comparison point, same reasoning as `bench_random.py` vs `numpy.random.Generator`). Two shapes at two sizes each: a flat array of numbers, and an array of small record objects (id/name/value/active), landing near ~1e3 and ~1e5 total scalar values. Measured: `json_parse` is roughly at parity with `json.loads` (0.92x-1.36x its time - occasionally a bit behind, once effectively tied), `json_write` is consistently a bit ahead of `json.dumps` (0.78x-0.95x its time). Neither direction is a large win or loss either way - unsurprising, since both sides are hand-written C parsers/encoders doing broadly similar work, not a hand-rolled-C-vs-interpreted-Python comparison the way some of this project's other benchmarks are.
+
 ## Known limitations and future work
 
 - No streaming parser — the whole document is read into memory first (`json_parse_file` via a whole-file read), same tradeoff `frame/csv.h`/`frame/txt.h` make.

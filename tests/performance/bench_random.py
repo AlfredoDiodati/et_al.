@@ -21,7 +21,6 @@ for f in (lib.c_fill_uniform, lib.c_fill_normal, lib.c_fill_gamma):
     f.restype = None
 
 REPEATS = 3
-N = 1_000_000
 
 
 def ptr(a):
@@ -43,27 +42,29 @@ def bench(fn):
     return best
 
 
-out = np.zeros(N, dtype=np.float64)
 rng = np.random.default_rng(42)
 
-print(f"\nBulk draw throughput, n = {N} doubles per call (Mdraws/s, higher is better)")
-print(f"{'variate':>12}  {'ours ms':>9}  {'np ms':>9}  {'ours Md/s':>10}  {'np Md/s':>10}  {'mean check':>11}")
-print("-" * 70)
+print("\nBulk draw throughput by n (Mdraws/s, higher is better) - small n exposes")
+print("per-call/loop-setup overhead that's invisible at the original n=1e6 point")
+print(f"{'variate / n':>16}  {'ours ms':>9}  {'np ms':>9}  {'ours Md/s':>10}  {'np Md/s':>10}  {'mean check':>11}")
+print("-" * 75)
 
-cases = [
-    ("uniform", lambda: lib.c_fill_uniform(7, N, ptr(out)),
-     lambda: rng.random(N), 0.5),
-    ("normal", lambda: lib.c_fill_normal(7, N, ptr(out)),
-     lambda: rng.standard_normal(N), 0.0),
-    ("gamma k=2.5", lambda: lib.c_fill_gamma(7, 2.5, N, ptr(out)),
-     lambda: rng.gamma(2.5, 1.0, N), 2.5),
-    ("gamma k=0.5", lambda: lib.c_fill_gamma(7, 0.5, N, ptr(out)),
-     lambda: rng.gamma(0.5, 1.0, N), 0.5),
-]
-for name, ours_fn, np_fn, mean in cases:
-    ours_fn()
-    err = abs(float(out.mean()) - mean)
-    ours = bench(ours_fn)
-    npms = bench(np_fn)
-    print(f"{name:>12}  {ours:>9.3f}  {npms:>9.3f}  {N / ours / 1000:>10.1f}  "
-          f"{N / npms / 1000:>10.1f}  {err:>11.2e}")
+for n in [1_000, 100_000, 1_000_000]:
+    out = np.zeros(n, dtype=np.float64)
+    cases = [
+        ("uniform", lambda n=n, out=out: lib.c_fill_uniform(7, n, ptr(out)),
+         lambda n=n: rng.random(n), 0.5),
+        ("normal", lambda n=n, out=out: lib.c_fill_normal(7, n, ptr(out)),
+         lambda n=n: rng.standard_normal(n), 0.0),
+        ("gamma k=2.5", lambda n=n, out=out: lib.c_fill_gamma(7, 2.5, n, ptr(out)),
+         lambda n=n: rng.gamma(2.5, 1.0, n), 2.5),
+        ("gamma k=0.5", lambda n=n, out=out: lib.c_fill_gamma(7, 0.5, n, ptr(out)),
+         lambda n=n: rng.gamma(0.5, 1.0, n), 0.5),
+    ]
+    for name, ours_fn, np_fn, mean in cases:
+        ours_fn()
+        err = abs(float(out.mean()) - mean)
+        ours = bench(ours_fn)
+        npms = bench(np_fn)
+        print(f"{name + ' ' + str(n):>16}  {ours:>9.3f}  {npms:>9.3f}  {n / ours / 1000:>10.1f}  "
+              f"{n / npms / 1000:>10.1f}  {err:>11.2e}")

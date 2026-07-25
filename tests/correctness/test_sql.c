@@ -642,6 +642,115 @@ static void test_random_order_by_stress(void) {
     printf("  200 random multi-key ORDER BY queries matched an independent reference sort\n");
 }
 
+/* Single-key reference comparator with an explicit idx tiebreak (a - b,
+   same trick sql_radix_sort_pairs/sql_quicksort_pairs use internally) -
+   deterministic regardless of qsort's own stability, so it's a valid
+   independent check for either algorithm's output. */
+static Mat g_ref_single;
+static int g_ref_single_desc;
+
+static int ref_single_key_cmp(const void *pa, const void *pb) {
+    int a = *(const int*)pa, b = *(const int*)pb;
+    mreal av = AT(g_ref_single, a, 0), bv = AT(g_ref_single, b, 0);
+    if (av != bv) { int c = (av < bv) ? -1 : 1; return g_ref_single_desc ? -c : c; }
+    return a - b;
+}
+
+/* random_panel_for_sql's own column generation (fragile-biased x, a
+   heavy-duplicate small-integer k), just with n forced comfortably above
+   SQL_RADIX_MIN_N (frame/sql.h) so this test actually exercises
+   sql_radix_sort_pairs - none of the other ORDER BY tests in this file
+   do, since random_panel_for_sql's own n never gets anywhere near that
+   threshold. */
+static DataFrame random_panel_for_radix(int n) {
+    DataFrame df = df_new(n);
+    Vec x = mat_new(n, 1);
+    Vec k = mat_new(n, 1);
+    Vec id = mat_new(n, 1);
+    for (int i = 0; i < n; i++) {
+        switch (rand() % 5) {
+            case 0: x.d[i] = 0; break;
+            case 1: x.d[i] = -((mreal)(rand() % 100000)) / 7; break;
+            case 2: x.d[i] = ((mreal)(rand() % 100000)) / 3; break;
+            case 3: x.d[i] = (mreal)(rand() % 2 ? 1 : -1) * (mreal)1e6; break;
+            default: x.d[i] = (mreal)1e-6; break;
+        }
+        k.d[i] = (mreal)(rand() % 7 - 3); /* heavy ties: only 7 distinct values */
+        id.d[i] = (mreal)i;
+    }
+    df_add_numeric_col(&df, "x", x);
+    df_add_numeric_col(&df, "k", k);
+    df_add_numeric_col(&df, "id", id);
+    mat_free(x); mat_free(k); mat_free(id);
+    return df;
+}
+
+static void check_order_by_radix(DataFrame *df, const char *col, int desc) {
+    int n = df->r;
+    char query[64];
+    snprintf(query, sizeof query, "SELECT id FROM df ORDER BY %s %s", col, desc ? "DESC" : "ASC");
+    DataFrame r = df_sql(df, query);
+
+    g_ref_single = df_col_numeric(df, col);
+    g_ref_single_desc = desc;
+    int *order = (int*)malloc((size_t)n * sizeof(int));
+    for (int i = 0; i < n; i++) order[i] = i;
+    qsort(order, (size_t)n, sizeof(int), ref_single_key_cmp);
+
+    assert(r.r == n);
+    for (int i = 0; i < n; i++) CHECK(AT(df_col_numeric(&r, "id"), i, 0), (mreal)order[i]);
+
+    free(order);
+    df_free(&r);
+}
+
+static void test_order_by_radix_path(void) {
+    puts("single-numeric-key ORDER BY at n >= SQL_RADIX_MIN_N vs. an independent reference sort (exercises sql_radix_sort_pairs specifically)");
+    srand(61);
+
+    /* continuous column (x: mixed sign, zero, tiny, large), both directions */
+    {
+        DataFrame df = random_panel_for_radix(SQL_RADIX_MIN_N + 137);
+        check_order_by_radix(&df, "x", 0);
+        check_order_by_radix(&df, "x", 1);
+        df_free(&df);
+    }
+    /* small-integer column (k: only 7 distinct values) - heavy ties, the
+       case that actually exercises stability, both directions */
+    {
+        DataFrame df = random_panel_for_radix(SQL_RADIX_MIN_N + 251);
+        check_order_by_radix(&df, "k", 0);
+        check_order_by_radix(&df, "k", 1);
+        df_free(&df);
+    }
+    /* adversarial: every value identical - the extreme case of the tie
+       test above, and never exercised anywhere else in this file */
+    {
+        DataFrame df = df_new(SQL_RADIX_MIN_N + 10);
+        Vec x = mat_new(df.r, 1), id = mat_new(df.r, 1);
+        for (int i = 0; i < df.r; i++) { x.d[i] = 7.5f; id.d[i] = (mreal)i; }
+        df_add_numeric_col(&df, "x", x);
+        df_add_numeric_col(&df, "id", id);
+        mat_free(x); mat_free(id);
+        DataFrame r = df_sql(&df, "SELECT id FROM df ORDER BY x");
+        assert(r.r == df.r);
+        for (int i = 0; i < r.r; i++) CHECK(AT(df_col_numeric(&r, "id"), i, 0), (mreal)i); /* all-tied: original order preserved exactly */
+        df_free(&r); df_free(&df);
+    }
+}
+
+static void test_random_order_by_radix_stress(void) {
+    puts("  random single-numeric-key ORDER BY at randomized n >= SQL_RADIX_MIN_N vs. an independent reference sort (fixed seed)");
+    srand(62);
+    for (int trial = 0; trial < 30; trial++) {
+        int n = SQL_RADIX_MIN_N + rand() % 5000;
+        DataFrame df = random_panel_for_radix(n);
+        check_order_by_radix(&df, rand() % 2 ? "x" : "k", rand() % 2);
+        df_free(&df);
+    }
+    printf("  30 randomized n/column/direction combinations matched the independent reference\n");
+}
+
 static void test_random_combined_pipeline_stress(void) {
     puts("  random WHERE + GROUP BY + ORDER BY pipeline vs. a full naive reference (fixed seed)");
     srand(52);
@@ -763,6 +872,7 @@ int main(void) {
     test_group_by_multiple_columns();
     test_count_star_no_group_by();
     test_order_by_asc_desc();
+    test_order_by_radix_path();
     test_where_empty_result();
     test_single_row();
     test_order_by_stability_equal_keys();
@@ -782,6 +892,7 @@ int main(void) {
         test_random_arithmetic_projection_stress();
         test_random_group_by_stress();
         test_random_order_by_stress();
+        test_random_order_by_radix_stress();
         test_random_combined_pipeline_stress();
         test_random_sql_try_stress();
     }

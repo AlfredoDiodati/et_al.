@@ -63,6 +63,8 @@ The univariate samplers take the output shape explicitly (it cannot be inferred 
 
 `tests/performance/bench_random.py` (wrappers in `bench_random.c`: bulk-fill loops around the scalar draws, exactly how the `dist/` samplers consume the engine) vs `numpy.random.Generator` at n=1e6 doubles per call - both sides PCG64 bit generators, so this compares variate transforms and loop overhead, not the bit stream. Measured: uniform ~550 vs ~300 Mdraws/s (1.8x ahead - one u64 shift-scale per draw, no buffer management), normal ~115 vs ~100 (the polar method edging NumPy's ziggurat), gamma k=2.5 ~59 vs ~50 and k=0.5 ~31 vs ~23 (same Marsaglia-Tsang algorithm both sides). The "revisit the polar method only if profiling shows it's a bottleneck" note above now has its measurement: it isn't.
 
+The n=1e6 point above hid one thing: a size sweep down to n=1,000/100,000 shows every variate's throughput is lower at n=1,000 than at n=100,000+ (e.g. uniform ~125 Mdraws/s at n=1,000 vs ~450-465 at n=100k/1M) - each `c_fill_*` call reseeds the generator from scratch (`rng_new` inside the wrapper, by design - see `bench_random.c`'s header comment), and that per-call setup cost is amortized over fewer draws at small n. At n=1,000 specifically, `uniform` is the one case where NumPy edges ahead (~156 vs ~125 Mdraws/s) - the only regime in this file where NumPy wins anything - while normal/gamma stay in ours' favor at every size tested. None of this changes the "not a bottleneck" conclusion above; it just shows where the constant-overhead floor is.
+
 ## Known limitations and future work
 
 - No jump-ahead/`rng_advance` (PCG supports O(log n) stream advancing) — trivial to add when something needs non-overlapping substreams beyond what independent `stream` values give.

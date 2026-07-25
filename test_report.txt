@@ -1,0 +1,291 @@
+test run: za 25 jul 2026 16:16:58 CEST
+
+=== build ===
+make: 'tests/correctness/test_mat' is up to date.
+make: 'tests/correctness/test_mat_special' is up to date.
+make: 'tests/correctness/test_decomp' is up to date.
+make: 'tests/correctness/test_solver' is up to date.
+make: 'tests/correctness/test_special' is up to date.
+make: 'tests/correctness/test_stats' is up to date.
+make: 'tests/correctness/test_random' is up to date.
+make: 'tests/correctness/test_broadcast' is up to date.
+make: 'tests/correctness/test_gauss' is up to date.
+make: 'tests/correctness/test_student' is up to date.
+make: 'tests/correctness/test_mvgauss' is up to date.
+make: 'tests/correctness/test_mvstudent' is up to date.
+make: 'tests/correctness/test_ad' is up to date.
+make: 'tests/correctness/test_adam' is up to date.
+make: 'tests/correctness/test_optimizer' is up to date.
+make: 'tests/correctness/test_mlp' is up to date.
+make: 'tests/correctness/test_frame' is up to date.
+make: 'tests/correctness/test_csv' is up to date.
+make: 'tests/correctness/test_txt' is up to date.
+make: 'tests/correctness/test_npy' is up to date.
+make: 'tests/correctness/test_json' is up to date.
+make: 'tests/correctness/test_sql' is up to date.
+
+=== test_mat: PASS ===
+construction
+views
+arithmetic contiguous
+arithmetic strided
+mat_mul
+reductions
+mat_max/mat_min propagate NaN correctly even under -ffast-math
+concatenation
+linear algebra
+  1.0000   2.0000 
+  3.0000   4.0000 
+test_mat: all passed
+
+=== test_mat_special: PASS ===
+--- overflow ---
+exp(200): +inf
+exp(-200): 0
+pow(FLT_MAX,2): +inf
+1e20 * 1e20 (1x1 matmul): +inf
+--- underflow ---
+exp(-200): 0
+pow(FLT_MIN/2, 1): 5.877e-39
+1e-40 (stored): 1e-40
+1e-40 * 1e-40: 0
+--- NaN production ---
+log(-1): NaN
+sqrt(-1): NaN
+0 / 0 (ediv): NaN
+pow(-1, 0.5): NaN
+inf - inf (sub): NaN
+--- infinity production ---
+log(0): -inf
+1 / 0 (ediv): +inf
+exp(200): +inf
+--- NaN propagation ---
+NaN propagation: ok
+--- inf propagation ---
+inf propagation: ok
+
+=== test_decomp: PASS ===
+cholesky
+lu
+qr
+eig_sym
+svd
+det
+inv
+cond/rank
+eig
+test_decomp: all passed
+
+=== test_solver: PASS ===
+vec_solve
+vec_solve_sym
+vec_lu_solve / vec_chol_solve
+mat_lstsq
+mat_lstsq_rd
+test_solver: all passed
+
+=== test_special: PASS ===
+known values
+recurrence psi(x+1) = psi(x) + 1/x
+vs central finite differences of lgamma
+large-x asymptotics
+test_special: all passed
+
+=== test_stats: PASS ===
+known values (hand-computed)
+invariants
+views (stride != c)
+adversarial (scale, near-constant, minimal sizes)
+randomized vs independent reference (fixed seed)
+prediction-quality metrics: known values (hand-computed)
+prediction-quality metrics: views (stride != c)
+prediction-quality metrics: invariants
+prediction-quality metrics: adversarial (minimal sizes, ties, badly scaled)
+prediction-quality metrics: randomized vs independent reference (fixed seed)
+test_stats: all passed
+
+=== test_random: PASS ===
+reproducibility + stream independence
+uniform: range + moments
+normal: first four moments
+gamma: mean/variance across shapes (incl. shape < 1 boost)
+independence: serial autocorrelation + cross-stream/seed correlation
+test_random: all passed
+
+=== test_broadcast: PASS ===
+dim resolution
+broadcast reads
+test_broadcast: all passed
+
+=== test_gauss: PASS ===
+pdf/logpdf
+dlogpdf_loc/dlogpdf_scale
+degenerate scale (undocumented, unguarded - pinning current behavior)
+broadcast shape resolution
+sampling: moments + broadcast + independence (fixed seed)
+test_gauss: all passed
+
+=== test_student: PASS ===
+known values
+degenerate nu/scale (undocumented, unguarded - pinning current behavior)
+vs independent reference (broadcast + fast path)
+derivatives vs finite differences
+nu = infinity is the Gaussian, exactly
+sampling: moments + independence + Gaussian-limit delegation (fixed seed)
+test_student: all passed
+
+=== test_mvgauss: PASS ===
+d=1 consistency with dist/gauss.h
+known values
+diagonal cov = sum of univariate logpdfs
+correlated cov vs independent reference
+derivatives vs finite differences
+per-observation loc
+views
+non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)
+sampling: empirical mean/covariance + row independence (fixed seed)
+test_mvgauss: all passed
+
+=== test_mvstudent: PASS ===
+d=1 consistency with dist/student.h
+known values
+correlated cov vs independent reference
+derivatives vs finite differences
+nu = infinity is the Gaussian, exactly
+per-observation loc + views
+non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)
+degenerate nu (undocumented, unguarded - pinning current behavior)
+sampling: moments + row independence + zero-score at truth (fixed seed)
+test_mvstudent: all passed
+
+=== test_ad: PASS ===
+dense ops (add/sub/scale/emul/ediv/pow, fan-out)
+ad_exp / ad_tanh (elementwise activations)
+ad_swish (x * sigmoid(x))
+ad_dot
+matmul
+ad_squared_error / ad_identity
+ad_huber_error / ad_logcosh_error
+ad-computed gradient vs analytical gauss_dlogpdf_loc/scale
+ad_lgamma (forward + digamma backward)
+ad-computed gradient vs analytical student_dlogpdf_loc/scale/nu
+ad-computed gradient vs analytical mvgauss/mvstudent scores
+ad_solve (finite-difference)
+ad_chol_solve (finite-difference)
+ad_det (finite-difference)
+ad_inv (finite-difference)
+ad_solve/ad_det/ad_inv on a singular A abort (fork + expect SIGABRT)
+ad_chol_solve given a non-Cholesky L (zero diagonal): silent NaN/Inf, not a crash (documents the 'trusts the factor' contract)
+test_ad: all passed
+
+=== test_adam: PASS ===
+adam_step: exact per-step arithmetic (not just convergence)
+adam_hyperparams_default: matches the paper's recommended defaults
+quadratic bowl: known minimum
+ill-conditioned bowl: different curvature per dimension
+adversarial: single-element parameter
+view: strided parameter/gradient
+integration: Adam MLE fit of Gaussian loc/scale
+test_adam: all passed
+
+=== test_optimizer: PASS ===
+Optimizer interface: a hand-rolled SGD, independent of solver/adam.h, plugs in and updates correctly
+adam_optimizer_init matches calling adam_init/adam_step directly
+test_optimizer: all passed
+
+=== test_mlp: PASS ===
+forward pass: known 2-2-1 network vs independent reference
+gradient (finite-difference) vs independent reference forward pass
+adversarial: no hidden layers, and single-neuron layers
+out_act: identity forecasts an unsquashed value tanh would clamp into (-1,1)
+integration: mlp_fit + mlp_forecast train and predict XOR
+integration: MLPFitOptions.on_epoch_end monitors and early-stops mlp_fit
+persistence: mlp_save + mlp_load round-trip matches original forecast exactly
+test_mlp: all passed
+
+=== test_frame: PASS ===
+numeric columns: added one at a time, integrity checked after each
+string columns: deep-copied, independent of caller's buffer
+mixed numeric/string columns preserve declaration order
+row names: optional, replaceable
+df_from_matrix: builds a DataFrame directly from an existing Mat, with and without column names
+adversarial: zero columns, single row, df_print smoke test
+           v          tag 
+     42.0000         only 
+looking up a nonexistent column aborts (fork + expect SIGABRT)
+duplicate column name: silently shadowed, first one wins on lookup (pinning current behavior)
+frame_mkdir_p: recursive directory creation
+test_frame: all passed
+
+=== test_csv: PASS ===
+basic CSV: header, numeric/string column inference
+CSV quoting: embedded delimiter and escaped quotes
+no header: generated col0/col1/... names
+a column with an NA marker becomes a string column, not numeric-with-NaN
+blank lines are skipped, not turned into a one-empty-field row
+custom delimiter: semicolon-separated
+adversarial: single row, single column, no trailing newline
+ragged row / empty file abort (fork + expect SIGABRT)
+unterminated quote at EOF: silently tolerated, not rejected (pinning current behavior)
+write/read round-trip: mixed numeric+string columns, values needing quoting
+write with write_header=0: no header row, columns get generated names on reread
+test_csv: all passed
+
+=== test_txt: PASS ===
+basic TXT: whitespace-separated numeric matrix, no header by default
+tabs and multiple spaces collapse to a single delimiter
+blank lines are skipped, not turned into empty rows
+has_header option: first row becomes column names
+adversarial: single value, no trailing newline
+write/read round-trip: numeric DataFrame survives a save/load cycle exactly
+write with write_header=1: header round-trips through has_header=1 on reread
+test_txt: all passed
+
+=== test_npy: PASS ===
+2D round-trip: known values survive write/read exactly
+genuine 1D shape string '(n,)' parses correctly
+genuine .npy v2.0 header format (4-byte header-length field, 12-byte preamble) parses correctly
+adversarial: single-element array
+malformed .npy aborts (fork + expect SIGABRT)
+write/read round-trip: DataFrame -> .npy -> DataFrame preserves values exactly
+test_npy: all passed
+
+=== test_json: PASS ===
+known-output: parse a hand-written JSON document
+string escaping: quotes, backslash, newline round-trip through parse and write
+\uXXXX escape decodes to UTF-8
+construction API + round-trip: build a tree, write it, parse it back
+duplicate object key: last value wins, matching JSON semantics
+adversarial: empty object/array, deep nesting, negative/fractional/exponent numbers
+file round-trip: json_write_file then json_parse_file
+malformed JSON aborts (fork + expect SIGABRT)
+test_json: all passed
+
+=== test_sql: PASS ===
+SELECT * FROM df: returns every column and row unchanged
+SELECT with computed column and AS alias
+WHERE with a numeric comparison filters rows
+WHERE with AND/OR/NOT and parenthesized grouping
+WHERE with a string literal equality filter
+GROUP BY with SUM/AVG aggregates, one row per group
+GROUP BY on more than one column
+COUNT(*) with no GROUP BY collapses to a single implicit group
+ORDER BY ASC (default) and DESC
+single-numeric-key ORDER BY at n >= SQL_RADIX_MIN_N vs. an independent reference sort (exercises sql_radix_sort_pairs specifically)
+adversarial: WHERE matching no rows returns a valid zero-row DataFrame
+adversarial: single-row DataFrame
+adversarial: ORDER BY with all-equal keys preserves original row order (stability)
+adversarial: GROUP BY a column with only one unique value yields one group
+independent reference: WHERE filter matches a naive hand-written loop
+independent reference: GROUP BY + SUM matches a naive hand-written accumulation
+GROUP BY: two aggregates combined arithmetically (e.g. SUM(gdp)/SUM(population))
+GROUP BY: an aggregate combined with a plain literal (e.g. SUM(gdp) / 100)
+adversarial: a bare literal as the entire SELECT item, and as the entire WHERE condition
+df_sql_try: a valid query returns SQL_OK and the same result df_sql would
+df_sql_try: malformed query text is SQL_ERR_SYNTAX, independent of the DataFrame
+df_sql_try: syntactically valid SQL that doesn't fit the schema is SQL_ERR_DATA
+test_sql: all passed
+
+
+=== summary ===
+22 passed, 0 failed

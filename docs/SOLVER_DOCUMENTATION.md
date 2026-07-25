@@ -53,7 +53,7 @@ Every `Mat`/`Vec` returned from this header is an owner and must be freed with `
 
 ## Benchmark results
 
-Measured with `tests/performance/bench_decomp.py` (float32; wrappers call the real library functions end to end - see `tests/performance/bench_decomp.c`). `vec_solve_sym`/`vec_lu_solve`/`vec_chol_solve`/`mat_lstsq_rd` are not yet in the benchmark harness - only the original two functions are covered so far:
+Measured with `tests/performance/bench_decomp.py` (float32; wrappers call the real library functions end to end - see `tests/performance/bench_decomp.c`):
 
 | n | `vec_solve` ms | numpy ms | max err | `mat_lstsq` (m=2n) ms | numpy lstsq ms | max err |
 |---|---|---|---|---|---|---|
@@ -61,7 +61,37 @@ Measured with `tests/performance/bench_decomp.py` (float32; wrappers call the re
 | 256 | 0.587 | 0.574 | 6.0e-8 | 6.256 | 22.475 | 9.0e-8 |
 | 512 | 2.428 | 6.667 | 6.0e-8 | - | - | - |
 
-`vec_solve` tracks `numpy.linalg.solve` closely (both call `?gesv`-equivalent LAPACK routines), pulling ahead at larger sizes for the same reason `mat_chol`/`mat_qr` do in `linalg/decomp.h`. `mat_lstsq` is markedly faster than `numpy.linalg.lstsq` - 3.8x at n=128, 3.6x at n=256 - but this is not a pure wrapper-overhead win: `numpy.linalg.lstsq` defaults to the SVD-based `?gelsd` driver (the same one `mat_lstsq_rd` now uses), which handles rank-deficient input but costs more, while `mat_lstsq` uses the QR-based `?gels`. The comparison is honest about what each is doing, not apples-to-apples on algorithm; a caller that needs `?gelsd`'s robustness should compare against `mat_lstsq_rd`, not `mat_lstsq`. Reproduce with `python tests/performance/bench_decomp.py`.
+`vec_solve` tracks `numpy.linalg.solve` closely (both call `?gesv`-equivalent LAPACK routines), pulling ahead at larger sizes for the same reason `mat_chol`/`mat_qr` do in `linalg/decomp.h`. `mat_lstsq` is markedly faster than `numpy.linalg.lstsq` - 3.8x at n=128, 3.6x at n=256 - but this is not a pure wrapper-overhead win: `numpy.linalg.lstsq` defaults to the SVD-based `?gelsd` driver (the same one `mat_lstsq_rd` now uses), which handles rank-deficient input but costs more, while `mat_lstsq` uses the QR-based `?gels`. The comparison is honest about what each is doing, not apples-to-apples on algorithm; a caller that needs `?gelsd`'s robustness should compare against `mat_lstsq_rd`, not `mat_lstsq`.
+
+`vec_solve_sym` (a random symmetric, not-necessarily-PD matrix - `sysv`, vs `numpy.linalg.solve` as the only general baseline numpy exposes, since it has no symmetry-specialized solver in its base API to compare against apples-to-apples):
+
+| n | ours ms | numpy ms | max err |
+|---|---|---|---|
+| 64 | 0.041 | 0.033 | 2.0e-5 |
+| 128 | 0.122 | 0.126 | 1.1e-5 |
+| 256 | 0.659 | 0.618 | 2.1e-5 |
+| 512 | 4.920 | 5.920 | 2.3e-3 |
+
+`vec_lu_solve`/`vec_chol_solve` exist to reuse an already-computed factorization across many right-hand sides instead of re-solving from scratch - the benchmark demonstrates exactly that saving: factor once, then 50 solves against the reused factor (`vec_lu_solve`/`vec_chol_solve`), against the naive baseline of calling `vec_solve` 50 times (re-factoring every call):
+
+| n | naive x50 ms | lu-reuse x50 ms | chol-reuse x50 ms | lu speedup | chol speedup |
+|---|---|---|---|---|---|
+| 64 | 1.00 | 0.27 | 0.25 | 3.7x | 4.1x |
+| 128 | 4.53 | 1.47 | 0.94 | 3.1x | 4.8x |
+| 256 | 182.9 | 5.78 | 5.39 | 31.6x | 34.0x |
+| 512 | 135.1 | 39.7 | 47.0 | 3.4x | 2.9x |
+
+The speedup is real and substantial at every size tested (3x-34x), though its exact magnitude is noisy across n - `vec_solve`'s repeated from-scratch LU factorization is the dominant cost at every size, so the specific ratio depends more on how that cost happens to interact with cache/BLAS-threading behavior at a given n than on anything `vec_lu_solve`/`vec_chol_solve` themselves are doing differently. The reused-factorization solves themselves (`lu`/`chol` columns) scale far more smoothly than the naive column does.
+
+`mat_lstsq_rd` on a genuinely rank-deficient input (m=2n, true rank n/2 by construction - every column is a linear combination of n/2 independent ones): no direct numpy equivalent to compare against (same situation as `mat_lu` in `docs/DECOMP_DOCUMENTATION.md`), so correctness is checked via the recovered rank and the residual `||a*x - b||` instead of a numpy column:
+
+| n | ours ms | recovered rank (expect n/2) | `\|Ax-b\|` residual |
+|---|---|---|---|
+| 64 | 0.41 | 33 | 9.58 |
+| 128 | 3.43 | 65 | 14.11 |
+| 256 | 12.05 | 130 | 19.42 |
+
+The recovered rank is within 1 of the true rank at every size (float32 SVD noise on a randomly-constructed low-rank input landing right at `mat_rank`'s tolerance threshold) - expected, not a bug; see `linalg/solver.h`'s own comment on why the rank cutoff is a fixed constant rather than a precision-relative one. Reproduce with `python tests/performance/bench_decomp.py`.
 
 ## Known limitations and future work
 

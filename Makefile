@@ -57,6 +57,15 @@ librandom.so: tests/performance/bench_random.c random.h
 libstats.so: tests/performance/bench_stats.c stats.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_stats.c $(LDLIBS) -o libstats.so
 
+libadam.so: tests/performance/bench_adam.c solver/adam.h solver/optimizer.h linalg/mat.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_adam.c $(LDLIBS) -o libadam.so
+
+libspecial.so: tests/performance/bench_special.c special.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_special.c $(LDLIBS) -o libspecial.so
+
+libjson.so: tests/performance/bench_json.c json.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_json.c $(LDLIBS) -o libjson.so
+
 # --- correctness tests (tests/correctness/) ---
 tests/correctness/test_mat: tests/correctness/test_mat.c linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mat.c $(LDLIBS) -o tests/correctness/test_mat

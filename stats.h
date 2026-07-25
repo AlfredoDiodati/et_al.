@@ -170,14 +170,61 @@ static inline Mat stats_autocov(Mat x, int lag) {
    these sort rather than accumulate, so there is no double-vs-mreal
    precision question - sort order is exact regardless of precision. --- */
 
-static int stats_cmp_mreal(const void *a, const void *b) {
-    mreal da = *(const mreal*)a, db = *(const mreal*)b;
-    return (da > db) - (da < db);
+static inline void stats_swap_mreal(mreal *a, mreal *b) { mreal t = *a; *a = *b; *b = t; }
+
+/* Median-of-three: sorts arr[lo], arr[mid], arr[hi] into ascending order
+   in place, leaving the median of the three at arr[mid] - the standard
+   pivot choice that keeps quickselect off its O(n^2) worst case on the
+   already-sorted/reverse-sorted inputs a naive first-or-last-element
+   pivot is most likely to hit in practice, without needing any RNG
+   (this project's own random.h exists specifically because relying on
+   libc's global rand() state is the kind of silent side effect this
+   codebase avoids - a statistics function reseeding/consuming from a
+   caller-invisible global stream would be exactly that). */
+static inline void stats_median_of_three(mreal *arr, int lo, int mid, int hi) {
+    if (arr[lo] > arr[mid]) stats_swap_mreal(&arr[lo], &arr[mid]);
+    if (arr[mid] > arr[hi]) stats_swap_mreal(&arr[mid], &arr[hi]);
+    if (arr[lo] > arr[mid]) stats_swap_mreal(&arr[lo], &arr[mid]);
+}
+
+/* Lomuto partition of arr[lo..hi] around arr[hi], returning the pivot's
+   final index - the usual scan-and-swap-below-pivot scheme. */
+static inline int stats_partition(mreal *arr, int lo, int hi) {
+    mreal pivot = arr[hi];
+    int i = lo;
+    for (int j = lo; j < hi; j++)
+        if (arr[j] < pivot) { stats_swap_mreal(&arr[i], &arr[j]); i++; }
+    stats_swap_mreal(&arr[i], &arr[hi]);
+    return i;
+}
+
+/* Quickselect: after this call, arr[k] holds the value that would be at
+   index k (0-indexed) if arr were fully sorted - a partial sort, O(n)
+   average instead of a full qsort's O(n log n), the same technique
+   behind NumPy's np.partition/np.median. Every element left of k ends up
+   <= arr[k], every element right >= arr[k], which is all stats_median
+   below needs (plus, for an even n, a linear scan of the left partition
+   for its max - see there). */
+static inline void stats_quickselect(mreal *arr, int lo, int hi, int k) {
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        stats_median_of_three(arr, lo, mid, hi);
+        stats_swap_mreal(&arr[mid], &arr[hi]);
+        int p = stats_partition(arr, lo, hi);
+        if (p == k) return;
+        else if (k < p) hi = p - 1;
+        else lo = p + 1;
+    }
 }
 
 /* Sample median over all elements of x (any shape) - the middle value,
    or the average of the two middle values for an even count. Operates on
-   a caller-owned copy; never mutates x. */
+   a caller-owned copy; never mutates x. Selects the middle value(s) via
+   stats_quickselect rather than a full qsort - measured via
+   tests/performance/bench_stats.py: this file's median (and
+   stats_medae, which calls it) was 8-16x slower than NumPy's/SciPy's
+   O(n) partition-based median before this existed, entirely explained
+   by fully sorting when only a middle element or two are ever needed. */
 static inline mreal stats_median(Mat x) {
     assert(x.r >= 1 && x.c >= 1);
     int n = x.r * x.c;
@@ -186,8 +233,20 @@ static inline mreal stats_median(Mat x) {
     int k = 0;
     for (int i = 0; i < x.r; i++)
         for (int j = 0; j < x.c; j++) tmp[k++] = AT(x, i, j);
-    qsort(tmp, (size_t)n, sizeof(mreal), stats_cmp_mreal);
-    mreal m = (n % 2) ? tmp[n / 2] : (mreal)(((double)tmp[n / 2 - 1] + (double)tmp[n / 2]) / 2.0);
+
+    int mid = n / 2;
+    stats_quickselect(tmp, 0, n - 1, mid);
+    mreal m;
+    if (n % 2) {
+        m = tmp[mid];
+    } else {
+        /* quickselect already guarantees every element left of mid is
+           <= tmp[mid] - the other middle value is just the max of that
+           left partition, one more O(n) pass, no second selection. */
+        mreal lo_val = tmp[0];
+        for (int t = 1; t < mid; t++) if (tmp[t] > lo_val) lo_val = tmp[t];
+        m = (mreal)(((double)lo_val + (double)tmp[mid]) / 2.0);
+    }
     free(tmp);
     return m;
 }

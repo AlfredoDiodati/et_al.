@@ -22,10 +22,34 @@ lib.c_exp.argtypes = [I, I, I, F, F]
 lib.c_tanh.argtypes = [I, I, I, F, F]
 lib.c_sum.argtypes = [I, I, I, F]
 lib.c_max.argtypes = [I, I, I, F]
-for fn in (lib.c_matmul, lib.c_add, lib.c_emul, lib.c_exp, lib.c_tanh):
+lib.c_sub.argtypes = [I, I, I, F, F, F]
+lib.c_ediv.argtypes = [I, I, I, F, F, F]
+lib.c_scale.argtypes = [I, I, I, F, ctypes.c_float, F]
+lib.c_pow.argtypes = [I, I, I, F, ctypes.c_float, F]
+lib.c_log.argtypes = [I, I, I, F, F]
+lib.c_abs.argtypes = [I, I, I, F, F]
+lib.c_sqrt.argtypes = [I, I, I, F, F]
+lib.c_mean.argtypes = [I, I, I, F]
+lib.c_min.argtypes = [I, I, I, F]
+lib.c_vcat.argtypes = [I, I, F, I, I, F, F]
+lib.c_hcat.argtypes = [I, I, F, I, I, F, F]
+lib.c_T.argtypes = [I, I, F, F]
+lib.c_vec_dot.argtypes = [I, F, F]
+lib.c_vec_norm.argtypes = [I, F]
+lib.c_trace.argtypes = [I, F]
+lib.c_norm.argtypes = [I, I, ctypes.c_char, F]
+for fn in (lib.c_matmul, lib.c_add, lib.c_emul, lib.c_exp, lib.c_tanh,
+           lib.c_sub, lib.c_ediv, lib.c_scale, lib.c_pow, lib.c_log,
+           lib.c_abs, lib.c_sqrt, lib.c_vcat, lib.c_hcat, lib.c_T):
     fn.restype = None
 lib.c_sum.restype = ctypes.c_float
 lib.c_max.restype = ctypes.c_float
+lib.c_mean.restype = ctypes.c_float
+lib.c_min.restype = ctypes.c_float
+lib.c_vec_dot.restype = ctypes.c_float
+lib.c_vec_norm.restype = ctypes.c_float
+lib.c_trace.restype = ctypes.c_float
+lib.c_norm.restype = ctypes.c_float
 
 NULL = ctypes.cast(None, F)
 
@@ -135,11 +159,23 @@ def run_binary(name, cfn, npfn, n, rng):
     ew_row(f"{name} {n}", cases, err)
 
 
-def run_unary(name, cfn, npfn, n, rng, tol_scale=1.0):
-    ((a_c, a_s),) = make_views(n, rng, 1)
+def make_views_pos(n, rng, count):
+    """Like make_views, but strictly positive (safe for log/sqrt's domain -
+    make_views' signed normal data would hand both sides a NaN half the
+    time, which is a correctness test, not a speed one)."""
+    out = []
+    for _ in range(count):
+        parent = np.ascontiguousarray(
+            (rng.random((n, n + PAD)).astype(np.float32) * 2.0 + 0.1))
+        out.append((np.ascontiguousarray(parent[:, :n]), parent[:, :n]))
+    return out
+
+
+def run_unary(name, cfn, npfn, n, rng, views_fn=make_views):
+    ((a_c, a_s),) = views_fn(n, rng, 1)
     out = np.zeros((n, n), dtype=np.float32)
     cfn(n, n, n, ptr(a_c), ptr(out))
-    err = float(np.max(np.abs(out - npfn(a_c)))) / tol_scale
+    err = float(np.max(np.abs(out - npfn(a_c))))
     cases = []
     for a, stride in ((a_c, n), (a_s, n + PAD)):
         c_ms = bench(lambda: cfn(n, n, stride, ptr(a), NULL))
@@ -169,7 +205,127 @@ for n in [256, 1024, 2048]:
     run_unary("exp", lib.c_exp, np.exp, n, rng)
     run_unary("tanh", lib.c_tanh, np.tanh, n, rng)
 
+ew_header("Element-wise, continued (mat_sub/mat_ediv/mat_log/mat_abs/mat_sqrt)")
+for n in [256, 1024, 2048]:
+    run_binary("sub", lib.c_sub, np.subtract, n, rng)
+    run_binary("ediv", lib.c_ediv, np.divide, n, rng)
+    run_unary("log", lib.c_log, np.log, n, rng, views_fn=make_views_pos)
+    run_unary("abs", lib.c_abs, np.abs, n, rng)
+    run_unary("sqrt", lib.c_sqrt, np.sqrt, n, rng, views_fn=make_views_pos)
+
 ew_header("Reductions (mat_sum/mat_max vs numpy; err is relative)")
 for n in [256, 1024, 2048]:
     run_reduction("sum", lib.c_sum, np.sum, n, rng)
     run_reduction("max", lib.c_max, np.max, n, rng)
+
+ew_header("Reductions, continued (mat_mean/mat_min vs numpy; err is relative)")
+for n in [256, 1024, 2048]:
+    run_reduction("mean", lib.c_mean, np.mean, n, rng)
+    run_reduction("min", lib.c_min, np.min, n, rng)
+
+
+# --- scalar-parameterized ops (mat_scale/mat_pow): same contiguous/strided
+# split as run_unary, but the C side takes an extra scalar argument ---
+
+def run_scalar_unary(name, cfn, npfn, n, rng):
+    ((a_c, a_s),) = make_views(n, rng, 1)
+    scalar = 2.0
+    out = np.zeros((n, n), dtype=np.float32)
+    cfn(n, n, n, ptr(a_c), scalar, ptr(out))
+    err = float(np.max(np.abs(out - npfn(a_c, scalar))))
+    cases = []
+    for a, stride in ((a_c, n), (a_s, n + PAD)):
+        c_ms = bench(lambda: cfn(n, n, stride, ptr(a), scalar, NULL))
+        np_ms = bench(lambda: npfn(a, scalar))
+        cases.append((c_ms, np_ms))
+    ew_row(f"{name} {n}", cases, err)
+
+
+ew_header("Scalar-parameterized (mat_scale/mat_pow vs numpy, scalar=2.0)")
+for n in [256, 1024, 2048]:
+    run_scalar_unary("scale", lib.c_scale, np.multiply, n, rng)
+    run_scalar_unary("pow", lib.c_pow, np.power, n, rng)
+
+
+# --- structural ops (mat_vcat/mat_hcat/mat_T): no stride-branching fast
+# path in the library itself (see bench_mat.c), so only contiguous
+# operands are timed - there is no second code path to compare against ---
+
+def struct_header(title):
+    print(f"\n{title}")
+    print(f"{'op / n':>10}  {'C ms':>9}  {'NP ms':>9}  {'C/NP':>6}  {'max err':>9}")
+    print("-" * 50)
+
+
+def struct_row(label, c_ms, np_ms, err):
+    print(f"{label:>10}  {c_ms:>9.3f}  {np_ms:>9.3f}  {c_ms / np_ms:>6.2f}  {err:>9.2e}")
+
+
+struct_header("Structural (mat_vcat/mat_hcat/mat_T vs numpy, contiguous only)")
+for n in [256, 1024, 2048]:
+    a = np.ascontiguousarray(rng.standard_normal((n, n)).astype(np.float32))
+    b = np.ascontiguousarray(rng.standard_normal((n, n)).astype(np.float32))
+
+    out_v = np.zeros((2 * n, n), dtype=np.float32)
+    lib.c_vcat(n, n, ptr(a), n, n, ptr(b), ptr(out_v))
+    err = float(np.max(np.abs(out_v - np.vstack([a, b]))))
+    c_ms = bench(lambda: lib.c_vcat(n, n, ptr(a), n, n, ptr(b), NULL))
+    np_ms = bench(lambda: np.vstack([a, b]))
+    struct_row(f"vcat {n}", c_ms, np_ms, err)
+
+    out_h = np.zeros((n, 2 * n), dtype=np.float32)
+    lib.c_hcat(n, n, ptr(a), n, n, ptr(b), ptr(out_h))
+    err = float(np.max(np.abs(out_h - np.hstack([a, b]))))
+    c_ms = bench(lambda: lib.c_hcat(n, n, ptr(a), n, n, ptr(b), NULL))
+    np_ms = bench(lambda: np.hstack([a, b]))
+    struct_row(f"hcat {n}", c_ms, np_ms, err)
+
+    out_t = np.zeros((n, n), dtype=np.float32)
+    lib.c_T(n, n, ptr(a), ptr(out_t))
+    err = float(np.max(np.abs(out_t - a.T)))
+    c_ms = bench(lambda: lib.c_T(n, n, ptr(a), NULL))
+    np_ms = bench(lambda: np.ascontiguousarray(a.T))
+    struct_row(f"T {n}", c_ms, np_ms, err)
+
+
+# --- vector/whole-matrix scalar ops (vec_dot/vec_norm/mat_trace/mat_norm):
+# vec_dot/vec_norm are thin cblas wrappers (stride is a plain BLAS argument,
+# not a branch in this library's own code), and mat_trace/mat_norm are
+# O(n)/O(n^2) reductions with no separate strided path either - all four
+# are timed contiguous-only, like vcat/hcat/T above ---
+
+print("\nVector/whole-matrix reductions (vec_dot/vec_norm/mat_trace/mat_norm; err is relative)")
+print(f"{'op / n':>14}  {'C ms':>9}  {'NP ms':>9}  {'C/NP':>6}  {'err':>9}")
+print("-" * 55)
+for n in [256, 1024, 2048]:
+    a = rng.standard_normal(n).astype(np.float32)
+    b = rng.standard_normal(n).astype(np.float32)
+    got = lib.c_vec_dot(n, ptr(a), ptr(b))
+    ref = float(np.dot(a, b))
+    err = abs(got - ref) / max(1.0, abs(ref))
+    c_ms = bench(lambda: lib.c_vec_dot(n, ptr(a), ptr(b)))
+    np_ms = bench(lambda: np.dot(a, b))
+    print(f"{f'dot {n}':>14}  {c_ms:>9.3f}  {np_ms:>9.3f}  {c_ms / np_ms:>6.2f}  {err:>9.2e}")
+
+    got = lib.c_vec_norm(n, ptr(a))
+    ref = float(np.linalg.norm(a))
+    err = abs(got - ref) / max(1.0, abs(ref))
+    c_ms = bench(lambda: lib.c_vec_norm(n, ptr(a)))
+    np_ms = bench(lambda: np.linalg.norm(a))
+    print(f"{f'norm(vec) {n}':>14}  {c_ms:>9.3f}  {np_ms:>9.3f}  {c_ms / np_ms:>6.2f}  {err:>9.2e}")
+
+for n in [256, 1024, 2048]:
+    m = np.ascontiguousarray(rng.standard_normal((n, n)).astype(np.float32))
+    got = lib.c_trace(n, ptr(m))
+    ref = float(np.trace(m))
+    err = abs(got - ref) / max(1.0, abs(ref))
+    c_ms = bench(lambda: lib.c_trace(n, ptr(m)))
+    np_ms = bench(lambda: np.trace(m))
+    print(f"{f'trace {n}':>14}  {c_ms:>9.3f}  {np_ms:>9.3f}  {c_ms / np_ms:>6.2f}  {err:>9.2e}")
+
+    got = lib.c_norm(n, n, b"F", ptr(m))
+    ref = float(np.linalg.norm(m, "fro"))
+    err = abs(got - ref) / max(1.0, abs(ref))
+    c_ms = bench(lambda: lib.c_norm(n, n, b"F", ptr(m)))
+    np_ms = bench(lambda: np.linalg.norm(m, "fro"))
+    print(f"{f'norm(F) {n}':>14}  {c_ms:>9.3f}  {np_ms:>9.3f}  {c_ms / np_ms:>6.2f}  {err:>9.2e}")

@@ -93,7 +93,18 @@ Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_q
 
 `bench_decomp.py` also covers `mat_eig_sym` vs `numpy.linalg.eigh` (~1.6-2.5x ahead across n=64..512), `mat_svd` vs `numpy.linalg.svd` (~1.4-1.6x ahead), and `mat_inv` vs `numpy.linalg.inv` (at parity to ~2.6x ahead at n=512) - same LAPACK underneath, shorter dispatch path here.
 
-`mat_chol` and `mat_qr` are consistently at or ahead of `numpy.linalg.cholesky`/`numpy.linalg.qr` - both call the same OpenBLAS/LAPACK under the hood, and this library's wrapper (one `mat_copy` plus the LAPACKE call) has less overhead than NumPy's dispatch path. `mat_lu` has no direct NumPy equivalent to compare against (NumPy does not expose raw `getrf`); its absolute timings sit in the same range as `mat_chol`'s, which is the expected relationship since both are O(n^3) with similar constants. Errors against NumPy (`max err`, and reconstruction error for QR) stay in the 1e-6 to 1e-7 range at every size tested - both floating-point roundoff, not an algorithmic discrepancy. Reproduce with `python tests/performance/bench_decomp.py`.
+`mat_chol` and `mat_qr` are consistently at or ahead of `numpy.linalg.cholesky`/`numpy.linalg.qr` - both call the same OpenBLAS/LAPACK under the hood, and this library's wrapper (one `mat_copy` plus the LAPACKE call) has less overhead than NumPy's dispatch path. `mat_lu` has no direct NumPy equivalent to compare against (NumPy does not expose raw `getrf`); its absolute timings sit in the same range as `mat_chol`'s, which is the expected relationship since both are O(n^3) with similar constants. Errors against NumPy (`max err`, and reconstruction error for QR) stay in the 1e-6 to 1e-7 range at every size tested - both floating-point roundoff, not an algorithmic discrepancy.
+
+`mat_det`, `mat_cond`, `mat_rank` (all built on `mat_lu`/`mat_svd` above), and `mat_eig` (the general, non-symmetric eigendecomposition - `mat_eig_sym` above is the symmetric-only path):
+
+| n | `mat_det` ms | numpy ms | `mat_cond` ms | numpy ms | `mat_rank` ms | numpy ms | `mat_eig` ms | numpy eigvals ms |
+|---|---|---|---|---|---|---|---|---|
+| 64 | 0.021 | 0.028 | 0.58 | 0.23 | 0.57 | 0.23 | 0.62 | 0.79 |
+| 128 | 0.090 | 0.106 | 2.12 | 1.73 | 2.62 | 1.68 | 5.37 | 20.19 |
+| 256 | 0.388 | 0.434 | 8.24 | 6.50 | 30.09 | 7.21 | 20.75 | 44.01 |
+| 512 | 2.303 | 3.898 | 39.25 | 40.82 | 69.67 | 107.33 | 130.16 | 304.33 |
+
+`mat_det` (a thin wrapper over the same `mat_lu` benchmarked above, reading off the diagonal) tracks or beats `numpy.linalg.det` at every size, as expected from `mat_lu`'s own numbers. `mat_cond`/`mat_rank` are both built on `mat_svd`, and are correspondingly the two slowest functions in this table relative to their numpy equivalents - `numpy.linalg.cond`/`numpy.linalg.matrix_rank` typically win at small-to-mid n (their SVD dispatch path is more optimized for this shape than this library's `mat_svd`-then-postprocess route), with `mat_rank` in particular 4x slower than numpy at n=256, though both narrow or invert the gap by n=512. `mat_eig` beats `numpy.linalg.eigvals` at every size tested, by a growing margin (1.3x at n=64, up to 2.3x at n=512) - both call LAPACK `?geev`, and neither computes eigenvectors here (numpy's `eigvals`, not `eig`, is the fair comparison, matching `mat_eig`'s own eigenvector-free scope). Eigenvalue error is checked by sorting both sides' complex eigenvalues (real then imaginary part) and comparing, since `?geev`'s output ordering is not guaranteed to agree between the two call sites - stays under 1e-5 relative at every size. Reproduce with `python tests/performance/bench_decomp.py`.
 
 ## Known limitations and future work
 

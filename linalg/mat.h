@@ -249,17 +249,65 @@ static inline Mat mat_ediv(Mat a, Mat b) {
     }
     return o;
 }
-/* Return a with every element raised to the power p. */
+/* base^exp by exponentiation by squaring - O(log|exp|) multiplies
+   instead of a general-purpose pow() call, the same technique NumPy
+   uses for an integer exponent (measured via tests/performance/
+   bench_mat.py: mat_pow was 15-27x slower than np.power before this
+   existed, entirely explained by pow()/powf() handling the fully
+   general real-exponent case for what is, in every integer-exponent
+   caller, exact integer multiplication). Negative exp is the reciprocal
+   of the positive power and exp == 0 returns 1 for any base including
+   0, both matching pow()'s convention exactly.
+
+   exp in {-1,0,1,2,3} - squaring/cubing being by far the most common
+   exponents a caller reaches for (e.g. a variance/MSE computation's
+   x^2) - are special-cased to the minimal multiply count directly: the
+   general loop below does 3 multiplies for exp=2 (one wasted final
+   squaring the loop can't know not to do), 3x the true 1-multiply cost
+   of base*base, which was the entire remaining gap to NumPy after the
+   general loop replaced pow(). */
+static inline mreal mat_ipow(mreal base, long exp) {
+    switch (exp) {
+        case  0: return (mreal)1;
+        case  1: return base;
+        case  2: return base * base;
+        case  3: return base * base * base;
+        case -1: return (mreal)1 / base;
+        default: break;
+    }
+    if (exp < 0) return (mreal)1 / mat_ipow(base, -exp);
+    mreal result = (mreal)1;
+    while (exp > 0) {
+        if (exp & 1) result *= base;
+        base *= base;
+        exp >>= 1;
+    }
+    return result;
+}
+
+/* Return a with every element raised to the power p. Takes the integer
+   fast path above whenever p is an exact integer within a safe `long`
+   range (the common case: squaring, cubing, ...); anything else - a
+   fractional exponent, or p itself NaN/Inf - falls back to MPOW
+   unchanged, so every existing special-value/domain behavior (e.g.
+   negative base with a fractional p producing NaN) is untouched. */
 static inline Mat mat_pow(Mat a, mreal p) {
     Mat o = mat_new(a.r, a.c);
+    int use_ipow = 0;
+    long ip = 0;
+    if (p >= -1024 && p <= 1024) {
+        ip = (long)p;
+        use_ipow = ((mreal)ip == p);
+    }
     if (a.stride == a.c) {
         int n = a.r * a.c;
         mreal *restrict pa = a.d, *restrict po = o.d;
-        for (int i = 0; i < n; i++) po[i] = MPOW(pa[i], p);
+        if (use_ipow) { for (int i = 0; i < n; i++) po[i] = mat_ipow(pa[i], ip); }
+        else           { for (int i = 0; i < n; i++) po[i] = MPOW(pa[i], p); }
     } else {
         for (int i = 0; i < a.r; i++)
             for (int j = 0; j < a.c; j++)
-                AT(o,i,j) = MPOW(AT(a,i,j), p);
+                AT(o,i,j) = use_ipow ? mat_ipow(AT(a,i,j), ip) : MPOW(AT(a,i,j), p);
     }
     return o;
 }
@@ -439,14 +487,36 @@ static inline mreal mat_trace(Mat m) {
     return s;
 }
 
-/* Return a norm of m, via LAPACK ?lange. kind selects which, using
-   LAPACK's own character convention directly:
+/* Return a norm of m, using LAPACK's own character convention:
      'F' or 'E' - Frobenius norm (sqrt of sum of squares of all elements)
      '1'        - one-norm (largest absolute column sum)
      'I'        - infinity-norm (largest absolute row sum)
      'M'        - max absolute element (not a true matrix norm, but the
-                  cheapest to compute and occasionally useful) */
+                  cheapest to compute and occasionally useful)
+   '1'/'I'/'M' go through LAPACK ?lange, which is what they actually need
+   (a real row/column-sum reduction). 'F'/'E' do not - a Frobenius norm is
+   just a flat sqrt(sum of squares) over every element, no row/column
+   structure involved, and measured via tests/performance/bench_mat.py,
+   ?lange was 6-12x slower than a plain reduction for exactly that reason
+   (general-purpose row/column-sum machinery paying for structure this
+   case doesn't use). Uses cblas_?nrm2 instead - same overflow/underflow-
+   resistant primitive vec_norm already uses, since "every element of m,
+   flattened" is a 1-D vector problem the moment row/column boundaries
+   stop mattering. A contiguous m is one nrm2 call over the whole buffer;
+   a strided view calls nrm2 once per row (elements within one row are
+   always contiguous regardless of m.stride - only the gap *between* rows
+   is strided) and combines the per-row norms via sqrt of their squares'
+   sum, the same safe combination hypot-chaining relies on. */
 static inline mreal mat_norm(Mat m, char kind) {
+    if (kind == 'F' || kind == 'E') {
+        if (m.stride == m.c) return MBLAS(nrm2)(m.r * m.c, m.d, 1);
+        mreal ss = 0;
+        for (int i = 0; i < m.r; i++) {
+            mreal rn = MBLAS(nrm2)(m.c, &AT(m,i,0), 1);
+            ss += rn * rn;
+        }
+        return MSQRT(ss);
+    }
     return MLAPACK(lange)(LAPACK_ROW_MAJOR, kind, m.r, m.c, m.d, m.stride);
 }
 

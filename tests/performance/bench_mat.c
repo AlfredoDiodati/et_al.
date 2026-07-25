@@ -57,3 +57,91 @@ mreal c_max(int r, int c, int stride, mreal *a) {
     Mat ma = { r, c, stride, a };
     return mat_max(ma);
 }
+
+void c_sub(int r, int c, int stride, mreal *a, mreal *b, mreal *out) {
+    Mat ma = { r, c, stride, a }, mb = { r, c, stride, b };
+    copy_out(mat_sub(ma, mb), out);
+}
+
+void c_ediv(int r, int c, int stride, mreal *a, mreal *b, mreal *out) {
+    Mat ma = { r, c, stride, a }, mb = { r, c, stride, b };
+    copy_out(mat_ediv(ma, mb), out);
+}
+
+void c_scale(int r, int c, int stride, mreal *a, mreal s, mreal *out) {
+    Mat ma = { r, c, stride, a };
+    copy_out(mat_scale(ma, s), out);
+}
+
+void c_pow(int r, int c, int stride, mreal *a, mreal p, mreal *out) {
+    Mat ma = { r, c, stride, a };
+    copy_out(mat_pow(ma, p), out);
+}
+
+void c_log(int r, int c, int stride, mreal *a, mreal *out) {
+    Mat ma = { r, c, stride, a };
+    copy_out(mat_log(ma), out);
+}
+
+void c_abs(int r, int c, int stride, mreal *a, mreal *out) {
+    Mat ma = { r, c, stride, a };
+    copy_out(mat_abs(ma), out);
+}
+
+void c_sqrt(int r, int c, int stride, mreal *a, mreal *out) {
+    Mat ma = { r, c, stride, a };
+    copy_out(mat_sqrt(ma), out);
+}
+
+mreal c_mean(int r, int c, int stride, mreal *a) {
+    Mat ma = { r, c, stride, a };
+    return mat_mean(ma);
+}
+
+mreal c_min(int r, int c, int stride, mreal *a) {
+    Mat ma = { r, c, stride, a };
+    return mat_min(ma);
+}
+
+/* vcat/hcat/mat_T have no stride-branching fast path (they walk every
+   element through AT() regardless), unlike everything above - so there
+   is no separate code path for a strided input to compare against a
+   contiguous one, and these are only timed on contiguous operands. */
+void c_vcat(int ar, int ac, mreal *a, int br, int bc, mreal *b, mreal *out) {
+    Mat ma = { ar, ac, ac, a }, mb = { br, bc, bc, b };
+    copy_out(mat_vcat(ma, mb), out);
+}
+
+void c_hcat(int ar, int ac, mreal *a, int br, int bc, mreal *b, mreal *out) {
+    Mat ma = { ar, ac, ac, a }, mb = { br, bc, bc, b };
+    copy_out(mat_hcat(ma, mb), out);
+}
+
+void c_T(int r, int c, mreal *a, mreal *out) {
+    Mat ma = { r, c, c, a };
+    copy_out(mat_T(ma), out);
+}
+
+/* vec_dot/vec_norm are thin cblas_?dot/?nrm2 wrappers - stride (incX/incY)
+   is a plain argument to BLAS, not a branch in this library's own code -
+   so, like vcat/hcat/T above, only a contiguous (stride 1) vector is
+   timed here. */
+mreal c_vec_dot(int n, mreal *a, mreal *b) {
+    Vec va = { n, 1, 1, a }, vb = { n, 1, 1, b };
+    return vec_dot(va, vb);
+}
+
+mreal c_vec_norm(int n, mreal *a) {
+    Vec va = { n, 1, 1, a };
+    return vec_norm(va);
+}
+
+mreal c_trace(int n, mreal *a) {
+    Mat ma = { n, n, n, a };
+    return mat_trace(ma);
+}
+
+mreal c_norm(int r, int c, char kind, mreal *a) {
+    Mat ma = { r, c, c, a };
+    return mat_norm(ma, kind);
+}
