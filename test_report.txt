@@ -1,4 +1,4 @@
-test run: za 25 jul 2026 16:16:58 CEST
+test run: zo 26 jul 2026  9:01:03 CEST
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.

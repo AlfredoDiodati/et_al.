@@ -36,6 +36,25 @@ examples/encoder: examples/encoder.c frame/csv.h frame/frame.h stats.h nn/mlp.h 
 	$(CC) $(CFLAGS) -I. examples/encoder.c $(LDLIBS) -o examples/encoder
 
 # --- benchmarks (tests/performance/) ---
+
+# Standalone design-space benchmark (no Python/ctypes, no pandas/NumPy
+# comparison) - compares our own row-major/column-major/cached-columnar
+# DataFrame storage candidates against each other. See the file header
+# and docs/PERFORMANCE_BACKLOG.md item 5. Deliberately not part of the
+# `test`/`bench.sh` targets (those gate correctness and the pandas/NumPy
+# comparison suites respectively) - run directly:
+#   make tests/performance/bench_storage_layout && ./tests/performance/bench_storage_layout
+tests/performance/bench_storage_layout: tests/performance/bench_storage_layout.c linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/bench_storage_layout.c $(LDLIBS) -o tests/performance/bench_storage_layout
+
+# Prototype of the hybrid per-column caching design for frame/sql.h
+# (see the file header and docs/PERFORMANCE_BACKLOG.md item 5) - runs
+# both a correctness check (production df_sql vs. the prototype
+# df_sql_v2, on identical queries) and a benchmark, before any of this
+# is ported into frame/sql.h for real. Not part of `test`/`bench.sh`.
+tests/performance/bench_sql_hybrid: tests/performance/bench_sql_hybrid.c frame/sql.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/bench_sql_hybrid.c $(LDLIBS) -o tests/performance/bench_sql_hybrid
+
 libmat.so: tests/performance/bench_mat.c linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_mat.c $(LDLIBS) -o libmat.so
 

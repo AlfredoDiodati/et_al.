@@ -612,14 +612,21 @@ static void sql_query_free(SqlQuery *q) {
    row count the way an earlier version of this file got wrong.
    --------------------------------------------------------------------- */
 
-typedef struct { int r; int is_string; Vec numeric; char **strings; } SqlEvalResult;
+/* borrowed: numeric is a raw view into the source DataFrame's own storage
+   (df_col_numeric's Vec, possibly strided) rather than an independently
+   owned buffer - set only by SQLEXPR_COL below. sql_eval_free must not
+   mat_free a borrowed result (its .d pointer is an offset into df's
+   buffer, not something malloc ever returned on its own), and any code
+   reading a borrowed numeric must go through AT() rather than raw .d[i]
+   indexing, since it may be strided. */
+typedef struct { int r; int is_string; int borrowed; Vec numeric; char **strings; } SqlEvalResult;
 
 /* strings[] holds pointers borrowed from the source DataFrame (or from a
    single shared literal, for SQLEXPR_STR) - only the array itself is
    owned here, never the character data. */
 static inline void sql_eval_free(SqlEvalResult *e) {
     if (e->is_string) free(e->strings);
-    else mat_free(e->numeric);
+    else if (!e->borrowed) mat_free(e->numeric);
 }
 
 static inline int sql_expr_contains_agg(const SqlExpr *e) {
@@ -660,14 +667,24 @@ static inline char **sql_broadcast_str(char **s, int r, int n) {
 
 static SqlEvalResult sql_eval(const SqlExpr *e, const DataFrame *df);
 
+/* Callers of sql_eval_num always take ownership of the returned Vec and
+   mat_free it themselves (see SQLEXPR_NEG/ADD/SUB/MUL/DIV/AND/OR/NOT/
+   aggregates below) - they predate the borrowed-view optimization and
+   were not individually audited for stride-safety, so a borrowed (raw,
+   possibly strided) result is materialized into a genuine owned copy
+   right here rather than handed out raw. This keeps every existing
+   caller exactly as correct as before; only the two call sites below
+   that use sql_eval() directly (comparisons, sql_project's column
+   write) see the borrowed flag and skip this copy. */
 static inline Vec sql_eval_num(const SqlExpr *e, const DataFrame *df) {
     SqlEvalResult r = sql_eval(e, df);
     assert(!r.is_string && "sql: expected a numeric value here");
+    if (r.borrowed) return mat_copy(r.numeric);
     return r.numeric;
 }
 
 static SqlEvalResult sql_eval(const SqlExpr *e, const DataFrame *df) {
-    SqlEvalResult out; out.r = df->r; out.is_string = 0; out.strings = NULL;
+    SqlEvalResult out; out.r = df->r; out.is_string = 0; out.borrowed = 0; out.strings = NULL;
     switch (e->kind) {
         case SQLEXPR_COL: {
             if (df_col_type(df, e->col_name) == COL_STRING) {
@@ -676,7 +693,13 @@ static SqlEvalResult sql_eval(const SqlExpr *e, const DataFrame *df) {
                 char **src = df_col_string(df, e->col_name);
                 for (int i = 0; i < df->r; i++) out.strings[i] = src[i];
             } else {
-                out.numeric = mat_copy(df_col_numeric(df, e->col_name));
+                /* No copy - a raw (possibly strided) view straight into
+                   df->numeric. Every reader of a borrowed numeric result
+                   must use AT(), not raw .d[i] indexing (see the
+                   SqlEvalResult comment above), and sql_eval_free must
+                   never mat_free it. */
+                out.numeric = df_col_numeric(df, e->col_name);
+                out.borrowed = 1;
             }
             return out;
         }
@@ -738,10 +761,22 @@ static SqlEvalResult sql_eval(const SqlExpr *e, const DataFrame *df) {
                 /* exact == here is the user's own explicit SQL predicate on
                    data values (e.g. WHERE year = 2020), not a computed
                    float result being checked for correctness - the usual
-                   "never compare floats with ==" pitfall doesn't apply. */
-                Vec av = sql_broadcast_num(a.numeric, n), bv = sql_broadcast_num(b.numeric, n);
+                   "never compare floats with ==" pitfall doesn't apply.
+
+                   Read a/b directly instead of always materializing both
+                   sides into fresh length-n buffers via sql_broadcast_num
+                   first: AT() is stride-safe (handles a's borrowed,
+                   possibly-strided column view with zero copies) when
+                   already length n, otherwise index 0 for a length-1
+                   scalar broadcast. This is the common `col OP literal`/
+                   `col OP col` WHERE shape, and used to cost two full
+                   extra n-length allocations+copies per comparison even
+                   though the values were only ever read once each. */
+                int a_full = (a.r == n), b_full = (b.r == n);
                 for (int i = 0; i < n; i++) {
-                    mreal x = av.d[i], y = bv.d[i], res;
+                    mreal x = a_full ? AT(a.numeric, i, 0) : a.numeric.d[0];
+                    mreal y = b_full ? AT(b.numeric, i, 0) : b.numeric.d[0];
+                    mreal res;
                     switch (e->kind) {
                         case SQLEXPR_EQ: res = (mreal)(x == y); break;
                         case SQLEXPR_NE: res = (mreal)(x != y); break;
@@ -752,7 +787,6 @@ static SqlEvalResult sql_eval(const SqlExpr *e, const DataFrame *df) {
                     }
                     out.numeric.d[i] = res;
                 }
-                mat_free(av); mat_free(bv);
             }
             sql_eval_free(&a); sql_eval_free(&b);
             return out;
@@ -813,15 +847,47 @@ static SqlEvalResult sql_eval(const SqlExpr *e, const DataFrame *df) {
    the next" with no shared-ownership bookkeeping.
    --------------------------------------------------------------------- */
 
+/* Appends metadata for a numeric column whose values the caller has
+   already written directly into out->numeric at column index
+   numeric_idx - the ColumnMeta/columns-array bookkeeping half of what
+   df_add_numeric_col does, without that function's O(n * n_cols) copy-
+   and-grow half (df_add_numeric_col's own comment: "not optimized for
+   adding many columns one at a time" - every caller below is exactly
+   that, called once per column in a loop, so out->numeric is always
+   pre-sized to its final column count in one mat_new instead). */
+static void sql_append_numeric_meta(DataFrame *out, const char *name, int numeric_idx) {
+    out->columns = (ColumnMeta*)realloc(out->columns, (size_t)(out->n_cols + 1) * sizeof(ColumnMeta));
+    out->columns[out->n_cols].type = COL_NUMERIC;
+    out->columns[out->n_cols].name = frame_strdup(name);
+    out->columns[out->n_cols].index = numeric_idx;
+    out->n_cols++;
+}
+
+/* Row-gather, keeping every column of df - used directly for WHERE (see
+   sql_apply_where below) and once per group inside GROUP BY aggregation
+   (sql_apply_group_select), so its own cost compounds across however
+   many times it's called. Used to build its numeric portion via
+   df_add_numeric_col once per column - O(n * n_cols^2) total (each call
+   re-copies every previously added column), not O(n * n_cols), exactly
+   the misuse df_add_numeric_col's own comment warns about. Measured via
+   tests/performance/bench_frame.py and a controlled split of the
+   benchmarked query (see docs/PERFORMANCE_BACKLOG.md item 5): this
+   was the dominant cost in what had looked like a residual `ORDER BY`
+   gap. Now builds out->numeric in one n x n_numeric allocation and
+   writes each column directly into its final slot. */
 static DataFrame sql_select_rows(const DataFrame *df, const int *rows, int n) {
+    int n_numeric = 0;
+    for (int j = 0; j < df->n_cols; j++) if (df->columns[j].type == COL_NUMERIC) n_numeric++;
+
     DataFrame out = df_new(n);
+    out.numeric = mat_new(n, n_numeric);
+    int numeric_idx = 0;
     for (int j = 0; j < df->n_cols; j++) {
         ColumnMeta cm = df->columns[j];
         if (cm.type == COL_NUMERIC) {
-            Vec col = mat_new(n, 1);
-            for (int i = 0; i < n; i++) col.d[i] = AT(df->numeric, rows[i], cm.index);
-            df_add_numeric_col(&out, cm.name, col);
-            mat_free(col);
+            for (int i = 0; i < n; i++) AT(out.numeric, i, numeric_idx) = AT(df->numeric, rows[i], cm.index);
+            sql_append_numeric_meta(&out, cm.name, numeric_idx);
+            numeric_idx++;
         } else {
             char **col = (char**)malloc((size_t)n * sizeof(char*));
             for (int i = 0; i < n; i++) col[i] = df->string_cols[cm.index][rows[i]];
@@ -845,12 +911,17 @@ static DataFrame sql_apply_where(const SqlExpr *where, const DataFrame *df) {
        per-row mask, the same convention sql_eval's binary operators use
        internally (see sql_broadcast_num). */
     Vec mask_raw = sql_eval_num(where, df);
-    Vec mask = sql_broadcast_num(mask_raw, df->r);
-    mat_free(mask_raw);
+    /* mask_raw is already length df->r in the common case (any comparison/
+       AND/OR already broadcasts internally) - avoid sql_broadcast_num's
+       unconditional extra mat_copy when no broadcast is actually needed;
+       only the rare bare-scalar case (e.g. "WHERE 1 = 1") allocates. */
+    int mask_is_raw = (mask_raw.r == df->r);
+    Vec mask = mask_is_raw ? mask_raw : sql_broadcast_num(mask_raw, df->r);
     int *rows = (int*)malloc((size_t)df->r * sizeof(int));
     int n = 0;
     for (int i = 0; i < df->r; i++) if (mask.d[i] != 0) rows[n++] = i;
-    mat_free(mask);
+    if (!mask_is_raw) mat_free(mask);
+    mat_free(mask_raw);
     DataFrame out = sql_select_rows(df, rows, n);
     free(rows);
     return out;
@@ -963,7 +1034,7 @@ static SqlEvalResult sql_eval_grouped_item(const SqlExpr *e, const DataFrame *gr
     if (e->kind == SQLEXPR_COL) {
         assert(sql_str_in_list(e->col_name, group_cols, n_group_cols) &&
                "sql: a SELECT column not listed in GROUP BY must be wrapped in SUM/AVG/MIN/MAX/COUNT");
-        SqlEvalResult out; out.r = 1; out.strings = NULL;
+        SqlEvalResult out; out.r = 1; out.borrowed = 0; out.strings = NULL;
         if (df_col_type(group_df, e->col_name) == COL_STRING) {
             out.is_string = 1;
             out.strings = (char**)malloc(sizeof(char*));
@@ -1018,6 +1089,10 @@ static DataFrame sql_apply_group_select(const SqlQuery *q, const DataFrame *df) 
     }
 
     DataFrame out = df_new(n_groups);
+    int n_numeric_items = 0;
+    for (int it = 0; it < q->n_items; it++) if (!is_string[it]) n_numeric_items++;
+    out.numeric = mat_new(n_groups, n_numeric_items); /* one allocation, not one per numeric SELECT item - see sql_select_rows's comment */
+    int numeric_idx = 0;
     for (int it = 0; it < q->n_items; it++) {
         const char *name = q->items[it].alias;
         if (!name) name = (q->items[it].expr->kind == SQLEXPR_COL) ? q->items[it].expr->col_name : "expr";
@@ -1026,7 +1101,9 @@ static DataFrame sql_apply_group_select(const SqlQuery *q, const DataFrame *df) 
             for (int g = 0; g < n_groups; g++) free(string_acc[it][g]);
             free(string_acc[it]);
         } else {
-            df_add_numeric_col(&out, name, numeric_acc[it]);
+            for (int g = 0; g < n_groups; g++) AT(out.numeric, g, numeric_idx) = numeric_acc[it].d[g];
+            sql_append_numeric_meta(&out, name, numeric_idx);
+            numeric_idx++;
         }
         mat_free(numeric_acc[it]);
     }
@@ -1035,29 +1112,53 @@ static DataFrame sql_apply_group_select(const SqlQuery *q, const DataFrame *df) 
     return out;
 }
 
+/* Evaluates every SELECT item, same O(n * n_items^2)-vs-O(n * n_items)
+   fix as sql_select_rows above (see its comment) - results are buffered
+   first so n_numeric is known before out.numeric is allocated once,
+   since evaluating twice to count first would waste real work (an
+   aggregate or arithmetic expression, not just a plain column
+   reference). */
 static DataFrame sql_project(const SqlQuery *q, const DataFrame *df) {
+    SqlEvalResult *results = (SqlEvalResult*)malloc((size_t)q->n_items * sizeof(SqlEvalResult));
+    int n_numeric = 0;
+    for (int i = 0; i < q->n_items; i++) {
+        results[i] = sql_eval(q->items[i].expr, df);
+        if (!results[i].is_string) n_numeric++;
+    }
+
     DataFrame out = df_new(df->r);
+    out.numeric = mat_new(df->r, n_numeric);
+    int numeric_idx = 0;
     for (int i = 0; i < q->n_items; i++) {
         SqlSelectItem item = q->items[i];
-        SqlEvalResult r = sql_eval(item.expr, df);
+        SqlEvalResult r = results[i];
         const char *name = item.alias;
         if (!name) name = (item.expr->kind == SQLEXPR_COL) ? item.expr->col_name : "expr";
         /* a bare literal (or anything else that happens to reduce to one
            value) as a plain, non-grouped SELECT item still needs to fill
            every row - e.g. "SELECT 42 AS answer FROM df" - so broadcast
-           up to df->r before handing it to df_add_*_col, which requires
-           an exact df->r-length column (see frame/frame.h). */
+           up to df->r before writing it into out.numeric/out.string_cols,
+           which need an exact df->r-length column (see frame/frame.h). */
         if (r.is_string) {
             char **bs = sql_broadcast_str(r.strings, r.r, df->r);
             df_add_string_col(&out, name, (const char *const *)bs);
             free(bs);
         } else {
-            Vec bv = sql_broadcast_num(r.numeric, df->r);
-            df_add_numeric_col(&out, name, bv);
-            mat_free(bv);
+            /* r.numeric may be a borrowed, possibly-strided column view
+               straight into df (a bare column select never copies now -
+               see SQLEXPR_COL in sql_eval) - read via AT() rather than
+               materializing a broadcast copy first, whether already
+               length df->r or a length-1 scalar needing broadcast (e.g.
+               "SELECT 42 AS answer FROM df"). */
+            int full = (r.numeric.r == df->r);
+            for (int k = 0; k < df->r; k++)
+                AT(out.numeric, k, numeric_idx) = full ? AT(r.numeric, k, 0) : r.numeric.d[0];
+            sql_append_numeric_meta(&out, name, numeric_idx);
+            numeric_idx++;
         }
         sql_eval_free(&r);
     }
+    free(results);
     return out;
 }
 
@@ -1254,50 +1355,79 @@ static inline SqlURadix sql_radix_key(mreal x, int desc) {
     return desc ? ~u : u;
 }
 
-/* LSD radix sort of (key, row index) pairs, one byte of sql_radix_key at
-   a time from least to most significant - O(n) per byte pass (a stable
-   counting sort), O(n) overall for a fixed-width key instead of a
-   comparison sort's O(n log n). Measured via tests/performance/
-   bench_frame.py and a standalone comparison against raw NumPy
-   array.sort(): sql_quicksort_pairs above was 13-21x slower than NumPy's
-   sort at n=100,000/1,000,000 despite matching its O(n log n) complexity
-   class - a SIMD-vectorized, cache-tuned comparison sort's constant
-   factor versus a scalar one, not something closable by tuning the
-   comparison sort further. A fixed-width numeric key sidesteps the
+/* LSD radix sort of (key, row index) pairs, SQL_RADIX_BITS of
+   sql_radix_key at a time from least to most significant - O(n) per
+   pass (a stable counting sort), O(n) overall for a fixed-width key
+   instead of a comparison sort's O(n log n). Measured via
+   tests/performance/bench_frame.py and a standalone comparison against
+   raw NumPy array.sort(): sql_quicksort_pairs above was 13-21x slower
+   than NumPy's sort at n=100,000/1,000,000 despite matching its O(n log
+   n) complexity class - a SIMD-vectorized, cache-tuned comparison sort's
+   constant factor versus a scalar one, not something closable by tuning
+   the comparison sort further. A fixed-width numeric key sidesteps the
    comparison-sort lower bound entirely. Every pass is a stable counting
    sort, so the whole sort is stable by construction (equal keys keep
    their original relative order) - no idx-tiebreak needed here, unlike
    sql_quicksort_pairs/_order above. Also immune to quicksort's classic
    already-sorted/reverse-sorted worst case: every pass costs the same
    regardless of input order. Used above SQL_RADIX_MIN_N; below that, the
-   fixed cost of a full counting pass over the whole array for every byte
-   of the key (4 passes for float, 8 for double) costs more than
-   sql_quicksort_pairs' comparison sort does. */
-#define SQL_RADIX_MIN_N 512
-#define SQL_RADIX_BUCKETS 256
+   fixed cost of a full counting pass for every pass of the key (4 passes
+   for float, 8 for double at 8 bits/pass) costs more than
+   sql_quicksort_pairs' comparison sort does.
 
-static void sql_radix_sort_pairs(SqlNumPair *a, int n, int desc) {
+   8 bits/pass, not wider: a 16-bit digit was tried specifically to
+   attack the n=100,000+ range where this sort's advantage over pandas
+   shrinks (halving the pass count - 4->2 for float - should roughly
+   halve the scatter step's memory traffic, which is what dominates each
+   pass once the working set outgrows cache). Measured with an isolated
+   A/B harness at the same fused-last-pass structure this function uses:
+   16 bits was ~8-9% faster at n=1,000,000, but ~15-20% *slower* at
+   n=100,000 - the bigger per-pass bucket-count table (65,536 buckets
+   instead of 256, each zeroed and prefix-summed on every pass) costs
+   more than the saved passes buy back until the array is considerably
+   larger than 100,000 elements. Since n=100,000 is squarely inside the
+   range this fix targets, 8 bits stays the default rather than adding a
+   size-adaptive dispatch between two digit widths for a trade that only
+   pays off past the range in question - a real finding, not a guess,
+   kept here rather than silently discarded so a future attempt at this
+   same range doesn't have to re-measure it from scratch. */
+#define SQL_RADIX_MIN_N 512
+#define SQL_RADIX_BITS 8
+#define SQL_RADIX_BUCKETS (1 << SQL_RADIX_BITS)
+#define SQL_RADIX_MASK (SQL_RADIX_BUCKETS - 1)
+
+/* order must have room for n ints - the last pass writes row indices
+   directly into it instead of into one more SqlNumPair buffer, saving
+   the separate O(n) order[i] = pairs[i].idx extraction pass a naive
+   "sort then extract" split would otherwise need. a's own final contents
+   are unspecified (a is scratch space once order is filled). */
+static void sql_radix_sort_pairs(SqlNumPair *a, int n, int desc, int *order) {
+    int n_passes = (int)(sizeof(SqlURadix) * 8) / SQL_RADIX_BITS;
     SqlNumPair *tmp = (SqlNumPair*)malloc((size_t)n * sizeof(SqlNumPair));
     SqlNumPair *src = a, *dst = tmp;
-    int count[SQL_RADIX_BUCKETS];
+    int count[SQL_RADIX_BUCKETS]; /* 256 ints at 8 bits/pass - small enough for the stack */
 
-    for (size_t byte = 0; byte < sizeof(SqlURadix); byte++) {
-        int shift = (int)byte * 8;
-        memset(count, 0, sizeof(count));
+    for (int pass = 0; pass < n_passes; pass++) {
+        int shift = pass * SQL_RADIX_BITS;
+        memset(count, 0, (size_t)SQL_RADIX_BUCKETS * sizeof(int));
         for (int i = 0; i < n; i++)
-            count[(sql_radix_key(src[i].key, desc) >> shift) & 0xFF]++;
+            count[(sql_radix_key(src[i].key, desc) >> shift) & SQL_RADIX_MASK]++;
         int total = 0;
         for (int b = 0; b < SQL_RADIX_BUCKETS; b++) { int c = count[b]; count[b] = total; total += c; }
-        for (int i = 0; i < n; i++) {
-            unsigned b = (unsigned)((sql_radix_key(src[i].key, desc) >> shift) & 0xFF);
-            dst[count[b]++] = src[i];
+
+        if (pass == n_passes - 1) {
+            for (int i = 0; i < n; i++) {
+                unsigned b = (unsigned)((sql_radix_key(src[i].key, desc) >> shift) & SQL_RADIX_MASK);
+                order[count[b]++] = src[i].idx;
+            }
+        } else {
+            for (int i = 0; i < n; i++) {
+                unsigned b = (unsigned)((sql_radix_key(src[i].key, desc) >> shift) & SQL_RADIX_MASK);
+                dst[count[b]++] = src[i];
+            }
+            SqlNumPair *t = src; src = dst; dst = t;
         }
-        SqlNumPair *t = src; src = dst; dst = t;
     }
-    /* sizeof(SqlURadix) is always even (4 for float, 8 for double), so
-       src/dst have swapped back to their starting roles - the sorted
-       result is always already in a itself, never in tmp. */
-    assert(src == a);
     free(tmp);
 }
 
@@ -1347,9 +1477,12 @@ static int *sql_order_permutation(const SqlQuery *q, const DataFrame *key_source
         SqlNumPair *pairs = (SqlNumPair*)malloc((size_t)n * sizeof(SqlNumPair));
         Mat col = df_col_numeric(key_source, q->order_by[0]);
         for (int i = 0; i < n; i++) { pairs[i].key = AT(col, i, 0); pairs[i].idx = i; }
-        if (n >= SQL_RADIX_MIN_N) sql_radix_sort_pairs(pairs, n, q->order_desc[0]);
-        else                      sql_quicksort_pairs(pairs, 0, n - 1, q->order_desc[0]);
-        for (int i = 0; i < n; i++) order[i] = pairs[i].idx;
+        if (n >= SQL_RADIX_MIN_N) {
+            sql_radix_sort_pairs(pairs, n, q->order_desc[0], order);
+        } else {
+            sql_quicksort_pairs(pairs, 0, n - 1, q->order_desc[0]);
+            for (int i = 0; i < n; i++) order[i] = pairs[i].idx;
+        }
         free(pairs);
         return order;
     }
