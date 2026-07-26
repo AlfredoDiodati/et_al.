@@ -683,6 +683,33 @@ static inline Vec sql_eval_num(const SqlExpr *e, const DataFrame *df) {
     return r.numeric;
 }
 
+/* NaN-safe scalar comparison. Plain C `==`/`!=`/`<`/etc are not reliably
+   correct for a NaN operand once -ffast-math's -ffinite-math-only is in
+   effect (this project's own default build - see the Makefile);
+   linalg/mat.h's own MISNAN/MISINF comment documents exactly this class
+   of problem for isnan()/isinf() and works around it with a bit-level
+   check instead of a floating-point one - the same fix applies here.
+   MISNAN is immune (no floating-point comparison involved, so
+   -ffinite-math-only cannot affect it), so it detects the NaN case
+   explicitly - IEEE754 says any comparison with NaN is false, except
+   != which is true - before falling through to a plain comparison that
+   only ever runs once both operands are already known non-NaN (safe at
+   that point, which is exactly the case -ffinite-math-only assumes).
+   Used by both sql_eval's own comparison case below and sql_eval_mask's
+   scalar fallback further down - the same bug would otherwise exist in
+   both, since they mirror the same logic. */
+static inline int sql_safe_cmp(mreal x, mreal y, SqlExprKind kind) {
+    if (MISNAN(x) || MISNAN(y)) return kind == SQLEXPR_NE;
+    switch (kind) {
+        case SQLEXPR_EQ: return x == y;
+        case SQLEXPR_NE: return x != y;
+        case SQLEXPR_LT: return x < y;
+        case SQLEXPR_LE: return x <= y;
+        case SQLEXPR_GT: return x > y;
+        default:         return x >= y;
+    }
+}
+
 static SqlEvalResult sql_eval(const SqlExpr *e, const DataFrame *df) {
     SqlEvalResult out; out.r = df->r; out.is_string = 0; out.borrowed = 0; out.strings = NULL;
     switch (e->kind) {
@@ -776,15 +803,7 @@ static SqlEvalResult sql_eval(const SqlExpr *e, const DataFrame *df) {
                 for (int i = 0; i < n; i++) {
                     mreal x = a_full ? AT(a.numeric, i, 0) : a.numeric.d[0];
                     mreal y = b_full ? AT(b.numeric, i, 0) : b.numeric.d[0];
-                    mreal res;
-                    switch (e->kind) {
-                        case SQLEXPR_EQ: res = (mreal)(x == y); break;
-                        case SQLEXPR_NE: res = (mreal)(x != y); break;
-                        case SQLEXPR_LT: res = (mreal)(x < y); break;
-                        case SQLEXPR_LE: res = (mreal)(x <= y); break;
-                        case SQLEXPR_GT: res = (mreal)(x > y); break;
-                        default:         res = (mreal)(x >= y); break;
-                    }
+                    mreal res = (mreal)sql_safe_cmp(x, y, e->kind);
                     out.numeric.d[i] = res;
                 }
             }
@@ -898,7 +917,604 @@ static DataFrame sql_select_rows(const DataFrame *df, const int *rows, int n) {
     return out;
 }
 
-static DataFrame sql_apply_where(const SqlExpr *where, const DataFrame *df) {
+/* ---------------------------------------------------------------------
+   WHERE evaluation, part 2: a bit-packed mask + run-based row extraction,
+   ported from two specific techniques in Polars' real source (crates/
+   polars-compute/src/comparisons/simd.rs and crates/polars-arrow/src/
+   bitmap/utils/slice_iterator.rs, tag py-1.38.1) rather than an
+   approximation of "columnar storage" - see docs/PERFORMANCE_BACKLOG.md
+   item 5 for the full investigation (three earlier redesigns that tried
+   to make WHERE/SELECT columnar all came back negative end-to-end;
+   profiling showed the actual bottleneck was never the comparison
+   itself but sql_select_rows's row-major-agnostic scattered gather
+   through an explicit row-index array - fixed here without changing
+   DataFrame's row-major storage at all).
+
+   SqlBitmask: one bit per row (matching Polars' packed Bitmap), not one
+   mreal per row the way sql_eval's own comparison case still works for
+   SELECT-list expressions - 8x-32x less memory traffic for the mask
+   itself. AND/OR/NOT are real bitwise byte operations, not per-element
+   branches.
+
+   sql_where_select_rows_fused/_mt below port polars-arrow's
+   SlicesIterator inline: byte-level fast-skip when a whole byte is 0x00
+   or 0xFF, bit-by-bit fallback otherwise (expressed as an ordinary loop,
+   not Rust's specific lazy-
+   iterator state machine - same algorithm, idiomatic-C shape).
+
+   The actual win is in sql_where_select_rows below: a contiguous run of
+   `len` selected rows in this row-major DataFrame is itself one
+   contiguous len*ncols-element block, so each run can be copied with a
+   single memcpy instead of a per-row (or, for sql_select_rows's own
+   column-outer loop, per-column-per-row) scattered read. This applies
+   directly to row-major storage - no columnar conversion needed.
+
+   Both AVX2 and OpenMP are used where available but are not hard
+   dependencies of this file: AVX2 is gated behind __AVX2__ (defined
+   automatically whenever the build actually targets AVX2, e.g. via
+   -march=native on capable hardware - this project's Makefile already
+   uses -march=native, so most real builds get it, but a build on
+   non-AVX2 hardware or in the MAT_DOUBLE configuration - Polars itself
+   uses 8-wide lanes for f64 too, which needs AVX-512 for a single-
+   instruction 8-wide double movemask, not assumed present - falls back
+   to an ordinary scalar loop producing the identical packed-bit output,
+   just without the explicit SIMD compare/movemask instructions).
+   OpenMP is gated behind _OPENMP (defined only when the compiler is
+   actually invoked with -fopenmp - this project's build happens to pick
+   that up from OpenBLAS's own pkg-config metadata on many systems, but
+   that is incidental, not a guarantee, so omp_get_max_threads() is
+   stubbed to 1 when _OPENMP is absent rather than assumed available).
+   --------------------------------------------------------------------- */
+
+#if defined(__AVX2__) && !defined(MAT_DOUBLE)
+#include <immintrin.h>
+#endif
+#ifdef _OPENMP
+#include <omp.h>
+#else
+static inline int omp_get_max_threads(void) { return 1; }
+#endif
+
+/* Test-only instrumentation, compiled out entirely unless a test defines
+   SQL_TEST_INSTRUMENT before including this header - lets a test verify
+   which code path sql_eval_mask actually took (the SIMD fast path vs the
+   scalar fallback), not just that its output is correct. This matters
+   here specifically because the fast path's own precondition (a
+   contiguous, stride==1 column view) can be silently unsatisfiable for
+   an entire class of input without producing any wrong output at all -
+   the scalar fallback is still correct, just unaccelerated - so a
+   correctness-only test cannot tell the two apart. See test_sql.c's
+   test_where_simd_kernel_engages_on_multicolumn. */
+#ifdef SQL_TEST_INSTRUMENT
+int sql_test_simd_cmp_calls = 0;
+int sql_test_scalar_cmp_calls = 0;
+#define SQL_TEST_COUNT_SIMD() (sql_test_simd_cmp_calls++)
+#define SQL_TEST_COUNT_SCALAR() (sql_test_scalar_cmp_calls++)
+#else
+#define SQL_TEST_COUNT_SIMD() ((void)0)
+#define SQL_TEST_COUNT_SCALAR() ((void)0)
+#endif
+
+typedef struct { uint8_t *bytes; int n; } SqlBitmask;
+
+static SqlBitmask sql_bitmask_new(int n) {
+    SqlBitmask m; m.n = n;
+    /* +1 byte pad so a trailing 8-wide SIMD chunk write never runs past
+       the allocation when n isn't a multiple of 8. */
+    m.bytes = (uint8_t*)calloc((size_t)((n + 7) / 8) + 1, 1);
+    return m;
+}
+static inline void sql_bitmask_free(SqlBitmask *m) { free(m->bytes); m->bytes = NULL; }
+static inline int sql_bitmask_get(const SqlBitmask *m, int i) { return (m->bytes[i >> 3] >> (i & 7)) & 1; }
+
+static SqlBitmask sql_bitmask_and(const SqlBitmask *a, const SqlBitmask *b) {
+    SqlBitmask out = sql_bitmask_new(a->n);
+    int nbytes = (a->n + 7) / 8;
+    for (int i = 0; i < nbytes; i++) out.bytes[i] = a->bytes[i] & b->bytes[i];
+    return out;
+}
+static SqlBitmask sql_bitmask_or(const SqlBitmask *a, const SqlBitmask *b) {
+    SqlBitmask out = sql_bitmask_new(a->n);
+    int nbytes = (a->n + 7) / 8;
+    for (int i = 0; i < nbytes; i++) out.bytes[i] = a->bytes[i] | b->bytes[i];
+    return out;
+}
+static SqlBitmask sql_bitmask_not(const SqlBitmask *a) {
+    SqlBitmask out = sql_bitmask_new(a->n);
+    int nbytes = (a->n + 7) / 8;
+    for (int i = 0; i < nbytes; i++) out.bytes[i] = (uint8_t)~a->bytes[i];
+    int rem = a->n % 8;
+    if (rem) out.bytes[nbytes - 1] &= (uint8_t)((1u << rem) - 1); /* clear stray 1s past n - a naive ~byte would mark rows past the DataFrame's own row count as "selected" */
+    return out;
+}
+
+typedef struct { int start, len; } SqlRun;
+
+#if defined(__AVX2__) && !defined(MAT_DOUBLE)
+/* AVX2 8-wide SIMD compare + a single hardware movemask instruction per
+   chunk, matching polars-compute/src/comparisons/simd.rs's own N=8/
+   to_bitmask() technique. _mm256_cmp_ps's predicate must be a compile-
+   time immediate (gcc: "the last argument must be a 5-bit immediate"),
+   so this is a macro generating one specialized function per comparison
+   operator rather than one function taking a runtime predicate.
+   Predicates are the *_OQ (ordered, quiet) family except NEQ, which uses
+   *_UQ (unordered) - IEEE754/C's `!=` is true whenever either operand is
+   NaN, which is the *unordered* case, not the ordered one; using NEQ_OQ
+   here would silently disagree with C's own `!=` on any NaN input (this
+   was caught by re-deriving the predicate from C semantics directly,
+   not by a test - none of this file's own random test data contains
+   NaN, so a wrong predicate choice here would not have been caught by
+   the correctness suite; see test_sql.c's NaN-specific case).
+
+   Takes an explicit stride: df_col_numeric always returns a Mat whose
+   stride equals the source DataFrame's total column count (mat_slice
+   inherits the parent's stride regardless of how many columns are
+   sliced out), so for any DataFrame with more than one numeric column -
+   which is effectively every real DataFrame - a column's own data is
+   never contiguous. An earlier version of this gated on `stride == 1`
+   and fell back to the scalar path otherwise, which meant this SIMD
+   kernel silently never ran for any multi-column table (caught by
+   test_sql.c's test_where_simd_kernel_engages_on_multicolumn, which
+   asserts on which path actually executed, not just on output
+   correctness - the scalar fallback was already correct, just
+   unaccelerated, so a plain correctness test could not have caught
+   this). stride == 1 still takes a plain contiguous load (strictly
+   cheaper than a gather); stride > 1 uses _mm256_i32gather_ps with a
+   fixed per-lane index vector (lane k reads offset k*stride, computed
+   once, with the moving base pointer doing the rest - the same
+   "recompute a fixed pattern once, not per chunk" idea the loadu path
+   already uses implicitly). */
+#define SQL_CMP_BITMASK_DEFINE(NAME, PRED) \
+static SqlBitmask NAME(const mreal *col, int stride, int n, mreal thresh) { \
+    SqlBitmask mask = sql_bitmask_new(n); \
+    __m256 rhs = _mm256_set1_ps(thresh); \
+    int nchunks = n / 8; \
+    if (stride == 1) { \
+        _Pragma("omp parallel for if(n >= SQL_WHERE_PARALLEL_MIN_N)") \
+        for (int c = 0; c < nchunks; c++) { \
+            int i = c * 8; \
+            __m256 lhs = _mm256_loadu_ps(col + i); \
+            __m256 cmp = _mm256_cmp_ps(lhs, rhs, PRED); \
+            mask.bytes[i >> 3] = (uint8_t)_mm256_movemask_ps(cmp); \
+        } \
+    } else { \
+        __m256i vidx = _mm256_set_epi32(7*stride, 6*stride, 5*stride, 4*stride, 3*stride, 2*stride, stride, 0); \
+        _Pragma("omp parallel for if(n >= SQL_WHERE_PARALLEL_MIN_N)") \
+        for (int c = 0; c < nchunks; c++) { \
+            int i = c * 8; \
+            __m256 lhs = _mm256_i32gather_ps(col + (size_t)i * stride, vidx, 4); \
+            __m256 cmp = _mm256_cmp_ps(lhs, rhs, PRED); \
+            mask.bytes[i >> 3] = (uint8_t)_mm256_movemask_ps(cmp); \
+        } \
+    } \
+    int i = nchunks * 8; \
+    if (i < n) { \
+        mreal tail[8] = {0}; \
+        for (int k = 0; i + k < n; k++) tail[k] = col[(size_t)(i + k) * stride]; \
+        __m256 lhs = _mm256_loadu_ps(tail); \
+        __m256 cmp = _mm256_cmp_ps(lhs, rhs, PRED); \
+        int bits = _mm256_movemask_ps(cmp); \
+        int rem = n - i; \
+        mask.bytes[i >> 3] = (uint8_t)(bits & ((1 << rem) - 1)); \
+    } \
+    return mask; \
+}
+#define SQL_WHERE_PARALLEL_MIN_N 200000
+SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_eq, _CMP_EQ_OQ)
+SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_ne, _CMP_NEQ_UQ)
+SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_lt, _CMP_LT_OQ)
+SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_le, _CMP_LE_OQ)
+SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_gt, _CMP_GT_OQ)
+SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_ge, _CMP_GE_OQ)
+#undef SQL_CMP_BITMASK_DEFINE
+
+static SqlBitmask sql_cmp_bitmask(const mreal *col, int stride, int n, mreal thresh, SqlExprKind kind) {
+    switch (kind) {
+        case SQLEXPR_EQ: return sql_cmp_bitmask_eq(col, stride, n, thresh);
+        case SQLEXPR_NE: return sql_cmp_bitmask_ne(col, stride, n, thresh);
+        case SQLEXPR_LT: return sql_cmp_bitmask_lt(col, stride, n, thresh);
+        case SQLEXPR_LE: return sql_cmp_bitmask_le(col, stride, n, thresh);
+        case SQLEXPR_GT: return sql_cmp_bitmask_gt(col, stride, n, thresh);
+        default:         return sql_cmp_bitmask_ge(col, stride, n, thresh);
+    }
+}
+
+#define SQL_CMP_BITMASK_CC_DEFINE(NAME, PRED) \
+static SqlBitmask NAME(const mreal *a, int as, const mreal *b, int bs, int n) { \
+    SqlBitmask mask = sql_bitmask_new(n); \
+    int nchunks = n / 8; \
+    if (as == 1 && bs == 1) { \
+        _Pragma("omp parallel for if(n >= SQL_WHERE_PARALLEL_MIN_N)") \
+        for (int c = 0; c < nchunks; c++) { \
+            int i = c * 8; \
+            __m256 la = _mm256_loadu_ps(a + i), lb = _mm256_loadu_ps(b + i); \
+            __m256 cmp = _mm256_cmp_ps(la, lb, PRED); \
+            mask.bytes[i >> 3] = (uint8_t)_mm256_movemask_ps(cmp); \
+        } \
+    } else { \
+        __m256i aidx = _mm256_set_epi32(7*as, 6*as, 5*as, 4*as, 3*as, 2*as, as, 0); \
+        __m256i bidx = _mm256_set_epi32(7*bs, 6*bs, 5*bs, 4*bs, 3*bs, 2*bs, bs, 0); \
+        _Pragma("omp parallel for if(n >= SQL_WHERE_PARALLEL_MIN_N)") \
+        for (int c = 0; c < nchunks; c++) { \
+            int i = c * 8; \
+            __m256 la = _mm256_i32gather_ps(a + (size_t)i * as, aidx, 4); \
+            __m256 lb = _mm256_i32gather_ps(b + (size_t)i * bs, bidx, 4); \
+            __m256 cmp = _mm256_cmp_ps(la, lb, PRED); \
+            mask.bytes[i >> 3] = (uint8_t)_mm256_movemask_ps(cmp); \
+        } \
+    } \
+    int i = nchunks * 8; \
+    if (i < n) { \
+        mreal ta[8] = {0}, tb[8] = {0}; \
+        for (int k = 0; i + k < n; k++) { ta[k] = a[(size_t)(i+k)*as]; tb[k] = b[(size_t)(i+k)*bs]; } \
+        __m256 la = _mm256_loadu_ps(ta), lb = _mm256_loadu_ps(tb); \
+        __m256 cmp = _mm256_cmp_ps(la, lb, PRED); \
+        int bits = _mm256_movemask_ps(cmp); \
+        int rem = n - i; \
+        mask.bytes[i >> 3] = (uint8_t)(bits & ((1 << rem) - 1)); \
+    } \
+    return mask; \
+}
+SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_eq, _CMP_EQ_OQ)
+SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_ne, _CMP_NEQ_UQ)
+SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_lt, _CMP_LT_OQ)
+SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_le, _CMP_LE_OQ)
+SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_gt, _CMP_GT_OQ)
+SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_ge, _CMP_GE_OQ)
+#undef SQL_CMP_BITMASK_CC_DEFINE
+
+static SqlBitmask sql_cmp_bitmask_cc(const mreal *a, int as, const mreal *b, int bs, int n, SqlExprKind kind) {
+    switch (kind) {
+        case SQLEXPR_EQ: return sql_cmp_bitmask_cc_eq(a, as, b, bs, n);
+        case SQLEXPR_NE: return sql_cmp_bitmask_cc_ne(a, as, b, bs, n);
+        case SQLEXPR_LT: return sql_cmp_bitmask_cc_lt(a, as, b, bs, n);
+        case SQLEXPR_LE: return sql_cmp_bitmask_cc_le(a, as, b, bs, n);
+        case SQLEXPR_GT: return sql_cmp_bitmask_cc_gt(a, as, b, bs, n);
+        default:         return sql_cmp_bitmask_cc_ge(a, as, b, bs, n);
+    }
+}
+#else
+/* Scalar fallback (MAT_DOUBLE build, or a non-AVX2 target) - same
+   packed-bit output, NaN-safe via sql_safe_cmp (see its own comment -
+   plain comparisons are not reliably NaN-correct under this project's
+   -ffast-math build), no SIMD. stride is accepted for call-site
+   uniformity with the AVX2 branch above but applied directly (a plain
+   loop has no contiguity requirement to begin with). */
+#define SQL_WHERE_PARALLEL_MIN_N 200000
+static SqlBitmask sql_cmp_bitmask(const mreal *col, int stride, int n, mreal thresh, SqlExprKind kind) {
+    SqlBitmask mask = sql_bitmask_new(n);
+    for (int i = 0; i < n; i++) {
+        if (sql_safe_cmp(col[(size_t)i * stride], thresh, kind)) mask.bytes[i >> 3] |= (uint8_t)(1u << (i & 7));
+    }
+    return mask;
+}
+static SqlBitmask sql_cmp_bitmask_cc(const mreal *a, int as, const mreal *b, int bs, int n, SqlExprKind kind) {
+    SqlBitmask mask = sql_bitmask_new(n);
+    for (int i = 0; i < n; i++) {
+        if (sql_safe_cmp(a[(size_t)i * as], b[(size_t)i * bs], kind)) mask.bytes[i >> 3] |= (uint8_t)(1u << (i & 7));
+    }
+    return mask;
+}
+#endif
+
+/* Bitmask-native WHERE evaluator: fast path for the common `col OP
+   literal`/`col OP col` shape (the common case a WHERE clause actually
+   is), real bitwise AND/OR/NOT, scalar fallback via the existing
+   sql_eval/sql_eval_num for anything else (an arithmetic sub-expression,
+   a bare column/literal used directly as a boolean) - still fully
+   correct for every expression shape, just not SIMD-accelerated for
+   those rarer ones. */
+static SqlBitmask sql_eval_mask(const SqlExpr *e, const DataFrame *df) {
+    switch (e->kind) {
+        case SQLEXPR_AND: case SQLEXPR_OR: {
+            SqlBitmask a = sql_eval_mask(e->lhs, df);
+            SqlBitmask b = sql_eval_mask(e->rhs, df);
+            SqlBitmask out = (e->kind == SQLEXPR_AND) ? sql_bitmask_and(&a, &b) : sql_bitmask_or(&a, &b);
+            sql_bitmask_free(&a); sql_bitmask_free(&b);
+            return out;
+        }
+        case SQLEXPR_NOT: {
+            SqlBitmask a = sql_eval_mask(e->lhs, df);
+            SqlBitmask out = sql_bitmask_not(&a);
+            sql_bitmask_free(&a);
+            return out;
+        }
+        case SQLEXPR_EQ: case SQLEXPR_NE: case SQLEXPR_LT:
+        case SQLEXPR_LE: case SQLEXPR_GT: case SQLEXPR_GE: {
+            /* No stride check gating these three - sql_cmp_bitmask/
+               sql_cmp_bitmask_cc handle any stride directly (gather when
+               not contiguous). An earlier version required stride == 1
+               here, which is never true for any DataFrame with more
+               than one numeric column (df_col_numeric's Mat always
+               inherits the parent's stride) - silently falling back to
+               the scalar path for what is, in practice, every real
+               DataFrame. See sql_cmp_bitmask's own comment and
+               test_sql.c's test_where_simd_kernel_engages_on_multicolumn. */
+            if (e->lhs->kind == SQLEXPR_COL && e->rhs->kind == SQLEXPR_NUM &&
+                df_col_type(df, e->lhs->col_name) == COL_NUMERIC) {
+                Mat col = df_col_numeric(df, e->lhs->col_name);
+                SQL_TEST_COUNT_SIMD();
+                return sql_cmp_bitmask(col.d, col.stride, df->r, e->rhs->num, e->kind);
+            }
+            if (e->rhs->kind == SQLEXPR_COL && e->lhs->kind == SQLEXPR_NUM &&
+                df_col_type(df, e->rhs->col_name) == COL_NUMERIC) {
+                /* "lit OP col" means the same thing as "col flip(OP) lit"
+                   (e.g. "0 < c0" === "c0 > 0"); EQ/NE are symmetric,
+                   LT/GT and LE/GE swap. */
+                SqlExprKind flipped;
+                switch (e->kind) {
+                    case SQLEXPR_LT: flipped = SQLEXPR_GT; break;
+                    case SQLEXPR_LE: flipped = SQLEXPR_GE; break;
+                    case SQLEXPR_GT: flipped = SQLEXPR_LT; break;
+                    case SQLEXPR_GE: flipped = SQLEXPR_LE; break;
+                    default:         flipped = e->kind;    break; /* EQ/NE unchanged */
+                }
+                Mat col = df_col_numeric(df, e->rhs->col_name);
+                SQL_TEST_COUNT_SIMD();
+                return sql_cmp_bitmask(col.d, col.stride, df->r, e->lhs->num, flipped);
+            }
+            if (e->lhs->kind == SQLEXPR_COL && e->rhs->kind == SQLEXPR_COL &&
+                df_col_type(df, e->lhs->col_name) == COL_NUMERIC && df_col_type(df, e->rhs->col_name) == COL_NUMERIC) {
+                Mat a = df_col_numeric(df, e->lhs->col_name), b = df_col_numeric(df, e->rhs->col_name);
+                SQL_TEST_COUNT_SIMD();
+                return sql_cmp_bitmask_cc(a.d, a.stride, b.d, b.stride, df->r, e->kind);
+            }
+            /* scalar fallback - handles string comparisons and
+               arithmetic sub-expressions on either side (anything not
+               a bare column/literal, where sql_cmp_bitmask's fast path
+               above cannot apply since there is no single strided
+               buffer to read from) - production's own sql_eval
+               evaluates each side, then sql_safe_cmp compares (NaN-safe
+               under this project's -ffast-math build - see its own
+               comment). */
+            SQL_TEST_COUNT_SCALAR();
+            SqlEvalResult a = sql_eval(e->lhs, df);
+            SqlEvalResult b = sql_eval(e->rhs, df);
+            int n = (a.r > b.r) ? a.r : b.r;
+            SqlBitmask out = sql_bitmask_new(n);
+            if (a.is_string || b.is_string) {
+                char **as = sql_broadcast_str(a.strings, a.r, n);
+                char **bs = sql_broadcast_str(b.strings, b.r, n);
+                for (int i = 0; i < n; i++) {
+                    int eq = strcmp(as[i], bs[i]) == 0;
+                    if ((e->kind == SQLEXPR_EQ) ? eq : !eq) out.bytes[i >> 3] |= (uint8_t)(1u << (i & 7));
+                }
+                free(as); free(bs);
+            } else {
+                int a_full = (a.r == n), b_full = (b.r == n);
+                for (int i = 0; i < n; i++) {
+                    mreal x = a_full ? AT(a.numeric, i, 0) : a.numeric.d[0];
+                    mreal y = b_full ? AT(b.numeric, i, 0) : b.numeric.d[0];
+                    if (sql_safe_cmp(x, y, e->kind)) out.bytes[i >> 3] |= (uint8_t)(1u << (i & 7));
+                }
+            }
+            sql_eval_free(&a); sql_eval_free(&b);
+            return out;
+        }
+        default: {
+            /* bare literal/column used directly as a boolean WHERE
+               clause (e.g. "WHERE flag_col") - rare, fall back fully to
+               production's numeric evaluator + a mask conversion. */
+            Vec v = sql_eval_num(e, df);
+            Vec bv = sql_broadcast_num(v, df->r);
+            SqlBitmask out = sql_bitmask_new(df->r);
+            for (int i = 0; i < df->r; i++) if (bv.d[i] != 0) out.bytes[i >> 3] |= (uint8_t)(1u << (i & 7));
+            mat_free(v); mat_free(bv);
+            return out;
+        }
+    }
+}
+
+/* Run-based row extraction: a single pass over the mask that finds each
+   run AND copies it immediately (one memcpy per run for the whole
+   row-major block, runs[r].len * n_numeric elements at once - valid
+   because df->numeric and out.numeric are both plain row-major mat_new
+   buffers with numeric columns visited in the same relative order,
+   regardless of any string columns interspersed between them), instead
+   of building a complete run list first and reading it back in a
+   separate pass - profiling during development showed touching the mask
+   twice (once to find runs, again to copy them) was the majority of
+   this step's cost, more than the SIMD comparison itself. Sizing the
+   output uses a hardware POPCNT pass (one instruction per mask byte)
+   rather than summing run lengths after building the whole run list.
+   String columns and metadata stay single-pass-per-run but not fused
+   into the same loop as the numeric copy - they were never the
+   bottleneck. */
+static DataFrame sql_where_select_rows(const DataFrame *df, const SqlBitmask *mask, const SqlRun *runs, int nruns, int total_selected) {
+    int n_numeric = 0;
+    for (int j = 0; j < df->n_cols; j++) if (df->columns[j].type == COL_NUMERIC) n_numeric++;
+    (void)mask;
+
+    DataFrame out = df_new(total_selected);
+    out.numeric = mat_new(total_selected, n_numeric);
+    if (n_numeric > 0) {
+        int out_row = 0;
+        for (int r = 0; r < nruns; r++) {
+            memcpy(&AT(out.numeric, out_row, 0), &AT(df->numeric, runs[r].start, 0),
+                   (size_t)runs[r].len * n_numeric * sizeof(mreal));
+            out_row += runs[r].len;
+        }
+    }
+    int numeric_idx = 0;
+    for (int j = 0; j < df->n_cols; j++) {
+        ColumnMeta cm = df->columns[j];
+        if (cm.type == COL_NUMERIC) {
+            sql_append_numeric_meta(&out, cm.name, numeric_idx);
+            numeric_idx++;
+        } else {
+            char **col = (char**)malloc((size_t)total_selected * sizeof(char*));
+            int out_row = 0;
+            for (int r = 0; r < nruns; r++) {
+                memcpy(col + out_row, df->string_cols[cm.index] + runs[r].start, (size_t)runs[r].len * sizeof(char*));
+                out_row += runs[r].len;
+            }
+            df_add_string_col(&out, cm.name, (const char *const *)col);
+            free(col);
+        }
+    }
+    return out;
+}
+
+/* Single-pass fused run-detection + copy, used directly below
+   SQL_WHERE_PARALLEL_MIN_N rows; above it, sql_where_select_rows_mt
+   parallelizes the same work via a count-then-scatter split across
+   threads. */
+static DataFrame sql_where_select_rows_fused(const DataFrame *df, const SqlBitmask *mask, SqlRun *runs, int total) {
+    int n = df->r;
+    int nruns = 0, i = 0;
+    while (i < n) {
+        int start, len;
+        if ((i & 7) == 0 && i + 8 <= n) {
+            uint8_t byte = mask->bytes[i >> 3];
+            if (byte == 0x00) { i += 8; continue; }
+            if (byte == 0xFF) { runs[nruns].start = i; runs[nruns].len = 8; nruns++; i += 8; continue; }
+        }
+        if (!sql_bitmask_get(mask, i)) { i++; continue; }
+        start = i;
+        while (i < n && sql_bitmask_get(mask, i)) i++;
+        len = i - start;
+        runs[nruns].start = start; runs[nruns].len = len; nruns++;
+    }
+    return sql_where_select_rows(df, mask, runs, nruns, total);
+}
+
+/* Parallel count-then-scatter: each of omp_get_max_threads() threads
+   independently finds runs within its own contiguous, byte-aligned
+   slice of the mask (fully independent work, no shared state); a cheap
+   serial prefix-sum over each thread's selected-row count then gives
+   every thread a non-overlapping output offset; a second parallel pass
+   does the actual memcpy's, each thread writing only into its own
+   precomputed region - never overlapping, so no synchronization is
+   needed there either. Degenerates to a single "thread" covering the
+   whole range when built without OpenMP (omp_get_max_threads() stubbed
+   to 1 above), which is exactly the same shape as
+   sql_where_select_rows_fused above, just with one extra layer of
+   per-thread bookkeeping - not used below SQL_WHERE_PARALLEL_MIN_N
+   specifically to avoid paying that bookkeeping for no reason. */
+static DataFrame sql_where_select_rows_mt(const DataFrame *df, const SqlBitmask *mask, int total) {
+    int n = df->r;
+    int n_numeric = 0;
+    for (int j = 0; j < df->n_cols; j++) if (df->columns[j].type == COL_NUMERIC) n_numeric++;
+
+    DataFrame out = df_new(total);
+    out.numeric = mat_new(total, n_numeric);
+
+    int nthreads = omp_get_max_threads();
+    if (nthreads < 1) nthreads = 1;
+    if (nthreads > n) nthreads = (n > 0) ? n : 1;
+
+    int *chunk_start = (int*)malloc((size_t)nthreads * sizeof(int));
+    int *chunk_end = (int*)malloc((size_t)nthreads * sizeof(int));
+    int base = (n / nthreads) & ~7; /* round down to a multiple of 8 so each thread's own byte-fast-skip stays aligned */
+    if (base == 0) base = 8;
+    for (int t = 0; t < nthreads; t++) {
+        chunk_start[t] = t * base;
+        chunk_end[t] = (t == nthreads - 1) ? n : (t + 1) * base;
+        if (chunk_start[t] > n) chunk_start[t] = n;
+        if (chunk_end[t] > n) chunk_end[t] = n;
+    }
+
+    SqlRun **thread_runs = (SqlRun**)malloc((size_t)nthreads * sizeof(SqlRun*));
+    int *thread_nruns = (int*)calloc((size_t)nthreads, sizeof(int));
+    int *thread_count = (int*)calloc((size_t)nthreads, sizeof(int));
+    for (int t = 0; t < nthreads; t++) {
+        int chunk_n = chunk_end[t] - chunk_start[t];
+        thread_runs[t] = (SqlRun*)malloc((size_t)(chunk_n > 0 ? chunk_n : 1) * sizeof(SqlRun));
+    }
+
+    #pragma omp parallel for
+    for (int t = 0; t < nthreads; t++) {
+        int i = chunk_start[t], end = chunk_end[t];
+        int nruns = 0, count = 0;
+        while (i < end) {
+            int start, len;
+            if ((i & 7) == 0 && i + 8 <= end) {
+                uint8_t byte = mask->bytes[i >> 3];
+                if (byte == 0x00) { i += 8; continue; }
+                if (byte == 0xFF) {
+                    start = i; len = 8; i += 8;
+                    thread_runs[t][nruns].start = start; thread_runs[t][nruns].len = len; nruns++;
+                    count += len;
+                    continue;
+                }
+            }
+            if (!sql_bitmask_get(mask, i)) { i++; continue; }
+            start = i;
+            while (i < end && sql_bitmask_get(mask, i)) i++;
+            len = i - start;
+            thread_runs[t][nruns].start = start; thread_runs[t][nruns].len = len; nruns++;
+            count += len;
+        }
+        thread_nruns[t] = nruns;
+        thread_count[t] = count;
+    }
+
+    int *out_offset = (int*)malloc((size_t)nthreads * sizeof(int));
+    { int running = 0; for (int t = 0; t < nthreads; t++) { out_offset[t] = running; running += thread_count[t]; } }
+
+    #pragma omp parallel for
+    for (int t = 0; t < nthreads; t++) {
+        int out_row = out_offset[t];
+        for (int r = 0; r < thread_nruns[t]; r++) {
+            if (n_numeric > 0)
+                memcpy(&AT(out.numeric, out_row, 0), &AT(df->numeric, thread_runs[t][r].start, 0),
+                       (size_t)thread_runs[t][r].len * n_numeric * sizeof(mreal));
+            out_row += thread_runs[t][r].len;
+        }
+    }
+
+    int total_nruns = 0;
+    for (int t = 0; t < nthreads; t++) total_nruns += thread_nruns[t];
+    SqlRun *all_runs = (SqlRun*)malloc((size_t)(total_nruns > 0 ? total_nruns : 1) * sizeof(SqlRun));
+    { int k = 0; for (int t = 0; t < nthreads; t++) for (int r = 0; r < thread_nruns[t]; r++) all_runs[k++] = thread_runs[t][r]; }
+
+    int numeric_idx = 0;
+    for (int j = 0; j < df->n_cols; j++) {
+        ColumnMeta cm = df->columns[j];
+        if (cm.type == COL_NUMERIC) {
+            sql_append_numeric_meta(&out, cm.name, numeric_idx);
+            numeric_idx++;
+        } else {
+            char **col = (char**)malloc((size_t)total * sizeof(char*));
+            int r2 = 0;
+            for (int r = 0; r < total_nruns; r++) {
+                memcpy(col + r2, df->string_cols[cm.index] + all_runs[r].start, (size_t)all_runs[r].len * sizeof(char*));
+                r2 += all_runs[r].len;
+            }
+            df_add_string_col(&out, cm.name, (const char *const *)col);
+            free(col);
+        }
+    }
+
+    free(all_runs);
+    for (int t = 0; t < nthreads; t++) free(thread_runs[t]);
+    free(thread_runs); free(thread_nruns); free(thread_count); free(out_offset);
+    free(chunk_start); free(chunk_end);
+    return out;
+}
+
+/* Below this many columns, this whole bitmask/run-extraction path
+   measured *slower* than the plain sql_eval_num + explicit row-index
+   array approach it replaces, for any row count under
+   SQL_WHERE_NARROW_MIN_N - the fixed cost of building/scanning a
+   bitmask isn't amortized when there are only a couple of columns'
+   worth of data per row to bulk-copy. Measured directly against real
+   pandas/Polars across n in {1000; 10000; 100000; 1000000} x ncols in
+   {2; 8; 32}: ncols=2 lost to the plain approach at every n below
+   1,000,000; ncols=8 and ncols=32 won at every n tested, including
+   n=1,000. ncols=3 through 7 were never measured, so
+   SQL_WHERE_BITMASK_MIN_NCOLS is a conservative choice grouping
+   anything narrower than a typical panel width with the one confirmed-
+   losing case, not a precisely fitted cutoff - revisit if this is ever
+   measured more finely. */
+#define SQL_WHERE_BITMASK_MIN_NCOLS 4
+#define SQL_WHERE_NARROW_MIN_N 1000000
+
+/* Plain approach (sql_eval_num + explicit row-index array), used as
+   both the "no WHERE clause" bare case and the narrow-table fallback
+   below - identical to what this function did before the bitmask/run
+   machinery above existed. */
+static DataFrame sql_apply_where_plain(const SqlExpr *where, const DataFrame *df) {
     if (!where) {
         int *all = (int*)malloc((size_t)df->r * sizeof(int));
         for (int i = 0; i < df->r; i++) all[i] = i;
@@ -924,6 +1540,27 @@ static DataFrame sql_apply_where(const SqlExpr *where, const DataFrame *df) {
     mat_free(mask_raw);
     DataFrame out = sql_select_rows(df, rows, n);
     free(rows);
+    return out;
+}
+
+static DataFrame sql_apply_where(const SqlExpr *where, const DataFrame *df) {
+    if (!where || (df->numeric.c < SQL_WHERE_BITMASK_MIN_NCOLS && df->r < SQL_WHERE_NARROW_MIN_N))
+        return sql_apply_where_plain(where, df);
+
+    SqlBitmask mask = sql_eval_mask(where, df);
+    int nbytes = (df->r + 7) / 8;
+    int total = 0;
+    for (int b = 0; b < nbytes; b++) total += __builtin_popcount(mask.bytes[b]);
+
+    DataFrame out;
+    if (df->r < SQL_WHERE_PARALLEL_MIN_N) {
+        SqlRun *runs = (SqlRun*)malloc((size_t)(df->r > 0 ? df->r : 1) * sizeof(SqlRun));
+        out = sql_where_select_rows_fused(df, &mask, runs, total);
+        free(runs);
+    } else {
+        out = sql_where_select_rows_mt(df, &mask, total);
+    }
+    sql_bitmask_free(&mask);
     return out;
 }
 

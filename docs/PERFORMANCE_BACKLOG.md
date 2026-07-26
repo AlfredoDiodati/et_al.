@@ -362,20 +362,199 @@ points, not the low-single-digits the redundant-broadcast fix bought).
 separate function from `sql_eval` with its own always-owned `mat_new(1,1)`
 construction, never touched by this change.
 
+**Storage-layout investigation, all three redesigns ruled out.** The
+borrowed-view fix left one open question: is `WHERE`'s remaining gap to
+pandas (~5.1-5.2x at 1,000,000 rows) a storage-layout problem - row-major
+`DataFrame.numeric` (chosen so it can go straight into `mat_mul`/`gemm`
+for regression/MLP work with zero conversion) vs. Polars/pandas'
+column-major internal storage (each column its own contiguous buffer)?
+A dedicated design-space benchmark
+(`tests/performance/bench_storage_layout.c`, not part of `bench.sh`)
+measured row-major vs. column-major vs. a "query-time columnar cache"
+directly, across a dense sweep of row counts (1,000 to 1,000,000) and
+column counts (4 to 64), for the access patterns `WHERE`/`SELECT`/
+`GROUP BY`/`ORDER BY` actually have. Findings: column-major wins
+decisively for single-column-touch patterns (filter, sort), but
+row-major wins once a query touches most/all of a table's columns
+(confirmed only at ncols >= 8; the crossover fraction was ~50-100%
+depending on width - see that file's own comments for the full grid).
+Critically, the *conversion cost* between layouts was measured directly
+too: row-major-to-columnar took ~17ms at n=1,000,000/ncols=8 (more
+expensive than col-to-row, ~5.7ms, since gathering one column at a time
+from a wide row-major source has poor per-column locality) - large
+enough that a query would need roughly a dozen repeated uses of the same
+converted table before columnar storage's own per-query win amortizes
+that cost. Three real prototypes were built and benchmarked against
+production, real pandas, and real Polars on identical data (not just
+against each other) to settle this empirically rather than debate it:
+  - **v2** (`tests/performance/bench_sql_hybrid.c`): per-column cache,
+    lazily materialized once a column is referenced 2+ times in one
+    query (a threshold derived from the storage-layout sweep's own
+    numbers). Result: statistically indistinguishable from production
+    (ratios 0.94x-1.53x) across every query/size/width tested - the
+    real evaluator's extra overhead (intermediate-mask allocations
+    `AND`/`OR` already pay) ate the isolated benchmark's predicted gain.
+  - **v3** (`tests/performance/bench_sql_columnar.c`): a genuinely
+    columnar evaluator, in "cold" (convert every call) and "warm"
+    (source pre-converted once, simulating data that was columnar from
+    load time - the best case for this design) variants. Cold lost to
+    production in every row tested (0.44x-0.94x). Warm - the fairest
+    comparison to what real Polars actually does, since it never pays a
+    conversion at all - still lost or barely tied in most rows
+    (0.77x-1.03x), because `sql_select_rows`'s own row-extraction step
+    (which neither v2 nor v3 touched) turned out to be the actual
+    bottleneck, not the column-vs-row evaluation itself.
+
+**Root cause, found by profiling rather than guessing further:**
+splitting a `WHERE` query's wall time into "compute the mask" vs. "turn
+selected rows into an output DataFrame" showed the second step
+dominating - and it dominates regardless of storage layout, because
+`sql_select_rows` builds an explicit array of selected row *indices*
+and gathers through it one row (for numeric columns: one row *per
+column*) at a time. That scattered-gather cost is orthogonal to whether
+the source is row-major or column-major; neither v2 nor v3 ever touched
+it.
+
+**Fourth fix landed - ported two specific techniques from Polars' real
+source** (not an approximation of "being columnar" - `crates/
+polars-compute/src/comparisons/simd.rs` and `crates/polars-arrow/src/
+bitmap/utils/slice_iterator.rs`, tag `py-1.38.1`, verified by reading the
+actual Rust, not by assumption):
+  1. A **bit-packed comparison mask** (`SqlBitmask` - 1 bit per row, not
+     one `mreal`) computed via real AVX2 SIMD (`_mm256_cmp_ps` + a single
+     `_mm256_movemask_ps` per 8-row chunk), instead of a value-per-row
+     float mask built by a scalar branch-and-store loop.
+  2. **Run-based row extraction**: `SlicesIterator`'s algorithm (byte-
+     level fast-skip when a whole mask byte is `0x00`/`0xFF`, bit-by-bit
+     fallback otherwise) finds maximal runs of selected rows, and each
+     run is copied with a *single* `memcpy` for the whole row-major
+     block (`run.len * ncols` elements) instead of `sql_select_rows`'s
+     column-outer, index-array-gather loop. This is the fix that
+     actually mattered - it applies directly to row-major storage, no
+     columnar conversion needed at all.
+
+Prototyped as **v4** (`bench_sql_faithful.c`) with a first, meaningful
+bug: the initial run-extraction still looped column-outer per run
+instead of one `memcpy` for the whole block - fixing that alone (**v5**,
+`bench_sql_v5.c`) improved v4's own numbers by another 15-25%.
+**v6** (`bench_sql_v6.c`) added OpenMP parallelism (comparison kernel and
+a count-then-scatter parallel row-extraction; both `#pragma omp parallel
+for if(n >= 200000)`, so small queries stay single-threaded rather than
+pay thread-spawn overhead for nothing), plus a narrow-table fallback
+(`ncols < 4 && n < 1,000,000` calls the plain approach directly - this
+combination was measured to be *slower* than production, since a
+bitmask's fixed overhead isn't amortized when there's only a couple of
+columns' worth of data to bulk-copy per run; ncols 3-7 were never
+measured individually, so 4 is a conservative grouping, not a precisely
+fitted cutoff). Measured against real pandas/Polars across n in
+{1,000; 10,000; 100,000; 1,000,000} x ncols in {2; 8; 32} (72
+combinations, not just the two sizes `bench_frame.py` itself uses): v6
+beat real Polars in every query at ncols=8/32, tied or beat pandas on
+most queries, and lands within roughly 1.3-1.6x of both on the one
+remaining hard case (large n, narrow table, no sort) rather than the
+original 5x.
+
+**Two real bugs found while porting v6 into `frame/sql.h` for
+real** (both caught by dedicated unit tests, *not* by the extensive
+prototype benchmarking or the existing `STRESS=1` fuzzers, which never
+happened to exercise the exact conditions that trigger either one):
+  1. **The AVX2 kernel never actually ran, for any of the ncols>=2
+     benchmarks above.** `df_col_numeric` returns a `Mat` whose stride
+     always equals the source DataFrame's *total* column count
+     (`mat_slice` inherits the parent's stride regardless of how many
+     columns are sliced out), so a column's own view is contiguous
+     (`stride == 1`) only when the DataFrame has exactly one numeric
+     column - never true for any of the multi-column tables this was
+     benchmarked on. The gating condition (`if (col.stride == 1) ...`)
+     silently fell back to the scalar path every time; the fallback was
+     already correct, so nothing in the correctness suite or the
+     benchmark's own output-checking could have caught it. Caught by a
+     new test (`test_where_simd_kernel_engages_on_multicolumn`) that
+     asserts on which code path actually ran (via a `SQL_TEST_INSTRUMENT`
+     counter, compiled out of normal builds entirely), not just on
+     output correctness. **Fixed**: the AVX2 kernel now takes an
+     explicit stride and uses `_mm256_i32gather_ps` (a real gather
+     instruction, part of AVX2) when `stride != 1`, keeping the cheaper
+     contiguous `_mm256_loadu_ps` path only for the genuinely-contiguous
+     case. All of v4/v5/v6's own measured numbers above were achieved
+     *without* this kernel ever running - meaning they came entirely
+     from the run-extraction technique, and the real production numbers
+     (below) are now better than any of the prototype numbers, since the
+     SIMD comparison finally does real work too.
+  2. **NaN handling in the scalar comparison path is unreliable under
+     this project's own `-ffast-math` build flag.** IEEE754/C says
+     `NaN != anything` (including itself) is `true`; this project's
+     default build enables `-ffinite-math-only` (part of `-ffast-math`),
+     under which a plain C `!=`/`==` on a genuine NaN value is
+     unspecified - the same class of problem `linalg/mat.h`'s own
+     `MISNAN`/`MISINF` comment already documents for `isnan()`/`isinf()`,
+     now found in `sql.h`'s own comparison logic too (pre-existing,
+     not introduced by this port - `sql_eval`'s comparison case used the
+     same plain operators from the start). Caught by
+     `test_where_nan_comparison`, the first test in this file to ever
+     use a NaN value. Separately, the AVX2 port's own predicate choice
+     for `!=` had a related but distinct bug: `_CMP_NEQ_OQ` (ordered)
+     returns `false` for NaN, disagreeing with C's `!=`; the correct
+     predicate is `_CMP_NEQ_UQ` (unordered). **Fixed**: a new
+     `sql_safe_cmp` helper explicitly checks `MISNAN` on both operands
+     before falling through to a plain comparison (bit-level check, so
+     `-ffinite-math-only` cannot affect it - the same technique
+     `MISNAN` itself uses), applied to *both* `sql_eval`'s own
+     comparison case and `sql_eval_mask`'s scalar fallback (the same
+     underlying bug existed in both, since one mirrors the other); the
+     AVX2 kernel uses the corrected `_CMP_NEQ_UQ` predicate.
+
+Both fixes were verified before being trusted: `make test`,
+`STRESS=1 ./check.sh` (all 22 suites), and a full AddressSanitizer+
+UndefinedBehaviorSanitizer `make test` + `STRESS=1` run all pass clean.
+A new randomized stress test
+(`test_random_where_wide_and_parallel_stress`) was added specifically
+because every *existing* random fuzzer in `test_sql.c` only ever used
+3-column, <=30-row DataFrames - never wide enough
+(`ncols >= SQL_WHERE_BITMASK_MIN_NCOLS`) or large enough
+(`n >= SQL_WHERE_PARALLEL_MIN_N`) to reach the bitmask/AVX2/gather path
+or the OpenMP-parallel path at all. It sweeps n in {50; 500; 50,000;
+200,000; 400,001} x ncols in {1; 2; 4; 9} (spanning below/at/above both
+thresholds, including ncols=1 to exercise the still-contiguous
+non-gather branch specifically) with injected NaN values, checked
+against a naive reference that itself computes NaN behavior via
+`MISNAN` rather than trusting `-ffast-math`-compiled comparisons -
+155 queries, all matching.
+
+Measured via `bench_frame.py`, run twice for consistency (before this
+port -> after):
+
+| query | n | before | after (run 1) | after (run 2) |
+|---|---|---|---|---|
+| `WHERE` alone, no sort | 100,000 | 2.14x-2.65x slower | **0.87x (faster than pandas)** | 0.88x |
+| `WHERE` alone, no sort | 1,000,000 | 5.13x-5.77x slower | **1.05x (near parity)** | 1.04x |
+| `WHERE` + `ORDER BY` | 10,000 | 0.27x-0.30x | 0.19x | 0.18x |
+| `WHERE` + `ORDER BY` | 100,000 | 1.04x-1.21x slower | **0.59x (faster than pandas)** | 0.57x |
+| `WHERE` + `ORDER BY` | 1,000,000 | not previously isolated at this n | **0.53x (faster than pandas)** | 0.54x |
+| `GROUP BY` + `SUM`/`AVG` (unaffected - separate code path, `sql_apply_group_select` never touched) | 10,000 | 2.15x-2.20x slower | 2.18x slower | (not rerun, already confirmed unaffected by design) |
+
+`WHERE` alone went from being the single largest remaining gap in this
+project's benchmark suite to at-parity-or-faster than pandas. `WHERE`+
+`ORDER BY` now beats pandas at every size tested, not just the small-n
+case the borrowed-view fix already had. `GROUP BY` is correctly
+unaffected, since `sql_apply_group_select` calls `sql_select_rows`
+directly and was never touched by this port.
+
 Next steps, not yet tried:
-- Extending the same borrowed-view idea to `sql_eval_num`'s callers
-  (arithmetic, `AND`/`OR`, `NOT`) instead of having them defensively copy
-  - would require auditing each for stride-safety the way comparisons and
-  `sql_project` just were. Deliberately deferred: those paths are rarer
-  in real `WHERE`/`SELECT` clauses than a bare column comparison, and the
-  audit-per-site cost is the same regardless of how many are done at
-  once, so it's a fine place to stop for now rather than a fix that was
-  tried and failed.
-- `WHERE` is still meaningfully slower than pandas at 1,000,000 rows
-  (~5.1-5.2x) - the fundamentally different evaluator architecture
-  (per-node tree walk allocating/freeing at every level, vs. pandas'
-  single vectorized boolean-mask pass) is the remaining structural gap,
-  not copy overhead anymore.
+- `sql_eval_num`'s callers (arithmetic, `AND`/`OR`, `NOT` on the numeric
+  path outside `WHERE`'s own top-level boolean tree) still go through
+  the original, unaccelerated comparison logic - same reasoning as
+  before, deliberately deferred rather than failed.
+- The `MAT_DOUBLE` build and non-AVX2 targets use the scalar fallback
+  kernel unconditionally (correct, NaN-safe via `sql_safe_cmp`, but not
+  SIMD-accelerated) - not benchmarked separately, since this project's
+  own benchmark suite only exercises the default `float`/AVX2
+  configuration.
+- The gather-based strided SIMD path's own performance relative to a
+  genuinely contiguous columnar layout was not isolated separately from
+  the run-extraction fix - the combined win is measured and real, but
+  which of the two techniques contributes how much of the remaining gap
+  to pandas/Polars at large n is not broken out.
 
 ## 6. `mat_T` (transpose, `linalg/mat.h`)
 

@@ -1,3 +1,4 @@
+#define SQL_TEST_INSTRUMENT 1
 #include "../../frame/sql.h"
 #include <stdio.h>
 
@@ -269,6 +270,93 @@ static void test_bare_literal_select_and_where(void) {
     DataFrame r3 = df_sql(&df, "SELECT country FROM df WHERE 1 = 2");
     assert(r3.r == 0); /* a contradiction keeps none */
     df_free(&r3);
+
+    df_free(&df);
+}
+
+/* --- NaN in a WHERE comparison: IEEE754/C says NaN != anything
+   (including itself) is true, and NaN compared with ==/</<=/>/>= is
+   always false. sql_apply_where's AVX2 fast path uses _mm256_cmp_ps's
+   *_OQ (ordered) predicates for ==/</<=/>/>=, matching that - but !=
+   specifically needs *_UQ (unordered), not *_OQ: the ordered variant
+   returns false whenever either operand is NaN, which disagrees with
+   C's own `!=` (true for NaN). Using NEQ_OQ here would silently exclude
+   NaN rows from a `!=` filter that should have kept them - none of this
+   file's own random test data contains NaN, so this could not have been
+   caught any other way; the fixed rows below (ncols=4, so this exercises
+   the AVX2 bitmask path directly rather than the narrow-table plain
+   fallback - see SQL_WHERE_BITMASK_MIN_NCOLS in frame/sql.h) pin the
+   correct behavior explicitly. --- */
+static void test_where_nan_comparison(void) {
+    puts("WHERE with a NaN value: != must keep it (IEEE754 NaN != anything is true), = must exclude it");
+    DataFrame df = df_new(4);
+    Vec x  = mat_lit(4, 1, 1.0f, (mreal)NAN, 3.0f, (mreal)NAN);
+    Vec c1 = mat_lit(4, 1, 0.f, 0.f, 0.f, 0.f);
+    Vec c2 = mat_lit(4, 1, 0.f, 0.f, 0.f, 0.f);
+    Vec c3 = mat_lit(4, 1, 0.f, 0.f, 0.f, 0.f);
+    df_add_numeric_col(&df, "x", x);
+    df_add_numeric_col(&df, "c1", c1);
+    df_add_numeric_col(&df, "c2", c2);
+    df_add_numeric_col(&df, "c3", c3);
+    mat_free(x); mat_free(c1); mat_free(c2); mat_free(c3);
+
+    DataFrame ne = df_sql(&df, "SELECT x FROM df WHERE x != 1");
+    assert(ne.r == 3); /* rows 1,2,3: NaN!=1 (true), 3!=1 (true), NaN!=1 (true) */
+    df_free(&ne);
+
+    DataFrame eq = df_sql(&df, "SELECT x FROM df WHERE x = 1");
+    assert(eq.r == 1); /* only row 0 - NaN=1 is always false, never a false positive */
+    CHECK(AT(df_col_numeric(&eq, "x"), 0, 0), 1.0f);
+    df_free(&eq);
+
+    /* col-vs-col path (sql_cmp_bitmask_cc) - same predicate, same fix */
+    DataFrame ne_cc = df_sql(&df, "SELECT x FROM df WHERE x != c1");
+    assert(ne_cc.r == 4); /* every row: 1!=0, NaN!=0, 3!=0, NaN!=0 all true */
+    df_free(&ne_cc);
+
+    df_free(&df);
+}
+
+/* --- sql_eval_mask's AVX2 fast path only fires when a column's Mat view
+   has stride==1 (contiguous). df_col_numeric always returns
+   mat_slice(df->numeric, ...), and mat_slice always inherits the
+   PARENT's stride regardless of how many columns are sliced out - so
+   for any DataFrame with more than one numeric column, every column
+   view has stride == df->numeric.c, never 1. The fast path's own
+   precondition is then unsatisfiable for the entire class of input this
+   engine actually sees in practice (real DataFrames almost always have
+   more than one column) - not a wrong-output bug (the scalar fallback
+   is still correct, aside from the separate NaN issue above), so a
+   plain correctness assertion cannot detect it; this test checks which
+   path actually ran instead, via the SQL_TEST_INSTRUMENT counters (see
+   frame/sql.h). Caught only because this test asks the question
+   directly - every earlier correctness check in this file, and every
+   benchmark run this technique was measured with, used a multi-column
+   DataFrame and would have passed/produced real speedups from the
+   row-extraction path alone regardless of whether this counter was
+   ever nonzero. --- */
+static void test_where_simd_kernel_engages_on_multicolumn(void) {
+    puts("WHERE on a multi-column DataFrame should use the AVX2 fast path, not silently fall back to the scalar path");
+    DataFrame df = df_new(4);
+    Vec x  = mat_lit(4, 1, 1.f, 2.f, 3.f, 4.f);
+    Vec c1 = mat_lit(4, 1, 0.f, 0.f, 0.f, 0.f);
+    Vec c2 = mat_lit(4, 1, 0.f, 0.f, 0.f, 0.f);
+    Vec c3 = mat_lit(4, 1, 0.f, 0.f, 0.f, 0.f);
+    df_add_numeric_col(&df, "x", x);
+    df_add_numeric_col(&df, "c1", c1);
+    df_add_numeric_col(&df, "c2", c2);
+    df_add_numeric_col(&df, "c3", c3);
+    mat_free(x); mat_free(c1); mat_free(c2); mat_free(c3);
+
+    sql_test_simd_cmp_calls = 0;
+    sql_test_scalar_cmp_calls = 0;
+    DataFrame r = df_sql(&df, "SELECT x FROM df WHERE x > 1");
+    assert(r.r == 3); /* output is correct either way - that's not what this test is checking */
+    df_free(&r);
+
+    assert(sql_test_simd_cmp_calls > 0 &&
+           "sql_eval_mask's AVX2 fast path never ran for a multi-column DataFrame's WHERE clause - "
+           "it silently fell back to the scalar path (see this test's own header comment)");
 
     df_free(&df);
 }
@@ -751,6 +839,116 @@ static void test_random_order_by_radix_stress(void) {
     printf("  30 randomized n/column/direction combinations matched the independent reference\n");
 }
 
+/* --- Every random stress test above uses random_panel_for_sql, which
+   only ever builds 3-numeric-column DataFrames with at most 30 rows -
+   never wide enough (ncols >= SQL_WHERE_BITMASK_MIN_NCOLS) or large
+   enough (n >= SQL_WHERE_PARALLEL_MIN_N) to reach the bitmask/AVX2/
+   gather comparison path or the OpenMP-parallel row-extraction path in
+   frame/sql.h at all - every one of those fuzzers only ever exercises
+   sql_apply_where_plain, the pre-existing code this port left
+   untouched. This test sweeps both row count (including sizes at/above
+   SQL_WHERE_PARALLEL_MIN_N) and column count (including sizes at/above
+   SQL_WHERE_BITMASK_MIN_NCOLS, and ncols=1 specifically to also
+   exercise the still-contiguous non-gather branch) together, with
+   occasional NaN values injected, so the fuzzer actually reaches every
+   regime this port added - not just the two hand-written cases in
+   test_where_nan_comparison/test_where_simd_kernel_engages_on_multicolumn. --- */
+static DataFrame random_wide_panel(int n, int ncols, int inject_nan) {
+    DataFrame df = df_new(n);
+    char name[16];
+    for (int j = 0; j < ncols; j++) {
+        Vec col = mat_new(n, 1);
+        for (int i = 0; i < n; i++) {
+            if (inject_nan && rand() % 37 == 0) { col.d[i] = (mreal)NAN; continue; }
+            switch (rand() % 4) {
+                case 0: col.d[i] = 0; break;
+                case 1: col.d[i] = -((mreal)(rand() % 100000)) / 7; break;
+                case 2: col.d[i] = ((mreal)(rand() % 100000)) / 3; break;
+                default: col.d[i] = (mreal)(rand() % 7 - 3); break;
+            }
+        }
+        snprintf(name, sizeof name, "c%d", j);
+        df_add_numeric_col(&df, name, col);
+        mat_free(col);
+    }
+    return df;
+}
+
+static void test_random_where_wide_and_parallel_stress(void) {
+    puts("  random WHERE on wide/large DataFrames (bitmask+SIMD+gather path, OpenMP-parallel row-extraction path) vs. a naive reference, with injected NaN");
+    srand(47);
+    int sizes[] = { 50, 500, 50000, 200000, 400001 }; /* below/at/above SQL_WHERE_PARALLEL_MIN_N */
+    int ncols_opts[] = { 1, 2, 4, 9 };                /* below/at/above SQL_WHERE_BITMASK_MIN_NCOLS; ncols=1 exercises the contiguous (non-gather) branch specifically */
+    const char *ops[6] = { "=", "!=", "<", "<=", ">", ">=" };
+    int trials = 0;
+    for (size_t si = 0; si < sizeof(sizes)/sizeof(sizes[0]); si++) {
+        for (size_t ci = 0; ci < sizeof(ncols_opts)/sizeof(ncols_opts[0]); ci++) {
+            int n = sizes[si], ncols = ncols_opts[ci];
+            DataFrame df = random_wide_panel(n, ncols, 1);
+            Mat c0 = df_col_numeric(&df, "c0");
+
+            for (int op_i = 0; op_i < 6; op_i++) {
+                char query[128];
+                snprintf(query, sizeof query, "SELECT c0 FROM df WHERE c0 %s 0", ops[op_i]);
+                DataFrame r = df_sql(&df, query);
+                int expected = 0;
+                for (int i = 0; i < n; i++) {
+                    mreal x = AT(c0, i, 0);
+                    int keep;
+                    /* naive reference recomputes NaN behavior explicitly
+                       via MISNAN - a plain `x != 0` here would be just as
+                       unreliable under -ffast-math as the bug being
+                       fixed, so this cannot just trust the C operators
+                       either. */
+                    if (MISNAN(x)) keep = (op_i == 1);
+                    else switch (op_i) {
+                        case 0: keep = (x == 0); break;
+                        case 1: keep = (x != 0); break;
+                        case 2: keep = (x < 0); break;
+                        case 3: keep = (x <= 0); break;
+                        case 4: keep = (x > 0); break;
+                        default: keep = (x >= 0); break;
+                    }
+                    if (keep) expected++;
+                }
+                assert(r.r == expected);
+                df_free(&r);
+                trials++;
+            }
+
+            if (ncols >= 2) {
+                Mat c1 = df_col_numeric(&df, "c1");
+                DataFrame r = df_sql(&df, "SELECT c0 FROM df WHERE c0 != c1");
+                int expected = 0;
+                for (int i = 0; i < n; i++) {
+                    mreal x = AT(c0, i, 0), y = AT(c1, i, 0);
+                    int keep = (MISNAN(x) || MISNAN(y)) ? 1 : (x != y);
+                    if (keep) expected++;
+                }
+                assert(r.r == expected);
+                df_free(&r);
+                trials++;
+            }
+
+            {
+                DataFrame r = df_sql(&df, "SELECT c0 FROM df WHERE c0 > -50000 AND c0 < 50000");
+                int expected = 0;
+                for (int i = 0; i < n; i++) {
+                    mreal x = AT(c0, i, 0);
+                    int keep = !MISNAN(x) && x > -50000 && x < 50000;
+                    if (keep) expected++;
+                }
+                assert(r.r == expected);
+                df_free(&r);
+                trials++;
+            }
+
+            df_free(&df);
+        }
+    }
+    printf("  %d random wide/parallel WHERE queries (n in {50,500,50000,200000,400001}, ncols in {1,2,4,9}, injected NaN) matched the naive reference\n", trials);
+}
+
 static void test_random_combined_pipeline_stress(void) {
     puts("  random WHERE + GROUP BY + ORDER BY pipeline vs. a full naive reference (fixed seed)");
     srand(52);
@@ -881,6 +1079,8 @@ int main(void) {
     test_group_by_reference_check();
     test_composite_aggregate_arithmetic();
     test_bare_literal_select_and_where();
+    test_where_nan_comparison();
+    test_where_simd_kernel_engages_on_multicolumn();
     test_sql_try_valid_query();
     test_sql_try_syntax_errors();
     test_sql_try_data_errors();
@@ -893,6 +1093,7 @@ int main(void) {
         test_random_group_by_stress();
         test_random_order_by_stress();
         test_random_order_by_radix_stress();
+        test_random_where_wide_and_parallel_stress();
         test_random_combined_pipeline_stress();
         test_random_sql_try_stress();
     }

@@ -1,4 +1,4 @@
-test run: zo 26 jul 2026  9:01:03 CEST
+test run: zo 26 jul 2026 19:04:29 CEST
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -281,6 +281,8 @@ independent reference: GROUP BY + SUM matches a naive hand-written accumulation
 GROUP BY: two aggregates combined arithmetically (e.g. SUM(gdp)/SUM(population))
 GROUP BY: an aggregate combined with a plain literal (e.g. SUM(gdp) / 100)
 adversarial: a bare literal as the entire SELECT item, and as the entire WHERE condition
+WHERE with a NaN value: != must keep it (IEEE754 NaN != anything is true), = must exclude it
+WHERE on a multi-column DataFrame should use the AVX2 fast path, not silently fall back to the scalar path
 df_sql_try: a valid query returns SQL_OK and the same result df_sql would
 df_sql_try: malformed query text is SQL_ERR_SYNTAX, independent of the DataFrame
 df_sql_try: syntactically valid SQL that doesn't fit the schema is SQL_ERR_DATA

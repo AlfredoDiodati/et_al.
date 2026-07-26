@@ -55,6 +55,39 @@ tests/performance/bench_storage_layout: tests/performance/bench_storage_layout.c
 tests/performance/bench_sql_hybrid: tests/performance/bench_sql_hybrid.c frame/sql.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/performance/bench_sql_hybrid.c $(LDLIBS) -o tests/performance/bench_sql_hybrid
 
+# Second prototype, contrasting with bench_sql_hybrid above - a
+# genuinely columnar (Polars-style) evaluator with no caching
+# heuristics, in COLD (convert every call) and WARM (source pre-
+# converted once) variants. See the file header. Not part of
+# `test`/`bench.sh`.
+tests/performance/bench_sql_columnar: tests/performance/bench_sql_columnar.c frame/sql.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/bench_sql_columnar.c $(LDLIBS) -o tests/performance/bench_sql_columnar
+
+# Third prototype - a precise (not approximate) port of two specific
+# techniques from Polars' real source (bit-packed comparison masks via
+# AVX2, run-based row extraction via a SlicesIterator port), targeting
+# sql_select_rows's scattered row-gather specifically, identified as the
+# real bottleneck by the two prototypes above. See the file header and
+# docs/PERFORMANCE_BACKLOG.md item 5. Not part of `test`/`bench.sh`.
+tests/performance/bench_sql_faithful: tests/performance/bench_sql_faithful.c frame/sql.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/bench_sql_faithful.c $(LDLIBS) -o tests/performance/bench_sql_faithful
+
+# v5 - fuses v4's separate run-detection and bulk-copy passes into one,
+# diagnosed via direct phase timing of v4 (not guessed) to be the
+# dominant remaining cost. See the file header and
+# docs/PERFORMANCE_BACKLOG.md item 5. Not part of `test`/`bench.sh`.
+tests/performance/bench_sql_v5: tests/performance/bench_sql_v5.c frame/sql.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/bench_sql_v5.c $(LDLIBS) -o tests/performance/bench_sql_v5
+
+# v6 - parallelizes v5's comparison kernel and fused row-extraction via
+# OpenMP (a count-then-scatter pattern for extraction), guarded by a
+# size threshold so small queries stay single-threaded. -fopenmp is
+# already part of $(CFLAGS) via openblas's own pkg-config metadata, not
+# newly added here. See the file header and
+# docs/PERFORMANCE_BACKLOG.md item 5. Not part of `test`/`bench.sh`.
+tests/performance/bench_sql_v6: tests/performance/bench_sql_v6.c frame/sql.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/bench_sql_v6.c $(LDLIBS) -o tests/performance/bench_sql_v6
+
 libmat.so: tests/performance/bench_mat.c linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_mat.c $(LDLIBS) -o libmat.so
 
@@ -69,6 +102,14 @@ libad.so: tests/performance/bench_ad.c ad.h special.h linalg/solver.h linalg/dec
 
 libframe.so: tests/performance/bench_frame.c frame/sql.h frame/csv.h frame/txt.h frame/npy.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_frame.c $(LDLIBS) -o libframe.so
+
+# ctypes-loadable .so exposing production df_sql plus all three session
+# prototypes (v2/v3/v4) side by side, for bench_sql_compare.py to time
+# against real pandas AND real Polars on identical data/queries. See
+# tests/performance/bench_sql_compare.c's header and
+# docs/PERFORMANCE_BACKLOG.md item 5.
+libsqlcompare.so: tests/performance/bench_sql_compare.c frame/sql.h frame/csv.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_sql_compare.c $(LDLIBS) -o libsqlcompare.so
 
 librandom.so: tests/performance/bench_random.c random.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_random.c $(LDLIBS) -o librandom.so
