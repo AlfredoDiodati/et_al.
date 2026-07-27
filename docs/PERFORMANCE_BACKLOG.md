@@ -995,9 +995,9 @@ Polars.
 
 ## 3. `mat_norm('F')` (`linalg/mat.h`)
 
-Already switched from LAPACK `?lange` to `cblas_?nrm2` (see
-docs/MATRIX_DOCUMENTATION.md), but not yet at parity with NumPy's
-`sqrt(sum(x**2))`, though the gap shrinks as n grows:
+**Resolved, ported to production.** Was already switched from LAPACK
+`?lange` to `cblas_?nrm2` (see docs/MATRIX_DOCUMENTATION.md), but not yet
+at parity with NumPy's `sqrt(sum(x**2))`, though the gap shrank as n grew:
 
 | n | ours vs NumPy |
 |---|---|
@@ -1005,9 +1005,108 @@ docs/MATRIX_DOCUMENTATION.md), but not yet at parity with NumPy's
 | 1024 | 1.52x slower |
 | 2048 | 1.14x slower |
 
-Next step: not yet scoped - possibly per-call overhead (`mat_new`-style
-allocation, function call indirection) rather than the reduction itself,
-worth profiling before changing anything further.
+Profiled directly rather than guessing further: the remaining gap wasn't
+per-call overhead (`mat_new`-style allocation, function-call indirection -
+`mat_norm` allocates nothing and is a single BLAS call for the contiguous
+case) but `cblas_?nrm2`'s own overflow/underflow-safe scaling, real extra
+work a Frobenius norm doesn't strictly need any more than `?lange`'s row/
+column-sum structure was needed - the identical reasoning that already
+ruled out `?lange` for this same operation. Measured three candidates in
+an isolated microbenchmark first (`tests/performance/bench_mat.c`'s own
+prototype scaffolding, since removed after the winner was chosen), best-
+of-N over 200-500 reps, `-O3 -march=native -ffast-math`:
+
+| n | `cblas_?nrm2` | naive sum-of-squares loop | manual 4-way accumulator | manual 8-way | `cblas_?dot(x,x)` |
+|---|---|---|---|---|---|
+| 256 | 0.0272ms | 0.0178ms | 0.0059ms (tied w/ naive) | 0.0239ms (worse) | **0.0034ms** |
+| 1024 | 0.2089ms | 0.1537ms | 0.1584ms (tied) | 0.3985ms (worse) | **0.1373ms** |
+| 2048 | 1.1007ms | 0.9632ms | 0.9620ms (tied) | 1.7441ms (worse) | 0.9976ms (~tied w/ naive) |
+
+Manual unrolling bought nothing - the compiler already auto-vectorizes
+the plain reduction loop under `-ffast-math` (which permits the
+reassociation this needs), and 8-way unrolling actively hurt (too many
+live accumulators to keep vectorized well). `cblas_?dot(x, x)` - BLAS's
+own tuned dot-product kernel, still with none of `nrm2`'s overflow
+protection - won outright at n=256/1024 and tied the naive loop at
+n=2048. Confirmed through the real `bench_mat.py` harness (not just the
+isolated microbenchmark):
+
+| n | `cblas_?nrm2` (old production) | naive loop | `cblas_?dot` |
+|---|---|---|---|
+| 256 | 2.09x slower, err 5.97e-08 | 1.48x slower, err 5.97e-08 | 1.19x slower, err **0.00** |
+| 1024 | 1.48x slower, err 1.43e-06 | 1.12x slower, err 8.70e-06 | 1.03x slower, err **0.00** |
+| 2048 | 1.14x slower, err 1.07e-05 | 0.97x (faster), err 6.95e-05 | 1.00x (parity), err **0.00** |
+
+`cblas_?dot` won on both axes: closer to NumPy's own time at every size,
+and its blocked/vectorized summation happened to agree with NumPy's
+reference value to the bit - better numerics than the naive loop, not
+just better speed, likely because both `cblas_?dot`'s summation strategy
+and NumPy's own reduction are similarly blocked/pairwise rather than a
+plain serial accumulate.
+
+**Ported to production**: `mat_norm('F'/'E')` now computes
+`sqrt(cblas_?dot(x, x))` instead of `cblas_?nrm2(x)` - a contiguous
+matrix is one `dot`-of-itself call over the whole flat buffer; a strided
+view dots each row against itself and sums the row totals before one
+final `sqrt` (simpler than before, too - no per-row `sqrt`-then-resquare
+round trip, since `dot` already returns each row's sum of squares
+directly). The accepted trade-off: like the naive loop, `cblas_?dot` has
+no overflow protection for elements whose square would exceed float32
+range (~1.8e19) - a deliberate choice, consistent with this project's
+existing default of trading strict IEEE robustness for speed
+(`-ffast-math` throughout), not a concern at the econometrics-panel/
+ML-array magnitudes this library targets, and confirmed with the user
+before porting given it's a real (if narrow) behavior change.
+
+Verified: `make test` (`test_mat.c`'s existing `mat_norm('F')` coverage
+already exercises both the contiguous and strided-view fast paths, plus
+zero-matrix and single-element cases - all still pass unchanged, no new
+test needed since nothing about the *interface* changed, only the
+internal computation), `STRESS=1 ./check.sh` (all 22 suites), and a full
+AddressSanitizer+UndefinedBehaviorSanitizer build in both normal and
+`STRESS=1` modes - all clean.
+
+Re-measured via the official `bench_mat.py` (not the isolated
+prototype), `norm(F)` row:
+
+| n | ours | NumPy | ratio |
+|---|---|---|---|
+| 256 | 0.009ms | 0.008ms | 1.18x slower |
+| 1024 | 0.161ms | 0.157ms | 1.02x slower |
+| 2048 | 0.989ms | 0.985ms | 1.00x (parity), err 0.00 at every size |
+
+Down from 2.02x/1.52x/1.14x slower (and originally 12.06x/8.68x/6.16x
+slower, before the `?lange` fix). `mat_norm('F')` is now at or within 2%
+of NumPy's own time at every size this project benchmarks.
+
+**Caveat on the above, and a proper fix for it.** The "down from
+2.02x/1.52x/1.14x" comparison stitches together two separate `bench_mat.py`
+runs - one before this port, one after - not one controlled, same-process
+measurement of both implementations. That's an inherently weaker check
+than the isolated-microbenchmark comparison used to *choose* `cblas_?dot`
+in the first place (which did measure `nrm2`/naive/`dot` together in one
+run), and it was fair to ask whether the reported win could partly be
+cross-run noise (thermal state, background load, OS scheduling) rather
+than real. Re-verified properly: the old `cblas_?nrm2` implementation was
+temporarily reintroduced as `c_norm_nrm2` in
+`tests/performance/bench_mat.c`/`.py` (not `linalg/mat.h` - production
+keeps only the `cblas_?dot` version) purely so it could be measured
+back-to-back with current production `c_norm` against the same NumPy
+reference, in one script execution:
+
+| n | production (`cblas_?dot`) | old (`cblas_?nrm2`), reintroduced for this check | NumPy |
+|---|---|---|---|
+| 256 | 0.009ms - 1.20x slower | 0.015ms - 1.99x slower | 0.008ms |
+| 1024 | 0.160ms - 1.03x slower | 0.225ms - 1.44x slower | 0.156ms |
+| 2048 | 0.963ms - 1.01x slower | 1.099ms - 1.15x slower | 0.956ms |
+
+`cblas_?dot` beats `cblas_?nrm2` by ~40% at n=256, ~29% at n=1024, ~12% at
+n=2048, all measured in a single execution - closely matching (and
+slightly exceeding) both of the separate-run numbers above. The win holds
+under the stricter methodology, not just the looser one. `c_norm_nrm2`
+was removed again from `bench_mat.c`/`.py` after this check, consistent
+with this project's practice of not leaving one-off comparison scaffolding
+in the official benchmark suite once it's served its purpose.
 
 ## 4. `stats_autocov` at d >= 32 (`stats.h`)
 
