@@ -168,6 +168,43 @@ static void test_order_by_stability_equal_keys(void) {
     df_free(&r); df_free(&df);
 }
 
+static void test_order_by_nan_key_does_not_corrupt_real_order(void) {
+    puts("adversarial: a NaN among ORDER BY key values must not reorder the real values relative to each other");
+    /* sql_cmp_pair (frame/sql.h) computes cmp = (a > b) - (a < b): both
+       > and < are false whenever either operand is NaN, so NaN compares
+       "tied" with every real value, and the tie then falls through to
+       comparing original array position instead of value - a real
+       violation of the transitivity a comparison sort depends on (NaN
+       "ties" with 5, NaN "ties" with -3, but 5 and -3 do not tie with
+       each other). Whether this actually corrupts the final order
+       depends on where in the array the NaN sits relative to the values
+       around it - most orderings of a NaN among distinct reals sort
+       fine by luck. This exact permutation is a minimized, deterministic
+       reproduction that does not: found via this session's new
+       hash-based GROUP BY prototype, whose row-construction order
+       differs from production's sort-based one - same downstream
+       sql_order_permutation code, a different order feeding into it is
+       all it took to expose this. Same class of bug as the WHERE
+       NaN-comparison bug fixed earlier (see sql_safe_cmp and
+       docs/PERFORMANCE_BACKLOG.md item 5), in a different function. */
+    Vec x = mat_lit(11, 1, 8.f, 7.f, 1.f, 6.f, 5.f, 0.f, 9.f, (mreal)NAN, 2.f, 3.f, 4.f);
+    DataFrame df = df_new(11);
+    df_add_numeric_col(&df, "x", x);
+    mat_free(x);
+
+    DataFrame r = df_sql(&df, "SELECT x FROM df ORDER BY x");
+    assert(r.r == 11);
+    mreal prev = 0; int have_prev = 0;
+    for (int i = 0; i < r.r; i++) {
+        mreal v = AT(df_col_numeric(&r, "x"), i, 0);
+        if (MISNAN(v)) continue;
+        assert((!have_prev || v >= prev) &&
+               "sql_cmp_pair: a NaN key reordered two real values relative to each other");
+        prev = v; have_prev = 1;
+    }
+    df_free(&r); df_free(&df);
+}
+
 static void test_group_by_single_unique_value(void) {
     puts("adversarial: GROUP BY a column with only one unique value yields one group");
     DataFrame df = make_panel();
@@ -973,31 +1010,133 @@ static void test_random_combined_pipeline_stress(void) {
                 if (strcmp(g[i], groups[kx]) == 0) { totals[kx] += AT(x, i, 0); counts[kx]++; }
         }
 
-        /* naive reference sort by total DESC, starting from alphabetical
-           (A,B,C) order and only swapping on strict inequality - stable,
-           and matches df_sql's own tie-breaking (its groups are also
-           built in alphabetical order - see sql_build_groups - then
-           stably sorted on top), so equal totals cannot cause a flaky
-           mismatch here */
-        int present[3], n_present = 0;
-        for (int kx = 0; kx < 3; kx++) if (counts[kx] > 0) present[n_present++] = kx;
-        for (int i = 1; i < n_present; i++) {
-            int cur = present[i]; int j = i - 1;
-            while (j >= 0 && totals[present[j]] < totals[cur]) { present[j + 1] = present[j]; j--; }
-            present[j + 1] = cur;
-        }
+        int n_present = 0;
+        for (int kx = 0; kx < 3; kx++) if (counts[kx] > 0) n_present++;
 
+        /* Checked without assuming any particular order among TIED
+           totals: `ORDER BY total DESC` only guarantees a non-
+           increasing sequence of totals, never a specific relative
+           order for two groups whose totals are exactly equal (this
+           project's own GROUP BY builds groups via a hash table now,
+           not sorted-by-name - see docs/PERFORMANCE_BACKLOG.md item 2 -
+           so a previous version of this test that assumed "alphabetical
+           order, stable-sorted" tie-breaking was relying on an
+           incidental property of the OLD implementation, not a real
+           SQL guarantee; found by STRESS - genuine ties in `total` are
+           rare but not impossible with this fixture's small integer-ish
+           `x` values). Each output row is matched to its reference
+           group by NAME (unique per row) instead of by a precomputed
+           tie-broken position, and the descending-order property itself
+           is checked structurally. */
         assert(r.r == n_present);
-        for (int i = 0; i < n_present; i++) {
-            int kx = present[i];
-            assert(strcmp(df_col_string(&r, "g")[i], groups[kx]) == 0);
+        for (int i = 0; i < r.r; i++) {
+            const char *name = df_col_string(&r, "g")[i];
+            int kx = -1;
+            for (int c = 0; c < 3; c++) if (strcmp(name, groups[c]) == 0) { kx = c; break; }
+            assert(kx >= 0 && counts[kx] > 0);
             CHECK_REL(AT(df_col_numeric(&r, "total"), i, 0), totals[kx]);
             CHECK(AT(df_col_numeric(&r, "n"), i, 0), (mreal)counts[kx]);
+            if (i > 0) assert(AT(df_col_numeric(&r, "total"), i - 1, 0) >= AT(df_col_numeric(&r, "total"), i, 0));
         }
 
         df_free(&r); df_free(&df);
     }
     printf("  150 random WHERE+GROUP BY+ORDER BY pipelines matched a full naive reference\n");
+}
+
+/* n rows, one numeric GROUP BY key restricted to [0, cardinality) (so
+   the actual distinct-group count is controllable independently of n),
+   plus two more numeric columns to aggregate, with NaN injected into
+   both when requested. Used specifically to exercise sql_build_groups'
+   parallel construction path (SQL_GROUP_PARALLEL_MIN_N) and
+   sql_apply_group_select's parallel aggregation path together -
+   nothing in this file's existing stress coverage ever builds a
+   GROUP BY DataFrame anywhere near that size (the existing GROUP BY
+   fuzzers above use n<=40), so neither path was exercised by anything
+   before this test existed. */
+static DataFrame random_group_panel(int n, int cardinality, int inject_nan) {
+    DataFrame df = df_new(n);
+    Vec c0 = mat_new(n, 1), c1 = mat_new(n, 1), c2 = mat_new(n, 1);
+    for (int i = 0; i < n; i++) {
+        c0.d[i] = (mreal)(rand() % cardinality);
+        c1.d[i] = (inject_nan && rand() % 101 == 0) ? (mreal)NAN : (mreal)((int)(rand() % 2001) - 1000) / 61.0;
+        c2.d[i] = (inject_nan && rand() % 103 == 0) ? (mreal)NAN : (mreal)((int)(rand() % 2001) - 1000) / 61.0;
+    }
+    df_add_numeric_col(&df, "c0", c0);
+    df_add_numeric_col(&df, "c1", c1);
+    df_add_numeric_col(&df, "c2", c2);
+    mat_free(c0); mat_free(c1); mat_free(c2);
+    return df;
+}
+
+static void test_random_group_by_parallel_stress(void) {
+    puts("  random GROUP BY at n >= SQL_GROUP_PARALLEL_MIN_N (parallel construction + aggregation) vs. a naive reference, with injected NaN");
+    srand(59);
+    int sizes[] = { 50000, 200000, 400001 }; /* below/at/above SQL_GROUP_PARALLEL_MIN_N */
+    int cards[] = { 3, 500, 5000 };
+    int trials = 0;
+    for (size_t si = 0; si < sizeof(sizes)/sizeof(sizes[0]); si++) {
+        for (size_t ci = 0; ci < sizeof(cards)/sizeof(cards[0]); ci++) {
+            int n = sizes[si], card = cards[ci];
+            DataFrame df = random_group_panel(n, card, 1);
+            DataFrame r = df_sql(&df, "SELECT c0, SUM(c1) AS s1, AVG(c2) AS a2, MIN(c1) AS m1, MAX(c2) AS m2, COUNT(*) AS cnt FROM df GROUP BY c0 ORDER BY c0");
+
+            Mat c0 = df_col_numeric(&df, "c0"), c1 = df_col_numeric(&df, "c1"), c2 = df_col_numeric(&df, "c2");
+            mreal *sum1 = (mreal*)calloc((size_t)card, sizeof(mreal));
+            mreal *sum2 = (mreal*)calloc((size_t)card, sizeof(mreal));
+            mreal *mn = (mreal*)malloc((size_t)card * sizeof(mreal));
+            mreal *mx = (mreal*)malloc((size_t)card * sizeof(mreal));
+            int *cnt = (int*)calloc((size_t)card, sizeof(int));
+            for (int k = 0; k < card; k++) { mn[k] = (mreal)INFINITY; mx[k] = (mreal)-INFINITY; }
+            for (int i = 0; i < n; i++) {
+                int k = (int)AT(c0, i, 0);
+                mreal x1 = AT(c1, i, 0), x2 = AT(c2, i, 0);
+                cnt[k]++;
+                sum1[k] += x1;
+                sum2[k] += x2;
+                if (MISNAN(x1)) mn[k] = NAN; else if (!MISNAN(mn[k]) && x1 < mn[k]) mn[k] = x1;
+                if (MISNAN(x2)) mx[k] = NAN; else if (!MISNAN(mx[k]) && x2 > mx[k]) mx[k] = x2;
+            }
+
+            int n_present = 0;
+            for (int k = 0; k < card; k++) if (cnt[k] > 0) n_present++;
+            assert(r.r == n_present);
+
+            int ri = 0;
+            for (int k = 0; k < card; k++) {
+                if (cnt[k] == 0) continue;
+                CHECK(AT(df_col_numeric(&r, "c0"), ri, 0), (mreal)k);
+                /* NaN-safe relative check, not CHECK_REL directly: SUM/AVG
+                   can legitimately be NaN here (NaN was injected into c1/
+                   c2, and any group containing one correctly propagates
+                   to a NaN sum/average) - a plain `<` comparison against
+                   a NaN threshold is always false regardless of how
+                   correct the value is, the same class of issue
+                   MIN/MAX's own checks below already guard against;
+                   found by STRESS at the very first n/cardinality
+                   combination once this was actually instrumented, not
+                   assumed away. */
+                {
+                    mreal got_s1 = AT(df_col_numeric(&r, "s1"), ri, 0);
+                    mreal got_a2 = AT(df_col_numeric(&r, "a2"), ri, 0);
+                    mreal exp_a2 = sum2[k] / (mreal)cnt[k];
+                    assert((MISNAN(sum1[k]) && MISNAN(got_s1)) || (!MISNAN(sum1[k]) && !MISNAN(got_s1) && MABS(got_s1 - sum1[k]) < 1e-3f * (mreal)(1.0 + MABS(sum1[k]))));
+                    assert((MISNAN(exp_a2) && MISNAN(got_a2)) || (!MISNAN(exp_a2) && !MISNAN(got_a2) && MABS(got_a2 - exp_a2) < 1e-3f * (mreal)(1.0 + MABS(exp_a2))));
+                }
+                mreal got_min = AT(df_col_numeric(&r, "m1"), ri, 0);
+                mreal got_max = AT(df_col_numeric(&r, "m2"), ri, 0);
+                assert((MISNAN(mn[k]) && MISNAN(got_min)) || (!MISNAN(mn[k]) && !MISNAN(got_min) && MABS(got_min - mn[k]) < TOL));
+                assert((MISNAN(mx[k]) && MISNAN(got_max)) || (!MISNAN(mx[k]) && !MISNAN(got_max) && MABS(got_max - mx[k]) < TOL));
+                CHECK(AT(df_col_numeric(&r, "cnt"), ri, 0), (mreal)cnt[k]);
+                ri++;
+                trials++;
+            }
+
+            free(sum1); free(sum2); free(mn); free(mx); free(cnt);
+            df_free(&r); df_free(&df);
+        }
+    }
+    printf("  %d random GROUP BY output rows (n up to 400,001, cardinality up to 5,000, SUM/AVG/MIN/MAX/COUNT, injected NaN) matched the naive reference\n", trials);
 }
 
 /* --- df_sql_try fuzzing: random truncations of otherwise-valid queries
@@ -1074,6 +1213,7 @@ int main(void) {
     test_where_empty_result();
     test_single_row();
     test_order_by_stability_equal_keys();
+    test_order_by_nan_key_does_not_corrupt_real_order();
     test_group_by_single_unique_value();
     test_where_reference_check();
     test_group_by_reference_check();
@@ -1095,6 +1235,7 @@ int main(void) {
         test_random_order_by_radix_stress();
         test_random_where_wide_and_parallel_stress();
         test_random_combined_pipeline_stress();
+        test_random_group_by_parallel_stress();
         test_random_sql_try_stress();
     }
 

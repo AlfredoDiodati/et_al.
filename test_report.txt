@@ -1,20 +1,29 @@
-test run: zo 26 jul 2026 19:04:29 CEST
+building...
+  test_mat                PASS
+  test_mat_special        PASS
+  test_decomp             PASS
+  test_solver             PASS
+  test_special            PASS
+  test_stats              PASS
+  test_random             PASS
+  test_broadcast          PASS
+  test_gauss              PASS
+  test_student            PASS
+  test_mvgauss            PASS
+  test_mvstudent          PASS
+  test_ad                 PASS
+  test_adam               PASS
+  test_optimizer          PASS
+  test_mlp                PASS
+  test_frame              PASS
+  test_csv                PASS
+  test_txt                PASS
+  test_npy                PASS
+  test_json               PASS
+  test_sql                PASS
 
-=== build ===
-make: 'tests/correctness/test_mat' is up to date.
-make: 'tests/correctness/test_mat_special' is up to date.
-make: 'tests/correctness/test_decomp' is up to date.
-make: 'tests/correctness/test_solver' is up to date.
-make: 'tests/correctness/test_special' is up to date.
-make: 'tests/correctness/test_stats' is up to date.
-make: 'tests/correctness/test_random' is up to date.
-make: 'tests/correctness/test_broadcast' is up to date.
-make: 'tests/correctness/test_gauss' is up to date.
-make: 'tests/correctness/test_student' is up to date.
-make: 'tests/correctness/test_mvgauss' is up to date.
-make: 'tests/correctness/test_mvstudent' is up to date.
-make: 'tests/correctness/test_ad' is up to date.
-make: 'tests/correctness/test_adam' is up to date.
+all 22 passed — report: test_report.txt
+dam' is up to date.
 make: 'tests/correctness/test_optimizer' is up to date.
 make: 'tests/correctness/test_mlp' is up to date.
 make: 'tests/correctness/test_frame' is up to date.
@@ -275,6 +284,7 @@ single-numeric-key ORDER BY at n >= SQL_RADIX_MIN_N vs. an independent reference
 adversarial: WHERE matching no rows returns a valid zero-row DataFrame
 adversarial: single-row DataFrame
 adversarial: ORDER BY with all-equal keys preserves original row order (stability)
+adversarial: a NaN among ORDER BY key values must not reorder the real values relative to each other
 adversarial: GROUP BY a column with only one unique value yields one group
 independent reference: WHERE filter matches a naive hand-written loop
 independent reference: GROUP BY + SUM matches a naive hand-written accumulation

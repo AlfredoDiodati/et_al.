@@ -88,6 +88,12 @@ tests/performance/bench_sql_v5: tests/performance/bench_sql_v5.c frame/sql.h fra
 tests/performance/bench_sql_v6: tests/performance/bench_sql_v6.c frame/sql.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/performance/bench_sql_v6.c $(LDLIBS) -o tests/performance/bench_sql_v6
 
+# Hash-based GROUP BY prototype (docs/PERFORMANCE_BACKLOG.md item 2) -
+# correctness vs production plus an isolated timing comparison. Not part
+# of `test`/`bench.sh`.
+tests/performance/bench_sql_groupby: tests/performance/bench_sql_groupby.c frame/sql.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/bench_sql_groupby.c $(LDLIBS) -o tests/performance/bench_sql_groupby
+
 libmat.so: tests/performance/bench_mat.c linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_mat.c $(LDLIBS) -o libmat.so
 
@@ -110,6 +116,13 @@ libframe.so: tests/performance/bench_frame.c frame/sql.h frame/csv.h frame/txt.h
 # docs/PERFORMANCE_BACKLOG.md item 5.
 libsqlcompare.so: tests/performance/bench_sql_compare.c frame/sql.h frame/csv.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_sql_compare.c $(LDLIBS) -o libsqlcompare.so
+
+# ctypes-loadable .so exposing production df_sql plus the hash-based
+# GROUP BY prototype (df_sql_v1, see tests/performance/bench_sql_groupby.c),
+# for bench_sql_groupby_compare.py to time against real pandas AND real
+# Polars on identical data/queries. See docs/PERFORMANCE_BACKLOG.md item 2.
+libsqlgroupbycompare.so: tests/performance/bench_sql_groupby_compare.c frame/sql.h frame/csv.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_sql_groupby_compare.c $(LDLIBS) -o libsqlgroupbycompare.so
 
 librandom.so: tests/performance/bench_random.c random.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_random.c $(LDLIBS) -o librandom.so

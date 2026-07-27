@@ -1564,83 +1564,393 @@ static DataFrame sql_apply_where(const SqlExpr *where, const DataFrame *df) {
     return out;
 }
 
-/* --- GROUP BY: bucket rows sharing identical group-column values --- */
+/* --- GROUP BY: bucket rows sharing identical group-column values ---
+
+   Ported from Polars' real source (tag py-1.38.1, read directly from
+   GitHub, not from memory) - see docs/PERFORMANCE_BACKLOG.md item 2 for
+   the full investigation this was built against (a sequence of
+   prototypes in tests/performance/bench_sql_groupby.c, each measured
+   against production, real pandas, and real Polars before being
+   trusted, and two real bugs found and fixed along the way - see that
+   file's own header and this section's comments below for both).
+
+   The previous implementation built a `%.17g` + `\x1f`-joined STRING key
+   per row (malloc/realloc/strcat per row), then `qsort`'d (key, row)
+   pairs with `strcmp` - O(n log n), every comparison a full string
+   compare, plus per-row allocation the hash approach below never needs.
+   That was the reason GROUP BY was 2.15x-55x slower than pandas'
+   `.groupby()` at every size measured: pandas/Polars are both O(n)
+   hash-based; the architecture itself, not just constant-factor
+   overhead, was the wrong complexity class. Replaced with Polars'
+   `group_by` technique (`crates/polars-core/src/frame/group_by/
+   hashing.rs`): a single pass over rows, one hash-table probe per row
+   (vacant -> new group; occupied -> append row index) - O(n) amortized
+   total. */
 
 typedef struct { int *rows; int n; } SqlGroup;
 
-/* Builds a row's group key by concatenating its group-column values
-   (numeric via %.17g - this project's shortest-round-trip digit count,
-   so two equal floating values never land in different groups due to a
-   lossy string rendering) separated by \x1f (ASCII "unit separator") -
-   a byte real column data essentially never contains, the same "pick a
-   byte nothing else uses" reasoning this project hasn't needed until
-   now since no other format required a synthetic delimiter. */
-static char *sql_row_key(const DataFrame *df, char *const *cols, int n_cols, int row) {
-    size_t cap = 64;
-    char *buf = (char*)malloc(cap);
-    buf[0] = '\0';
-    for (int i = 0; i < n_cols; i++) {
-        char piece[64];
-        const char *s;
-        if (df_col_type(df, cols[i]) == COL_STRING) {
-            s = df_col_string(df, cols[i])[row];
+/* Multiplication by a 'random' odd constant gives a universal hash in
+   the TOP bits only - `crates/polars-utils/src/hashing.rs`'s own
+   `DirtyHash` trait documents this explicitly ("Only the top bits of
+   the hash are decent, such as used in hash_to_partition"). Getting
+   this backwards (indexing an open-addressing table by the LOW bits
+   instead) was the first of the two real bugs found while building
+   this: for small-integer group keys (a handful of category codes,
+   the common case), the low bits of this hash cluster badly, and every
+   `sql_group_table_index` call below deliberately extracts the HIGH
+   bits instead - see that function's own comment for the measured
+   effect (32x on the construction step alone, from a table clustering
+   so badly nearly every lookup meant a long linear-probe chain). */
+#define SQL_GROUP_RANDOM_ODD  0x55fbfd6bfc5458e9ULL
+#define SQL_GROUP_BOOST_CONST 0x9e3779b9ULL /* Boost's own hash_combine constant */
+
+static inline uint64_t sql_group_dirty_hash_u64(uint64_t bits) {
+    return bits * SQL_GROUP_RANDOM_ODD;
+}
+static inline uint64_t sql_group_boost_combine(uint64_t l, uint64_t r) {
+    return l ^ (r + SQL_GROUP_BOOST_CONST + (l << 6) + (r >> 2));
+}
+/* Matches `canonical_f32`/`canonical_f64` (`crates/polars-utils/src/
+   total_ord.rs`): -0.0 folds into +0.0, and every NaN folds into one
+   canonical quiet-NaN bit pattern, before hashing - so hashing and
+   equality both treat all NaNs as one group and +0/-0 as one group,
+   matching real Polars GROUP BY semantics. */
+static inline uint32_t sql_group_canonical_f32_bits(float x) {
+    if (x == 0.0f) x = 0.0f;
+    if (MISNAN(x)) return 0x7fc00000u;
+    uint32_t bits; memcpy(&bits, &x, sizeof bits);
+    return bits;
+}
+static inline uint64_t sql_group_canonical_f64_bits(double x) {
+    if (x == 0.0) x = 0.0;
+    if (MISNAN(x)) return 0x7ff8000000000000ull;
+    uint64_t bits; memcpy(&bits, &x, sizeof bits);
+    return bits;
+}
+
+/* Combines every group column's hash for one row - numeric columns via
+   the canonicalized-bits dirty hash above; string columns via a plain
+   FNV-1a (not a Polars port - Polars precomputes a different upstream
+   hash for its own `BytesHash`, an implementation detail this project
+   has no equivalent of, and not worth replicating just to match a
+   hash's exact bit pattern when only its DISTRIBUTION matters here). */
+static uint64_t sql_group_row_hash(const DataFrame *df, char *const *cols, int n_cols, int row) {
+    uint64_t h = 0;
+    for (int c = 0; c < n_cols; c++) {
+        uint64_t ch;
+        if (df_col_type(df, cols[c]) == COL_STRING) {
+            const char *s = df_col_string(df, cols[c])[row];
+            uint64_t hh = 1469598103934665603ull;
+            for (const unsigned char *p = (const unsigned char*)s; *p; p++) { hh ^= *p; hh *= 1099511628211ull; }
+            ch = hh;
         } else {
-            snprintf(piece, sizeof piece, "%.17g", (double)AT(df_col_numeric(df, cols[i]), row, 0));
-            s = piece;
+            mreal v = AT(df_col_numeric(df, cols[c]), row, 0);
+#ifdef MAT_DOUBLE
+            ch = sql_group_dirty_hash_u64(sql_group_canonical_f64_bits((double)v));
+#else
+            ch = sql_group_dirty_hash_u64((uint64_t)sql_group_canonical_f32_bits((float)v));
+#endif
         }
-        size_t need = strlen(buf) + strlen(s) + 2;
-        if (need > cap) { while (cap < need) cap *= 2; buf = (char*)realloc(buf, cap); }
-        strcat(buf, s);
-        strcat(buf, "\x1f");
+        h = (c == 0) ? ch : sql_group_boost_combine(h, ch);
     }
-    return buf;
+    return h;
 }
 
-/* Sort (key, row) pairs by key with qsort, then a single pass collects
-   each run of equal keys into one group. This used to be a hand-rolled
-   insertion sort, on the reasoning that qsort's comparator has no
-   portable way to carry the "which columns, in what order" context
-   short of a nonstandard qsort_r - that reasoning doesn't actually apply
-   here: the key for every row is built once, up front, into a plain
-   string before any comparison happens, so the comparator below needs
-   nothing beyond the two SqlKeyOrder elements it's given. Measured via
-   tests/performance/bench_frame.py: the insertion sort's O(n^2) cost was
-   real, not "nothing in practice" - a GROUP BY at n=30,000 took ~40x
-   longer than at n=10,000 (matching the O(n^2) exponent, not O(n log n)
-   scaling). qsort is not required to be stable, but within-group row
-   order genuinely doesn't matter here: SUM/AVG/MIN/MAX/COUNT are all
-   order-independent, and every group-producing query in this codebase
-   pairs GROUP BY with an explicit ORDER BY to pin down final row order
-   regardless (see docs/SQL_DOCUMENTATION.md). */
-typedef struct { char *key; int order; } SqlKeyOrder;
-static int sql_cmp_key_order(const void *a, const void *b) {
-    return strcmp(((const SqlKeyOrder*)a)->key, ((const SqlKeyOrder*)b)->key);
+/* Plain == is enough once both operands are known non-NaN (the
+   canonicalization above already folds -0.0/+0.0 together for hashing,
+   and == already treats them equal too). NaN needs an explicit MISNAN
+   check, not a plain != fallback - the second of the two real bugs
+   found while building this: this project's default `-ffast-math`
+   build enables `-ffinite-math-only`, under which a plain `==`/`!=`
+   that might see a NaN operand at runtime is unspecified, not just
+   "false" - the exact class of bug `sql_safe_cmp` (used by `WHERE`,
+   see that section's own comment) already exists to avoid, needed here
+   too since GROUP BY has its own independent equality check. */
+static int sql_group_row_eq(const DataFrame *df, char *const *cols, int n_cols, int row_a, int row_b) {
+    for (int c = 0; c < n_cols; c++) {
+        if (df_col_type(df, cols[c]) == COL_STRING) {
+            if (strcmp(df_col_string(df, cols[c])[row_a], df_col_string(df, cols[c])[row_b]) != 0) return 0;
+        } else {
+            mreal a = AT(df_col_numeric(df, cols[c]), row_a, 0);
+            mreal b = AT(df_col_numeric(df, cols[c]), row_b, 0);
+            if (MISNAN(a) && MISNAN(b)) continue;
+            if (MISNAN(a) || MISNAN(b)) return 0;
+            if (a != b) return 0;
+        }
+    }
+    return 1;
 }
-static SqlGroup *sql_build_groups(const DataFrame *df, char *const *group_cols, int n_group_cols, int *n_groups_out) {
+
+/* Build-time bookkeeping for one group: same shape as the public
+   SqlGroup (rows/n), plus a growable capacity and this group's cached
+   hash (so a table resize - sql_group_table_grow below - can rehash
+   from `hash` directly, never re-touching DataFrame columns). */
+typedef struct { int *rows; int n; int cap; uint64_t hash; } SqlGroupBuild;
+
+/* Open-addressing hash table used only during construction (never
+   exposed past this section) - linear probing, not hashbrown's
+   SwissTable (a distinct, general-purpose hash-table library, not part
+   of "the group-by algorithm" itself; investigated as a possible
+   further fix for a small remaining gap at one specific data shape -
+   near-unique group keys - and deliberately not pursued: real
+   engineering effort and correctness risk for a narrow payoff, see
+   docs/PERFORMANCE_BACKLOG.md item 2 for the full cost/benefit). */
+typedef struct { uint64_t *hash; int *group; size_t cap, mask; int shift; } SqlGroupTable;
+
+/* `h >> shift` extracts the top `log2(cap)` bits of the hash as the
+   table's initial probe slot - see this section's opening comment for
+   why the bottom bits (`h & mask`) are the wrong choice for this
+   specific hash. The collision-probe WRAPAROUND step (`(pos + 1) &
+   mask`) is unrelated and unaffected - `mask` is still the correct way
+   to keep a linearly-probed index within `[0, cap)`, only the very
+   first slot computed from a fresh hash needed to change. */
+static inline size_t sql_group_table_index(const SqlGroupTable *t, uint64_t h) {
+    return (size_t)(h >> t->shift);
+}
+static void sql_group_table_init(SqlGroupTable *t, size_t cap_pow2) {
+    t->cap = cap_pow2; t->mask = cap_pow2 - 1;
+    t->shift = 64 - __builtin_ctzll(cap_pow2);
+    t->hash = (uint64_t*)malloc(cap_pow2 * sizeof(uint64_t));
+    t->group = (int*)malloc(cap_pow2 * sizeof(int));
+    for (size_t i = 0; i < cap_pow2; i++) t->group[i] = -1;
+}
+static void sql_group_table_grow(SqlGroupTable *t, const SqlGroupBuild *groups, int n_groups) {
+    size_t newcap = t->cap * 2;
+    size_t newmask = newcap - 1;
+    int newshift = 64 - __builtin_ctzll(newcap);
+    uint64_t *nh = (uint64_t*)malloc(newcap * sizeof(uint64_t));
+    int *ng = (int*)malloc(newcap * sizeof(int));
+    for (size_t i = 0; i < newcap; i++) ng[i] = -1;
+    for (int g = 0; g < n_groups; g++) {
+        uint64_t h = groups[g].hash;
+        size_t pos = (size_t)(h >> newshift);
+        while (ng[pos] != -1) pos = (pos + 1) & newmask;
+        ng[pos] = g; nh[pos] = h;
+    }
+    free(t->hash); free(t->group);
+    t->hash = nh; t->group = ng; t->cap = newcap; t->mask = newmask; t->shift = newshift;
+}
+
+/* General path: any number of group columns, numeric or string. Used
+   whenever the single-column fast path below doesn't apply. */
+static SqlGroup *sql_build_groups_generic(const DataFrame *df, char *const *group_cols, int n_group_cols, int *n_groups_out) {
     int n = df->r;
-    SqlKeyOrder *ko = (SqlKeyOrder*)malloc((size_t)n * sizeof(SqlKeyOrder));
-    for (int i = 0; i < n; i++) { ko[i].key = sql_row_key(df, group_cols, n_group_cols, i); ko[i].order = i; }
+    SqlGroupTable t;
+    sql_group_table_init(&t, 16);
 
-    qsort(ko, (size_t)n, sizeof(SqlKeyOrder), sql_cmp_key_order);
+    int groups_cap = 16;
+    SqlGroupBuild *groups = (SqlGroupBuild*)malloc((size_t)groups_cap * sizeof(SqlGroupBuild));
+    int n_groups = 0;
 
-    SqlGroup *groups = NULL; int n_groups = 0, cap = 0;
-    int i = 0;
-    while (i < n) {
-        int j = i;
-        while (j < n && strcmp(ko[j].key, ko[i].key) == 0) j++;
-        if (n_groups == cap) { cap = cap ? cap * 2 : 4; groups = (SqlGroup*)realloc(groups, (size_t)cap * sizeof(SqlGroup)); }
-        int cnt = j - i;
-        groups[n_groups].rows = (int*)malloc((size_t)cnt * sizeof(int));
-        for (int k = 0; k < cnt; k++) groups[n_groups].rows[k] = ko[i + k].order;
-        groups[n_groups].n = cnt;
-        n_groups++;
-        i = j;
+    for (int i = 0; i < n; i++) {
+        uint64_t h = sql_group_row_hash(df, group_cols, n_group_cols, i);
+        size_t pos = sql_group_table_index(&t, h);
+        int found = -1;
+        while (t.group[pos] != -1) {
+            int g = t.group[pos];
+            if (t.hash[pos] == h && sql_group_row_eq(df, group_cols, n_group_cols, groups[g].rows[0], i)) { found = g; break; }
+            pos = (pos + 1) & t.mask;
+        }
+        if (found == -1) {
+            if (n_groups == groups_cap) { groups_cap *= 2; groups = (SqlGroupBuild*)realloc(groups, (size_t)groups_cap * sizeof(SqlGroupBuild)); }
+            int g = n_groups++;
+            groups[g].cap = 4; groups[g].n = 0; groups[g].hash = h;
+            groups[g].rows = (int*)malloc((size_t)groups[g].cap * sizeof(int));
+            groups[g].rows[groups[g].n++] = i;
+            t.group[pos] = g; t.hash[pos] = h;
+            if ((size_t)n_groups * 4 > t.cap * 3) sql_group_table_grow(&t, groups, n_groups);
+        } else {
+            SqlGroupBuild *gr = &groups[found];
+            if (gr->n == gr->cap) { gr->cap *= 2; gr->rows = (int*)realloc(gr->rows, (size_t)gr->cap * sizeof(int)); }
+            gr->rows[gr->n++] = i;
+        }
+    }
+    free(t.hash); free(t.group);
+
+    SqlGroup *out = (SqlGroup*)malloc((size_t)n_groups * sizeof(SqlGroup));
+    for (int g = 0; g < n_groups; g++) { out[g].rows = groups[g].rows; out[g].n = groups[g].n; }
+    free(groups);
+    *n_groups_out = n_groups;
+    return out;
+}
+
+/* Fast path for the overwhelmingly common case: a single, non-string
+   `GROUP BY` column. Calling the generic path above with `n_group_cols`
+   fixed at 1 still measured 34.95ms at n=1,000,000/cardinality=10 in
+   testing - roughly 4.2x this version's 8.33ms - because
+   `sql_group_row_hash`/`sql_group_row_eq`'s per-row `df_col_type`/
+   `df_col_numeric` by-name resolution and their `for (c = 0; c <
+   n_group_cols; c++)` loop (a runtime trip count the compiler can't
+   fold away at the real call site, since `n_group_cols` comes from a
+   parsed query) cost real, avoidable overhead. This resolves the
+   column's `Mat` once, outside the per-row loop, and never touches the
+   generic multi-column machinery at all. */
+static SqlGroup *sql_build_groups_1col(const DataFrame *df, const char *col, int *n_groups_out) {
+    int n = df->r;
+    Mat c = df_col_numeric(df, col);
+    SqlGroupTable t;
+    sql_group_table_init(&t, 16);
+
+    int groups_cap = 16;
+    SqlGroupBuild *groups = (SqlGroupBuild*)malloc((size_t)groups_cap * sizeof(SqlGroupBuild));
+    int n_groups = 0;
+
+    for (int i = 0; i < n; i++) {
+        mreal v = AT(c, i, 0);
+#ifdef MAT_DOUBLE
+        uint64_t h = sql_group_dirty_hash_u64(sql_group_canonical_f64_bits((double)v));
+#else
+        uint64_t h = sql_group_dirty_hash_u64((uint64_t)sql_group_canonical_f32_bits((float)v));
+#endif
+        size_t pos = sql_group_table_index(&t, h);
+        int found = -1;
+        while (t.group[pos] != -1) {
+            int g = t.group[pos];
+            if (t.hash[pos] == h) {
+                mreal a = AT(c, groups[g].rows[0], 0);
+                int eq = (MISNAN(a) && MISNAN(v)) || (!MISNAN(a) && !MISNAN(v) && a == v);
+                if (eq) { found = g; break; }
+            }
+            pos = (pos + 1) & t.mask;
+        }
+        if (found == -1) {
+            if (n_groups == groups_cap) { groups_cap *= 2; groups = (SqlGroupBuild*)realloc(groups, (size_t)groups_cap * sizeof(SqlGroupBuild)); }
+            int g = n_groups++;
+            groups[g].cap = 4; groups[g].n = 0; groups[g].hash = h;
+            groups[g].rows = (int*)malloc((size_t)groups[g].cap * sizeof(int));
+            groups[g].rows[groups[g].n++] = i;
+            t.group[pos] = g; t.hash[pos] = h;
+            if ((size_t)n_groups * 4 > t.cap * 3) sql_group_table_grow(&t, groups, n_groups);
+        } else {
+            SqlGroupBuild *gr = &groups[found];
+            if (gr->n == gr->cap) { gr->cap *= 2; gr->rows = (int*)realloc(gr->rows, (size_t)gr->cap * sizeof(int)); }
+            gr->rows[gr->n++] = i;
+        }
+    }
+    free(t.hash); free(t.group);
+
+    SqlGroup *out = (SqlGroup*)malloc((size_t)n_groups * sizeof(SqlGroup));
+    for (int g = 0; g < n_groups; g++) { out[g].rows = groups[g].rows; out[g].n = groups[g].n; }
+    free(groups);
+    *n_groups_out = n_groups;
+    return out;
+}
+
+/* Below this many rows, thread-spawn/join overhead isn't worth paying -
+   the same reasoning (and the same round, deliberately-not-precisely-
+   tuned magnitude) as `SQL_WHERE_PARALLEL_MIN_N`, measured independently
+   for GROUP BY specifically rather than reused, since construction and
+   WHERE-evaluation have different per-row costs. */
+#define SQL_GROUP_PARALLEL_MIN_N 200000
+
+static inline uint64_t sql_group_hash_to_partition(uint64_t h, int n_partitions) {
+    /* Matches Polars' own `hash_to_partition` (`crates/polars-utils/src/
+       hashing.rs`): `(h as u128 * n_partitions) >> 64` - the same "top
+       bits of a multiply" principle sql_group_table_index uses for
+       table-slot indexing, generalized to an arbitrary partition count
+       via `unsigned __int128` (a GCC/Clang extension; this project
+       already assumes that toolchain family for its AVX2 intrinsics and
+       `__builtin_popcount` elsewhere in this file, so this adds no new
+       portability constraint). */
+    return (uint64_t)(((unsigned __int128)h * (unsigned __int128)n_partitions) >> 64);
+}
+
+/* Parallel construction for the single-numeric-column case, ported
+   directly from Polars' own multi-threaded technique
+   (`crates/polars-core/src/frame/group_by/hashing.rs`'s
+   `group_by_threaded_slice`/`group_by_threaded_iter`): each of N
+   threads builds its own local hash table, scanning every row but
+   inserting only the ones whose hash routes to that thread's partition.
+   Since a row's partition is a deterministic function of its own hash,
+   and every row in a group shares an identical hash by construction, a
+   group can never be split across threads - only concatenating each
+   thread's already-complete groups into one final array is needed, no
+   cross-thread merge of a single group's row list. Not gated on
+   cardinality - even at low cardinality (few groups), each thread that
+   owns a group still parallelizes that group's own probe/insert work
+   against every other thread's, and the "scan and reject" cost paid by
+   threads owning no rows in a given region is cheap (hashing alone
+   measured ~2ms/1M rows in testing). */
+static SqlGroup *sql_build_groups_1col_mt(const DataFrame *df, const char *col, int *n_groups_out) {
+    int n = df->r;
+    int n_threads = omp_get_max_threads();
+    if (n_threads < 1) n_threads = 1;
+    Mat c = df_col_numeric(df, col);
+
+    SqlGroupBuild **tl_groups = (SqlGroupBuild**)malloc((size_t)n_threads * sizeof(SqlGroupBuild*));
+    int *tl_n_groups = (int*)calloc((size_t)n_threads, sizeof(int));
+
+    #pragma omp parallel num_threads(n_threads)
+    {
+        int tid = omp_get_thread_num();
+        int cap = 16;
+        SqlGroupBuild *groups = (SqlGroupBuild*)malloc((size_t)cap * sizeof(SqlGroupBuild));
+        int n_groups = 0;
+        SqlGroupTable t;
+        sql_group_table_init(&t, 16);
+
+        for (int i = 0; i < n; i++) {
+            mreal v = AT(c, i, 0);
+#ifdef MAT_DOUBLE
+            uint64_t h = sql_group_dirty_hash_u64(sql_group_canonical_f64_bits((double)v));
+#else
+            uint64_t h = sql_group_dirty_hash_u64((uint64_t)sql_group_canonical_f32_bits((float)v));
+#endif
+            if ((int)sql_group_hash_to_partition(h, n_threads) != tid) continue;
+            size_t pos = sql_group_table_index(&t, h);
+            int found = -1;
+            while (t.group[pos] != -1) {
+                int g = t.group[pos];
+                if (t.hash[pos] == h) {
+                    mreal a = AT(c, groups[g].rows[0], 0);
+                    int eq = (MISNAN(a) && MISNAN(v)) || (!MISNAN(a) && !MISNAN(v) && a == v);
+                    if (eq) { found = g; break; }
+                }
+                pos = (pos + 1) & t.mask;
+            }
+            if (found == -1) {
+                if (n_groups == cap) { cap *= 2; groups = (SqlGroupBuild*)realloc(groups, (size_t)cap * sizeof(SqlGroupBuild)); }
+                int g = n_groups++;
+                groups[g].cap = 4; groups[g].n = 0; groups[g].hash = h;
+                groups[g].rows = (int*)malloc(4 * sizeof(int));
+                groups[g].rows[groups[g].n++] = i;
+                t.group[pos] = g; t.hash[pos] = h;
+                if ((size_t)n_groups * 4 > t.cap * 3) sql_group_table_grow(&t, groups, n_groups);
+            } else {
+                SqlGroupBuild *gr = &groups[found];
+                if (gr->n == gr->cap) { gr->cap *= 2; gr->rows = (int*)realloc(gr->rows, (size_t)gr->cap * sizeof(int)); }
+                gr->rows[gr->n++] = i;
+            }
+        }
+        free(t.hash); free(t.group);
+        tl_groups[tid] = groups;
+        tl_n_groups[tid] = n_groups;
     }
 
-    for (int k = 0; k < n; k++) free(ko[k].key);
-    free(ko);
-    *n_groups_out = n_groups;
-    return groups;
+    int total_groups = 0;
+    for (int t = 0; t < n_threads; t++) total_groups += tl_n_groups[t];
+    SqlGroup *out = (SqlGroup*)malloc((size_t)(total_groups > 0 ? total_groups : 1) * sizeof(SqlGroup));
+    int idx = 0;
+    for (int t = 0; t < n_threads; t++) {
+        for (int g = 0; g < tl_n_groups[t]; g++) {
+            out[idx].rows = tl_groups[t][g].rows;
+            out[idx].n = tl_groups[t][g].n;
+            idx++;
+        }
+        free(tl_groups[t]);
+    }
+    free(tl_groups); free(tl_n_groups);
+    *n_groups_out = total_groups;
+    return out;
+}
+
+static SqlGroup *sql_build_groups(const DataFrame *df, char *const *group_cols, int n_group_cols, int *n_groups_out) {
+    if (n_group_cols == 1 && df_col_type(df, group_cols[0]) != COL_STRING) {
+        if (df->r >= SQL_GROUP_PARALLEL_MIN_N)
+            return sql_build_groups_1col_mt(df, group_cols[0], n_groups_out);
+        return sql_build_groups_1col(df, group_cols[0], n_groups_out);
+    }
+    return sql_build_groups_generic(df, group_cols, n_group_cols, n_groups_out);
 }
 
 static void sql_groups_free(SqlGroup *groups, int n) {
@@ -1689,6 +1999,81 @@ static SqlEvalResult sql_eval_grouped_item(const SqlExpr *e, const DataFrame *gr
     return r;
 }
 
+/* Fast-path classification for one SELECT item in a grouped query: a
+   bare GROUP BY column, COUNT (this project's COUNT already ignores
+   its argument - see sql_eval's own SQLEXPR_COUNT case - so it's always
+   simple), or SUM/AVG/MIN/MAX over a single plain column, can all be
+   computed directly against the source DataFrame's raw columns without
+   ever materializing a per-group sub-DataFrame. Anything else
+   (composite arithmetic combining two aggregates, an aggregate combined
+   with a literal, etc.) falls back to the original sql_select_rows +
+   sql_eval_grouped_item path below, built lazily per group. */
+static int sql_grouped_item_is_simple(const SqlExpr *e, char *const *group_cols, int n_group_cols) {
+    if (e->kind == SQLEXPR_COL) return sql_str_in_list(e->col_name, group_cols, n_group_cols);
+    if (e->kind == SQLEXPR_COUNT) return 1;
+    if (e->kind == SQLEXPR_SUM || e->kind == SQLEXPR_AVG || e->kind == SQLEXPR_MIN || e->kind == SQLEXPR_MAX)
+        return e->lhs && e->lhs->kind == SQLEXPR_COL;
+    return 0;
+}
+
+static SqlEvalResult sql_eval_grouped_item_simple(const SqlExpr *e, const DataFrame *df, const int *rows, int gn) {
+    SqlEvalResult out; out.r = 1; out.borrowed = 0; out.strings = NULL;
+    if (e->kind == SQLEXPR_COL) {
+        int row0 = rows[0];
+        if (df_col_type(df, e->col_name) == COL_STRING) {
+            out.is_string = 1;
+            out.strings = (char**)malloc(sizeof(char*));
+            out.strings[0] = df_col_string(df, e->col_name)[row0];
+        } else {
+            out.is_string = 0;
+            out.numeric = mat_new(1, 1);
+            out.numeric.d[0] = AT(df_col_numeric(df, e->col_name), row0, 0);
+        }
+        return out;
+    }
+    out.is_string = 0;
+    out.numeric = mat_new(1, 1);
+    if (e->kind == SQLEXPR_COUNT) {
+        out.numeric.d[0] = (mreal)gn;
+        return out;
+    }
+    Mat col = df_col_numeric(df, e->lhs->col_name);
+    mreal v;
+    if (e->kind == SQLEXPR_SUM || e->kind == SQLEXPR_AVG) {
+        mreal s = 0;
+        for (int k = 0; k < gn; k++) s += AT(col, rows[k], 0);
+        v = (e->kind == SQLEXPR_SUM) ? s : s / (mreal)gn;
+    } else {
+        v = AT(col, rows[0], 0);
+        int want_max = (e->kind == SQLEXPR_MAX);
+        for (int k = 1; k < gn; k++) {
+            mreal x = AT(col, rows[k], 0);
+            if (MISNAN(x)) { v = NAN; break; }
+            if ((want_max && x > v) || (!want_max && x < v)) v = x;
+        }
+    }
+    out.numeric.d[0] = v;
+    return out;
+}
+
+/* `row -> group` mapping, built from the already-constructed groups -
+   used by the sequential-pass aggregation below in place of the
+   group-outer, row-inner gather every earlier version of this code
+   used. Measured directly (tests/performance/bench_sql_groupby.c): a
+   single sequential pass over every row, scatter-accumulating into
+   small per-group running totals via this map, was 4.2x-4.8x faster
+   than gathering each group's (effectively randomly scattered) member
+   rows one at a time from the source column - group membership is
+   uncorrelated with row position, so the old approach read the source
+   column in essentially random order (a cache miss on nearly every
+   access), while this one reads it sequentially and only scatters on
+   the (small, cache-resident) write side. */
+static void sql_build_row_to_group(const SqlGroup *groups, int n_groups, int *row_to_group) {
+    for (int g = 0; g < n_groups; g++)
+        for (int k = 0; k < groups[g].n; k++)
+            row_to_group[groups[g].rows[k]] = g;
+}
+
 static DataFrame sql_apply_group_select(const SqlQuery *q, const DataFrame *df) {
     int n_groups;
     SqlGroup *groups;
@@ -1705,24 +2090,178 @@ static DataFrame sql_apply_group_select(const SqlQuery *q, const DataFrame *df) 
         for (int i = 0; i < df->r; i++) groups[0].rows[i] = i;
     }
 
+    int *item_simple = (int*)malloc((size_t)q->n_items * sizeof(int));
+    int *item_needs_pass = (int*)malloc((size_t)q->n_items * sizeof(int));
+    for (int it = 0; it < q->n_items; it++) {
+        const SqlExpr *e = q->items[it].expr;
+        item_simple[it] = sql_grouped_item_is_simple(e, q->group_by, q->n_group_by);
+        item_needs_pass[it] = item_simple[it] &&
+            (e->kind == SQLEXPR_SUM || e->kind == SQLEXPR_AVG || e->kind == SQLEXPR_MIN || e->kind == SQLEXPR_MAX);
+    }
+
     Vec *numeric_acc = (Vec*)malloc((size_t)q->n_items * sizeof(Vec));
     char ***string_acc = (char***)calloc((size_t)q->n_items, sizeof(char**));
     int *is_string = (int*)malloc((size_t)q->n_items * sizeof(int));
     for (int it = 0; it < q->n_items; it++) { numeric_acc[it] = mat_new(n_groups, 1); is_string[it] = -1; }
 
-    for (int g = 0; g < n_groups; g++) {
-        DataFrame group_df = sql_select_rows(df, groups[g].rows, groups[g].n);
-        for (int it = 0; it < q->n_items; it++) {
-            SqlEvalResult r = sql_eval_grouped_item(q->items[it].expr, &group_df, q->group_by, q->n_group_by);
-            if (is_string[it] == -1) {
-                is_string[it] = r.is_string;
-                if (is_string[it]) string_acc[it] = (char**)malloc((size_t)n_groups * sizeof(char*));
+    /* Pull SUM/AVG/MIN/MAX items into a compact list (pass_item[p] is
+       the original item index; pass_kind[p] is 0=sum-like/1=min/2=max),
+       so the per-row loop below never touches q->items or SqlExpr at
+       all, only these flat arrays. */
+    int n_pass = 0;
+    int *pass_item = (int*)malloc((size_t)q->n_items * sizeof(int));
+    int *pass_kind = (int*)malloc((size_t)q->n_items * sizeof(int));
+    Mat *pass_col = (Mat*)malloc((size_t)q->n_items * sizeof(Mat));
+    mreal **pass_acc = (mreal**)calloc((size_t)q->n_items, sizeof(mreal*));
+    for (int it = 0; it < q->n_items; it++) {
+        if (!item_needs_pass[it]) continue;
+        const SqlExpr *e = q->items[it].expr;
+        int p = n_pass++;
+        pass_item[p] = it;
+        pass_kind[p] = (e->kind == SQLEXPR_MIN) ? 1 : (e->kind == SQLEXPR_MAX) ? 2 : 0;
+        pass_col[p] = df_col_numeric(df, e->lhs->col_name);
+        pass_acc[it] = (mreal*)malloc((size_t)n_groups * sizeof(mreal));
+    }
+
+    if (n_pass > 0) {
+        int *row_to_group = (int*)malloc((size_t)(df->r > 0 ? df->r : 1) * sizeof(int));
+        sql_build_row_to_group(groups, n_groups, row_to_group);
+
+        if (df->r >= SQL_GROUP_PARALLEL_MIN_N) {
+            /* Private-per-thread accumulators, combined afterward - not
+               an OpenMP `reduction` clause, which only supports scalar
+               reductions natively, not a per-group array. Each thread
+               gets a contiguous row range and its own local
+               accumulator per pass item, so there is no write race to
+               guard against at all. MIN/MAX seed at +-infinity (a
+               valid sentinel distinct from "no value seen yet", since
+               a thread's chunk may not touch every group) and combine
+               across threads with the same NaN-poisons-and-stays-
+               poisoned rule already used across rows within one
+               thread, generalized to across threads' partial results. */
+            int n_threads = omp_get_max_threads();
+            if (n_threads < 1) n_threads = 1;
+            mreal **tl_acc = (mreal**)malloc((size_t)n_threads * (size_t)n_pass * sizeof(mreal*));
+
+            #pragma omp parallel num_threads(n_threads)
+            {
+                int tid = omp_get_thread_num();
+                int actual_threads = omp_get_num_threads();
+                mreal **my_acc = (mreal**)malloc((size_t)n_pass * sizeof(mreal*));
+                for (int p = 0; p < n_pass; p++) {
+                    my_acc[p] = (mreal*)malloc((size_t)n_groups * sizeof(mreal));
+                    for (int g = 0; g < n_groups; g++)
+                        my_acc[p][g] = (pass_kind[p] == 0) ? 0 : (pass_kind[p] == 1 ? (mreal)INFINITY : (mreal)-INFINITY);
+                    tl_acc[tid * n_pass + p] = my_acc[p];
+                }
+                long long chunk = ((long long)df->r + actual_threads - 1) / actual_threads;
+                long long lo = (long long)tid * chunk;
+                long long hi = lo + chunk; if (hi > df->r) hi = df->r;
+                for (long long i = lo; i < hi; i++) {
+                    int g = row_to_group[i];
+                    for (int p = 0; p < n_pass; p++) {
+                        mreal x = AT(pass_col[p], i, 0);
+                        if (pass_kind[p] == 0) {
+                            my_acc[p][g] += x;
+                        } else {
+                            int want_max = (pass_kind[p] == 2);
+                            if (MISNAN(x)) my_acc[p][g] = NAN;
+                            else if (!MISNAN(my_acc[p][g])) {
+                                if ((want_max && x > my_acc[p][g]) || (!want_max && x < my_acc[p][g])) my_acc[p][g] = x;
+                            }
+                        }
+                    }
+                }
+                free(my_acc);
             }
-            if (is_string[it]) string_acc[it][g] = frame_strdup(r.strings[0]);
-            else numeric_acc[it].d[g] = r.numeric.d[0];
-            sql_eval_free(&r);
+
+            for (int p = 0; p < n_pass; p++) {
+                int it = pass_item[p];
+                for (int g = 0; g < n_groups; g++) {
+                    mreal v = tl_acc[0 * n_pass + p][g];
+                    for (int t = 1; t < n_threads; t++) {
+                        mreal tv = tl_acc[t * n_pass + p][g];
+                        if (pass_kind[p] == 0) {
+                            v += tv;
+                        } else {
+                            int want_max = (pass_kind[p] == 2);
+                            if (MISNAN(tv)) v = NAN;
+                            else if (!MISNAN(v)) {
+                                if ((want_max && tv > v) || (!want_max && tv < v)) v = tv;
+                            }
+                        }
+                    }
+                    pass_acc[it][g] = v;
+                }
+            }
+            for (int t = 0; t < n_threads; t++)
+                for (int p = 0; p < n_pass; p++)
+                    free(tl_acc[t * n_pass + p]);
+            free(tl_acc);
+        } else {
+            for (int p = 0; p < n_pass; p++)
+                for (int g = 0; g < n_groups; g++)
+                    pass_acc[pass_item[p]][g] = (pass_kind[p] == 0) ? 0 : AT(pass_col[p], groups[g].rows[0], 0);
+            for (int i = 0; i < df->r; i++) {
+                int g = row_to_group[i];
+                for (int p = 0; p < n_pass; p++) {
+                    mreal x = AT(pass_col[p], i, 0);
+                    mreal *acc = pass_acc[pass_item[p]];
+                    if (pass_kind[p] == 0) {
+                        acc[g] += x;
+                    } else {
+                        int want_max = (pass_kind[p] == 2);
+                        if (MISNAN(x)) acc[g] = NAN;
+                        else if (!MISNAN(acc[g])) {
+                            if ((want_max && x > acc[g]) || (!want_max && x < acc[g])) acc[g] = x;
+                        }
+                    }
+                }
+            }
         }
-        df_free(&group_df);
+        free(row_to_group);
+    }
+
+    for (int p = 0; p < n_pass; p++) {
+        int it = pass_item[p];
+        const SqlExpr *e = q->items[it].expr;
+        is_string[it] = 0;
+        for (int g = 0; g < n_groups; g++) {
+            mreal v = pass_acc[it][g];
+            if (e->kind == SQLEXPR_AVG) v /= (mreal)groups[g].n;
+            numeric_acc[it].d[g] = v;
+        }
+        free(pass_acc[it]);
+    }
+    free(pass_acc); free(pass_item); free(pass_kind); free(pass_col);
+
+    for (int g = 0; g < n_groups; g++) {
+        int have_group_df = 0;
+        DataFrame group_df;
+        for (int it = 0; it < q->n_items; it++) {
+            if (item_needs_pass[it]) continue;
+            if (item_simple[it]) {
+                SqlEvalResult r = sql_eval_grouped_item_simple(q->items[it].expr, df, groups[g].rows, groups[g].n);
+                if (is_string[it] == -1) {
+                    is_string[it] = r.is_string;
+                    if (is_string[it]) string_acc[it] = (char**)malloc((size_t)n_groups * sizeof(char*));
+                }
+                if (is_string[it]) string_acc[it][g] = frame_strdup(r.strings[0]);
+                else numeric_acc[it].d[g] = r.numeric.d[0];
+                sql_eval_free(&r);
+            } else {
+                if (!have_group_df) { group_df = sql_select_rows(df, groups[g].rows, groups[g].n); have_group_df = 1; }
+                SqlEvalResult r = sql_eval_grouped_item(q->items[it].expr, &group_df, q->group_by, q->n_group_by);
+                if (is_string[it] == -1) {
+                    is_string[it] = r.is_string;
+                    if (is_string[it]) string_acc[it] = (char**)malloc((size_t)n_groups * sizeof(char*));
+                }
+                if (is_string[it]) string_acc[it][g] = frame_strdup(r.strings[0]);
+                else numeric_acc[it].d[g] = r.numeric.d[0];
+                sql_eval_free(&r);
+            }
+        }
+        if (have_group_df) df_free(&group_df);
     }
 
     DataFrame out = df_new(n_groups);
@@ -1744,7 +2283,7 @@ static DataFrame sql_apply_group_select(const SqlQuery *q, const DataFrame *df) 
         }
         mat_free(numeric_acc[it]);
     }
-    free(numeric_acc); free(string_acc); free(is_string);
+    free(numeric_acc); free(string_acc); free(is_string); free(item_simple); free(item_needs_pass);
     sql_groups_free(groups, n_groups);
     return out;
 }
@@ -1827,6 +2366,37 @@ static void sql_resolve_sort_keys(const DataFrame *df, char *const *cols, const 
     }
 }
 
+/* Three-way NaN-safe compare for ORDER BY keys. Plain `(a > b) - (a < b)`
+   is 0 (i.e. "tied") whenever either operand is NaN, since both `>` and
+   `<` are false for NaN under IEEE754 - that breaks the transitivity a
+   comparison sort's correctness depends on (NaN "ties" with 5, NaN
+   "ties" with -3, but 5 and -3 don't tie with each other), which lets a
+   NaN key corrupt the relative order of two real values depending on
+   where in the array everything happens to sit (found via
+   test_order_by_nan_key_does_not_corrupt_real_order - the same class of
+   bug as sql_eval_mask's NaN-comparison bug fixed earlier, see
+   sql_safe_cmp, just in the ORDER BY comparator instead of WHERE).
+   Every NaN is defined to sort after every real number (matches pandas'
+   own default `na_position='last'` for ascending sorts) - both operands
+   NaN ties (falls through to the caller's index tiebreak, same as any
+   other genuine tie). Note: the separate radix-sort path
+   (sql_radix_key, used above SQL_RADIX_MIN_N for a single numeric key)
+   sorts by raw IEEE754 bit pattern, which places a positive-signed NaN
+   (what C's own NAN constant produces) last too, consistent with this -
+   but would place a negative-signed NaN first instead, since the bit
+   pattern's sign bit alone decides which end of the range it lands in
+   there. Real-world NaN values arising from actual computation (0.0/0.0,
+   etc.) are practically always positive-signed, so this asymmetry is
+   noted, not fixed - changing the radix path's own well-tested bit-
+   transform is out of scope for this fix. */
+static inline int sql_safe_order_cmp(mreal a, mreal b) {
+    int a_nan = MISNAN(a), b_nan = MISNAN(b);
+    if (a_nan && b_nan) return 0;
+    if (a_nan) return 1;
+    if (b_nan) return -1;
+    return (a > b) - (a < b);
+}
+
 static int sql_compare_rows(const SqlSortKey *keys, int n_keys, int a, int b) {
     for (int k = 0; k < n_keys; k++) {
         int cmp;
@@ -1835,7 +2405,7 @@ static int sql_compare_rows(const SqlSortKey *keys, int n_keys, int a, int b) {
         } else {
             mreal av = AT(keys[k].num, a, 0);
             mreal bv = AT(keys[k].num, b, 0);
-            cmp = (av > bv) - (av < bv);
+            cmp = sql_safe_order_cmp(av, bv);
         }
         if (keys[k].desc) cmp = -cmp;
         if (cmp != 0) return cmp;
@@ -1924,7 +2494,7 @@ typedef struct { mreal key; int idx; } SqlNumPair;
 static inline void sql_swap_pair(SqlNumPair *a, SqlNumPair *b) { SqlNumPair t = *a; *a = *b; *b = t; }
 
 static inline int sql_cmp_pair(SqlNumPair a, SqlNumPair b, int desc) {
-    int cmp = (a.key > b.key) - (a.key < b.key);
+    int cmp = sql_safe_order_cmp(a.key, b.key);
     if (desc) cmp = -cmp;
     return cmp != 0 ? cmp : (a.idx > b.idx) - (a.idx < b.idx);
 }
@@ -2336,22 +2906,42 @@ static int sql_validate(const SqlQuery *q, const DataFrame *df, char *errbuf, si
    holds, this needs no error-recovery of its own: every assert it or
    sql_eval could hit has already been proven unreachable. */
 static DataFrame sql_execute(const SqlQuery *q, const DataFrame *df) {
-    DataFrame filtered = sql_apply_where(q->where, df);
+    /* sql_apply_where's own where==NULL branch always returns a full
+       owned copy of every column, purely so the rest of the pipeline
+       has a DataFrame it's allowed to free - even though nothing is
+       being filtered, and every downstream reader here only ever reads
+       through df_col_numeric/df_col_string/sql_select_rows, never
+       mutates its input. Measured directly: ~7ms of a 26.47ms total
+       query at n=1,000,000/cardinality=10 (ncols=3), roughly 27% of
+       the whole query, for a copy whose result is read once and thrown
+       away - see docs/PERFORMANCE_BACKLOG.md item 2. Skipped entirely
+       when there's no WHERE clause at all, aliasing df directly
+       instead; only the genuinely-filtered (where != NULL) case still
+       pays for - and needs - a real copy. */
+    int filtered_is_copy = (q->where != NULL);
+    DataFrame filtered_owned;
+    const DataFrame *filtered;
+    if (filtered_is_copy) {
+        filtered_owned = sql_apply_where(q->where, df);
+        filtered = &filtered_owned;
+    } else {
+        filtered = df;
+    }
 
     int grouped_path = 0;
     DataFrame projected;
     if (q->is_star) {
-        int *all = (int*)malloc((size_t)filtered.r * sizeof(int));
-        for (int i = 0; i < filtered.r; i++) all[i] = i;
-        projected = sql_select_rows(&filtered, all, filtered.r);
+        int *all = (int*)malloc((size_t)filtered->r * sizeof(int));
+        for (int i = 0; i < filtered->r; i++) all[i] = i;
+        projected = sql_select_rows(filtered, all, filtered->r);
         free(all);
     } else {
         int has_agg = 0;
         for (int i = 0; i < q->n_items; i++)
             if (sql_expr_contains_agg(q->items[i].expr)) { has_agg = 1; break; }
         grouped_path = (q->n_group_by > 0 || has_agg);
-        if (grouped_path) projected = sql_apply_group_select(q, &filtered);
-        else projected = sql_project(q, &filtered);
+        if (grouped_path) projected = sql_apply_group_select(q, filtered);
+        else projected = sql_project(q, filtered);
     }
 
     DataFrame result;
@@ -2361,7 +2951,7 @@ static DataFrame sql_execute(const SqlQuery *q, const DataFrame *df) {
            projection, fully-columned `filtered` as the sort key source
            in that case; a grouped/aggregated result has no such
            pre-projection row correspondence, so it sorts itself */
-        const DataFrame *key_source = grouped_path ? &projected : &filtered;
+        const DataFrame *key_source = grouped_path ? &projected : filtered;
         int *order = sql_order_permutation(q, key_source);
         result = sql_select_rows(&projected, order, projected.r);
         free(order);
@@ -2369,7 +2959,7 @@ static DataFrame sql_execute(const SqlQuery *q, const DataFrame *df) {
     } else {
         result = projected;
     }
-    df_free(&filtered);
+    if (filtered_is_copy) df_free(&filtered_owned);
     return result;
 }
 

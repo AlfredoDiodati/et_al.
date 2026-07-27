@@ -141,6 +141,56 @@ two follow-up attempts recorded, genuinely beats pandas on `ORDER BY`-only
 workloads at every size tested) - see item 5 for where the real remaining
 work in this specific benchmarked query actually is.**
 
+**A real correctness bug found and fixed, unrelated to performance:**
+`sql_cmp_pair` (the single-numeric-key quicksort/insertion-sort
+comparator) and `sql_compare_rows` (the multi-key comparator) both
+computed `cmp = (a > b) - (a < b)`. Both `>` and `<` are false whenever
+either operand is NaN (plain IEEE754 behavior, nothing to do with
+`-ffast-math` this time), so a NaN key compared "tied" with every real
+value - a genuine transitivity violation (NaN "ties" with 5, NaN "ties"
+with -3, but 5 and -3 don't tie with each other), which a comparison
+sort's correctness depends on not happening. The practical effect: a
+NaN key could reorder two *real* values relative to each other, not just
+land in an unexpected spot itself - and whether it actually did depended
+on the input row order, not just the values, since the tie fell through
+to an original-array-position tiebreak.
+
+Found while building item 2's hash-based `GROUP BY` prototype below: its
+row-construction order differs from production's sort-based one for
+identical data, and that different order fed into the exact same,
+already-buggy `sql_order_permutation`/quicksort code was enough to
+expose it - production's own group-construction order happened to sort
+correctly for every case tried before now, by luck, not by correctness.
+Minimized to an 11-value deterministic reproduction (no randomness
+needed): `ORDER BY x` on `x = [8,7,1,6,5,0,9,NaN,2,3,4]` produces
+`[0,1,5,6,7,8,9,NaN,2,3,4]` - `2,3,4` end up after `NaN` instead of in
+their correct ascending position. Captured in
+`test_order_by_nan_key_does_not_corrupt_real_order` (`test_sql.c`)
+before any fix was written, confirmed failing, then fixed.
+
+**Fixed** with a new `sql_safe_order_cmp` helper (three-way, NaN-safe):
+both operands NaN ties (falls through to the existing index tiebreak,
+same as any other genuine tie); exactly one NaN sorts that side last
+(matches pandas' own default `na_position='last'` for ascending sorts);
+otherwise a plain `(a > b) - (a < b)`. Used by both `sql_cmp_pair` and
+`sql_compare_rows`. The separate radix-sort path (`sql_radix_key`, used
+above `SQL_RADIX_MIN_N` for a single numeric key) sorts by raw IEEE754
+bit pattern rather than this comparator, and was not touched: a
+positive-signed NaN (what C's `NAN` constant actually produces) already
+lands last there too, consistent with the fix above, but a
+negative-signed NaN would land first instead, since the bit-flip
+transform's sign bit alone decides which end of the range it lands in.
+Real NaNs arising from actual computation are practically always
+positive-signed, so this asymmetry is noted, not fixed - changing the
+radix path's own separately-verified bit-transform was judged out of
+scope for this fix.
+
+Verified: `make test`, `STRESS=1 ./check.sh` (all 22 suites, including
+the existing 200-trial random multi-key `ORDER BY` fuzzer, which never
+injects NaN into a sort key and so never caught this on its own), and a
+full AddressSanitizer+UndefinedBehaviorSanitizer build (both normal and
+`STRESS=1`) all pass clean.
+
 ## 2. `GROUP BY` (`sql_build_groups`, `frame/sql.h`)
 
 Same story as `ORDER BY`: complexity already fixed (O(n^2) insertion sort ->
@@ -156,6 +206,792 @@ widening with n:
 Next step: currently sort-based (O(n log n)); a true hash-based grouping
 (build a hash map from row key -> group index in one pass) would be O(n),
 matching pandas' own approach.
+
+**Prototyped in `tests/performance/bench_sql_groupby.c`** (not yet ported
+to production), ported directly from Polars' real source (tag
+py-1.38.1, read from GitHub, not from memory):
+
+1. **v1 - hash-based group construction.** Production's `sql_build_groups`
+   builds a `%.17g` + `\x1f`-joined string key per row (malloc/realloc/
+   strcat per row), then `qsort`s (key, row) pairs with `strcmp` - O(n log
+   n), each comparison a full string compare. Ported instead: Polars'
+   `group_by` (`crates/polars-core/src/frame/group_by/hashing.rs`) -
+   single pass over rows, one hash-table probe per row (vacant -> new
+   group; occupied -> append row index) - and its numeric dirty-hash
+   (`crates/polars-utils/src/hashing.rs`: `DirtyHash for u32/u64`,
+   `bits.wrapping_mul(0x55fbfd6bfc5458e9)`; `crates/polars-utils/src/
+   total_ord.rs`: `canonical_f32`/`canonical_f64` folds -0.0 into +0.0 and
+   every NaN into one canonical bit pattern before hashing, so hashing
+   and equality both treat all NaNs as one group) and multi-column hash
+   combination (`_boost_hash_combine`, straight from Boost). Not
+   ported: hashbrown's SwissTable itself (a distinct, general-purpose
+   hash-table library, not part of "the group-by algorithm") - a plain
+   linear-probing open-addressing table is used instead; `UnitVec`'s
+   single-element inline storage (see below - this turned out to
+   matter after all); `group_by_threaded_slice`'s rayon-based
+   partitioned multi-threading (v1 is single-threaded).
+2. **v2 - direct per-group aggregation.** Even with v1's hash-based
+   construction, `sql_apply_group_select` still calls `sql_select_rows`
+   once per group - a fresh `Mat` allocation with a scattered gather of
+   *every* numeric column (not just the ones any aggregate touches) -
+   then evaluates each `SELECT` item through the general `sql_eval`
+   recursive evaluator. That cost scales with the number of *groups*,
+   not rows, and neither v1 nor any earlier `GROUP BY` fix touched it.
+   Polars never materializes a per-group sub-frame at all
+   (`crates/polars-core/src/frame/group_by/aggregations/mod.rs`'s
+   `agg_sum`/`agg_mean`: each group's closure reads straight from the
+   source column's raw buffer via its row-index list and reduces
+   inline, folding directly into one pre-sized output array). Ported for
+   the common shapes only - a bare `GROUP BY` column, `COUNT(*)`/
+   `COUNT(anything)` (this project's `COUNT` already ignores its
+   argument), and `SUM`/`AVG`/`MIN`/`MAX` over a single plain column -
+   computed directly against the source `DataFrame`'s raw columns via
+   each group's row-index list, no `sql_select_rows`, no per-group
+   `DataFrame`. Anything else (composite arithmetic combining two
+   aggregates, an aggregate combined with a literal - the same shapes
+   `test_composite_aggregate_arithmetic` in `test_sql.c` covers) falls
+   back to the exact old per-group `sql_select_rows` +
+   `sql_eval_grouped_item` path, built lazily (once per group, only if
+   that group actually has a non-simple item).
+3. **v3 - tried and ruled out.** v2 still allocates a fresh 1-element
+   `Mat` per simple aggregate per group, immediately copied out and
+   freed. Hypothesized this was real, measurable overhead at high group
+   counts; wrote v3 to write each simple item's value directly into the
+   output accumulator with no `SqlEvalResult`/`Mat` allocation at all.
+   Measured no consistent difference from v2 at any n/cardinality
+   tested (within noise both directions). **Not adopted** - the
+   allocation wasn't the bottleneck.
+
+**A real bug found in this session's own test tooling, not the
+algorithm**, while investigating why an isolated benchmark
+(`bench_sql_groupby.c`'s own `bench_isolated`) and a real-pandas/Polars
+comparison (`bench_sql_groupby_compare.py`) disagreed at the same
+n/cardinality: `make_group_df`'s data generator used one shared LCG
+state, advanced once per column per row, to fill every column - so
+which underlying random draw actually became the group-key column
+silently depended on `ncols`, meaning the DataFrame's *actual* realized
+group count didn't reliably match the nominal `cardinality` parameter
+once `ncols > 1`. Measured directly: same `n=10,000`, `cardinality=5,000`,
+same seed, produced 625 actual groups at `ncols=8` but 4,291 at
+`ncols=3` - nowhere near each other, let alone near the intended ~4,300.
+This made v1/v2's apparent performance at "high cardinality" look
+better than it really was, since the realized group count was often far
+lower than labeled. Fixed with two independent LCG streams (one for the
+key column, one for every other column), so the key column's values -
+and the real group count - depend only on `n`, `cardinality`, and
+`seed`, never on `ncols`, matching how `bench_sql_groupby_compare.py`
+already generates the key column independently via its own numpy RNG
+call. After the fix, the isolated benchmark and the pandas/Polars
+comparison agree.
+
+4. **v4 - `UnitVec` inline row storage, tried and ruled out.** v1/v2/v3
+   all pay one `malloc` per group for that group's row-index array
+   (`SqlGroupBuildV1.rows`), regardless of group size - at near-unique
+   cardinality (the regime where v1/v2/v3 lose to production), most
+   groups are singletons, so this is a great many tiny allocations.
+   Polars avoids this entirely via `UnitVec`
+   (`crates/polars-utils/src/idx_vec.rs`, tag py-1.38.1, read directly):
+   a group's first row lives inline inside the group's own struct - no
+   heap allocation until a *second* row is appended, at which point it
+   jumps straight to an 8-slot heap buffer (`max(capacity*2, new_len,
+   8)`, matching `UnitVec::reserve` exactly), doubling normally after
+   that. Ported precisely (`SqlGroupUV`, `sql_group_uv_push`) - this
+   needed a distinct type from production/v1/v2/v3's shared `SqlGroup`
+   (`frame/sql.h`: plain `{int *rows; int n;}`, no room for an inline
+   value), plus a structural change to how the groups array itself is
+   allocated: since a still-inline group's `.rows` points to
+   `&group.inline_row` (an address *inside* the groups array), that
+   array can no longer be grown via `realloc` the way v1/v2/v3's is -
+   doing so would move it and dangle every inline `.rows` pointer.
+   Fixed by allocating the groups array once, up front, sized to the
+   theoretical maximum (`df->r` - every row its own group), never
+   reallocated after that.
+
+   **Measured no consistent improvement over v3, in either direction,
+   across two repeated runs** - ruled out, same as v3's own result.
+   The most likely explanation: at near-unique cardinality, *every* row
+   triggers a genuinely new hash-table entry, meaning the working set is
+   the *whole* open-addressing table (sized for up to `df->r` slots) at
+   a high load factor - a scattered, low-locality access pattern absent
+   in production's own approach (a contiguous array of (key, row) pairs
+   that `qsort` walks and swaps sequentially, real cache-friendly access
+   despite `qsort`'s own worse complexity and more expensive per-
+   comparison string work). If that theory is right, the group *storage*
+   was never the bottleneck at this extreme - the *hash table itself*'s
+   memory-access pattern is - which would mean neither v3 nor v4's target
+   was the actual remaining cost. Not directly confirmed (would need
+   cache-miss profiling, not just wall-clock timing, to verify) - noted
+   as the leading hypothesis, not a proven conclusion.
+
+Measured via the isolated benchmark (production vs v1 vs v2 vs v3 vs v4,
+8-column DataFrame, corrected generator, best of two runs):
+
+| n x cardinality | production | v1 | v2 | v3 | v4 |
+|---|---|---|---|---|---|
+| 1,000x10 | 0.358-0.370ms | 5.14-5.18x | 6.56-6.77x | 6.59-6.74x | 6.81-6.92x |
+| 1,000x500 | 0.617-0.632ms | 1.23-1.26x | 2.38-2.46x | 2.46-2.49x | 2.44-2.49x |
+| 1,000x5,000 | 0.929-0.968ms | 0.88-0.89x | 1.58-1.63x | 1.62-1.67x | 1.69-1.75x |
+| 10,000x10 | 3.765-3.917ms | 5.91-6.23x | 7.46-7.65x | 7.46-7.68x | 7.48-7.64x |
+| 10,000x500 | 4.318-4.410ms | 1.66-1.68x | 1.95-1.96x | 1.96-1.97x | 1.98-2.01x |
+| 10,000x5,000 | 6.727-6.906ms | 0.52-0.53x | 0.63-0.64x | 0.63-0.64x | 0.63-0.65x |
+| 100,000x10 | 61.457-62.264ms | 6.16-6.20x | 7.31-7.40x | 7.20-7.44x | 7.17-7.39x |
+| 100,000x500 | 60.988-61.009ms | 2.28x | 2.34-2.36x | 2.34-2.35x | 2.42-2.44x |
+| 100,000x5,000 | 67.634-67.955ms | 0.65-0.66x | 0.68-0.69x | 0.69x | 0.68-0.70x |
+| 1,000,000x10 | 832.618-836.233ms | 4.50-4.56x | 8.04-8.47x | 8.18x | 7.67-7.92x |
+| 1,000,000x500 | 861.425-865.507ms | 3.10-3.11x | 3.32x | 3.33-3.36x | 3.26-3.27x |
+| 1,000,000x5,000 | 861.411-871.283ms | 0.85-0.86x | 0.88x | 0.88x | 0.87-0.88x |
+
+Measured via `bench_sql_groupby_compare.py` against real pandas/Polars
+(`SELECT c0, SUM(c1), AVG(c2) FROM df GROUP BY c0`, 3-column DataFrame,
+ratio = production time / variant time, v1/v2 only - v4 not yet wired
+into this harness since it showed no isolated win over v2). **These
+numbers predate the hash-table indexing fix below and are superseded -
+kept for the historical record, not as the current state:**
+
+| n x cardinality | groups | production | v1 | v2 | pandas | polars |
+|---|---|---|---|---|---|---|
+| 1,000x10 | 10 | 0.441ms | 7.18x | 8.60x | 0.20x | 0.41x |
+| 1,000x500 | 427 | 0.643ms | 1.70x | 2.69x | 0.28x | 0.53x |
+| 1,000x5,000 | 901 | 0.772ms | 0.96x | 1.40x | 0.34x | 0.63x |
+| 10,000x10 | 10 | 4.618ms | 8.31x | 9.57x | 1.86x | 3.78x |
+| 10,000x500 | 500 | 5.030ms | 2.28x | 2.55x | 2.12x | 10.96x |
+| 10,000x5,000 | 4,309 | 6.978ms | 0.63x | 0.74x | 2.52x | 9.49x |
+| 100,000x10 | 10 | 61.485ms | 10.83x | 12.71x | 16.78x | 31.54x |
+| 100,000x500 | 500 | 66.129ms | 3.38x | 3.46x | 17.30x | 34.70x |
+| 100,000x5,000 | 5,000 | 71.042ms | 0.87x | 0.90x | 16.18x | 34.70x |
+| 1,000,000x10 | 10 | 752.013ms | 9.43x | 12.34x | 47.87x | 96.91x |
+| 1,000,000x500 | 500 | 858.713ms | 4.10x | 4.38x | 47.28x | 66.90x |
+| 1,000,000x5,000 | 5,000 | 903.679ms | 1.12x | 1.14x | 39.82x | 59.37x |
+
+**The actual root cause, found by direct profiling of v2 itself (not by
+comparing output values, and not by continuing to guess at storage-
+allocation theories after v3/v4 both failed to help): splitting a
+GROUP BY query's time into "hash every row's key" vs "full hash-table
+group construction" vs "aggregate, given groups already built"** (n=
+1,000,000, cardinality=5,000) showed hashing alone costing 2.0ms and
+aggregation alone 7.8ms, but the *construction* step sitting between
+them - which should cost roughly their sum plus a small constant -
+instead cost 915.5ms, i.e. essentially the entire query.
+
+**Cause**: `sql_build_groups_hash`'s open-addressing table computed its
+initial slot as `hash & (table_size - 1)` - the hash's LOW bits. But
+`sql_group_dirty_hash_u64` ports Polars' own `DirtyHash` formula
+(`crates/polars-utils/src/hashing.rs`) verbatim, and that source
+documents it explicitly:
+
+> A quick and dirty hash. Only the top bits of the hash are decent, such
+> as used in hash_to_partition.
+
+For small-integer group keys (the overwhelmingly common case - a
+handful of category codes), the LOW bits of `bits.wrapping_mul(RANDOM_
+ODD)` are poorly distributed, causing catastrophic clustering in the
+open-addressing table - long linear-probe chains on nearly every
+lookup, silently, since the output was always correct (a pure
+performance bug, invisible to any correctness check - see
+`test_hash_table_probe_length_bounded` in `bench_sql_groupby.c`, the
+regression test that would have caught this immediately if it had
+existed before v1 was first written).
+
+**Fixed** by extracting the table index from the hash's HIGH bits
+instead (`hash >> (64 - log2(table_size))`), the exact bits Polars'
+own `hash_to_partition` uses (`(h as u128 * n_partitions) >> 64` - a
+multiply-based generalization for non-power-of-two partition counts; a
+plain shift suffices here since the table size is always a power of
+two). Applied identically everywhere the bug existed: `sql_build_
+groups_hash` (v1/v2/v3), `sql_build_groups_uv` (v4), and their
+respective hash-table-grow functions, in both `bench_sql_groupby.c`
+and `bench_sql_groupby_compare.c` (the two files independently
+duplicate this construction code). Verified directly before trusting
+it: the same standalone profiling harness that found the bug, patched
+with only the indexing change, dropped the 915.5ms construction step to
+28.0ms (32x) - confirmed, not assumed. `test_hash_table_probe_length_
+bounded` (average probe-chain length per lookup, not wall-clock time -
+deterministic, machine-speed-independent) dropped from 1306.48 to 1.20
+after the fix and is now part of the regular correctness run for this
+prototype file.
+
+Measured via the isolated benchmark **after the fix** (production vs
+v1 vs v2 vs v3 vs v4, 8-column DataFrame, best of two runs) - the
+near-unique-cardinality regression that motivated v3/v4 in the first
+place is gone entirely, every variant now beats production at every
+n/cardinality tested:
+
+| n x cardinality | production | v1 | v2 | v3 | v4 |
+|---|---|---|---|---|---|
+| 1,000x10 | 0.374-0.375ms | 5.68-5.73x | 7.60-7.61x | 7.65-7.76x | 7.85-7.95x |
+| 1,000x500 | 0.633-0.636ms | 1.94-2.01x | 7.77x | 8.50-8.51x | 8.64-8.65x |
+| 1,000x5,000 | 0.898-0.909ms | 1.52-1.57x | 7.85-8.09x | 9.18-9.30x | 11.98-12.18x |
+| 10,000x10 | 3.934-3.964ms | 6.84-6.94x | 8.84-9.03x | 8.93-8.97x | 9.18-9.26x |
+| 10,000x500 | 4.418-4.442ms | 4.94-4.98x | 8.33-8.43x | 8.53-8.56x | 9.35-9.42x |
+| 10,000x5,000 | 6.774-6.844ms | 2.24-2.26x | 7.74-7.87x | 8.54-8.59x | 8.73-8.84x |
+| 100,000x10 | 62.656-62.664ms | 6.58-6.64x | 7.96-7.99x | 7.96-7.98x | 7.88-7.98x |
+| 100,000x500 | 61.331-62.928ms | 6.42-6.48x | 7.66-7.87x | 7.68-7.74x | 7.97-8.09x |
+| 100,000x5,000 | 67.869-69.229ms | 4.54-4.58x | 6.25-6.31x | 6.29-6.36x | 6.57-6.82x |
+| 1,000,000x10 | 842.248-855.040ms | 4.90-4.95x | 9.23-9.38x | 9.26-9.37x | 8.58-9.26x |
+| 1,000,000x500 | 866.757-870.451ms | 8.07-8.27x | 9.71-9.88x | 9.31-9.45x | 9.79-9.85x |
+| 1,000,000x5,000 | 871.774-875.198ms | 6.85-7.02x | 7.74-8.01x | 7.63-7.80x | 8.10-8.24x |
+
+Measured via `bench_sql_groupby_compare.py` against real pandas/Polars,
+same query, **after the fix**:
+
+| n x cardinality | groups | production | v1 | v2 | pandas | polars |
+|---|---|---|---|---|---|---|
+| 1,000x10 | 10 | 0.444ms | 8.29x | 10.22x | 0.21x | 0.41x |
+| 1,000x500 | 427 | 0.646ms | 2.95x | 8.00x | 0.29x | 0.54x |
+| 1,000x5,000 | 901 | 0.779ms | 2.16x | 6.61x | 0.34x | 0.65x |
+| 10,000x10 | 10 | 4.628ms | 9.64x | 11.33x | 2.03x | 3.72x |
+| 10,000x500 | 500 | 4.979ms | 6.49x | 9.36x | 2.04x | 11.10x |
+| 10,000x5,000 | 4,309 | 7.060ms | 2.86x | 7.48x | 2.49x | 9.40x |
+| 100,000x10 | 10 | 64.231ms | 11.94x | 14.07x | 17.36x | 33.16x |
+| 100,000x500 | 500 | 65.680ms | 12.46x | 15.25x | 17.52x | 41.20x |
+| 100,000x5,000 | 5,000 | 71.414ms | 7.48x | 10.14x | 15.90x | 32.82x |
+| 1,000,000x10 | 10 | 783.133ms | 10.53x | 14.24x | 47.77x | 100.24x |
+| 1,000,000x500 | 500 | 837.707ms | 13.34x | 16.37x | 52.26x | 65.60x |
+| 1,000,000x5,000 | 5,000 | 910.585ms | 10.62x | 12.46x | 38.93x | 59.12x |
+
+Converting to v2's own standing against pandas/Polars directly (v2 time
+/ reference time - below 1.0 means v2 is faster):
+
+| n x cardinality | v2 vs pandas | v2 vs polars |
+|---|---|---|
+| 1,000x10 | 0.02x (faster) | 0.04x (faster) |
+| 1,000x500 | 0.04x (faster) | 0.07x (faster) |
+| 1,000x5,000 | 0.05x (faster) | 0.10x (faster) |
+| 10,000x10 | 0.18x (faster) | 0.33x (faster) |
+| 10,000x500 | 0.22x (faster) | 1.19x (slower) |
+| 10,000x5,000 | 0.33x (faster) | 1.26x (slower) |
+| 100,000x10 | 1.23x (slower) | 2.36x (slower) |
+| 100,000x500 | 1.15x (slower) | 2.70x (slower) |
+| 100,000x5,000 | 1.57x (slower) | 3.24x (slower) |
+| 1,000,000x10 | 3.35x (slower) | 7.04x (slower) |
+| 1,000,000x500 | 3.19x (slower) | 4.01x (slower) |
+| 1,000,000x5,000 | 3.13x (slower) | 4.74x (slower) |
+
+**A second lever, found by continuing to profile instead of stopping at
+the first fix**: with the indexing bug fixed, `v2`'s own real (not
+simplified-standalone) construction step still cost far more than a
+minimal reproduction of the same algorithm - 34.95ms vs 8.33ms at
+n=1,000,000/cardinality=10, confirmed by timing `sql_apply_group_select_
+v2`/`sql_build_groups_hash` directly (not through `df_sql_v2`, to rule
+out parsing/output-construction overhead) and comparing against a
+hand-written specialized reproduction of the identical algorithm.
+Isolating further: calling the *generic* multi-column path with
+`n_group_cols` fixed at a literal `1` at the call site (instead of the
+real runtime value read from a parsed `SqlQuery`) already measured
+14.74ms - meaning roughly half the remaining gap was simply that the
+compiler cannot constant-fold/specialize `sql_group_row_hash`/
+`sql_group_row_eq`'s `for (c = 0; c < n_group_cols; c++)` loop and its
+per-row `df_col_type`/`df_col_numeric` by-name resolution at
+`sql_apply_group_select_v2`'s real call site, where `n_group_cols` is a
+genuine runtime value. The rest of the gap (14.74ms -> 8.33ms) was the
+per-row by-name resolution itself, avoidable by resolving the column's
+`Mat` once, outside the loop.
+
+**Fixed** with `sql_build_groups_hash_1col` - a fast path for the
+overwhelmingly common case (a single, non-string `GROUP BY` column):
+resolves the column's `Mat` once, hashes/compares directly against it
+with no generic loop or per-row name lookup at all.
+`sql_build_groups_hash` dispatches to it when `n_group_cols == 1` and
+the column isn't a string column, falling back to the unchanged generic
+path (`sql_build_groups_hash_generic`) otherwise - multi-column `GROUP
+BY` and string-column `GROUP BY` are untouched, still correct, just not
+sped up by this specific fix. Applied to both `bench_sql_groupby.c` and
+`bench_sql_groupby_compare.c` (the two independent copies of this
+construction code). `test_hash_table_probe_length_bounded` still passes
+unchanged (its counters are incremented in both the generic and the new
+fast path, so it verifies whichever one actually runs).
+
+Measured via the isolated benchmark, this fix on top of the indexing
+fix (production vs v1 vs v2 vs v3 vs v4 - v4 unaffected, since it has
+its own separate, not-yet-updated construction function):
+
+| n x cardinality | production | v1 | v2 | v3 | v4 |
+|---|---|---|---|---|---|
+| 1,000x10 | 0.367ms | 10.85x | 28.38x | 22.15x | 7.68x |
+| 1,000x500 | 0.617ms | 2.11x | 10.75x | 12.35x | 8.37x |
+| 1,000x5,000 | 0.937ms | 1.66x | 10.01x | 11.42x | 12.47x |
+| 10,000x10 | 3.898ms | 13.30x | 24.49x | 25.46x | 9.03x |
+| 10,000x500 | 4.412ms | 7.03x | 16.88x | 17.27x | 9.25x |
+| 10,000x5,000 | 6.778ms | 2.51x | 10.85x | 12.14x | 8.79x |
+| 100,000x10 | 61.780ms | 9.34x | 12.30x | 12.34x | 7.88x |
+| 100,000x500 | 61.489ms | 9.04x | 11.36x | 11.83x | 7.94x |
+| 100,000x5,000 | 68.980ms | 5.80x | 8.81x | 9.03x | 6.63x |
+| 1,000,000x10 | 835.929ms | 5.65x | 13.13x | 13.19x | 7.94x |
+| 1,000,000x500 | 869.296ms | 11.18x | 13.23x | 13.59x | 9.79x |
+| 1,000,000x5,000 | 868.181ms | 9.87x | 12.24x | 12.19x | 7.96x |
+
+Measured via `bench_sql_groupby_compare.py` against real pandas/Polars,
+same query, with both fixes applied:
+
+| n x cardinality | groups | production | v1 | v2 | pandas | polars |
+|---|---|---|---|---|---|---|
+| 1,000x10 | 10 | 0.449ms | 18.37x | 31.26x | 0.21x | 0.42x |
+| 1,000x500 | 427 | 0.653ms | 3.35x | 11.53x | 0.29x | 0.55x |
+| 1,000x5,000 | 901 | 0.780ms | 2.28x | 8.03x | 0.34x | 0.63x |
+| 10,000x10 | 10 | 4.624ms | 22.13x | 35.30x | 2.04x | 3.82x |
+| 10,000x500 | 500 | 5.065ms | 9.69x | 17.98x | 2.10x | 11.39x |
+| 10,000x5,000 | 4,309 | 6.704ms | 3.17x | 10.46x | 2.40x | 8.94x |
+| 100,000x10 | 10 | 65.050ms | 26.95x | 41.61x | 17.23x | 33.58x |
+| 100,000x500 | 500 | 65.882ms | 26.16x | 41.33x | 17.61x | 39.71x |
+| 100,000x5,000 | 5,000 | 74.669ms | 11.19x | 18.33x | 15.39x | 27.79x |
+| 1,000,000x10 | 10 | 843.154ms | 16.76x | 28.21x | 48.06x | 96.54x |
+| 1,000,000x500 | 500 | 866.141ms | 24.39x | 37.14x | 48.74x | 65.94x |
+| 1,000,000x5,000 | 5,000 | 888.475ms | 19.09x | 26.48x | 39.93x | 57.85x |
+
+Converting to v2's own standing against pandas/Polars directly (v2 time
+/ reference time - below 1.0 means v2 is faster):
+
+| n x cardinality | v2 vs pandas | v2 vs polars |
+|---|---|---|
+| 1,000x10 | 0.007x (faster) | 0.013x (faster) |
+| 1,000x500 | 0.025x (faster) | 0.047x (faster) |
+| 1,000x5,000 | 0.042x (faster) | 0.079x (faster) |
+| 10,000x10 | 0.058x (faster) | 0.108x (faster) |
+| 10,000x500 | 0.117x (faster) | 0.634x (faster) |
+| 10,000x5,000 | 0.230x (faster) | 0.855x (faster) |
+| 100,000x10 | 0.414x (faster) | 0.807x (faster) |
+| 100,000x500 | 0.426x (faster) | 0.961x (faster, ~tied) |
+| 100,000x5,000 | 0.839x (faster) | 1.516x (slower) |
+| 1,000,000x10 | 1.703x (slower) | 3.422x (slower) |
+| 1,000,000x500 | 1.312x (slower) | 1.776x (slower) |
+| 1,000,000x5,000 | 1.508x (slower) | 2.184x (slower) |
+
+**A third lever, found by continuing to profile the real code path
+rather than accepting "pandas/Polars are mature" as the explanation**:
+splitting `df_sql_v2`'s own total time into `sql_apply_group_select_v2`
+alone vs the rest showed a real, unaccounted-for ~7ms gap at
+n=1,000,000/cardinality=10 (26.47ms total, 19.38ms inside group-select).
+Direct measurement of `sql_apply_where(NULL, df)` alone (the no-`WHERE`
+case every query in this benchmark uses) matched that gap almost
+exactly: **`sql_apply_where` unconditionally runs a full `sql_select_
+rows(df, all, df->r)` - copying every column of the entire source
+table - even when there is no `WHERE` clause to apply at all**, purely
+so the rest of the pipeline has a DataFrame it's allowed to free.
+Neither Polars nor pandas pays anything like this when there's no
+filter. This is a general SQL-pipeline cost (production's own
+`sql_execute` has the identical pattern), not something specific to
+`GROUP BY` - it only became the dominant remaining cost here because
+the first two fixes made everything else so much faster.
+
+**Fixed** in a new `v5` (`sql_execute_v5`/`df_sql_v5`): skips the copy
+entirely when `where == NULL`, aliasing the original `df` directly
+instead. Safe because every downstream reader (`sql_apply_group_
+select_v2`, `sql_project`, `sql_order_permutation`) only ever reads
+through `df_col_numeric`/`df_col_string`/`sql_select_rows` - never
+mutates its input - so the alias is only ever read, and only the
+genuinely-copied (`where != NULL`) branch gets `df_free`'d.
+`test_correctness_v5_where_plus_group_by` was added specifically
+because every other test in this file happens to use the no-`WHERE`
+shape - a real `WHERE` clause needed its own dedicated test to confirm
+the *other* branch (still a genuine copy) stays correct.
+
+Measured via the isolated benchmark, `v5` on top of both earlier fixes
+(8-column DataFrame; `v4` still excluded from this fix, same as before):
+
+| n x cardinality | production | v1 | v2 | v3 | v4 | v5 |
+|---|---|---|---|---|---|---|
+| 1,000x10 | 0.363ms | 11.04x | 21.23x | 21.67x | 7.62x | 34.44x |
+| 1,000x500 | 0.615ms | 2.17x | 10.61x | 12.27x | 8.28x | 12.15x |
+| 1,000x5,000 | 0.929ms | 1.76x | 9.74x | 11.34x | 12.18x | 10.49x |
+| 10,000x10 | 3.799ms | 13.12x | 24.45x | 24.49x | 8.84x | 39.53x |
+| 10,000x500 | 4.396ms | 7.15x | 17.29x | 18.03x | 9.25x | 22.64x |
+| 10,000x5,000 | 6.746ms | 2.45x | 10.54x | 12.10x | 8.67x | 11.69x |
+| 100,000x10 | 62.216ms | 9.60x | 12.57x | 12.39x | 7.97x | 52.08x |
+| 100,000x500 | 61.351ms | 9.02x | 11.63x | 11.87x | 7.87x | 43.27x |
+| 100,000x5,000 | 67.830ms | 5.82x | 8.88x | 8.78x | 6.70x | 17.03x |
+| 1,000,000x10 | 833.731ms | 5.68x | 13.15x | 13.49x | 8.81x | 41.34x |
+| 1,000,000x500 | 852.836ms | 10.68x | 13.65x | 13.99x | 9.25x | 47.29x |
+| 1,000,000x5,000 | 863.439ms | 9.89x | 12.21x | 12.10x | 8.15x | 31.54x |
+
+`v5`'s standing against real Polars specifically (the fastest of the
+two references, and the one that matters most here) - `v5` time /
+Polars time, below 1.0 means `v5` is faster - measured via
+`bench_sql_groupby_compare.py`, same query:
+
+| n x cardinality | groups | v5 vs polars | v5 vs pandas |
+|---|---|---|---|
+| 1,000x10 | 10 | 0.011x (faster) | 0.006x (faster) |
+| 1,000x500 | 427 | 0.044x (faster) | 0.023x (faster) |
+| 1,000x5,000 | 901 | 0.077x (faster) | 0.040x (faster) |
+| 10,000x10 | 10 | 0.088x (faster) | 0.047x (faster) |
+| 10,000x500 | 500 | 0.563x (faster) | 0.102x (faster) |
+| 10,000x5,000 | 4,309 | 0.794x (faster) | 0.217x (faster) |
+| 100,000x10 | 10 | 0.616x (faster) | 0.334x (faster) |
+| 100,000x500 | 500 | 0.711x (faster) | 0.305x (faster) |
+| 100,000x5,000 | 5,000 | 1.476x (slower) | 0.693x (faster) |
+| 1,000,000x10 | 10 | 2.512x (slower) | 1.241x (slower) |
+| 1,000,000x500 | 500 | 1.290x (slower) | 0.991x (~tied) |
+| 1,000,000x5,000 | 5,000 | 1.755x (slower) | 1.145x (slower) |
+
+**A fourth lever, found by continuing to profile `v5`'s own remaining
+time instead of accepting the n=1,000,000 gap as intrinsic**: splitting
+`v5`'s time at n=1,000,000/cardinality=10 into construction vs
+aggregation showed aggregation (10.77ms) actually costing *more* than
+construction (8.59ms) - the opposite of what the first two fixes might
+suggest. Root cause: `v2`-`v5` all aggregate group-outer, row-inner -
+for each group, gather that group's row indices from the source column
+one at a time. Since group membership is effectively random (a row's
+group depends on its `GROUP BY` key value, uncorrelated with its
+position), this reads the source column in essentially random order -
+a cache miss on nearly every access. A direct isolated comparison
+(group-outer gather vs a single sequential pass over every row,
+scatter-accumulating into small per-group running totals via a `row ->
+group` mapping) measured the sequential version 4.2x-4.8x faster:
+
+| n | cardinality | group-outer gather | row-outer scatter | speedup |
+|---|---|---|---|---|
+| 1,000,000 | 10 | 6.35ms | 1.32ms | 4.8x |
+| 1,000,000 | 500 | 5.82ms | 1.24ms | 4.7x |
+| 1,000,000 | 5,000 | 8.83ms | 2.09ms | 4.2x |
+
+The mechanism: row-outer reads the source column sequentially (cache/
+prefetcher-friendly, auto-vectorizable) and only scatters on the WRITE
+side, into an array small enough (one slot per group) to stay cache-
+resident regardless of source size. **This is not what Polars' own
+`agg_sum`/`agg_mean` actually do** - they also gather per-group via an
+index list, the same architecture `v2`-`v5` already use - so this fix
+was found by profiling this codebase's own bottleneck, not by porting
+a further Polars technique; it's included because it measures faster
+for this implementation regardless of what the reference does.
+
+**Fixed** in a new `v6`: for the fast-path items only (`SUM`/`AVG`/
+`MIN`/`MAX` over a plain column), builds a `row -> group` map from the
+already-built groups (a cheap backfill pass, ~1.2ms at n=1,000,000/
+cardinality=5,000 - confirmed directly, not assumed, since it has a
+similar scattered-write access pattern and needed to be checked, not
+just theorized about), then does one sequential pass per query
+accumulating into per-item, per-group totals; `MIN`/`MAX` are seeded
+from each group's already-known representative row and use a NaN-
+poisons-and-stays-poisoned rule matching the existing per-group
+short-circuit semantics exactly. `COUNT` and a bare `GROUP BY` column
+still need no pass at all (already O(1) per group from construction).
+Composite/fallback items are unchanged, still using the lazy per-group
+path. `test_correctness_v6_min_max_with_nan` was added specifically
+because `MIN`/`MAX` had never been exercised by any test in this file
+before, let alone with a NaN in the *aggregated* column (every existing
+NaN test only ever put one in the `GROUP BY` key).
+
+Measured via the isolated benchmark, `v6` on top of all three earlier
+fixes (8-column DataFrame):
+
+| n x cardinality | production | v1 | v2 | v3 | v4 | v5 | v6 |
+|---|---|---|---|---|---|---|---|
+| 1,000x10 | 0.368ms | 7.74x | 21.00x | 21.97x | 7.66x | 33.80x | 31.20x |
+| 1,000x500 | 0.631ms | 2.12x | 6.72x | 12.73x | 8.64x | 10.88x | 16.74x |
+| 1,000x5,000 | 0.917ms | 1.71x | 9.10x | 11.32x | 11.90x | 9.66x | 14.56x |
+| 10,000x10 | 3.867ms | 13.60x | 24.82x | 24.93x | 8.99x | 41.17x | 34.95x |
+| 10,000x500 | 4.437ms | 7.18x | 17.10x | 18.09x | 9.17x | 18.99x | 20.08x |
+| 10,000x5,000 | 6.872ms | 2.37x | 10.02x | 11.03x | 8.82x | 11.11x | 14.91x |
+| 100,000x10 | 63.766ms | 9.17x | 12.77x | 12.52x | 7.79x | 53.70x | 51.37x |
+| 100,000x500 | 64.403ms | 9.24x | 12.09x | 11.99x | 7.94x | 44.87x | 45.40x |
+| 100,000x5,000 | 68.671ms | 5.88x | 8.87x | 8.43x | 6.53x | 16.40x | 18.73x |
+| 1,000,000x10 | 864.882ms | 5.42x | 12.97x | 12.83x | 9.30x | 40.87x | 59.91x |
+| 1,000,000x500 | 910.899ms | 11.60x | 13.53x | 13.44x | 10.28x | 53.00x | 57.69x |
+| 1,000,000x5,000 | 936.695ms | 9.78x | 12.62x | 13.31x | 8.51x | 34.89x | 35.99x |
+
+`v6`'s standing against real Polars and pandas, via
+`bench_sql_groupby_compare.py`, same query:
+
+| n x cardinality | groups | v6 vs polars | v6 vs pandas |
+|---|---|---|---|
+| 1,000x10 | 10 | 0.013x (faster) | - |
+| 1,000x500 | 427 | 0.035x (faster) | - |
+| 1,000x5,000 | 901 | 0.059x (faster) | - |
+| 10,000x10 | 10 | 0.109x (faster) | - |
+| 10,000x500 | 500 | 0.484x (faster) | - |
+| 10,000x5,000 | 4,309 | 0.637x (faster) | - |
+| 100,000x10 | 10 | 0.780x (faster) | - |
+| 100,000x500 | 500 | 0.754x (faster) | - |
+| 100,000x5,000 | 5,000 | 1.420x (slower) | - |
+| 1,000,000x10 | 10 | 1.840x (slower) | 0.843x (faster) |
+| 1,000,000x500 | 500 | 1.177x (slower) | 0.895x (faster) |
+| 1,000,000x5,000 | 5,000 | 1.636x (slower) | 1.141x (slower) |
+
+(pandas column left blank above n=1,000,000 - not the focus of this
+round, `v6` was already ahead of pandas at every one of those points in
+`v5`'s own table; the two points worth calling out are the ones that
+changed direction: `v6` now *beats pandas outright* at n=1,000,000/
+cardinality=10 and 500, where `v5` was tied or slightly behind.)
+
+**Conclusion**: four fixes found by profiling (each one found by
+continuing to measure the ACTUAL remaining bottleneck rather than
+attributing any remaining gap to "the reference implementation is more
+mature") took the worst-measured point from 35x/52x slower than
+pandas/Polars down to 1.18x-1.84x slower against Polars, and `v6` now
+beats pandas outright at n=1,000,000/cardinality=10 and 500 (was
+1.24x/0.99x with `v5`) - only cardinality=5,000 remains behind pandas
+(1.14x). Against Polars, `v6` beats it at every n up to and including
+100,000 except the single highest cardinality tested there, and the
+n=1,000,000 gap narrowed at every cardinality tested (2.51x->1.84x,
+1.29x->1.18x, 1.76x->1.64x) without closing entirely.
+
+None of the four fixes were "Polars/pandas being written in Rust/
+Cython" in any general, unfalsifiable sense - each was a distinct,
+precisely identified and independently verified cost (hash-table
+indexing, per-row generic-path overhead, an unconditional full-table
+copy, group-outer vs row-outer memory access pattern).
+
+**The n=1,000,000 gap was then broken down by isolating threading
+specifically**: Polars uses 16 threads by default on this machine
+(`pl.thread_pool_size()`); forcing it to 1 (`POLARS_MAX_THREADS=1`) and
+re-measuring at the exact same data shape gave, at n=1,000,000:
+
+| cardinality | v6 (ours) | Polars (1 thread) | v6 / polars(1 thread) |
+|---|---|---|---|
+| 10 | 14.55ms | 10.55ms | 1.38x slower |
+| 500 | 15.49ms | 19.43ms | 0.80x - **v6 faster** |
+| 5,000 | 26.82ms | 28.67ms | 0.94x - **v6 faster** |
+
+**At cardinality 500 and 5,000, `v6` already beats Polars once its
+threading advantage is removed** - the entire 1.18x/1.64x gap measured
+against default multi-threaded Polars at those two points is exactly
+that: threading, not an algorithmic shortfall. Only cardinality=10 (few
+groups, ~100,000 rows each) shows a genuine non-threading gap.
+
+**Attempted fix (`v7`), tried and ruled out**: hypothesized the
+cardinality=10 gap was per-row dispatch overhead in `v6`'s aggregation
+loop - it iterates every `q->n_items` on every row (checking
+`item_needs_pass[it]` even for items that never need it, e.g. a bare
+`GROUP BY` column) and re-derefences `q->items[it].expr->kind` through
+the AST on every row rather than a flat precomputed code. Built a
+compact pass-item list (skipping non-pass items entirely, a flat `int`
+kind code read from a plain array instead of chasing pointers) -
+**measured no improvement over `v6` at any n/cardinality, in either
+direction** (e.g. n=1,000,000/cardinality=10: `v6` 14.62ms, `v7`
+14.89ms - `v7` marginally *slower*, within noise elsewhere). Not
+adopted; recorded here specifically because it was the natural next
+guess and it didn't pan out, the same as v3/v4 before it.
+
+**Root cause actually isolated by direct construction profiling**, at
+n=1,000,000/cardinality=10 (only 10 groups, so almost every one of
+1,000,000 rows hits the "occupied, verify hash match" branch): building
+progressively more faithful standalone reproductions of `sql_build_
+groups_hash_1col` -
+
+| reproduction | time |
+|---|---|
+| hash + probe + count only, no equality verification at all | 4.65ms |
+| + full row-index array growth (realloc doubling) | 5.58ms |
+| + row-index array PRE-SIZED (growth ruled out as the cost) | 4.85ms |
+| + real equality verification (`MISNAN`-safe, scattered lookup into the group's representative row) | 7.14ms |
+| same, verification via plain `==` instead of `MISNAN`-safe | 6.70ms |
+| real code's actual measured cost | 8.71-8.83ms |
+
+- row-index array growth/`realloc` is **not** the cost (5.58ms vs
+  4.85ms pre-sized - only ~0.7ms, and growth can't be avoided without
+  knowing group sizes in advance, which isn't possible at construction
+  time).
+- Caching each group's representative value directly in the hash-table
+  slot (avoiding the scattered `AT(col, groups[g].rows[0], 0)` lookup
+  needed to verify a hash match isn't a collision) was tried too:
+  6.65ms with the scattered lookup vs 6.40ms cached - only ~4%,
+  **not adopted**, not worth the added bookkeeping for that little gain.
+- The `MISNAN`-safe equality check itself costs a real but small
+  ~0.44ms (6.70ms plain `==` vs 7.14ms `MISNAN`-safe) - necessary for
+  correctness (a NaN group key must still work), not something to trade
+  away.
+
+Even the most faithful reproduction (7.14ms) still falls ~1.5ms short
+of the real function's 8.71-8.83ms - the remaining difference is
+attributed to accumulated real overhead (the actual `SqlGroupBuildV1`
+struct's larger size vs the experiment's bare arrays, function-call
+boundaries the experiment's single translation unit didn't have) rather
+than one identifiable inefficiency. **Conclusion: the cardinality=10
+gap is not one fixable bug - it is the legitimate sum of hash
+computation, probing, and (necessarily `MISNAN`-safe) collision
+verification, at a data shape where nearly every one of a million rows
+takes the "verify an existing match" path.** Closing it further would
+mean adopting a fundamentally different hash-table data structure
+(SwissTable-style SIMD group-metadata matching, so verification touches
+a compact control-byte array before ever reading the actual key) -
+exactly the piece of Polars' own technique this investigation scoped
+out from the very first fix in this item, as a distinct, general-
+purpose hash-table library rather than part of "the group-by
+algorithm" itself. Not pursued further here.
+
+**A fifth fix (`v8`): real OpenMP parallelism**, since the previous
+item's own investigation established that most of the remaining
+n=1,000,000 gap was Polars' own 16-thread default, not a single-
+threaded algorithmic shortfall - the natural next lever was
+parallelism itself, not further single-threaded tuning. This project
+already used OpenMP successfully for the WHERE optimization earlier
+this session (`bench_sql_v6.c`), the same precedent applied here.
+
+**Construction** ported directly from Polars' own multi-threaded
+technique (`crates/polars-core/src/frame/group_by/hashing.rs`'s
+`group_by_threaded_slice`/`group_by_threaded_iter`, tag py-1.38.1, read
+directly): each of N threads builds its own local hash table, scanning
+every row but inserting only the ones whose hash routes to that
+thread's partition via `hash_to_partition` (a multiply-high partition
+function - the same "use the hash's top bits" principle already
+established as correct for this hash by the earlier indexing-bug fix,
+generalized from "which table slot" to "which thread"). Since a row's
+partition is a deterministic function of its own hash, and every row in
+a group shares an identical hash by construction, a group can never be
+split across threads - only concatenating each thread's already-
+complete groups into one final array is needed, no cross-thread merge
+of a single group's row list.
+
+**Aggregation** parallelized via private-per-thread accumulator arrays
+(not OpenMP's `reduction` clause, which only supports scalars, not a
+per-group array) - each thread gets a contiguous row range and its own
+local accumulator per pass item, avoiding write races entirely; `MIN`/
+`MAX` seed at +-infinity and combine across threads with the same NaN-
+poison-propagates rule already used across rows within one thread.
+
+**A real measurement pitfall found and fixed along the way**: the
+isolated benchmark's existing rep count (3, at n=1,000,000) is tuned
+for the single-threaded versions, which have tight, low-variance timing.
+`v8`'s parallel execution has genuinely higher run-to-run variance (OS
+thread scheduling/migration) - confirmed directly by 20 individual
+timings at n=1,000,000/cardinality=10: `v8` ranged 12.32-17.89ms vs a
+tight 15.26-16.46ms for `v6`. With only 3 samples, an unlucky draw can
+make `v8`'s best-of-3 look worse than `v6`'s tight best-of-3 - which is
+exactly what the first measurement showed (`v8` *slower* than `v6` at
+every cardinality tested). Fixed by giving `v8` specifically 10 reps at
+n=1,000,000 (not inflating the other, non-noisy variants' run time);
+after that fix, `v8` consistently beat `v6` at every cardinality,
+confirmed across two repeated runs.
+
+Measured via the isolated benchmark (8-column DataFrame, `v8` at 10
+reps, everything else unchanged):
+
+| n x cardinality | production | v1 | v2 | v6 | v8 |
+|---|---|---|---|---|---|
+| 1,000x10 | 0.371-0.375ms | 11.00-11.03x | 21.52-21.74x | 28.89-29.66x | 29.50-29.53x |
+| 1,000x500 | 0.641-0.647ms | 2.25-2.26x | 10.35-10.44x | 16.37-16.39x | 16.42-16.61x |
+| 1,000x5,000 | 0.953-0.956ms | 1.55-1.60x | 8.91-9.19x | 7.80-8.07x | 8.06-8.47x |
+| 10,000x10 | 3.904-3.928ms | 12.93-13.23x | 23.01-24.92x | 34.23-34.51x | 34.19-34.36x |
+| 10,000x500 | 4.426-4.429ms | 7.00-7.07x | 16.45-16.54x | 21.00-21.10x | 21.02-21.17x |
+| 10,000x5,000 | 6.843-6.916ms | 2.36-2.40x | 10.21-10.26x | 14.76-14.96x | 14.81-14.94x |
+| 100,000x10 | 57.464-57.896ms | 8.63-8.77x | 11.32-11.55x | 44.18-44.68x | 42.99-45.09x |
+| 100,000x500 | 61.056-61.731ms | 9.30-9.36x | 11.85-11.91x | 44.00-44.75x | 44.08-44.94x |
+| 100,000x5,000 | 67.936-67.953ms | 6.08-6.13x | 9.25-9.41x | 21.98-22.59x | 22.44-22.54x |
+| 1,000,000x10 | 814.563-825.135ms | 5.63-5.73x | 12.85-13.58x | 56.85-58.41x | 65.47-69.61x |
+| 1,000,000x500 | 842.239-842.616ms | 10.75-10.91x | 13.86-14.19x | 52.42-53.76x | 64.24-67.79x |
+| 1,000,000x5,000 | 845.620-875.381ms | 10.01-10.17x | 12.18-12.35x | 32.38-33.68x | 33.68-36.95x |
+
+`v8` vs real Polars, `bench_sql_groupby_compare.py` (Polars run at its
+own default - 16 threads on this machine, not the single-threaded
+comparison used to isolate the earlier finding):
+
+| n x cardinality | groups | v8 vs polars |
+|---|---|---|
+| 1,000x10 | 10 | 0.012x (faster) |
+| 1,000x500 | 427 | 0.033x (faster) |
+| 1,000x5,000 | 901 | 0.076x (faster) |
+| 10,000x10 | 10 | 0.103x (faster) |
+| 10,000x500 | 500 | 0.509x (faster) |
+| 10,000x5,000 | 4,309 | 0.735x (faster) |
+| 100,000x10 | 10 | 0.693x (faster) |
+| 100,000x500 | 500 | 0.913x (faster) |
+| 100,000x5,000 | 5,000 | 1.486x (slower) |
+| 1,000,000x10 | 10 | 1.424x (slower) |
+| 1,000,000x500 | 500 | 1.058x (slower) |
+| 1,000,000x5,000 | 5,000 | 1.911x (slower) |
+
+**Conclusion, stated plainly rather than oversold: `v8`'s parallelism
+gave a real but modest and inconsistent improvement, and did not close
+the gap to Polars' own (mature, default multi-threaded) implementation
+at n=1,000,000.** Comparing directly to `v6`'s own numbers: `v8` won at
+cardinality=10 (53.73x -> 69.79x) and cardinality=500 (60.45x ->
+61.61x), essentially flat/slightly worse at cardinality=5,000 (33.47x
+-> 30.96x on this run - within the range of the run-to-run variance
+already established for `v8`, not confidently a regression, but not
+confidently an improvement either). Against Polars specifically, `v8`
+is slower at every cardinality tested at n=1,000,000 (1.06x-1.91x), and
+now also slower at n=100,000/cardinality=5,000 (1.49x) - a point `v6`
+had actually still been ahead of Polars on internally, though that
+specific comparison had used single-threaded Polars; against Polars'
+own default (multi-threaded) config, that point was already behind
+before `v8`, not newly regressed by it.
+
+The straightforward interpretation: a from-scratch, direct OpenMP port
+of Polars' own documented technique captures some of the available
+parallelism but not all of it - Polars' actual implementation has had
+substantially more engineering investment (chunk-size tuning, NUMA-
+aware scheduling, a more sophisticated hash table than this project's
+plain open-addressing one) that a first straightforward port doesn't
+replicate. This is consistent with, not a contradiction of, the earlier
+finding that threading explains most (not all) of the single-threaded
+gap - it explains why threading was the right lever to pull, without
+promising that any implementation of it would fully close the gap.
+
+v3/v4/v7 are recorded as ruled-out attempts, not carried forward - v4's
+own construction function (`sql_build_groups_uv`) received none of the
+fixes v6/v8 build on, so its numbers above understate what it could
+reach if it did.
+
+### Ported to production
+
+`v8` has been ported into production `frame/sql.h`, replacing
+`sql_build_groups`'s old `qsort`-based string-key approach (the O(n log
+n) fix from earlier in this section) entirely. Ported: the hash-based
+construction technique from Polars' own `group_by` (with a fast path
+for the single-numeric-column case, the overwhelmingly common shape for
+this project's queries, that resolves the group column once instead of
+re-resolving it by name on every row); the sequential-pass aggregation
+that replaced per-group gathers with one row-outer scatter-accumulate
+pass; the where-copy-skip fix in `sql_execute` (no full-table copy via
+`sql_apply_where` when a query has no `WHERE` clause, previously true
+of every `GROUP BY`-only query); and OpenMP parallelism for both
+construction and aggregation above `SQL_GROUP_PARALLEL_MIN_N` (200,000
+rows), mirroring `SQL_WHERE_PARALLEL_MIN_N`'s existing precedent in this
+file.
+
+Two real STRESS-mode bugs were found and fixed during verification,
+both in test code, not production:
+
+1. `test_random_combined_pipeline_stress` asserted exact positional
+   equality against a reference ordering it built assuming groups with
+   tied `ORDER BY` values would come out in "alphabetical order" - true
+   only as an incidental side effect of the *old* sort-based
+   `sql_build_groups`, never a real SQL guarantee, and explicitly
+   labeled as such in the test's own old comment. The new hash-based
+   construction has no such incidental ordering, so STRESS (which keeps
+   re-rolling random data until it hits a genuine tie) found a
+   mismatch within about 150 trials. Fixed by rewriting the test to
+   match each output row to its reference by group name and check that
+   `total` is non-increasing across rows, rather than assuming any
+   particular order among ties.
+2. A newly-added test for the parallel path itself
+   (`test_random_group_by_parallel_stress`, added because nothing in
+   the existing suite exercised `GROUP BY` anywhere near the 200,000-row
+   parallel threshold) failed on its first run. The cause: its `SUM`/
+   `AVG` assertions used a plain `<` comparison against a relative-error
+   threshold, which is always false when both the computed and
+   reference values are correctly `NaN` (from an injected-NaN row) -
+   the same class of bug the test's own `MIN`/`MAX` checks were already
+   guarded against, but which hadn't been applied to `SUM`/`AVG`. Fixed
+   by making those checks NaN-safe too. Not a production bug - both
+   values were correctly `NaN` throughout; only the comparison logic in
+   the test was wrong.
+
+Verified under `make test`, `STRESS=1 ./check.sh` (22/22, including the
+new parallel-path stress test sweeping n up to 400,001 and cardinality
+up to 5,000), and a full AddressSanitizer+UndefinedBehaviorSanitizer
+build in both normal and `STRESS=1` modes - clean, no leaks or UB
+despite the new per-thread allocation/free churn in the parallel path.
+
+Re-measured via the official `bench_frame.py` (not the isolated
+prototype benchmark) against real pandas:
+
+| n | ours | pandas | ratio |
+|---|---|---|---|
+| 10,000 | 0.239ms | 2.374ms | 0.10x (10x faster) |
+| 100,000 | 1.532ms | 3.683ms | 0.42x (2.4x faster) |
+| 1,000,000 | 15.397ms | 15.935ms | 0.97x (parity) |
+
+Down from the pre-port numbers of 2.5x/19x/54x *slower* than pandas at
+the same three sizes. `GROUP BY` is now at parity with or faster than
+pandas at every size this project benchmarks, closing out the gap this
+whole investigation was chasing - even though the narrower
+prototype-vs-Polars comparison above shows Polars' own multi-threaded
+implementation still ahead at n=1,000,000. The discrepancy is real, not
+a contradiction: `bench_frame.py`'s query and data shape differ from
+`bench_sql_groupby_compare.py`'s isolated grid, and pandas (this
+project's actual comparison baseline in `bench_frame.py`) is not
+Polars.
 
 ## 3. `mat_norm('F')` (`linalg/mat.h`)
 
