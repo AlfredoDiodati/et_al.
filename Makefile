@@ -47,6 +47,18 @@ examples/encoder: examples/encoder.c frame/csv.h frame/frame.h stats.h nn/mlp.h 
 tests/performance/bench_storage_layout: tests/performance/bench_storage_layout.c linalg/mat.h
 	$(CC) $(CFLAGS) tests/performance/bench_storage_layout.c $(LDLIBS) -o tests/performance/bench_storage_layout
 
+# Standalone design-space benchmarks for two candidate changes to ad.h, both
+# now adopted: a bump allocator for node structs and gradients, and a fused
+# quadratic form. Each compares the candidate against what it replaced on the
+# primitive itself, not on any model built over it. Deliberately not part of
+# the `test`/`bench.sh` targets - run directly:
+#   make tests/performance/bench_tape_pool && ./tests/performance/bench_tape_pool
+tests/performance/bench_tape_pool: tests/performance/bench_tape_pool.c ad.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/bench_tape_pool.c $(LDLIBS) -o tests/performance/bench_tape_pool
+
+tests/performance/bench_chol_quadform: tests/performance/bench_chol_quadform.c ad.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/bench_chol_quadform.c $(LDLIBS) -o tests/performance/bench_chol_quadform
+
 # Prototype of the hybrid per-column caching design for frame/sql.h
 # (see the file header and docs/PERFORMANCE_BACKLOG.md item 5) - runs
 # both a correctness check (production df_sql vs. the prototype

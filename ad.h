@@ -58,13 +58,54 @@ typedef struct Node {
     struct Node *parents[2];
     int n_parents;
     mreal aux;                /* extra scalar a backward rule may need (e.g. ad_scale's factor) */
+    int aux_offset;           /* extra flat offset a backward rule may need (ad_slice's) */
     void (*backward)(struct Node *self); /* NULL for leaves - nothing to propagate to */
 } Node;
+
+/* A tape allocates one Node struct and one gradient buffer per operation, and
+   holds every one of them live until tape_free. That is the pattern a general
+   allocator handles worst, so both come from a bump allocator over large
+   blocks instead, released together. Measured in
+   tests/performance/bench_tape_pool.c: at eleven thousand nodes this halves the
+   time spent allocating, and 64 KiB blocks were the best of a sweep from 4 KiB
+   to 1 MiB.
+
+   Node values are not pooled. They arrive already allocated from whichever
+   mat_* call the operation made, so reaching them would mean routing every
+   op's allocation through the tape. The same benchmark shows that would be
+   worth around 7x rather than 2x, so it is the obvious next step, but it is a
+   change to linalg/mat.h's allocation contract rather than to this file. */
+#define TAPE_BLOCK_BYTES ((size_t)1 << 16)
+
+typedef struct TapeBlock {
+    struct TapeBlock *next;
+    size_t used, size;
+    unsigned char *data;
+} TapeBlock;
 
 typedef struct {
     Node **nodes; /* creation order == topological order, see file comment */
     int n, cap;
+    TapeBlock *block;
 } Tape;
+
+/* Chunks are rounded up to 32 bytes so anything handed out keeps the same
+   AVX2 alignment mat_new guarantees. */
+static inline void *tape_alloc(Tape *t, size_t bytes) {
+    bytes = (bytes + 31u) & ~(size_t)31u;
+    if (!t->block || t->block->used + bytes > t->block->size) {
+        size_t size = bytes > TAPE_BLOCK_BYTES ? bytes : TAPE_BLOCK_BYTES;
+        TapeBlock *block = (TapeBlock*)malloc(sizeof(TapeBlock));
+        block->data = (unsigned char*)aligned_alloc(32, size);
+        block->size = size;
+        block->used = 0;
+        block->next = t->block;
+        t->block = block;
+    }
+    void *out = t->block->data + t->block->used;
+    t->block->used += bytes;
+    return out;
+}
 
 /* Activation: an elementwise nonlinearity applied inside a forward pass
    (ad_tanh below is the first; ad_identity the second - the "linear
@@ -84,16 +125,22 @@ static inline Tape *tape_new(void) {
     t->n = 0;
     t->cap = 64;
     t->nodes = (Node**)malloc((size_t)t->cap * sizeof(Node*));
+    t->block = NULL;
     return t;
 }
 
-/* Free every node's val/grad and the node itself, then the tape. Every
-   Node* returned by an ad_* call becomes invalid after this. */
+/* Free every node's value, then release the pool holding the node structs and
+   their gradients in one go. Gradients are not freed individually: they are
+   slices of a tape block, not owners. Every Node* returned by an ad_* call
+   becomes invalid after this. */
 static inline void tape_free(Tape *t) {
-    for (int i = 0; i < t->n; i++) {
-        mat_free(t->nodes[i]->val);
-        mat_free(t->nodes[i]->grad);
-        free(t->nodes[i]);
+    for (int i = 0; i < t->n; i++) mat_free(t->nodes[i]->val);
+    TapeBlock *block = t->block;
+    while (block) {
+        TapeBlock *next = block->next;
+        free(block->data);
+        free(block);
+        block = next;
     }
     free(t->nodes);
     free(t);
@@ -108,11 +155,15 @@ static inline void ad_tape_push(Tape *t, Node *n) {
 }
 
 static inline Node *ad_node_new(Tape *t, Mat val, void (*backward)(Node*)) {
-    Node *n = (Node*)malloc(sizeof(Node));
+    Node *n = (Node*)tape_alloc(t, sizeof(Node));
     n->val = val;
-    n->grad = mat_new(val.r, val.c); /* mat_new zero-fills */
+    int count = val.r * val.c;
+    mreal *grad = (mreal*)tape_alloc(t, (size_t)count * sizeof(mreal));
+    for (int i = 0; i < count; i++) grad[i] = 0;
+    n->grad = (Mat){ val.r, val.c, val.c, grad };
     n->n_parents = 0;
     n->aux = 0;
+    n->aux_offset = 0;
     n->backward = backward;
     ad_tape_push(t, n);
     return n;
@@ -325,6 +376,55 @@ static void ad_pow_backward(Node *self) {
 static inline Node *ad_pow(Tape *t, Node *a, mreal p) {
     Node *n = ad_node_new(t, mat_pow(a->val, p), ad_pow_backward);
     n->parents[0] = a; n->n_parents = 1; n->aux = p;
+    return n;
+}
+
+/* --- shape: carving a block out of a larger node, and reinterpreting one --- */
+
+/* c = a[r0:r1, c0:c1]. abar[r0:r1, c0:c1] += cbar, everything outside the
+   block untouched: the block's adjoint scatters straight back to where the
+   block came from. This is what makes a single flat parameter vector usable
+   as a tape input, with each parameter block sliced out of it and each
+   block's gradient landing in the right slots of the whole vector's gradient.
+
+   The value is a copy, not a view. Every Mat on a tape is a contiguous owner
+   (see ad_accum's comment), and a strided view would break every flat loop in
+   this file. mat_slice followed by mat_copy is correct on a non-contiguous
+   block because mat_copy walks rows when stride != c.
+
+   aux_offset carries the block's start as a flat index into the parent's
+   buffer, r0*a.c + c0, which is all the backward pass needs: the parent is
+   contiguous, so row i of the block sits at that offset plus i*a.c. */
+static void ad_slice_backward(Node *self) {
+    Node *a = self->parents[0];
+    int parent_width = a->val.c;
+    for (int i = 0; i < self->grad.r; i++)
+        for (int j = 0; j < self->grad.c; j++)
+            a->grad.d[self->aux_offset + i * parent_width + j] += AT(self->grad, i, j);
+}
+static inline Node *ad_slice(Tape *t, Node *a, int r0, int r1, int c0, int c1) {
+    assert(r0 >= 0 && r0 < r1 && r1 <= a->val.r);
+    assert(c0 >= 0 && c0 < c1 && c1 <= a->val.c);
+    Mat block = mat_slice(a->val, r0, r1, c0, c1);
+    Node *n = ad_node_new(t, mat_copy(block), ad_slice_backward);
+    n->parents[0] = a; n->n_parents = 1;
+    n->aux_offset = r0 * a->val.c + c0;
+    return n;
+}
+
+/* c = a with a new shape, same elements in the same order. abar += cbar
+   elementwise, the two buffers having equal length and matching layout, so
+   the adjoint is a plain accumulation and no index arithmetic is involved.
+   Pairs with ad_slice: a block carved out of a flat vector arrives as a
+   column and becomes a matrix here. */
+static void ad_reshape_backward(Node *self) {
+    ad_accum(self->parents[0]->grad, self->grad);
+}
+static inline Node *ad_reshape(Tape *t, Node *a, int r, int c) {
+    assert(r > 0 && c > 0 && r * c == a->val.r * a->val.c);
+    Mat reshaped = mat_reshape(a->val, r, c);
+    Node *n = ad_node_new(t, mat_copy(reshaped), ad_reshape_backward);
+    n->parents[0] = a; n->n_parents = 1;
     return n;
 }
 
@@ -563,6 +663,62 @@ static inline Node *ad_chol_solve(Tape *t, Node *L, Node *b) {
     Node *n = ad_node_new(t, vec_chol_solve(L->val, b->val), ad_chol_solve_backward);
     n->parents[0] = L; n->parents[1] = b; n->n_parents = 2;
     return n;
+}
+
+/* q = b^T (L*L^T)^-1 b -> 1x1, the quadratic form every Gaussian and Student t
+   log-density is built around, as one node rather than
+   ad_dot(b, ad_chol_solve(L, b)).
+
+   Forward needs only one triangular solve: q = ||L^-1 b||^2, where
+   ad_chol_solve would call ?potrs and solve with both triangles to produce
+   A^-1 b, of which only the norm is wanted.
+
+   Backward is the same arithmetic the two-node path already performs, just
+   reached directly. With x = A^-1 b, dq/db = 2x and dq/dA = -x*x^T, so
+   Lbar += tril((Abar + Abar^T) L) = tril(-2 qbar x x^T L). Working the pair
+   through by hand gives exactly this: ad_dot hands ad_chol_solve an adjoint of
+   qbar*b, so its z is qbar*x and its Asym is -2 qbar x x^T. Not from the TOMS
+   paper, which has no quadratic-form row; derived from that pair.
+
+   The saving is one node and one triangular solve per call, measured at
+   1.13x to 1.23x for K from 12 down to 3 in
+   tests/performance/bench_chol_quadform.c. x is recomputed in the backward
+   pass rather than carried over from the forward one, since a Node has nowhere
+   to keep it. */
+static void ad_chol_quadform_backward(Node *self) {
+    Node *L = self->parents[0], *b = self->parents[1];
+    int n = L->val.r;
+    mreal seed = self->grad.d[0];
+
+    Vec x = vec_chol_solve(L->val, b->val);
+    for (int i = 0; i < n; i++) b->grad.d[i] += 2 * seed * x.d[i];
+
+    Mat outer = mat_new(n, n);
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            AT(outer, i, j) = -2 * seed * x.d[i] * x.d[j];
+    Mat product = mat_mul(outer, L->val);
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j <= i; j++)
+            AT(L->grad, i, j) += AT(product, i, j);
+
+    mat_free(x); mat_free(outer); mat_free(product);
+}
+static inline Node *ad_chol_quadform(Tape *t, Node *L, Node *b) {
+    assert(L->val.r == L->val.c && b->val.r == L->val.r && b->val.c == 1);
+    int n = L->val.r;
+    Vec w = mat_copy(b->val);
+    MLAPACK(trtrs)(LAPACK_ROW_MAJOR, 'L', 'N', 'N', n, 1,
+                   L->val.d, L->val.stride, w.d, w.stride);
+    Mat val = mat_new(1, 1);
+    mreal q = 0;
+    for (int i = 0; i < n; i++) q += w.d[i] * w.d[i];
+    val.d[0] = q;
+    mat_free(w);
+
+    Node *node = ad_node_new(t, val, ad_chol_quadform_backward);
+    node->parents[0] = L; node->parents[1] = b; node->n_parents = 2;
+    return node;
 }
 
 /* beta = det(A) -> 1x1. Abar += beta_bar*beta*A^-T (table 7 "determinant") */

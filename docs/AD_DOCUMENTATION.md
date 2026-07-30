@@ -14,7 +14,7 @@ That paper's contribution - and the reason it's a good fit here - is deriving re
 
 ## Scope
 
-Implemented: general dense arithmetic (`add`, `sub`, `scale` by a constant, elementwise `mul`/`div`, `exp`, `log`, `pow` by a constant exponent, `tanh`, `identity`, `swish`), `sum` and `dot` reductions, `matmul`, `squared_error`/`mean_squared_error`/`huber_error`/`logcosh_error` (all `Criterion`-shaped except `huber_error`, see below), and - the part that needed `linalg/decomp.h`/`linalg/solver.h` - `solve`, a Cholesky-factor solve, `det`, and matrix `inv`.
+Implemented: general dense arithmetic (`add`, `sub`, `scale` by a constant, elementwise `mul`/`div`, `exp`, `log`, `pow` by a constant exponent, `tanh`, `identity`, `swish`), the shape operations `slice` and `reshape`, `sum` and `dot` reductions, `matmul`, `squared_error`/`mean_squared_error`/`huber_error`/`logcosh_error` (all `Criterion`-shaped except `huber_error`, see below), and - the part that needed `linalg/decomp.h`/`linalg/solver.h` - `solve`, a Cholesky-factor solve, `det`, and matrix `inv`.
 
 `Activation` (`Node *(*)(Tape*, Node*)`) and `Criterion` (`Node *(*)(Tape*, Node *pred, Node *target)`) are two function-pointer types declared here, not in their first consumer (`nn/mlp.h`). Both are plain Tape/Node-level concepts - any future model header needs them the same way `nn/mlp.h` does, and per README's "Model fit/forecast API" policy, a model header must not have to include another, unrelated model header just to get a shared type. `ad_tanh`/`ad_identity`/`ad_swish` are the three concrete `Activation`s so far; `ad_squared_error`/`ad_mean_squared_error`/`ad_logcosh_error` are three concrete `Criterion`s (`ad_huber_error` takes an extra `delta` argument, so it does not literally match the `Criterion` type - see its own comment).
 
@@ -30,7 +30,13 @@ Every backward callback **accumulates** (`+=`/`-=`) into a parent's gradient rat
 
 ### Memory ownership - different from the rest of this library
 
-Everywhere else in this codebase, every function returns an independent owner and the caller frees it. Here, ownership is per-`Tape`: `ad_leaf()` and every `ad_*` op return a `Node*` whose `val`/`grad` `Mat`s are owned by the tape they were created on, not by the caller. Call `tape_free(t)` once, after reading whatever gradients you need out of it, to free every node's `val`, `grad`, and the node structs themselves - individual nodes are never freed one at a time. If you need a gradient to outlive the tape, `mat_copy()` it out first (see `gauss_ad_gradients()` in `tests/correctness/test_ad.c` for the pattern).
+Everywhere else in this codebase, every function returns an independent owner and the caller frees it. Here, ownership is per-`Tape`: `ad_leaf()` and every `ad_*` op return a `Node*` whose `val`/`grad` `Mat`s are owned by the tape they were created on, not by the caller. Call `tape_free(t)` once, after reading whatever gradients you need out of it, to free everything the tape holds - individual nodes are never freed one at a time. If you need a gradient to outlive the tape, `mat_copy()` it out first (see `gauss_ad_gradients()` in `tests/correctness/test_ad.c` for the pattern).
+
+Within that, the two `Mat`s a node carries are owned differently, which matters if you ever write code that frees one. A node's **`val` is an ordinary owner**, allocated by whichever `mat_*` call the operation made, and `tape_free` calls `mat_free` on it. A node's **`grad` is not an owner**: its buffer is a slice of a tape block handed out by `tape_alloc`, and it is released when the block is, so `tape_free` never frees it individually. Calling `mat_free` on a node's gradient is therefore a double free rather than the merely redundant operation it used to be. Nothing in this library or its tests does so, but new code must not start.
+
+A tape allocates one `Node` struct and one gradient buffer per operation and holds every one of them live until `tape_free`, which is the allocation pattern a general-purpose allocator handles worst. Both therefore come from a bump allocator over 64 KiB blocks, released together, with chunks rounded to 32 bytes so anything handed out keeps `mat_new`'s AVX2 alignment. `tests/performance/bench_tape_pool.c` measures this at roughly 2x on the allocation itself at eleven thousand nodes, and picked the block size from a sweep between 4 KiB and 1 MiB.
+
+Node **values** are deliberately not pooled: they arrive already allocated from the operation's own `mat_*` call, so reaching them would mean routing every op's allocation through the tape. The same benchmark shows that would be worth around 7x rather than 2x, which makes it the obvious next step — but it is a change to `linalg/mat.h`'s allocation contract, not to this file.
 
 ## API reference
 
@@ -55,6 +61,8 @@ Node *ad_pow(Tape *t, Node *a, mreal p)
 Node *ad_tanh(Tape *t, Node *a)          /* Activation */
 Node *ad_identity(Tape *t, Node *a)      /* Activation - the "linear output" case */
 Node *ad_swish(Tape *t, Node *a)         /* Activation - x * sigmoid(x) */
+Node *ad_slice(Tape *t, Node *a, int r0, int r1, int c0, int c1)
+Node *ad_reshape(Tape *t, Node *a, int r, int c)
 Node *ad_dot(Tape *t, Node *x, Node *y)
 Node *ad_sum(Tape *t, Node *a)
 Node *ad_matmul(Tape *t, Node *a, Node *b)
@@ -64,6 +72,7 @@ Node *ad_huber_error(Tape *t, Node *pred, Node *target, mreal delta)  /* not lit
 Node *ad_logcosh_error(Tape *t, Node *pred, Node *target)  /* Criterion */
 Node *ad_solve(Tape *t, Node *A, Node *b)
 Node *ad_chol_solve(Tape *t, Node *L, Node *b)
+Node *ad_chol_quadform(Tape *t, Node *L, Node *b)
 Node *ad_det(Tape *t, Node *A)
 Node *ad_inv(Tape *t, Node *A)
 ```
@@ -77,6 +86,24 @@ Node *ad_inv(Tape *t, Node *A)
 `ad_leaf` wraps a `Mat` as an untracked input (a graph root) - it copies `val`, matching this library's usual "functions own new memory, never the caller's" convention for the copy itself, even though the copy then becomes tape-owned rather than caller-owned. Every other `ad_*` function both computes the forward value (by calling the corresponding `mat_*`/`vec_*`/LAPACKE-wrapping function) and records a backward rule on the tape.
 
 `tape_backward(t, output)` seeds `output`'s gradient with `1` and runs every backward callback in reverse creation order. `output` must be `1`x`1` - a scalar loss, the standard "the gradient" convention every autodiff system uses.
+
+### `ad_chol_quadform`
+
+`ad_chol_quadform(t, L, b)` is `b^T (L*L^T)^-1 b` as a single `1`x`1` node — the quadratic form at the centre of every Gaussian and Student t log-density, and the reason `ad_chol_solve` exists in the first place. It is exactly `ad_dot(t, b, ad_chol_solve(t, L, b))` and replaces that pair.
+
+Forward needs only one triangular solve, since `q = ||L^-1 b||^2`; `ad_chol_solve` calls `?potrs`, which solves with both triangles to produce `A^-1 b`, of which only the inner product with `b` is wanted. Backward is the same arithmetic the pair already performs, reached directly: with `x = A^-1 b`, `dq/db = 2x` and `dq/dA = -x*x^T`, so `Lbar += tril(-2*qbar*x*x^T*L)`. Working the pair through by hand produces precisely this — `ad_dot` hands `ad_chol_solve` an adjoint of `qbar*b`, so its `z` is `qbar*x` and its `Asym` is `-2*qbar*x*x^T` — which is why the fused version is a saving of one node and one triangular solve rather than of any real work in the backward pass. `x` is recomputed there rather than carried over from the forward pass, since a `Node` has nowhere to keep it.
+
+Measured at 1.23x, 1.18x and 1.13x for `K` = 3, 6 and 12 against the pair, on a tape holding 600 quadratic forms — see `tests/performance/bench_chol_quadform.c`, which also asserts the two agree to the last bit in value and in both gradients before timing either. Not from the TOMS paper, which has no quadratic-form row; derived from the pair it replaces.
+
+### `ad_slice` / `ad_reshape`
+
+`ad_slice(t, a, r0, r1, c0, c1)` is `a[r0:r1, c0:c1]`, half-open on both axes like `mat_slice`. Its adjoint scatters the block's gradient straight back into the same position of `a`'s gradient and leaves everything outside the block alone, so `abar[r0:r1, c0:c1] += cbar`. `ad_reshape(t, a, r, c)` reinterprets `a`'s shape with the same elements in the same order (`r*c` must equal `a`'s element count) and its adjoint is a plain accumulation, the two buffers having equal length and identical layout.
+
+These two exist for one shape of problem: an optimizer wants the parameters as a single flat vector, while the model wants them as a set of matrices. `ad_slice` carves each block out of the flat vector and `ad_reshape` gives it its matrix shape, and because both are tape ops the gradient of the whole flat vector comes back assembled, with each block's contribution in the right slots. Without them a flat parameter vector cannot be differentiated through at all, and every parameter block has to be its own `ad_leaf` — workable with per-parameter optimizers like `solver/adam.h`, but not with a quasi-Newton method, which needs one vector and one gradient.
+
+Unlike `mat_slice` and `mat_reshape`, which return zero-copy views, both of these **copy**. Every `Mat` on a tape is a contiguous owner (see the memory ownership section below), and a strided view would silently break every flat loop in this file; `mat_copy` is correct on a non-contiguous block because it walks rows when `stride != c`. Slicing is therefore not free, and slicing the same block in a loop is worth hoisting.
+
+`ad_slice` is the one op that needs an integer alongside `aux`, so `Node` carries an `aux_offset` field holding the block's start as a flat index into the parent's buffer (`r0*a.c + c0`). That is all the backward pass needs, since the parent is contiguous and row `i` of the block therefore sits at that offset plus `i*a.c`. Neither op is from the TOMS paper; both are bookkeeping rather than matrix calculus.
 
 ### `ad_lgamma`
 
@@ -95,6 +122,10 @@ Elementwise log-Gamma with `d(lgamma(a))/da = psi(a)`, the digamma function from
 ## Testing
 
 `tests/correctness/test_ad.c` checks known hand-computed gradients for the dense ops (`sum(a*b)` → `b`,`a`; `sum(a^2)` → `2a`; a hand-verified small `matmul`), an explicit fan-out case (a leaf feeding two separate downstream nodes, confirming gradient contributions sum rather than overwrite), `ad_squared_error`/`ad_mean_squared_error`'s known output/gradient (the latter exactly the former divided by element count) and `ad_identity`'s pass-through behavior (including the invariant that it returns the same `Node*` it was given), `ad_swish`'s known output/gradient across negative/zero/positive magnitudes against an independently-computed `x*sigmoid(x)` reference (including a strongly negative input, checking it decays towards 0 rather than saturating at a hard bound the way `ad_tanh` does), `ad_huber_error`/`ad_logcosh_error`'s known output/gradient against independently-computed piecewise and `log(cosh(e))`/`tanh(e)` references respectively (plus the invariant that `ad_huber_error` with a `delta` larger than every `|e|` present must equal exactly half of `ad_mean_squared_error`, since it then falls entirely in its quadratic branch), and - the centerpiece, directly answering "does this produce a gradient equivalent to the analytical one" - rebuilds `dist/gauss.h`'s log-pdf formula using `ad_*` ops on same-shape (non-broadcast) `x`/`loc`/`scale`, runs `tape_backward`, and checks the result against `gauss_dlogpdf_loc`/`gauss_dlogpdf_scale` directly, including a `STRESS=1` randomized sweep (using a relative tolerance there, since a `scale` landing near its lower bound can push gradient magnitudes into the hundreds, where an absolute tolerance is the wrong tool). `ad_solve`, `ad_chol_solve`, `ad_det`, and `ad_inv` are verified against central finite differences of an independently-written reference loss (same technique `test_gauss.c` uses for its derivatives), perturbing every element of the relevant input matrix.
+
+`ad_chol_quadform` is checked against the pair it replaces, `ad_dot(b, ad_chol_solve(L, b))`, in value and in both gradients, since that pair is what every existing caller uses; against central finite differences of an independently written reference; on the invariant that the strict upper triangle of `L`'s gradient stays exactly zero, a Cholesky factor having no parameters there; and on a 1x1 factor, where the whole thing reduces to `q = b^2/L^2` with hand-computed derivatives `2b/L^2` and `-2b^2/L^3`.
+
+`ad_slice` and `ad_reshape` are checked on the block's own values, on a gradient that must be `2a` inside the block and *exactly* zero outside it (the property that makes a masked or unreferenced parameter provably inert), on the two boundary shapes a scatter is most likely to get wrong (a whole-matrix slice, which must behave as the identity, and a single-element slice), and on an overlapping-block fan-out case where the shared column must receive a contribution from each block rather than one overwriting the other. A reshape round-trip confirms the gradient returns in the original shape and element order. Finally the case the two ops exist for is checked end to end against finite differences of a tape-free reference: one flat parameter vector carved into a 2x2 matrix and a 2x1 vector, multiplied, and reduced.
 
 The same synthetic-vs-analytical technique extends to the t distributions and the multivariate files: `ad_lgamma` is checked on known forward values, its digamma backward wiring, and a double finite difference of `lgamma` itself; the Student t log-pdf is rebuilt on the tape (including its `ad_lgamma` normalization) and its gradients checked against `student_dlogpdf_loc`/`_scale`/`_nu`; and the multivariate total log-likelihood is rebuilt per observation via `ad_solve`/`ad_det`/`ad_dot` with shared `loc`/`cov`/`nu` leaves and checked against the `mvgauss_*`/`mvstudent_*` scores. The multivariate case is a particularly strong check: the AD path factors `cov` via LU (`vec_solve`/`mat_det`) while the analytical path uses Cholesky (`?potrs`/`?potri`) — numerically disjoint routes that must land on the same gradient, for `loc` (column sums), the full `d x d` `cov` gradient, and the summed `nu` score. All of these get `STRESS=1` randomized sweeps.
 

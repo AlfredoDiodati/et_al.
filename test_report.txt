@@ -1,28 +1,28 @@
-test run: ma 27 jul 2026 21:16:36 CEST
+test run: do 30 jul 2026 21:29:19 CEST
 
 === build ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mat.c -lm -lopenblas -o tests/correctness/test_mat
-cc -Wall -Wextra -O1 -g -I/usr/include/openblas -fopenmp  tests/correctness/test_mat_special.c -lm -lopenblas -o tests/correctness/test_mat_special
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_decomp.c -lm -lopenblas -o tests/correctness/test_decomp
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_solver.c -lm -lopenblas -o tests/correctness/test_solver
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_special.c -lm -lopenblas -o tests/correctness/test_special
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_stats.c -lm -lopenblas -o tests/correctness/test_stats
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_random.c -lm -lopenblas -o tests/correctness/test_random
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_broadcast.c -lm -lopenblas -o tests/correctness/test_broadcast
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_gauss.c -lm -lopenblas -o tests/correctness/test_gauss
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_student.c -lm -lopenblas -o tests/correctness/test_student
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mvgauss.c -lm -lopenblas -o tests/correctness/test_mvgauss
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mvstudent.c -lm -lopenblas -o tests/correctness/test_mvstudent
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_ad.c -lm -lopenblas -o tests/correctness/test_ad
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_adam.c -lm -lopenblas -o tests/correctness/test_adam
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_optimizer.c -lm -lopenblas -o tests/correctness/test_optimizer
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mlp.c -lm -lopenblas -o tests/correctness/test_mlp
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_frame.c -lm -lopenblas -o tests/correctness/test_frame
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_csv.c -lm -lopenblas -o tests/correctness/test_csv
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_txt.c -lm -lopenblas -o tests/correctness/test_txt
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_npy.c -lm -lopenblas -o tests/correctness/test_npy
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_json.c -lm -lopenblas -o tests/correctness/test_json
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_sql.c -lm -lopenblas -o tests/correctness/test_sql
+make: 'tests/correctness/test_mat' is up to date.
+make: 'tests/correctness/test_mat_special' is up to date.
+make: 'tests/correctness/test_decomp' is up to date.
+make: 'tests/correctness/test_solver' is up to date.
+make: 'tests/correctness/test_special' is up to date.
+make: 'tests/correctness/test_stats' is up to date.
+make: 'tests/correctness/test_random' is up to date.
+make: 'tests/correctness/test_broadcast' is up to date.
+make: 'tests/correctness/test_gauss' is up to date.
+make: 'tests/correctness/test_student' is up to date.
+make: 'tests/correctness/test_mvgauss' is up to date.
+make: 'tests/correctness/test_mvstudent' is up to date.
+make: 'tests/correctness/test_ad' is up to date.
+make: 'tests/correctness/test_adam' is up to date.
+make: 'tests/correctness/test_optimizer' is up to date.
+make: 'tests/correctness/test_mlp' is up to date.
+make: 'tests/correctness/test_frame' is up to date.
+make: 'tests/correctness/test_csv' is up to date.
+make: 'tests/correctness/test_txt' is up to date.
+make: 'tests/correctness/test_npy' is up to date.
+make: 'tests/correctness/test_json' is up to date.
+make: 'tests/correctness/test_sql' is up to date.
 
 === test_mat: PASS ===
 construction
@@ -175,8 +175,10 @@ ad-computed gradient vs analytical gauss_dlogpdf_loc/scale
 ad_lgamma (forward + digamma backward)
 ad-computed gradient vs analytical student_dlogpdf_loc/scale/nu
 ad-computed gradient vs analytical mvgauss/mvstudent scores
+ad_slice / ad_reshape (known output, fan-out, finite-difference)
 ad_solve (finite-difference)
 ad_chol_solve (finite-difference)
+ad_chol_quadform (against ad_dot+ad_chol_solve, and finite differences)
 ad_det (finite-difference)
 ad_inv (finite-difference)
 ad_solve/ad_det/ad_inv on a singular A abort (fork + expect SIGABRT)

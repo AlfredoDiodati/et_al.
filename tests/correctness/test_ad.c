@@ -911,6 +911,173 @@ static void expect_abort(void (*fn)(void)) {
     assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 
+static mreal ref_quadform(Mat L, Mat b) {
+    Vec x = vec_chol_solve(L, b);
+    mreal q = 0;
+    for (int i = 0; i < x.r; i++) q += AT(b,i,0) * x.d[i];
+    mat_free(x);
+    return q;
+}
+
+static void test_chol_quadform(void) {
+    puts("ad_chol_quadform (against ad_dot+ad_chol_solve, and finite differences)");
+    Mat L = mat_lit(3, 3, 2.0f,0.f,0.f,  0.5f,1.5f,0.f,  -0.25f,0.75f,1.25f);
+    Mat b = mat_lit(3, 1, 1.5f, -0.5f, 2.0f);
+
+    /* the fused node must match the pair it replaces, in value and in both
+       gradients, since that pair is what every caller uses today */
+    Tape *pair = tape_new();
+    Node *Lp = ad_leaf(pair, L), *bp = ad_leaf(pair, b);
+    Node *qp = ad_dot(pair, bp, ad_chol_solve(pair, Lp, bp));
+    tape_backward(pair, qp);
+
+    Tape *fused = tape_new();
+    Node *Lf = ad_leaf(fused, L), *bf = ad_leaf(fused, b);
+    Node *qf = ad_chol_quadform(fused, Lf, bf);
+    tape_backward(fused, qf);
+
+    CHECK(qf->val.d[0], qp->val.d[0]);
+    CHECK(qf->val.d[0], ref_quadform(L, b));
+    for (int i = 0; i < 3; i++) CHECK(AT(bf->grad,i,0), AT(bp->grad,i,0));
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j <= i; j++) CHECK(AT(Lf->grad,i,j), AT(Lp->grad,i,j));
+    /* the strict upper triangle is not a parameter of a Cholesky factor and
+       must stay untouched */
+    for (int i = 0; i < 3; i++)
+        for (int j = i + 1; j < 3; j++) CHECK(AT(Lf->grad,i,j), 0.f);
+
+    /* and against central differences of an independent reference */
+    mreal h = 1e-3f;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j <= i; j++) {
+            Mat plus = mat_copy(L), minus = mat_copy(L);
+            AT(plus,i,j) += h; AT(minus,i,j) -= h;
+            mreal fd = (ref_quadform(plus,b) - ref_quadform(minus,b)) / (2*h);
+            assert(MABS(AT(Lf->grad,i,j) - fd) < TOL_FD);
+            mat_free(plus); mat_free(minus);
+        }
+    for (int i = 0; i < 3; i++) {
+        Mat plus = mat_copy(b), minus = mat_copy(b);
+        AT(plus,i,0) += h; AT(minus,i,0) -= h;
+        mreal fd = (ref_quadform(L,plus) - ref_quadform(L,minus)) / (2*h);
+        assert(MABS(AT(bf->grad,i,0) - fd) < TOL_FD);
+        mat_free(plus); mat_free(minus);
+    }
+
+    /* a 1x1 factor is the degenerate case: q = b^2/L^2 */
+    Mat L1 = mat_lit(1, 1, 2.0f), b1 = mat_lit(1, 1, 3.0f);
+    Tape *one = tape_new();
+    Node *L1n = ad_leaf(one, L1), *b1n = ad_leaf(one, b1);
+    Node *q1 = ad_chol_quadform(one, L1n, b1n);
+    tape_backward(one, q1);
+    CHECK(q1->val.d[0], 2.25f);              /* 9/4 */
+    CHECK(AT(b1n->grad,0,0), 1.5f);          /* 2b/L^2 = 6/4 */
+    CHECK(AT(L1n->grad,0,0), -2.25f);        /* -2b^2/L^3 = -18/8 */
+    tape_free(one); mat_free(L1); mat_free(b1);
+
+    tape_free(pair); tape_free(fused);
+    mat_free(L); mat_free(b);
+}
+
+/* Reference for the flat-parameter-vector case: theta holds a 2x2 matrix in
+   its first four slots and a 2x1 vector in the next two, and the loss is
+   sum((W*v)^2). Written against plain mat.h with no tape, so the slice and
+   reshape adjoints have something independent to be checked against. */
+static mreal ref_flat_param_loss(Mat theta) {
+    Mat W = mat_new(2, 2), v = mat_new(2, 1);
+    for (int i = 0; i < 4; i++) W.d[i] = theta.d[i];
+    for (int i = 0; i < 2; i++) v.d[i] = theta.d[4 + i];
+    Mat Wv = mat_mul(W, v);
+    mreal s = 0;
+    for (int i = 0; i < 2; i++) s += Wv.d[i] * Wv.d[i];
+    mat_free(W); mat_free(v); mat_free(Wv);
+    return s;
+}
+
+static void test_slice_reshape(void) {
+    puts("ad_slice / ad_reshape (known output, fan-out, finite-difference)");
+
+    /* known output: the block's values, and a gradient that is 2*a inside the
+       block and exactly zero outside it */
+    Mat a = mat_lit(3, 4, 1.f,2.f,3.f,4.f,  5.f,6.f,7.f,8.f,  9.f,10.f,11.f,12.f);
+    Tape *t = tape_new();
+    Node *an = ad_leaf(t, a);
+    Node *block = ad_slice(t, an, 1, 3, 1, 3);
+    CHECK(AT(block->val,0,0), 6.f);
+    CHECK(AT(block->val,0,1), 7.f);
+    CHECK(AT(block->val,1,0), 10.f);
+    CHECK(AT(block->val,1,1), 11.f);
+    tape_backward(t, ad_sum(t, ad_emul(t, block, block)));
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 4; j++) {
+            int inside = (i >= 1 && i < 3 && j >= 1 && j < 3);
+            CHECK(AT(an->grad,i,j), inside ? 2 * AT(a,i,j) : 0.f);
+        }
+    tape_free(t);
+
+    /* a whole-matrix slice is the identity, and a single element is a 1x1 */
+    t = tape_new();
+    an = ad_leaf(t, a);
+    Node *whole = ad_slice(t, an, 0, 3, 0, 4);
+    Node *one = ad_slice(t, an, 2, 3, 3, 4);
+    CHECK(AT(one->val,0,0), 12.f);
+    tape_backward(t, ad_add(t, ad_sum(t, whole), ad_sum(t, one)));
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 4; j++)
+            CHECK(AT(an->grad,i,j), (i == 2 && j == 3) ? 2.f : 1.f);
+    tape_free(t);
+
+    /* fan-out: two overlapping blocks must add rather than overwrite, so the
+       column shared by both receives a contribution from each */
+    t = tape_new();
+    an = ad_leaf(t, a);
+    Node *left = ad_slice(t, an, 0, 3, 0, 2);
+    Node *right = ad_slice(t, an, 0, 3, 1, 3);
+    tape_backward(t, ad_add(t, ad_sum(t, left), ad_sum(t, right)));
+    for (int i = 0; i < 3; i++) {
+        CHECK(AT(an->grad,i,0), 1.f);
+        CHECK(AT(an->grad,i,1), 2.f);
+        CHECK(AT(an->grad,i,2), 1.f);
+        CHECK(AT(an->grad,i,3), 0.f);
+    }
+    tape_free(t);
+    mat_free(a);
+
+    /* reshape round-trip: a column becomes a matrix and the gradient comes
+       back in the original shape and order */
+    Mat flat = mat_lit(6, 1, 1.f,2.f,3.f,4.f,5.f,6.f);
+    t = tape_new();
+    Node *fn = ad_leaf(t, flat);
+    Node *as_matrix = ad_reshape(t, fn, 2, 3);
+    CHECK(AT(as_matrix->val,0,2), 3.f);
+    CHECK(AT(as_matrix->val,1,0), 4.f);
+    tape_backward(t, ad_sum(t, ad_emul(t, as_matrix, as_matrix)));
+    for (int i = 0; i < 6; i++) CHECK(AT(fn->grad,i,0), 2 * flat.d[i]);
+    tape_free(t);
+    mat_free(flat);
+
+    /* the case these two ops exist for: one flat parameter vector carved into
+       a matrix and a vector, checked against an independent implementation */
+    Mat theta = mat_lit(6, 1, 0.5f,-1.5f,2.f,0.25f, 1.f,-2.f);
+    t = tape_new();
+    Node *theta_node = ad_leaf(t, theta);
+    Node *W = ad_reshape(t, ad_slice(t, theta_node, 0, 4, 0, 1), 2, 2);
+    Node *v = ad_slice(t, theta_node, 4, 6, 0, 1);
+    Node *Wv = ad_matmul(t, W, v);
+    tape_backward(t, ad_sum(t, ad_emul(t, Wv, Wv)));
+
+    mreal h = 1e-3f;
+    for (int i = 0; i < 6; i++) {
+        Mat plus = mat_copy(theta), minus = mat_copy(theta);
+        AT(plus,i,0) += h; AT(minus,i,0) -= h;
+        mreal fd = (ref_flat_param_loss(plus) - ref_flat_param_loss(minus)) / (2 * h);
+        assert(MABS(AT(theta_node->grad,i,0) - fd) < TOL_FD);
+        mat_free(plus); mat_free(minus);
+    }
+    tape_free(t);
+    mat_free(theta);
+}
+
 static void test_singular_matrix_aborts(void) {
     puts("ad_solve/ad_det/ad_inv on a singular A abort (fork + expect SIGABRT)");
 
@@ -966,8 +1133,10 @@ int main(void) {
     test_lgamma_op();
     test_student_equivalence();
     test_mv_equivalence();
+    test_slice_reshape();
     test_solve_fd();
     test_chol_solve_fd();
+    test_chol_quadform();
     test_det_fd();
     test_inv_fd();
     test_singular_matrix_aborts();
