@@ -1,4 +1,4 @@
-test run: ma 27 jul 2026 16:49:58 CEST
+test run: ma 27 jul 2026 21:16:36 CEST
 
 === build ===
 cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mat.c -lm -lopenblas -o tests/correctness/test_mat
@@ -97,6 +97,11 @@ invariants
 views (stride != c)
 adversarial (scale, near-constant, minimal sizes)
 randomized vs independent reference (fixed seed)
+autocov: gemm path (d >= STATS_AUTOCOV_GEMM_MIN_D)
+autocov: gemm path centers the sample exactly once (not once per gemm operand)
+autocov_f32: known values (hand-computed)
+autocov_f32: views (stride != c)
+autocov_f32: randomized vs independent double reference (looser float32 tolerance)
 prediction-quality metrics: known values (hand-computed)
 prediction-quality metrics: views (stride != c)
 prediction-quality metrics: invariants

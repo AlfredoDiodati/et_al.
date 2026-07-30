@@ -1110,16 +1110,128 @@ in the official benchmark suite once it's served its purpose.
 
 ## 4. `stats_autocov` at d >= 32 (`stats.h`)
 
-Hand-rolled `O(n*d^2)` loop:
+**Resolved, ported to production.** Was a hand-rolled `O(n*d^2)` loop for
+every `d`:
 
 | n x d | ours vs NumPy |
 |---|---|
 | 200,000 x 32 | 3.28x slower |
 | 50,000 x 128 | 11.03x slower |
 
-Fix already spec'd in docs/STATS_DOCUMENTATION.md's limitations section:
-switch to a centered `X0^T * X1` `mat_mul`/gemm formulation above some `d`
-threshold (the loop already wins below d~8). Not yet implemented.
+Fix was already spec'd in docs/STATS_DOCUMENTATION.md's limitations
+section: switch to a centered `X0^T * X1` gemm formulation above some `d`
+threshold (the loop already wins below d~8). `STATS_AUTOCOV_GEMM_MIN_D`
+(16) gates it, matching the doc's own "worth switching for d beyond ~16".
+
+**First attempt at this fix made things worse, caught before it shipped
+by re-measuring rather than trusting the design.** The obvious reading of
+"centered `X0^T X1`" is to materialize two separate centered `(n-lag) x d`
+buffers - one for rows `0..n-lag-1`, one for rows `lag..n-1` - then
+`dgemm` them. Measured via `bench_stats.py`: 200,000x32 went from 3.28x
+slower to **4.92x slower** (a regression) and 50,000x128 only improved to
+4.71x slower, both far short of expectations. Profiled directly rather
+than guessing further (isolated harness, timing the centering-copy step
+and the `dgemm` step separately): the `dgemm` step itself was genuinely
+fast (12-20ms), but the centering-copy step alone cost 41-51ms - more
+than the *entire* old loop (38ms) at d=32. The two `(n-lag) x d` buffers
+overlap in all but `lag` rows (trivially true for `lag=1`, the case
+benchmarked), so materializing both separately does roughly *double* the
+necessary centering work for no benefit - the same mistake NumPy's own
+reference formulation avoids: `xc[:n-lag]` and `xc[lag:]` in
+`docs/STATS_DOCUMENTATION.md`'s cited NumPy formulation are *views* into
+one centered array, not two copies. **Fixed**: `stats_autocov` now
+centers the full `n x d` sample once into a single double buffer, then
+calls `cblas_dgemm` on two offset views into that one buffer (pointer,
+and pointer `+ lag*d`) - no second buffer, no duplicated centering work.
+A secondary bug caught in the same profiling pass: the first version of
+this single-buffer attempt used `xc[i] = x[i] - mu[i % d]` (flat loop
+with a modulo to recover the column index) - the integer division alone
+cost more than the nested `for i for j` loop it replaced, an object
+lesson in checking a "simplification" against the loop it's replacing
+rather than assuming flatter is faster.
+
+Verified after the real fix: `make test` (a new dedicated test,
+`test_autocov_gemm_path` in `test_stats.c`, was added first - the
+existing randomized fuzzers only ever exercised `d` in 1..4, never
+reaching `STATS_AUTOCOV_GEMM_MIN_D`, so the gemm path had zero coverage
+before this; it checks `d` at, just above, and well above the threshold,
+through a strided view, at lag 0/1/n-2, against an independent double
+reference, and is also exercised at n=50,000 under `STRESS=1` to reach
+the sizes the benchmark itself uses), `STRESS=1 ./check.sh` (all 22
+suites), and a full AddressSanitizer+UndefinedBehaviorSanitizer build in
+both normal and `STRESS=1` modes - all clean, re-run after the fix since
+the first (buggy) version had already passed its own sanitizer pass
+before the performance bug was caught (a reminder that ASan/UBSan catch
+memory/UB bugs, not performance regressions - both checks are necessary,
+neither substitutes for the other).
+
+Re-measured via `bench_stats.py` after the real fix:
+
+| n x d | old loop | first (buggy) gemm attempt | fixed gemm |
+|---|---|---|---|
+| 200,000 x 32 | 3.28x slower | 4.92x slower | **2.96x slower** |
+| 50,000 x 128 | 11.03x slower | 4.71x slower | **2.61x slower** |
+
+The remaining ~2.6-3x gap is not a further bug to chase: NumPy's own
+autocovariance benchmark here runs entirely in float32 (no
+`dtype=np.float64` requested, unlike the scalar-statistics benchmarks
+elsewhere in this file), while `stats_autocov` deliberately accumulates
+in double throughout, per this file's own stated policy. Confirmed
+directly (isolated profiling harness, `OPENBLAS_NUM_THREADS` varied):
+NumPy's single-threaded float32 `xc.T @ xc` took about half the time of
+an equivalent double-precision centering-plus-`dgemm` path on identical
+data - a real, permanent, and deliberate cost of this file's numerical
+policy, not a performance bug. See docs/STATS_DOCUMENTATION.md for the
+full writeup.
+
+**Confirmed with a direct, same-codebase test, not just inferred from
+NumPy's behavior**: built a float32 counterpart of the exact same
+function (identical structure - one shared centered buffer, offset
+views, one gemm call - only `float`/`cblas_sgemm` instead of
+`double`/`cblas_dgemm`), timing the *whole* call each rep (matching what
+`stats_autocov` actually does per invocation, including recomputing
+column means fresh every time - an earlier, less faithful version of
+this same test excluded that step from the timed loop and understated
+the real cost as a result). Measured standalone first:
+
+| n x d | double (production structure) | float32 counterpart | ratio |
+|---|---|---|---|
+| 200,000 x 32 | 44.27ms | 12.02ms | 3.68x |
+| 50,000 x 128 | 45.27ms | 13.05ms | 3.47x |
+
+The precision cost alone (3.47-3.68x) is *larger* than the observed gap
+against real NumPy (2.6-2.9x) - meaning NumPy's real measured time
+carries its own Python/array-temporary overhead on top of its float32
+computation, partly masking how much faster pure float32 math is.
+
+**Ported to production as a separate function, `stats_autocov_f32`**
+(not a flag on `stats_autocov` - a distinct name keeps the trade-off
+visible at every call site), after confirming the win holds in the real
+`bench_stats.py` harness, all three variants (production double, the
+new float32 function, real NumPy) measured back-to-back in one execution
+(added temporarily to `bench_stats.c`/`.py` as `c_stats_autocov_f32`,
+then kept as the production function's own thin wrapper once it shipped
+in `stats.h`, per the user's explicit request to keep both variants
+under test rather than remove the comparison):
+
+| n x d | production (`stats_autocov`, double) | `stats_autocov_f32` | NumPy |
+|---|---|---|---|
+| 200,000 x 2 | 0.35x | 0.31x | (baseline) |
+| 200,000 x 8 | 0.39x | 0.37x | (baseline) |
+| 200,000 x 32 | 2.73x slower | **0.70x (faster)** | (baseline) |
+| 50,000 x 128 | 2.66x slower | **0.80x (faster)** | (baseline) |
+
+`stats_autocov_f32` genuinely beats NumPy's own reference at both sizes
+where `stats_autocov` loses to it - since both now do the same precision
+of arithmetic, and `stats_autocov_f32` pays no Python-level overhead on
+top. Verified: `make test` (new tests: known values, strided view, and
+a randomized-vs-independent-double-reference check with a looser,
+float32-appropriate tolerance - `1e-3` absolute+relative combined,
+instead of this file's usual `1e-5f`, since the larger discrepancy there
+is the accepted precision cost, not a bug; also exercised at n=50,000
+under `STRESS=1`), `STRESS=1 ./check.sh` (all 22 suites), and a full
+AddressSanitizer+UndefinedBehaviorSanitizer build in both normal and
+`STRESS=1` modes - all clean.
 
 ## 5. `df_sql` `WHERE` filter (`frame/sql.h`)
 

@@ -1,3 +1,4 @@
+#define STATS_TEST_INSTRUMENT 1
 #include "../../stats.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,8 +36,8 @@ static double ref_corr(const double *x, const double *y, int n) {
 
 /* lag-k autocovariance of row-major n x d data, into out[d*d] */
 static void ref_autocov(const double *x, int n, int d, int k, double *out) {
-    double mu[8];
-    assert(d <= 8);
+    double *mu = (double *)malloc((size_t)d * sizeof *mu);
+    assert(mu);
     for (int j = 0; j < d; j++) {
         mu[j] = 0;
         for (int i = 0; i < n; i++) mu[j] += x[i * d + j];
@@ -49,6 +50,7 @@ static void ref_autocov(const double *x, int n, int d, int k, double *out) {
                 s += (x[i * d + a] - mu[a]) * (x[(i + k) * d + b] - mu[b]);
             out[a * d + b] = s / (n - k);
         }
+    free(mu);
 }
 
 /* copy a Mat (possibly a view) into a row-major double buffer */
@@ -331,12 +333,176 @@ static void test_vs_reference(void) {
     run_ref_comparison(200, 40);
 }
 
+/* run_ref_comparison above only ever exercises d in 1..4 - never large
+   enough to reach STATS_AUTOCOV_GEMM_MIN_D, so it gives zero coverage of
+   stats_autocov's gemm formulation (docs/PERFORMANCE_BACKLOG.md item 4).
+   Exercised here directly: d at, just above, and well above the
+   threshold, through a strided view (the gemm path's own centering copy
+   reads through AT() same as the loop path, but is worth checking
+   explicitly rather than assuming), at several lags including 0. */
+static void run_autocov_gemm_comparison(int n) {
+    int dims[] = { STATS_AUTOCOV_GEMM_MIN_D, STATS_AUTOCOV_GEMM_MIN_D + 4,
+                   STATS_AUTOCOV_GEMM_MIN_D * 2 };
+    for (int di = 0; di < 3; di++) {
+        int d = dims[di];
+        Mat parent = mat_new(n, d + 2);
+        for (int i = 0; i < n * (d + 2); i++)
+            parent.d[i] = (mreal)(rand() % 4001 - 2000) / 1000.0f;
+        Mat s = mat_slice(parent, 0, n, 1, 1 + d);
+        assert(s.stride != s.c);
+
+        double *xd = (double *)malloc((size_t)n * d * sizeof *xd);
+        to_dbl(s, xd);
+        double *ref = (double *)malloc((size_t)d * d * sizeof *ref);
+        assert(ref);
+
+        int lags[] = { 0, 1, n / 2 };
+        for (int li = 0; li < 3; li++) {
+            int lag = lags[li];
+            Mat ac = stats_autocov(s, lag);
+            ref_autocov(xd, n, d, lag, ref);
+            for (int t = 0; t < d * d; t++)
+                assert(MABS(ac.d[t] - (mreal)ref[t]) < TOL);
+            mat_free(ac);
+        }
+        free(xd); free(ref);
+        mat_free(parent);
+    }
+}
+
+static void test_autocov_gemm_path(void) {
+    puts("autocov: gemm path (d >= STATS_AUTOCOV_GEMM_MIN_D)");
+    srand(46);
+    run_autocov_gemm_comparison(40);
+}
+
+/* An early version of stats_autocov's gemm path centered two separate
+   (n-lag) x d buffers (one per gemm operand) instead of one shared n x d
+   buffer - the two overlap in all but `lag` rows, so this doubled the
+   centering work for no benefit. It was never a correctness bug (both
+   versions produce identical output, since both correctly center every
+   value used), which is exactly why no assertion on stats_autocov's
+   *output* - including the reference comparison above - could ever have
+   caught it; it was only caught by re-measuring wall-clock time and then
+   profiling (see docs/PERFORMANCE_BACKLOG.md item 4). This checks the
+   actual algorithmic property that regression violated: the gemm path
+   performs exactly one centering write per element of the n x d input,
+   via the STATS_TEST_INSTRUMENT counter (see stats.h) - a bug in the
+   spirit of the two-buffer mistake would produce closer to 2*(n-lag)*d
+   writes, not n*d. */
+static void test_autocov_gemm_single_centering_pass(void) {
+    puts("autocov: gemm path centers the sample exactly once (not once per gemm operand)");
+    int n = 100, d = STATS_AUTOCOV_GEMM_MIN_D, lag = 1;
+    Mat s = mat_new(n, d);
+    srand(48);
+    for (int i = 0; i < n * d; i++) s.d[i] = (mreal)(rand() % 4001 - 2000) / 1000.0f;
+
+    stats_test_autocov_centering_writes = 0;
+    Mat ac = stats_autocov(s, lag);
+    assert(stats_test_autocov_centering_writes == (long)n * d &&
+           "stats_autocov's gemm path centered more than once per element - "
+           "the two-separate-buffers regression this test guards against "
+           "(see this test's own header comment)");
+
+    mat_free(ac);
+    mat_free(s);
+}
+
+static void test_autocov_f32_known_values(void) {
+    puts("autocov_f32: known values (hand-computed)");
+    /* same as stats_autocov's own known-value check above - small exact
+       integers, so float32 accumulation should match exactly, same as
+       double would here. */
+    Mat s = mat_lit(2, 2, 1.0f, 2.0f, 3.0f, 6.0f);
+    Mat c0 = stats_autocov_f32(s, 0);
+    Mat c1 = stats_autocov_f32(s, 1);
+    assert(c0.r == 2 && c0.c == 2);
+    CHECK(AT(c0, 0, 0), 1.0f); CHECK(AT(c0, 0, 1), 2.0f);
+    CHECK(AT(c0, 1, 0), 2.0f); CHECK(AT(c0, 1, 1), 4.0f);
+    CHECK(AT(c1, 0, 0), -1.0f); CHECK(AT(c1, 0, 1), -2.0f);
+    CHECK(AT(c1, 1, 0), -2.0f); CHECK(AT(c1, 1, 1), -4.0f);
+    mat_free(s); mat_free(c0); mat_free(c1);
+}
+
+static void test_autocov_f32_views(void) {
+    puts("autocov_f32: views (stride != c)");
+    srand(49);
+    Mat parent = mat_new(10, 5);
+    for (int i = 0; i < 50; i++)
+        parent.d[i] = (mreal)(rand() % 2001 - 1000) / 500.0f;
+    Mat v = mat_slice(parent, 1, 9, 1, 4); /* 8 x 3, strided */
+    assert(v.stride != v.c);
+    Mat w = mat_copy(v); /* contiguous twin */
+
+    Mat va = stats_autocov_f32(v, 1), wa = stats_autocov_f32(w, 1);
+    for (int t = 0; t < 9; t++) CHECK(va.d[t], wa.d[t]);
+
+    mat_free(parent); mat_free(w); mat_free(va); mat_free(wa);
+}
+
+/* stats_autocov_f32 trades stats_autocov's double-accumulation guarantee
+   for speed (docs/PERFORMANCE_BACKLOG.md item 4), so comparing it
+   against an independent DOUBLE reference needs a looser, float32-
+   appropriate tolerance instead of this file's usual TOL=1e-5f - the
+   discrepancy here is the accepted precision cost, not a bug. Combined
+   absolute+relative bound (common practice for exactly this situation)
+   rather than a bare relative one, since autocovariance entries can be
+   legitimately near zero. */
+#define AUTOCOV_F32_ATOL 1e-3
+#define AUTOCOV_F32_RTOL 1e-3
+
+static void run_autocov_f32_comparison(int n) {
+    int dims[] = { 4, STATS_AUTOCOV_GEMM_MIN_D, STATS_AUTOCOV_GEMM_MIN_D * 2 };
+    for (int di = 0; di < 3; di++) {
+        int d = dims[di];
+        Mat parent = mat_new(n, d + 2);
+        for (int i = 0; i < n * (d + 2); i++)
+            parent.d[i] = (mreal)(rand() % 4001 - 2000) / 1000.0f;
+        Mat s = mat_slice(parent, 0, n, 1, 1 + d);
+        assert(s.stride != s.c);
+
+        double *xd = (double *)malloc((size_t)n * d * sizeof *xd);
+        to_dbl(s, xd);
+        double *ref = (double *)malloc((size_t)d * d * sizeof *ref);
+        assert(ref);
+
+        int lags[] = { 0, 1, n / 2 };
+        for (int li = 0; li < 3; li++) {
+            int lag = lags[li];
+            Mat ac = stats_autocov_f32(s, lag);
+            ref_autocov(xd, n, d, lag, ref);
+            for (int t = 0; t < d * d; t++) {
+                double diff = fabs((double)ac.d[t] - ref[t]);
+                double bound = AUTOCOV_F32_ATOL + AUTOCOV_F32_RTOL * fabs(ref[t]);
+                assert(diff < bound);
+            }
+            mat_free(ac);
+        }
+        free(xd); free(ref);
+        mat_free(parent);
+    }
+}
+
+static void test_autocov_f32_vs_reference(void) {
+    puts("autocov_f32: randomized vs independent double reference (looser float32 tolerance)");
+    srand(50);
+    run_autocov_f32_comparison(40);
+}
+
 static void test_stress(void) {
     if (!getenv("STRESS")) return;
     puts("  stress");
     srand(45);
     run_ref_comparison(400, 300);
     printf("  400 randomized strided runs (n up to ~300, d up to 4) ok\n");
+    srand(47);
+    run_autocov_gemm_comparison(50000);
+    printf("  autocov gemm path checked at n=50000, d up to %d, ok\n",
+           STATS_AUTOCOV_GEMM_MIN_D * 2);
+    srand(51);
+    run_autocov_f32_comparison(50000);
+    printf("  autocov_f32 checked at n=50000, d up to %d, ok\n",
+           STATS_AUTOCOV_GEMM_MIN_D * 2);
 }
 
 static void test_pred_known_values(void) {
@@ -579,6 +745,11 @@ int main(void) {
     test_views();
     test_adversarial();
     test_vs_reference();
+    test_autocov_gemm_path();
+    test_autocov_gemm_single_centering_pass();
+    test_autocov_f32_known_values();
+    test_autocov_f32_views();
+    test_autocov_f32_vs_reference();
     test_stress();
     test_pred_known_values();
     test_pred_views();

@@ -23,6 +23,7 @@ lib.c_stats_mean.argtypes = [I, F]
 lib.c_stats_var.argtypes = [I, F]
 lib.c_stats_autocorr.argtypes = [I, I, F]
 lib.c_stats_autocov.argtypes = [I, I, I, F, F]
+lib.c_stats_autocov_f32.argtypes = [I, I, I, F, F]
 lib.c_stats_corr.argtypes = [I, F, F]
 lib.c_stats_median.argtypes = [I, F]
 lib.c_stats_rank.argtypes = [I, F, F]
@@ -39,6 +40,7 @@ lib.c_stats_mean.restype = ctypes.c_float
 lib.c_stats_var.restype = ctypes.c_float
 lib.c_stats_autocorr.restype = ctypes.c_float
 lib.c_stats_autocov.restype = None
+lib.c_stats_autocov_f32.restype = None
 lib.c_stats_corr.restype = ctypes.c_float
 lib.c_stats_median.restype = ctypes.c_float
 lib.c_stats_rank.restype = None
@@ -118,6 +120,16 @@ for n, d in [(200_000, 2), (200_000, 8), (200_000, 32), (50_000, 128)]:
     ours = bench(lambda: lib.c_stats_autocov(n, d, 1, ptr(x), NULL))
     npms = bench(lambda: np_autocov(x, 1))
     print(f"{f'{n}x{d}':>18}  {ours:>9.3f}  {npms:>9.3f}  {ours / npms:>7.2f}  {err:>9.2e}")
+
+    # verification only (docs/PERFORMANCE_BACKLOG.md item 4): float32
+    # counterpart of stats_autocov's gemm path, measured here in the same
+    # run as production (double) and NumPy above, for a same-execution
+    # comparison of what a float32 build would cost
+    out_f32 = np.zeros((d, d), dtype=np.float32)
+    lib.c_stats_autocov_f32(n, d, 1, ptr(x), ptr(out_f32))
+    err_f32 = float(np.max(np.abs(out_f32 - ref)))
+    ours_f32 = bench(lambda: lib.c_stats_autocov_f32(n, d, 1, ptr(x), NULL))
+    print(f"{f'{n}x{d} f32':>18}  {ours_f32:>9.3f}  {npms:>9.3f}  {ours_f32 / npms:>7.2f}  {err_f32:>9.2e}")
 
 print("\nRank / Spearman correlation on an n-vector (vs scipy.stats.rankdata, average-tie method)")
 print(f"{'op / n':>18}  {'ours ms':>9}  {'ref ms':>9}  {'ratio':>7}  {'max err':>9}")

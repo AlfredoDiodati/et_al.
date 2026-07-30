@@ -29,6 +29,13 @@ void c_stats_autocov(int n, int d, int lag, mreal *x, mreal *out) {
     mat_free(o);
 }
 
+void c_stats_autocov_f32(int n, int d, int lag, mreal *x, mreal *out) {
+    Mat mx = { n, d, d, x };
+    Mat o = stats_autocov_f32(mx, lag);
+    if (out) memcpy(out, o.d, (size_t)d * d * sizeof(mreal));
+    mat_free(o);
+}
+
 mreal c_stats_corr(int n, mreal *x, mreal *y) {
     Mat mx = { n, 1, 1, x }, my = { n, 1, 1, y };
     return stats_corr(mx, my);

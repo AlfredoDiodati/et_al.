@@ -137,6 +137,31 @@ static inline Mat stats_vec_mean(Mat x) {
     return o;
 }
 
+/* Above this many columns, the hand-rolled O((n-lag)*d^2) loop below
+   loses to a BLAS gemm formulation of the same computation - measured
+   (docs/PERFORMANCE_BACKLOG.md item 4): the loop wins below d~8, is
+   ~3x slower than the gemm path at d=32, ~9x slower at d=128. */
+#define STATS_AUTOCOV_GEMM_MIN_D 16
+
+/* Test-only instrumentation, compiled out entirely unless a test defines
+   STATS_TEST_INSTRUMENT before including this header - lets a test
+   verify how many centering writes stats_autocov's gemm path actually
+   performs, not just that its output is correct. This matters here
+   specifically because an early version of this path centered two
+   separate (n-lag) x d buffers (one per gemm operand) instead of one
+   shared n x d buffer - a real, if short-lived, performance defect
+   (never a wrong-output bug, so no correctness assertion could have
+   caught it: both versions produced identical results, see
+   docs/PERFORMANCE_BACKLOG.md item 4 for the measured regression this
+   caused) that doubles this exact count. See test_stats.c's
+   test_autocov_gemm_single_centering_pass. */
+#ifdef STATS_TEST_INSTRUMENT
+long stats_test_autocov_centering_writes = 0;
+#define STATS_TEST_COUNT_CENTER() (stats_test_autocov_centering_writes++)
+#else
+#define STATS_TEST_COUNT_CENTER() ((void)0)
+#endif
+
 /* Lag-k (k >= 0) sample autocovariance matrix of an n x d sample:
    out[a][b] = mean over the n-k row pairs of
    (x[i][a] - mean[a]) * (x[i+k][b] - mean[b]), both sides centered by
@@ -148,21 +173,99 @@ static inline Mat stats_vec_mean(Mat x) {
 static inline Mat stats_autocov(Mat x, int lag) {
     int n = x.r, d = x.c;
     assert(lag >= 0 && lag < n);
-    double *acc = (double *)calloc((size_t)d * d + d, sizeof *acc);
-    assert(acc);
-    double *mu = acc + (size_t)d * d;
+    int m = n - lag;
+    double *mu = (double *)calloc((size_t)d, sizeof *mu);
+    assert(mu);
     for (int i = 0; i < n; i++)
         for (int j = 0; j < d; j++) mu[j] += (double)AT(x, i, j);
     for (int j = 0; j < d; j++) mu[j] /= n;
-    for (int i = 0; i < n - lag; i++)
-        for (int a = 0; a < d; a++) {
-            double da = (double)AT(x, i, a) - mu[a];
-            for (int b = 0; b < d; b++)
-                acc[a * d + b] += da * ((double)AT(x, i + lag, b) - mu[b]);
-        }
+
     Mat o = mat_new(d, d);
-    for (int t = 0; t < d * d; t++) o.d[t] = (mreal)(acc[t] / (n - lag));
-    free(acc);
+
+    if (d < STATS_AUTOCOV_GEMM_MIN_D) {
+        double *acc = (double *)calloc((size_t)d * d, sizeof *acc);
+        assert(acc);
+        for (int i = 0; i < m; i++)
+            for (int a = 0; a < d; a++) {
+                double da = (double)AT(x, i, a) - mu[a];
+                for (int b = 0; b < d; b++)
+                    acc[a * d + b] += da * ((double)AT(x, i + lag, b) - mu[b]);
+            }
+        for (int t = 0; t < d * d; t++) o.d[t] = (mreal)(acc[t] / m);
+        free(acc);
+    } else {
+        /* out = centered(x)[0:m]^T * centered(x)[lag:n] / m, both sides
+           centered by the same full-sample mu above. The two operands
+           are offset views (rows 0..m-1 and rows lag..n-1) into ONE
+           centered n x d buffer, not two separately-materialized m x d
+           copies - they overlap in all but lag rows, and duplicating
+           that overlap turned out to roughly double the centering
+           cost for no benefit (measured directly: near-tied with the
+           loop path at d=32 instead of a clear win), mirroring how
+           NumPy's own `xc[:n-lag]`/`xc[lag:]` are views into one
+           centered array, not two copies, in the reference formulation
+           this fix is based on. Materialized in double and multiplied
+           via cblas_dgemm directly - not MBLAS(gemm), which would
+           silently drop to single-precision accumulation under the
+           default float build - to keep this file's "all accumulation
+           is in double regardless of the mreal build" policy (see this
+           file's own header comment) exactly as the loop above
+           provides it. */
+        double *xc = (double *)malloc((size_t)n * d * sizeof *xc);
+        double *acc = (double *)malloc((size_t)d * d * sizeof *acc);
+        assert(xc && acc);
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < d; j++) {
+                xc[i * d + j] = (double)AT(x, i, j) - mu[j];
+                STATS_TEST_COUNT_CENTER();
+            }
+        cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, d, d, m,
+                    1.0, xc, d, xc + (size_t)lag * d, d, 0.0, acc, d);
+        for (int t = 0; t < d * d; t++) o.d[t] = (mreal)(acc[t] / m);
+        free(xc); free(acc);
+    }
+    free(mu);
+    return o;
+}
+
+/* Same computation as stats_autocov, but accumulates in float instead of
+   double throughout - a deliberate, explicit exception to this file's
+   "all accumulation is in double regardless of the mreal build" policy
+   (see this file's header comment), opt-in via a separate function name
+   rather than a flag on stats_autocov itself, so the trade-off is visible
+   at every call site rather than hidden behind an argument. Exists
+   because the double-precision gemm path above, while it uses BLAS
+   correctly, is inherently ~2-3.5x slower than an equivalent float32
+   computation (confirmed directly, docs/PERFORMANCE_BACKLOG.md item 4) -
+   for callers who want stats_autocov's speed to actually beat NumPy's own
+   (float32) reference implementation rather than trail it by ~2.6-2.9x,
+   and who accept float32's own accumulation error for doing so (still
+   tiny in absolute terms for realistic data, just less conservative than
+   the double path's guarantee). Always uses the gemm formulation
+   regardless of d - unlike stats_autocov, there is no small-d loop
+   fallback here, since this function exists specifically for the
+   large-d case the loop already loses at; d x d; caller must mat_free(). */
+static inline Mat stats_autocov_f32(Mat x, int lag) {
+    int n = x.r, d = x.c;
+    assert(lag >= 0 && lag < n);
+    int m = n - lag;
+    float *mu = (float *)calloc((size_t)d, sizeof *mu);
+    assert(mu);
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < d; j++) mu[j] += (float)AT(x, i, j);
+    for (int j = 0; j < d; j++) mu[j] /= n;
+
+    float *xc = (float *)malloc((size_t)n * d * sizeof *xc);
+    float *acc = (float *)malloc((size_t)d * d * sizeof *acc);
+    assert(xc && acc);
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < d; j++) xc[i * d + j] = (float)AT(x, i, j) - mu[j];
+    cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans, d, d, m,
+                1.0f, xc, d, xc + (size_t)lag * d, d, 0.0f, acc, d);
+
+    Mat o = mat_new(d, d);
+    for (int t = 0; t < d * d; t++) o.d[t] = (mreal)(acc[t] / m);
+    free(mu); free(xc); free(acc);
     return o;
 }
 
