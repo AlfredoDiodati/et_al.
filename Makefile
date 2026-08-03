@@ -4,6 +4,15 @@ BLAS_LIBS   := $(shell pkg-config --libs openblas 2>/dev/null || echo -lopenblas
 CFLAGS  = -Wall -Wextra -O3 -march=native -ffast-math $(BLAS_CFLAGS) $(if $(MAT_DOUBLE),-DMAT_DOUBLE)
 LDLIBS  = -lm $(BLAS_LIBS)
 
+# LAPACKE is not a dependency of this library and must never reach LDLIBS.
+# It is linked only by the targets that compare a replacement against the
+# LAPACKE routine it replaced, which need both arms in one binary to time
+# and cross-check them on identical data. Those targets are kept out of
+# `test` and `bench.sh` so the suite builds against OpenBLAS alone; run
+# them by hand on a machine with liblapacke-dev installed. See README.md's
+# "Dependencies" section.
+LAPACKE_LIBS = -llapacke
+
 # --- installation tiers: see README.md's "Installation tiers" policy.
 # core:  linalg/*.h (mat.h, decomp.h, solver.h), ad.h, dist/*.h, solver/*.h -
 #        math and general-purpose statistics, no model implementations.
@@ -214,6 +223,118 @@ tests/correctness/test_json: tests/correctness/test_json.c json.h
 
 tests/correctness/test_sql: tests/correctness/test_sql.c frame/sql.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_sql.c $(LDLIBS) -o tests/correctness/test_sql
+
+# --- LAPACKE comparison targets (see LAPACKE_LIBS at the top of this file).
+# Each pairs a routine this library now computes against CBLAS with the
+# LAPACKE routine it replaced, checking they agree and timing them against
+# each other. These are the only targets that link -llapacke, and they are
+# deliberately absent from `test` and `bench.sh`.
+tests/correctness/norm_blas_only: tests/correctness/norm_blas_only.c linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/norm_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/norm_blas_only
+
+tests/performance/norm_lapack_removal: tests/performance/norm_lapack_removal.c linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/norm_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/norm_lapack_removal
+
+tests/correctness/chol_blas_only: tests/correctness/chol_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/chol_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/chol_blas_only
+
+tests/performance/chol_lapack_removal: tests/performance/chol_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/chol_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/chol_lapack_removal
+
+tests/correctness/chol_solve_blas_only: tests/correctness/chol_solve_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/chol_solve_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/chol_solve_blas_only
+
+tests/performance/chol_solve_lapack_removal: tests/performance/chol_solve_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/chol_solve_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/chol_solve_lapack_removal
+
+tests/correctness/lu_blas_only: tests/correctness/lu_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/lu_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/lu_blas_only
+
+tests/performance/lu_lapack_removal: tests/performance/lu_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/lu_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/lu_lapack_removal
+
+tests/correctness/lu_solve_blas_only: tests/correctness/lu_solve_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/lu_solve_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/lu_solve_blas_only
+
+tests/performance/lu_solve_lapack_removal: tests/performance/lu_solve_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/lu_solve_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/lu_solve_lapack_removal
+
+tests/correctness/qr_blas_only: tests/correctness/qr_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/qr_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/qr_blas_only
+
+tests/performance/qr_lapack_removal: tests/performance/qr_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/qr_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/qr_lapack_removal
+
+tests/correctness/lstsq_blas_only: tests/correctness/lstsq_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/lstsq_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/lstsq_blas_only
+
+tests/performance/lstsq_lapack_removal: tests/performance/lstsq_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/lstsq_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/lstsq_lapack_removal
+
+tests/correctness/lstsq_rd_blas_only: tests/correctness/lstsq_rd_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/lstsq_rd_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/lstsq_rd_blas_only
+
+tests/performance/lstsq_rd_lapack_removal: tests/performance/lstsq_rd_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/lstsq_rd_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/lstsq_rd_lapack_removal
+
+tests/correctness/eig_blas_only: tests/correctness/eig_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/eig_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/eig_blas_only
+
+tests/performance/eig_lapack_removal: tests/performance/eig_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/eig_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/eig_lapack_removal
+
+tests/correctness/sysolve_blas_only: tests/correctness/sysolve_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/sysolve_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/sysolve_blas_only
+
+tests/performance/sysolve_lapack_removal: tests/performance/sysolve_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/sysolve_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/sysolve_lapack_removal
+
+tests/correctness/eigsym_blas_only: tests/correctness/eigsym_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/eigsym_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/eigsym_blas_only
+
+tests/performance/eigsym_lapack_removal: tests/performance/eigsym_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/eigsym_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/eigsym_lapack_removal
+
+tests/correctness/svd_blas_only: tests/correctness/svd_blas_only.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/svd_blas_only.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/correctness/svd_blas_only
+
+tests/performance/svd_lapack_removal: tests/performance/svd_lapack_removal.c linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/svd_lapack_removal.c $(LDLIBS) $(LAPACKE_LIBS) -o tests/performance/svd_lapack_removal
+
+LAPACK_COMPARISON_TESTS := tests/correctness/norm_blas_only tests/correctness/chol_blas_only tests/correctness/chol_solve_blas_only tests/correctness/lu_blas_only tests/correctness/lu_solve_blas_only tests/correctness/qr_blas_only tests/correctness/lstsq_blas_only tests/correctness/lstsq_rd_blas_only tests/correctness/sysolve_blas_only tests/correctness/eigsym_blas_only tests/correctness/svd_blas_only tests/correctness/eig_blas_only
+LAPACK_COMPARISON_BENCH := tests/performance/norm_lapack_removal tests/performance/chol_lapack_removal tests/performance/chol_solve_lapack_removal tests/performance/lu_lapack_removal tests/performance/lu_solve_lapack_removal tests/performance/qr_lapack_removal tests/performance/lstsq_lapack_removal tests/performance/lstsq_rd_lapack_removal tests/performance/sysolve_lapack_removal tests/performance/eigsym_lapack_removal tests/performance/svd_lapack_removal tests/performance/eig_lapack_removal
+
+# Correctness only - fast, and what to run after touching a kernel.
+lapack-comparison: $(LAPACK_COMPARISON_TESTS)
+	for t in $(LAPACK_COMPARISON_TESTS); do STRESS=1 ./$$t || exit 1; done
+
+# The same tests under AddressSanitizer and UndefinedBehaviorSanitizer.
+# These kernels hand raw pointers and leading dimensions to BLAS, and a
+# workspace sized for one call path but reused by another overruns it
+# silently - a real one shipped here, an _larfb workspace sized for the
+# right-hand sides and then used across the wider matrix. That failed as a
+# heap corruption at exit, nowhere near the write, so the sanitizers earn
+# their place as a separate gate rather than a nicety.
+lapack-comparison-asan:
+	for t in $(LAPACK_COMPARISON_TESTS); do \
+	  $(CC) -Wall -Wextra -O1 -g -fsanitize=address,undefined $(BLAS_CFLAGS) \
+	    $(if $(MAT_DOUBLE),-DMAT_DOUBLE) $$t.c $(LDLIBS) $(LAPACKE_LIBS) -o $$t.asan || exit 1; \
+	  STRESS=1 ./$$t.asan || exit 1; \
+	  rm -f $$t.asan; \
+	done
+
+# The timings as well. Each benchmark exits nonzero if its replacement is
+# slower than the LAPACKE routine anywhere it measured, so this target
+# failing is the signal that a kernel is not ready for production.
+# OPENBLAS_NUM_THREADS=1 is not a convenience here, it is what makes the
+# measurement mean anything. OpenBLAS's pthread build spin-waits on worker
+# threads, and on the many small BLAS calls a blocked factorization makes,
+# that overhead both dominates and drifts: the same reference call was
+# measured 5.99x slower at the end of a run than at the start, which
+# reversed individual comparisons between runs. Pinned to one thread the
+# same check is flat. Each benchmark records the value it actually saw.
+lapack-comparison-bench: $(LAPACK_COMPARISON_BENCH)
+	for b in $(LAPACK_COMPARISON_BENCH); do OPENBLAS_NUM_THREADS=1 ./$$b || exit 1; done
 
 test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json tests/correctness/test_sql
 	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_special && ./tests/correctness/test_stats && ./tests/correctness/test_random && ./tests/correctness/test_broadcast && ./tests/correctness/test_gauss && ./tests/correctness/test_student && ./tests/correctness/test_mvgauss && ./tests/correctness/test_mvstudent && ./tests/correctness/test_ad && ./tests/correctness/test_adam && ./tests/correctness/test_optimizer && ./tests/correctness/test_mlp && ./tests/correctness/test_frame && ./tests/correctness/test_csv && ./tests/correctness/test_txt && ./tests/correctness/test_npy && ./tests/correctness/test_json && ./tests/correctness/test_sql

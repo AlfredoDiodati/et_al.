@@ -708,8 +708,7 @@ static inline Node *ad_chol_quadform(Tape *t, Node *L, Node *b) {
     assert(L->val.r == L->val.c && b->val.r == L->val.r && b->val.c == 1);
     int n = L->val.r;
     Vec w = mat_copy(b->val);
-    MLAPACK(trtrs)(LAPACK_ROW_MAJOR, 'L', 'N', 'N', n, 1,
-                   L->val.d, L->val.stride, w.d, w.stride);
+    _trtrs('L', 'N', 'N', n, 1, L->val.d, L->val.stride, w.d, w.stride);
     Mat val = mat_new(1, 1);
     mreal q = 0;
     for (int i = 0; i < n; i++) q += w.d[i] * w.d[i];

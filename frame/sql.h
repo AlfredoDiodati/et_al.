@@ -959,11 +959,23 @@ static DataFrame sql_select_rows(const DataFrame *df, const int *rows, int n) {
    instruction 8-wide double movemask, not assumed present - falls back
    to an ordinary scalar loop producing the identical packed-bit output,
    just without the explicit SIMD compare/movemask instructions).
-   OpenMP is gated behind _OPENMP (defined only when the compiler is
-   actually invoked with -fopenmp - this project's build happens to pick
-   that up from OpenBLAS's own pkg-config metadata on many systems, but
-   that is incidental, not a guarantee, so omp_get_max_threads() is
-   stubbed to 1 when _OPENMP is absent rather than assumed available).
+   OpenMP is gated behind _OPENMP, which the compiler defines only when it
+   is actually invoked with -fopenmp. This project's build picks that flag
+   up from OpenBLAS's own pkg-config metadata on systems where OpenBLAS was
+   built against OpenMP, but that is incidental and not a guarantee: an
+   OpenBLAS built against pthreads instead, which is a separate package of
+   the same name on Debian, hands back no such flag. So every OpenMP entry
+   point this file uses is stubbed when _OPENMP is absent, to the values
+   OpenMP itself defines outside a parallel region. The parallel sections
+   are written as count-then-scatter keyed on the thread index, so with one
+   thread reporting index zero they collapse to a single serial pass over
+   the whole range.
+
+   Stub every entry point the file calls, not just the ones it called when
+   the fallback was written. Missing one does not degrade to serial, it
+   fails to link: a #pragma is a hint the compiler discards without
+   -fopenmp, but the omp_get_* calls inside the block it guards are
+   ordinary code and survive with nothing to resolve them.
    --------------------------------------------------------------------- */
 
 #if defined(__AVX2__) && !defined(MAT_DOUBLE)
@@ -973,6 +985,8 @@ static DataFrame sql_select_rows(const DataFrame *df, const int *rows, int n) {
 #include <omp.h>
 #else
 static inline int omp_get_max_threads(void) { return 1; }
+static inline int omp_get_thread_num(void) { return 0; }
+static inline int omp_get_num_threads(void) { return 1; }
 #endif
 
 /* Test-only instrumentation, compiled out entirely unless a test defines

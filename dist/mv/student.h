@@ -110,7 +110,7 @@ static inline Mat mvstudent_dlogpdf_loc(Mat x, Mat loc, Mat cov, mreal nu) {
     Mat l = mat_chol(cov);
     Mat dt = mvgauss_diff_t(x, loc);
     Mat wt = mat_copy(dt); /* wt <- cov^-1 * dt; dt kept for q_i = diff . w */
-    int info = MLAPACK(potrs)(LAPACK_ROW_MAJOR, 'L', d, n, l.d, l.stride, wt.d, wt.stride);
+    int info = _potrs(d, n, l.d, l.stride, wt.d, wt.stride);
     assert(info == 0);
 
     Mat o = mat_new(n, d);
@@ -189,11 +189,11 @@ static inline Mat mvstudent_dlogpdf_cov(Mat x, Mat loc, Mat cov, mreal nu) {
     Mat l = mat_chol(cov);
     Mat dt = mvgauss_diff_t(x, loc);
     Mat wt = mat_copy(dt);
-    int info = MLAPACK(potrs)(LAPACK_ROW_MAJOR, 'L', d, n, l.d, l.stride, wt.d, wt.stride);
+    int info = _potrs(d, n, l.d, l.stride, wt.d, wt.stride);
     assert(info == 0);
 
     Mat p = mat_copy(l);
-    info = MLAPACK(potri)(LAPACK_ROW_MAJOR, 'L', d, p.d, p.stride);
+    info = _potri(p.d, d, p.stride);
     assert(info == 0);
     for (int i = 0; i < d; i++)
         for (int j = i + 1; j < d; j++)

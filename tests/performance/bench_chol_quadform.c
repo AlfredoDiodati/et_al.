@@ -1,27 +1,33 @@
-/* Design-space benchmark for a fused quadratic form on the tape, deciding
-   whether ad.h should gain ad_chol_quadform(L, b) computing b' (L L')^-1 b as
-   one node instead of ad_dot(b, ad_chol_solve(L, b)) as two.
+/* Does ad.h's fused quadratic form still beat the two nodes it replaced?
 
-   The quadratic form is what every Gaussian and Student t log-density needs,
-   and a score-driven filter evaluates one per period, so it is worth knowing
-   whether fusing it pays before adding a public function for it.
+   ad_chol_quadform(L, b) computes b' (L L')^-1 b as one node where
+   ad_dot(b, ad_chol_solve(L, b)) takes two. This file asked whether fusing
+   it was worth a public function, the answer was yes, and the function is
+   now in ad.h. What is left is the measurement that justified it: nothing
+   else checks that the fused path is the faster one, so a change to
+   _trtrs, to vec_chol_solve or to the tape that reversed the two would go
+   unnoticed. Correctness is not this file's job - test_ad.c already checks
+   the fused node against ad_dot plus ad_chol_solve and against finite
+   differences.
 
-   What the fused version can save, and what it cannot:
+   The quadratic form is what every Gaussian and Student t log-density
+   needs, and a score-driven filter evaluates one per period.
 
-     forward   one triangular solve. ad_chol_solve calls ?potrs, which solves
-               with both triangles to produce A^-1 b, but only L^-1 b is needed
-               to form q = ||L^-1 b||^2.
+   What the fused version saves, and what it cannot:
+
+     forward   one triangular solve. ad_chol_solve calls _potrs, which
+               solves with both triangles to produce A^-1 b, but only
+               L^-1 b is needed to form q = ||L^-1 b||^2.
      nodes     one per call, with its struct and gradient buffer.
-     backward  nothing. Working the current path through by hand gives exactly
-               the fused adjoint: ad_dot hands ad_chol_solve an adjoint of
-               qbar*b, so its z is qbar*x and its Asym is -2 qbar x x', which
-               is what differentiating q directly produces. The n x n outer
-               product and the multiply by L are unavoidable either way.
+     backward  nothing. Working the two-node path through by hand gives
+               exactly the fused adjoint: ad_dot hands ad_chol_solve an
+               adjoint of qbar*b, so its z is qbar*x and its Asym is
+               -2 qbar x x', which is what differentiating q directly
+               produces. The n x n outer product and the multiply by L are
+               unavoidable either way.
 
-   The prototype below is deliberately not in ad.h: it lives here until the
-   measurement justifies it. It does not cache L^-1 b between the passes, since
-   Node has nowhere to put it, so its backward recomputes A^-1 b with a full
-   solve exactly as ad_chol_solve's does.
+   Neither path caches L^-1 b between the passes, since Node has nowhere to
+   put it, so both backwards recompute A^-1 b with a full solve.
 
    Standalone, no Python driver. Build and run:
      make tests/performance/bench_chol_quadform && ./tests/performance/bench_chol_quadform
@@ -34,47 +40,6 @@ static double now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + 1e-9 * ts.tv_nsec;
-}
-
-/* q = b' (L L')^-1 b as a single node. */
-static void quadform_backward(Node *self) {
-    Node *L = self->parents[0], *b = self->parents[1];
-    int n = L->val.r;
-    mreal seed = self->grad.d[0];
-
-    Vec x = vec_chol_solve(L->val, b->val);
-    for (int i = 0; i < n; i++) b->grad.d[i] += 2 * seed * x.d[i];
-
-    Mat outer = mat_new(n, n);
-    for (int i = 0; i < n; i++)
-        for (int j = 0; j < n; j++)
-            AT(outer, i, j) = -2 * seed * x.d[i] * x.d[j];
-    Mat product = mat_mul(outer, L->val);
-    for (int i = 0; i < n; i++)
-        for (int j = 0; j <= i; j++)
-            AT(L->grad, i, j) += AT(product, i, j);
-
-    mat_free(x);
-    mat_free(outer);
-    mat_free(product);
-}
-
-static Node *ad_chol_quadform(Tape *t, Node *L, Node *b) {
-    int n = L->val.r;
-    Vec w = mat_copy(b->val);
-    MLAPACK(trtrs)(LAPACK_ROW_MAJOR, 'L', 'N', 'N', n, 1,
-                   L->val.d, L->val.stride, w.d, w.stride);
-    Mat val = mat_new(1, 1);
-    mreal q = 0;
-    for (int i = 0; i < n; i++) q += w.d[i] * w.d[i];
-    val.d[0] = q;
-    mat_free(w);
-
-    Node *node = ad_node_new(t, val, quadform_backward);
-    node->parents[0] = L;
-    node->parents[1] = b;
-    node->n_parents = 2;
-    return node;
 }
 
 /* One tape holding n_calls quadratic forms against a shared factor, summed,

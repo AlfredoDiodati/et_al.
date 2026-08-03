@@ -14,6 +14,15 @@ __pycache__/
 tests/correctness/test_*
 !tests/correctness/*.c
 
+# compiled binaries for the LAPACKE comparison targets: one correctness
+# binary per migrated kernel and one benchmark, same pattern reasoning.
+tests/correctness/*_blas_only
+tests/correctness/*.asan
+tests/performance/*_lapack_removal
+
+# results written by the benchmarks and by any pipeline run
+out/
+
 # compiled example binaries: one per examples/<noun>_example.c source, same
 # auto-covering reasoning as above.
 examples/*_example

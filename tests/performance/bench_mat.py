@@ -329,3 +329,20 @@ for n in [256, 1024, 2048]:
     c_ms = bench(lambda: lib.c_norm(n, n, b"F", ptr(m)))
     np_ms = bench(lambda: np.linalg.norm(m, "fro"))
     print(f"{f'norm(F) {n}':>14}  {c_ms:>9.3f}  {np_ms:>9.3f}  {c_ms / np_ms:>6.2f}  {err:>9.2e}")
+
+    # '1'/'I'/'M' were a LAPACKE ?lange call and are now this library's own
+    # reductions, so they belong in the NumPy comparison alongside every
+    # other hand-written kernel here. The head-to-head against the ?lange
+    # they replaced is a separate measurement, in
+    # tests/performance/norm_lapack_removal.c.
+    for kind, np_fn, label in (
+        (b"1", lambda: np.linalg.norm(m, 1), "norm(1)"),
+        (b"I", lambda: np.linalg.norm(m, np.inf), "norm(I)"),
+        (b"M", lambda: np.abs(m).max(), "norm(M)"),
+    ):
+        got = lib.c_norm(n, n, kind, ptr(m))
+        ref = float(np_fn())
+        err = abs(got - ref) / max(1.0, abs(ref))
+        c_ms = bench(lambda: lib.c_norm(n, n, kind, ptr(m)))
+        np_ms = bench(np_fn)
+        print(f"{f'{label} {n}':>14}  {c_ms:>9.3f}  {np_ms:>9.3f}  {c_ms / np_ms:>6.2f}  {err:>9.2e}")

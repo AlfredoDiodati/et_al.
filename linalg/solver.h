@@ -1,12 +1,11 @@
 #pragma once
 #include "decomp.h"
-#include <lapacke.h>
 
 /* Solvers: Ax=b (via LU, via symmetric indefinite factorization, or
    reusing an existing mat_lu/mat_chol factorization), least squares (via
    QR, or via SVD for rank-deficient input).
    All functions here call decomp.h. decomp.h never includes this file.
-   Like decomp.h, inputs are copied first (LAPACKE solves in place) so
+   Like decomp.h, inputs are copied first (the kernels solve in place) so
    these functions never mutate their arguments, and a singular/rank-
    deficient input is treated as a contract violation (assert), not a
    recoverable runtime condition - see decomp.h's header comment. The one
@@ -23,7 +22,7 @@ static inline Vec vec_solve(Mat a, Vec b) {
     Vec x = mat_copy(b);
     lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
 
-    int info = MLAPACK(gesv)(LAPACK_ROW_MAJOR, n, 1, lu.d, lu.stride, piv, x.d, x.stride);
+    int info = _gesv(n, 1, lu.d, lu.stride, piv, x.d, x.stride);
     assert(info == 0); /* a is singular */
 
     free(piv);
@@ -31,14 +30,22 @@ static inline Vec vec_solve(Mat a, Vec b) {
     return x;
 }
 
-/* Solve a*x = b for x via symmetric indefinite factorization (LAPACK
-   ?sysv), for symmetric a that is not necessarily positive-definite -
+/* Solve a*x = b for x via symmetric indefinite factorization
+   (Bunch-Kaufman), for symmetric a that is not necessarily positive-definite -
    e.g. a sample covariance matrix perturbed to indefiniteness by
    floating-point noise, where vec_solve would work but wastes the
    symmetry and mat_chol-based solving would wrongly assert. Only the
    lower triangle of a is read. a must be square and nonsingular; b is a
    single right-hand-side column vector with b.r == a.r. Returns a new
-   owner; a and b are not modified. */
+   owner; a and b are not modified.
+
+   factor.h's _sysv computes this against CBLAS alone; it replaced a
+   LAPACKE ?sysv call and is 1.08x to 3.17x faster at the single
+   right-hand side this passes (tests/performance/sysolve_lapack_removal.c).
+   It is a real Bunch-Kaufman factorization, not an LU wearing a different
+   name: the symmetry is what makes this cheaper than vec_solve, and a 2x2
+   pivot block is what keeps it stable where no diagonal entry is large
+   enough to pivot on. */
 static inline Vec vec_solve_sym(Mat a, Vec b) {
     assert(a.r == a.c && b.r == a.r && b.c == 1);
     int n = a.r;
@@ -46,7 +53,7 @@ static inline Vec vec_solve_sym(Mat a, Vec b) {
     Vec x = mat_copy(b);
     lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
 
-    int info = MLAPACK(sysv)(LAPACK_ROW_MAJOR, 'L', n, 1, af.d, af.stride, piv, x.d, x.stride); /* 'L': read the lower triangle */
+    int info = _sysv(n, 1, af.d, af.stride, piv, x.d, x.stride);
     assert(info == 0); /* a is singular */
 
     free(piv);
@@ -67,7 +74,7 @@ static inline Vec vec_solve_sym(Mat a, Vec b) {
 static inline Vec vec_lu_solve(Mat lu, lapack_int *piv, Vec b) {
     assert(lu.r == lu.c && b.r == lu.r && b.c == 1);
     Vec x = mat_copy(b);
-    int info = MLAPACK(getrs)(LAPACK_ROW_MAJOR, 'N', lu.r, 1, lu.d, lu.stride, piv, x.d, x.stride); /* 'N': solve a*x=b, not the transposed system a^T*x=b */
+    int info = _getrs('N', lu.r, 1, lu.d, lu.stride, piv, x.d, x.stride); /* 'N': solve a*x=b, not the transposed system a^T*x=b */
     assert(info == 0);
     return x;
 }
@@ -81,24 +88,28 @@ static inline Vec vec_lu_solve(Mat lu, lapack_int *piv, Vec b) {
 static inline Vec vec_chol_solve(Mat l, Vec b) {
     assert(l.r == l.c && b.r == l.r && b.c == 1);
     Vec x = mat_copy(b);
-    int info = MLAPACK(potrs)(LAPACK_ROW_MAJOR, 'L', l.r, 1, l.d, l.stride, x.d, x.stride); /* 'L': l is the lower-triangular factor mat_chol produces */
+    int info = _potrs(l.r, 1, l.d, l.stride, x.d, x.stride);
     assert(info == 0);
     return x;
 }
 
-/* Solve the least-squares problem min ||a*x - b||_2 via QR (LAPACK ?gels).
+/* Solve the least-squares problem min ||a*x - b||_2 via QR.
    a is m x n with m >= n (overdetermined or square); b is m x nrhs with
    b.r == a.r. Returns the n x nrhs solution as a new owner; a and b are
-   not modified. */
+   not modified.
+
+   factor.h's _gels computes this against CBLAS alone; it replaced a
+   LAPACKE ?gels call and is 1.40x to 2.29x faster across the shapes in
+   tests/performance/lstsq_lapack_removal.c. */
 static inline Mat mat_lstsq(Mat a, Mat b) {
     assert(a.r >= a.c && b.r == a.r);
     int m = a.r, n = a.c, nrhs = b.c;
     Mat qr = mat_copy(a);
 
-    /* ?gels overwrites its b argument in place with the solution in the
+    /* _gels overwrites its b argument in place with the solution in the
        first n rows - work is an m x nrhs copy of b sized for that. */
     Mat work = mat_copy(b);
-    int info = MLAPACK(gels)(LAPACK_ROW_MAJOR, 'N', m, n, nrhs, qr.d, qr.stride, work.d, work.stride); /* 'N': solve with a itself, not a^T */
+    int info = _gels(m, n, nrhs, qr.d, qr.stride, work.d, work.stride);
     assert(info == 0); /* a is rank-deficient */
 
     Mat x = mat_new(n, nrhs);
@@ -111,9 +122,9 @@ static inline Mat mat_lstsq(Mat a, Mat b) {
     return x;
 }
 
-/* Solve the least-squares problem min ||a*x - b||_2 via SVD (LAPACK
-   ?gelsd), returning the minimum-norm solution even when a is rank-
-   deficient - unlike mat_lstsq (QR-based ?gels), which requires full
+/* Solve the least-squares problem min ||a*x - b||_2 via SVD
+   (linalg/factor.h's _gelsd, which replaces ?gelsd), returning the
+   minimum-norm solution even when a is rank-deficient - unlike mat_lstsq (QR-based ?gels), which requires full
    column rank and simply asserts otherwise. Slower than mat_lstsq (SVD
    costs more than QR) - prefer mat_lstsq when a is known to be full
    rank, e.g. a well-specified regression design matrix; reach for this
@@ -121,7 +132,7 @@ static inline Mat mat_lstsq(Mat a, Mat b) {
 
    a is m x n with m >= n; b is m x nrhs. Returns the n x nrhs solution as
    a new owner; a and b are not modified. If rank_out is non-NULL,
-   *rank_out receives the effective rank LAPACK used internally.
+   *rank_out receives the effective rank the cutoff below produced.
 
    The rank cutoff is a fixed 10*FLT_EPSILON, deliberately NOT LAPACK's
    own "rcond < 0 means machine precision of mreal" default. A singular
@@ -143,18 +154,18 @@ static inline Mat mat_lstsq_rd(Mat a, Mat b, int *rank_out) {
     Mat qr = mat_copy(a);
     Mat work = mat_copy(b);
     mreal *s = (mreal*)malloc((size_t)k * sizeof(mreal));
-    lapack_int rank;
+    int rank;
 
-    int info = MLAPACK(gelsd)(LAPACK_ROW_MAJOR, m, n, nrhs, qr.d, qr.stride,
-                               work.d, work.stride, s, (mreal)(10 * FLT_EPSILON), &rank);
-    assert(info == 0);
+    int info = _gelsd(qr.d, m, n, qr.stride, work.d, work.stride, nrhs,
+                      (mreal)(10 * FLT_EPSILON), s, &rank);
+    assert(info == 0); /* a singular value failed to converge */
 
     Mat x = mat_new(n, nrhs);
     for (int i = 0; i < n; i++)
         for (int j = 0; j < nrhs; j++)
             AT(x, i, j) = AT(work, i, j);
 
-    if (rank_out) *rank_out = (int)rank;
+    if (rank_out) *rank_out = rank;
     free(s);
     mat_free(qr);
     mat_free(work);

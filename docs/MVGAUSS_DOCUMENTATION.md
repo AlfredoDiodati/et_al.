@@ -28,7 +28,7 @@ Mat mvgauss_dlogpdf_cov(Mat x, Mat loc, Mat cov)  /* d x d */
 Mat mvgauss_sample(Rng *rng, Mat loc, Mat cov, int n)  /* n x d */
 ```
 
-All four return a new owner; caller must `mat_free()`. None of the inputs are modified. Strided views are accepted for `x` and `loc` (inputs are read through `AT`, then repacked contiguously before any BLAS/LAPACK call).
+All four return a new owner; caller must `mat_free()`. None of the inputs are modified. Strided views are accepted for `x` and `loc` (inputs are read through `AT`, then repacked contiguously before any BLAS call).
 
 The precondition check (`mvgauss_check`) and the observation-repacking helper (`mvgauss_diff_t`) are shared infrastructure for `dist/mv/`: `dist/mv/student.h` reuses both (this file being the lower of the two headers, per the root README's shared-helper rule), so their signatures should be treated as a within-`dist/mv/` contract, not private implementation detail.
 

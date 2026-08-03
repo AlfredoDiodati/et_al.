@@ -110,7 +110,7 @@ static inline Mat mvgauss_dlogpdf_loc(Mat x, Mat loc, Mat cov) {
 
     Mat l = mat_chol(cov);
     Mat dt = mvgauss_diff_t(x, loc);
-    int info = MLAPACK(potrs)(LAPACK_ROW_MAJOR, 'L', d, n, l.d, l.stride, dt.d, dt.stride);
+    int info = _potrs(d, n, l.d, l.stride, dt.d, dt.stride);
     assert(info == 0);
 
     Mat o = mat_T(dt); /* back to one observation per row */
@@ -138,14 +138,14 @@ static inline Mat mvgauss_dlogpdf_cov(Mat x, Mat loc, Mat cov) {
 
     Mat l = mat_chol(cov);
     Mat wt = mvgauss_diff_t(x, loc);
-    int info = MLAPACK(potrs)(LAPACK_ROW_MAJOR, 'L', d, n, l.d, l.stride, wt.d, wt.stride);
+    int info = _potrs(d, n, l.d, l.stride, wt.d, wt.stride);
     assert(info == 0);
 
     /* cov^-1 from the factor already in hand (?potri fills the lower
        triangle; mirror it to the upper) - cheaper and more accurate
        than a fresh LU-based mat_inv(cov). */
     Mat p = mat_copy(l);
-    info = MLAPACK(potri)(LAPACK_ROW_MAJOR, 'L', d, p.d, p.stride);
+    info = _potri(p.d, d, p.stride);
     assert(info == 0);
     for (int i = 0; i < d; i++)
         for (int j = i + 1; j < d; j++)

@@ -7,7 +7,6 @@
 #include <float.h>
 #include <stdint.h>
 #include <cblas.h>
-#include <lapacke.h>
 
 /* mreal is the one element type every function in this library is written
    against. -DMAT_DOUBLE switches it (and the BLAS/LAPACK/libm call sites
@@ -15,9 +14,14 @@
    cblas_s-prefixed or cblas_d-prefixed functions, or an f-suffixed /
    unsuffixed libm function, directly - always go through
    MBLAS/MLAPACK/M{EXP,LOG,ABS,SQRT,POW,EPS} so the file stays correct
-   under both builds. mat.h itself only needs LAPACK for mat_norm
-   (?lange); decomp.h/solver.h use MLAPACK far more heavily and re-include
-   lapacke.h themselves so each file's dependencies are visible locally. */
+   under both builds. Nothing in this library calls LAPACK any more, so
+   this file includes only cblas.h. MLAPACK is kept because it is part of
+   the same precision switch and the tests that compare a replacement
+   against the LAPACKE routine it replaced still need it; those include
+   lapacke.h themselves, so each one's dependencies stay visible locally.
+   It is expanded nowhere else, and a macro that is not expanded costs
+   nothing. Expanding it in this library would put back the dependency
+   linalg/factor.h exists to remove. */
 #ifdef MAT_DOUBLE
 typedef double mreal;
 #define MBLAS(fn)   cblas_d##fn
@@ -79,10 +83,44 @@ static inline int mat_isinf_f64(double x) {
 #ifdef MAT_DOUBLE
 #define MISNAN(x) mat_isnan_f64(x)
 #define MISINF(x) mat_isinf_f64(x)
+#define MUINT     uint64_t
+#define MABSMASK  0x7FFFFFFFFFFFFFFFull
+#define MINFBITS  0x7FF0000000000000ull
 #else
 #define MISNAN(x) mat_isnan_f32(x)
 #define MISINF(x) mat_isinf_f32(x)
+#define MUINT     uint32_t
+#define MABSMASK  0x7FFFFFFFu
+#define MINFBITS  0x7F800000u
 #endif
+
+/* Largest |element| over a contiguous run, returned as a bit pattern with
+   the sign cleared rather than as a value.
+
+   IEEE754 orders non-negative floats the same way it orders their bit
+   patterns read as unsigned integers, so clearing the sign bit turns a
+   magnitude comparison into an integer one. Every NaN encoding lands above
+   infinity's under that ordering (same all-ones exponent, nonzero
+   mantissa), so a single integer maximum answers both "what is the largest
+   magnitude" and "was there a NaN", and the caller separates the two by
+   comparing the result against MINFBITS.
+
+   The alternative, comparing values and calling MISNAN per element, costs
+   a branch the compiler cannot vectorize past: measured on this file's own
+   max-element norm, it ran 13x slower than the one-norm over the same 1M
+   elements despite doing strictly less arithmetic (1265 us against 97 us,
+   tests/performance/norm_lapack_removal.c). Nothing here is a
+   floating-point comparison, so -ffinite-math-only has nothing to fold. */
+static inline MUINT mat_absmax_bits(const mreal *restrict p, int n) {
+    MUINT best = 0;
+    for (int i = 0; i < n; i++) {
+        MUINT b;
+        memcpy(&b, &p[i], sizeof b);
+        b &= MABSMASK;
+        if (b > best) best = b;
+    }
+    return best;
+}
 
 /* Row-major matrix of mreal. stride is the number of mreal elements between the
    start of consecutive rows - equals c for full matrices, parent's c for slices. */
@@ -493,13 +531,31 @@ static inline mreal mat_trace(Mat m) {
      'I'        - infinity-norm (largest absolute row sum)
      'M'        - max absolute element (not a true matrix norm, but the
                   cheapest to compute and occasionally useful)
-   '1'/'I'/'M' go through LAPACK ?lange, which is what they actually need
-   (a real row/column-sum reduction). 'F'/'E' do not - a Frobenius norm is
-   just a flat sqrt(sum of squares) over every element, no row/column
-   structure involved, and measured via tests/performance/bench_mat.py,
-   ?lange was 6-12x slower than a plain reduction for exactly that reason
-   (general-purpose row/column-sum machinery paying for structure this
-   case doesn't use). Uses cblas_?dot(x, x) instead of cblas_?nrm2:
+   Either case is accepted for every kind, and 'O' is a synonym for '1',
+   following LAPACK. An unrecognised kind is a programmer error and
+   asserts.
+
+   Every kind is computed here against CBLAS and plain loops; none of them
+   calls LAPACK. The one-norm keeps a c-element column accumulator and
+   walks the input in row order, which is the traversal a row-major matrix
+   wants, rather than reading down strided columns. The infinity-norm sums
+   each row with cblas_?asum, whose elements are contiguous whatever
+   m.stride is. The max-element norm goes through mat_absmax_bits, which
+   compares sign-cleared bit patterns as integers.
+
+   These replaced a ?lange call, which under LAPACK_ROW_MAJOR transposes
+   the whole r x c input into a scratch buffer before running its
+   column-major kernel - a full copy and allocation none of the three
+   reductions above needs. Measured in tests/performance/norm_lapack_removal.c
+   across n = 8 to 1024, contiguous and strided, the replacements run
+   1.92x to 56.77x faster than the ?lange they replace, worst case at
+   n = 8 where the fixed cost of either path dominates.
+
+   'F'/'E' were already a flat sqrt(sum of squares) over every element with
+   no row/column structure involved, for the same reason: measured via
+   tests/performance/bench_mat.py, ?lange was 6-12x slower than a plain
+   reduction (general-purpose row/column-sum machinery paying for structure
+   this case doesn't use). Uses cblas_?dot(x, x) instead of cblas_?nrm2:
    nrm2's overflow/underflow-safe scaling (the same protection vec_norm
    relies on, appropriate there) costs real time a Frobenius norm doesn't
    strictly need, and measurement confirmed a plain dot-product-with-
@@ -520,15 +576,62 @@ static inline mreal mat_trace(Mat m) {
    are always contiguous regardless of m.stride - only the gap *between*
    rows is strided) and sums the row totals before the one final sqrt -
    no per-row sqrt-then-resquare round trip, since dot already returns
-   each row's sum of squares directly. */
+   each row's sum of squares directly.
+
+   NaN propagates out of every kind, matching mat_max/mat_min in this file
+   and the ?lange this replaced. A comparison against NaN is false, so the
+   running maxima below cannot pick one up on their own: the one- and
+   infinity-norms check explicitly, and the max-element norm gets it from
+   the bit ordering mat_absmax_bits relies on. */
 static inline mreal mat_norm(Mat m, char kind) {
-    if (kind == 'F' || kind == 'E') {
+    if (kind == 'F' || kind == 'f' || kind == 'E' || kind == 'e') {
         if (m.stride == m.c) return MSQRT(MBLAS(dot)(m.r * m.c, m.d, 1, m.d, 1));
         mreal ss = 0;
         for (int i = 0; i < m.r; i++) ss += MBLAS(dot)(m.c, &AT(m,i,0), 1, &AT(m,i,0), 1);
         return MSQRT(ss);
     }
-    return MLAPACK(lange)(LAPACK_ROW_MAJOR, kind, m.r, m.c, m.d, m.stride);
+
+    if (kind == 'M' || kind == 'm') {
+        MUINT best;
+        if (m.stride == m.c) {
+            best = mat_absmax_bits(m.d, m.r * m.c);
+        } else {
+            best = 0;
+            for (int i = 0; i < m.r; i++) {
+                MUINT b = mat_absmax_bits(&AT(m,i,0), m.c);
+                if (b > best) best = b;
+            }
+        }
+        if (best > MINFBITS) return NAN; /* only NaN encodings exceed infinity */
+        mreal v;
+        memcpy(&v, &best, sizeof v);
+        return v;
+    }
+
+    if (kind == 'I' || kind == 'i') {
+        mreal best = 0;
+        for (int i = 0; i < m.r; i++) {
+            mreal s = MBLAS(asum)(m.c, &AT(m,i,0), 1);
+            if (MISNAN(s)) return NAN;
+            if (s > best) best = s;
+        }
+        return best;
+    }
+
+    assert(kind == '1' || kind == 'O' || kind == 'o');
+    mreal *acc = (mreal*)calloc((size_t)m.c, sizeof(mreal));
+    for (int i = 0; i < m.r; i++) {
+        const mreal *restrict row = &AT(m,i,0);
+        for (int j = 0; j < m.c; j++) acc[j] += MABS(row[j]);
+    }
+    mreal best = 0;
+    int saw_nan = 0;
+    for (int j = 0; j < m.c; j++) {
+        if (MISNAN(acc[j])) saw_nan = 1;
+        else if (acc[j] > best) best = acc[j];
+    }
+    free(acc);
+    return saw_nan ? NAN : best;
 }
 
 /* Print m to stdout, one row per line, values formatted as %8.4f. */
