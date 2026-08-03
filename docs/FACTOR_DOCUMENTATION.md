@@ -56,7 +56,7 @@ of the public surface.
 |---|---|---|
 | `_potrf_unblocked` | ?potrf base case | `_potrf` |
 | `_potrf` | `LAPACKE_?potrf('L')` | `mat_chol` |
-| `_trtrs` | `LAPACKE_?trtrs` | `ad_chol_quadform` |
+| `_trtrs` | `LAPACKE_?trtrs` | `ad_chol_quadform`, `vec_triangular_solve` |
 | `_potrs` | `LAPACKE_?potrs('L')` | `vec_chol_solve`, `mvgauss_dlogpdf_loc`, `mvgauss_dlogpdf_cov`, `mvstudent_dlogpdf_loc`, `mvstudent_dlogpdf_cov` |
 | `_potri` | `LAPACKE_?potri('L')` | `mvgauss_dlogpdf_cov`, `mvstudent_dlogpdf_cov` |
 | `_getf2_base`, `_getf2`, `_getrf_panel`, `_getrf` | `LAPACKE_?getrf` | `mat_lu`, and `mat_det` through it |

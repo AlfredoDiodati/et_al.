@@ -93,6 +93,24 @@ static inline Vec vec_chol_solve(Mat l, Vec b) {
     return x;
 }
 
+/* Solve op(a)*x = b for x, where a is triangular and already in hand -
+   no factorization step at all, one ?trtrs. uplo is 'L' or 'U' for which
+   triangle of a holds the data, trans 'N' or 'T' for op(a) = a or a^T,
+   diag 'N' for a stored diagonal or 'U' for an implicit unit one. a is
+   n x n; b is a single right-hand-side column vector with b.r == a.r.
+   Returns a new owner; a and b are not modified.
+
+   For a parameter that is itself a triangular factor rather than derived
+   from one by mat_chol - a Cholesky-parameterized covariance, say - this
+   is the reuse this family exists for, one level below vec_chol_solve. */
+static inline Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char diag) {
+    assert(a.r == a.c && b.r == a.r && b.c == 1);
+    Vec x = mat_copy(b);
+    int info = _trtrs(uplo, trans, diag, a.r, 1, a.d, a.stride, x.d, x.stride);
+    assert(info == 0);
+    return x;
+}
+
 /* Solve the least-squares problem min ||a*x - b||_2 via QR.
    a is m x n with m >= n (overdetermined or square); b is m x nrhs with
    b.r == a.r. Returns the n x nrhs solution as a new owner; a and b are

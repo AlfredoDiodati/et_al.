@@ -6,7 +6,7 @@
 
 `linalg/solver.h` implements the ways a caller actually wants to use the factorizations in `linalg/decomp.h`: solving a square linear system (generally, exploiting symmetry, or reusing an existing factorization), and solving an overdetermined one in the least-squares sense (assuming full column rank, or robust to rank deficiency). It includes `linalg/decomp.h` (and transitively `linalg/mat.h`); `linalg/decomp.h` never includes this file. Same `mreal`/`MLAPACK` dual-precision style as `linalg/mat.h`/`linalg/decomp.h` - see `docs/MATRIX_DOCUMENTATION.md`'s Precision section.
 
-Most functions here call `linalg/factor.h`'s driver kernels (`_gesv`, `_sysv`, `_gels`, `_gelsd`, which replace the LAPACKE routines of the same names and are CBLAS-only) directly rather than composing `linalg/decomp.h`'s `mat_lu`/`mat_chol`/`mat_qr` themselves - the driver routines do the factor-and-solve in one call, which is both simpler and avoids an extra copy. The two exceptions are `vec_lu_solve`/`vec_chol_solve`, which deliberately take an already-computed `linalg/decomp.h` factorization instead of factoring again - see their own entries below.
+Most functions here call `linalg/factor.h`'s driver kernels (`_gesv`, `_sysv`, `_gels`, `_gelsd`, which replace the LAPACKE routines of the same names and are CBLAS-only) directly rather than composing `linalg/decomp.h`'s `mat_lu`/`mat_chol`/`mat_qr` themselves - the driver routines do the factor-and-solve in one call, which is both simpler and avoids an extra copy. The exceptions are `vec_lu_solve`/`vec_chol_solve`, which deliberately take an already-computed `linalg/decomp.h` factorization instead of factoring again, and `vec_triangular_solve`, for a triangular matrix that was never factored at all because it already is the factor - see their own entries below.
 
 Same contract as `linalg/decomp.h`: inputs are copied first and never mutated, and a singular (`vec_solve`, `vec_solve_sym`) or rank-deficient (`mat_lstsq`) input is a contract violation caught by `assert(info == 0)`, not a recoverable error path. See `docs/DECOMP_DOCUMENTATION.md`'s "Contract: assert on failure, not error codes" section - the same reasoning applies here unchanged. The one exception is `mat_lstsq_rd`, whose entire purpose is to handle rank deficiency instead of asserting on it.
 
@@ -17,6 +17,7 @@ Vec vec_solve(Mat a, Vec b)
 Vec vec_solve_sym(Mat a, Vec b)
 Vec vec_lu_solve(Mat lu, lapack_int *piv, Vec b)
 Vec vec_chol_solve(Mat l, Vec b)
+Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char diag)
 Mat mat_lstsq(Mat a, Mat b)
 Mat mat_lstsq_rd(Mat a, Mat b, int *rank_out)
 ```
@@ -32,6 +33,10 @@ Solves `a*x = b` via symmetric indefinite factorization (`?sysv`) instead of gen
 ### `vec_lu_solve` / `vec_chol_solve`
 
 Solve `a*x = b` reusing an LU (`vec_lu_solve`, via `?getrs`) or Cholesky (`vec_chol_solve`, via `?potrs`) factorization already computed by `mat_lu`/`mat_chol`, instead of factoring `a` again - for reusing one factorization across many right-hand sides (Newton iterations, Kalman filter covariance updates, anything that solves against the same matrix repeatedly). `lu`/`piv` must be exactly what `mat_lu(a, &piv)` returned (`l` exactly what `mat_chol(a)` returned) for the `a` being solved against - passing a factorization for a different matrix silently produces the wrong answer, since `?getrs`/`?potrs` trust the factorization without re-checking it against any original `a`. `b` is a single right-hand-side column vector; returns a new owner, does not modify its arguments.
+
+### `vec_triangular_solve`
+
+Solve `op(a)*x = b` for `x`, where `a` is triangular and already in hand - no `mat_chol`/`mat_lu` step at all, one `?trtrs`. This is one level below `vec_chol_solve`: that one starts from a full matrix, factors it, and solves against the factor; this one is for a matrix that is already triangular by construction and was never a full matrix to begin with, e.g. a covariance parameterized directly by its Cholesky factor rather than assembled and then factored. `uplo` is `'L'` or `'U'` for which triangle of `a` holds the data, `trans` `'N'` or `'T'` for `op(a) = a` or `a^T`, `diag` `'N'` for a stored diagonal or `'U'` for an implicit unit one. `a` is `n x n`; `b` is a single right-hand-side column vector with `b.r == a.r`. Returns a new owner; neither `a` nor `b` is modified. A singular `a` (`diag == 'N'` and a zero on the diagonal) is a contract violation, same `assert(info == 0)` convention as the rest of this file.
 
 ### `mat_lstsq`
 
