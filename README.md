@@ -2,6 +2,33 @@
 
 ET_AL. is a pure C11 econometrics and machine learning compute stack, built to reach the performance class of JAX, NumPy, and numba without depending on a Python runtime. It combines a dense linear algebra core, general-purpose reverse-mode automatic differentiation, probability distributions, gradient-based optimizers, a `DataFrame` layer for loading, wrangling, and querying tabular data (including a small SQL engine), a JSON serializer for parameters and diagnostics, and neural network architectures, all built as a chain of layers on the same core and shipped as single-header C files. The one dependency the whole stack links against is OpenBLAS; everything else, from matrix arithmetic on up through model training and SQL query execution, is C with no further external libraries.
 
+## Contents
+
+- [What can I do with this software?](#what-can-i-do-with-this-software)
+  - [Motivation](#motivation)
+  - [AI full disclosure](#ai-full-disclosure)
+- [Directory structure](#directory-structure)
+- [Build](#build)
+  - [Pre-commit check](#pre-commit-check)
+- [Installation](#installation)
+- [Testing and benchmarking](#testing-and-benchmarking)
+- [Policies](#policies)
+  - [Dependencies](#dependencies)
+  - [Documentation structure](#documentation-structure)
+  - [Adding files and headers](#adding-files-and-headers)
+  - [Model fit/forecast API](#model-fitforecast-api)
+  - [Installation tiers](#installation-tiers)
+  - [Testing requirements](#testing-requirements)
+- [Design principles](#design-principles)
+  - [1. Matrices are views over flat buffers, not rectangular blocks](#1-matrices-are-views-over-flat-buffers-not-rectangular-blocks)
+  - [2. One memory convention, stated once, followed everywhere](#2-one-memory-convention-stated-once-followed-everywhere)
+  - [3. Performance lives in a small number of kernels](#3-performance-lives-in-a-small-number-of-kernels)
+  - [4. Separate raw computation from user-facing logic](#4-separate-raw-computation-from-user-facing-logic)
+  - [5. Tests and benchmarks are both first-class, and stay separate](#5-tests-and-benchmarks-are-both-first-class-and-stay-separate)
+  - [6. Build in dependency order](#6-build-in-dependency-order)
+  - [7. Fail loudly on a contract violation, not silently](#7-fail-loudly-on-a-contract-violation-not-silently)
+- [Pitfalls](#pitfalls)
+
 ## What can I do with this software?
 
 Build Machine Learning or Econometrics models in pure C, without the overhead of going through numpy or similar packages, which often slow down computations due to the parts of the code implemented in the higher-level programming language used. With the current implementation you can expect a peformance increase to sequentially compiled numpy/scipy models, with JAX / numba as upper bounds of performance. This allows to make research-oriented models and scripts without depending on a multitude of general purpuse packages.
@@ -120,7 +147,7 @@ python tests/performance/bench_random.py   # random.h vs numpy.random.Generator
 python tests/performance/bench_stats.py    # stats.h vs NumPy
 ```
 
-The overall picture these show: wherever this library and NumPy call the same OpenBLAS routine, this library is at or ahead thanks to a shorter dispatch path; the hand-rolled transcendentals (`mat_exp`/`mat_tanh`), reductions on strided views, `stats.h`, `random.h`, and the `dist/` log-densities (up to two orders of magnitude ahead of `scipy.stats` at large `n`) all beat their external counterparts; and the benchmarks also honestly expose the places the library currently trails — `mat_max`'s NaN-propagating scan, allocating element-wise arithmetic on contiguous data, and `stats_autocov` at large `d` — see each header's own doc file for numbers and the open items they imply. Benchmarks exist to find exactly those, not to flatter the library.
+Where this library and NumPy reach the same OpenBLAS routine it is at or ahead, on a shorter dispatch path; the hand-rolled parts that beat their external counterparts, and the several that still trail, are listed with numbers in each header's own doc file, and the still-open gaps in `docs/PERFORMANCE_BACKLOG.md`. Benchmarks exist to find the places this library loses, not to flatter it — a doc file that reports only wins is not finished.
 
 **Performance testing has a second purpose beyond measuring whether a function is currently fast enough: it is this project's accumulated record of what has already been tried on a slow function and why it worked (or didn't).** A before/after number on its own isn't reusable — the next optimization on a similarly-shaped function (another hand-rolled sort, another per-element reduction, another comparison-based routine competing with a vectorized external one) starts from zero without it. So every performance fix gets written up with the *mechanism*, not just the measurement: what the previous implementation was actually spending its time on (e.g. "re-resolved a column by name on every comparison instead of once", "a comparison sort's constant factor, not its complexity class"), and why the replacement is faster (e.g. "the lookup only needs to happen once, up front", "a fixed-width numeric key sidesteps the comparison-sort lower bound entirely via a radix sort"). This is why a doc file's "Benchmark results" section reads as a sequence of numbered fixes with reasoning attached to each, not a single final number — `docs/SQL_DOCUMENTATION.md`'s and `docs/FRAME_DOCUMENTATION.md`'s `ORDER BY` sections (four stacked fixes, each with its own diagnosis) are the fullest example so far. `docs/PERFORMANCE_BACKLOG.md` is the current list of still-open gaps, each carrying the same why-it's-slow diagnosis and, where there is one, a concrete next-step hypothesis, so picking one back up later means reading a starting point instead of re-deriving it from a cold read of the code.
 
@@ -147,51 +174,19 @@ No LAPACK, no LAPACKE, no Fortran-suffixed symbol of any kind. (A linked *execut
 
 OpenMP falls inside the "ships with GCC" half of the policy, and is optional even so: `frame/sql.h` uses it when the compiler was invoked with `-fopenmp` and stubs every entry point it calls when it was not, so a build without the flag computes the same answers on one thread. See `docs/SQL_DOCUMENTATION.md`'s Threading section, and the Pitfalls entry on dependencies arriving through a particular build — which is how both LAPACKE and OpenMP got in.
 
-**This was not true until recently, and the correction is now complete.** OpenBLAS supplies BLAS and the raw Fortran LAPACK symbols, but it does **not** supply LAPACKE — the C interface with row-major support that `LAPACKE_dpotrf` and friends belong to. LAPACKE is a separate library (`liblapacke`), and it happened to be installed on the machine this project started on, so a second, undeclared dependency went unnoticed: nothing in the Makefile ever asked for it. A build on a machine without `liblapacke-dev` fails to link. Verified directly rather than assumed:
+**This was not always true.** OpenBLAS supplies BLAS and the raw Fortran LAPACK symbols, but it does **not** supply LAPACKE — the C interface with row-major support that `LAPACKE_dpotrf` and friends belong to. LAPACKE is a separate package (`liblapacke-dev`) that happened to be installed on the machine this project started on, so a second, undeclared dependency went unnoticed for a long time: nothing in the Makefile ever asked for it, and a build on a machine without it failed to link.
 
-```
-$ nm -D /lib/x86_64-linux-gnu/libopenblas.so.0 | grep -c LAPACKE_
-0
-$ dpkg -S /usr/include/lapacke.h
-liblapacke-dev:amd64: /usr/include/lapacke.h
-```
+Every LAPACKE routine has since been reimplemented against CBLAS in `linalg/factor.h` — all seventeen, each required to match the routine it replaced on correctness *and* to be no slower before going into production. The per-routine results, the algorithms, and the failed experiments are in `docs/FACTOR_DOCUMENTATION.md`; how that dependency got in without anyone choosing it is in [Pitfalls](#pitfalls).
 
-Every LAPACKE routine was therefore reimplemented against CBLAS in `linalg/factor.h`, one at a time, each required to match the routine it replaced on correctness *and* to be no slower before going into production. All seventeen are done. The measurements, and the failed experiments, are in `docs/FACTOR_DOCUMENTATION.md`.
+The comparison tests are the one place `-llapacke` is still linked deliberately, because they hold both implementations in one binary to check and time them against each other. They are reached only through the `lapack-comparison` and `lapack-comparison-bench` targets, which are excluded from `test` and `bench.sh` so the suite itself builds against OpenBLAS alone. Run them on a machine with `liblapacke-dev` installed; nothing else needs it.
 
-- **Done: all 17.** Worst-case speedup against the LAPACKE routine replaced, all with `OPENBLAS_NUM_THREADS=1` — see below:
+**Do not add a second dependency.** No pandas, no NumPy, no matplotlib, no Eigen, no Python runtime of any kind. If something looks like it needs another library, write the usually-small piece of functionality directly against `linalg/mat.h`'s primitives first.
 
-  | replaced | reached through | worst case |
-  |---|---|---|
-  | `?lange` | `mat_norm` | 2.15x |
-  | `?potrf` | `mat_chol` | 1.21x |
-  | `?trtrs`, `?potrs`, `?potri` | `vec_chol_solve`, `ad_chol_quadform`, the multivariate densities | 1.03x |
-  | `?getrf` | `mat_lu`, `mat_det` | 1.18x |
-  | `?getrs`, `?gesv`, `?getri` | `vec_lu_solve`, `vec_solve`, `mat_inv` | 1.58x |
-  | `?geqrf`, `?orgqr` | `mat_qr` | 1.12x |
-  | `?gels` | `mat_lstsq` | 1.41x |
-  | `?sysv` | `vec_solve_sym`, a real Bunch-Kaufman factorization | 1.05x |
-  | `?syevd` | `mat_eig_sym`, Householder tridiagonalisation plus divide and conquer | 1.06x |
-  | `?gesdd` | `mat_svd`, `mat_cond`, `mat_rank`, bidiagonal reduction plus divide and conquer | 1.11x |
-  | `?gelsd` | `mat_lstsq_rd`, minimum-norm least squares, neither orthogonal factor of the reduction ever assembled | 1.10x |
-  | `?geev` | `mat_eig`, balancing plus a blocked Hessenberg reduction plus double-shift QR with aggressive early deflation | 1.01x |
+OpenBLAS's hand-tuned, architecture-specific assembly is the one piece of numerical code here not written by hand, and the division of labour is deliberate: OpenBLAS gets the operations it has kernels for, this project writes everything else — the memory model, views, element-wise operations, reductions, orchestration, and every layer above `linalg/solver.h` — in portable C. If an operation has no BLAS routine, write it by hand in the appropriate layer, in the same `stride`-aware, `restrict`-qualified style as the rest of the codebase. Do not add a hand-written competitor to a routine OpenBLAS already provides — see [Pitfalls](#pitfalls). Which call goes where is listed per header in `docs/MATRIX_DOCUMENTATION.md` and `docs/FACTOR_DOCUMENTATION.md`.
 
-**The dependency is gone.** No header in this library includes `lapacke.h` or names a `LAPACKE_` symbol, and none calls a raw Fortran LAPACK symbol either. The whole of it compiles and links against `-lopenblas` alone. The only remaining references are under `tests/`, where LAPACKE is deliberately linked because those files *are* the comparison.
+`linalg/mat.h` supports both `float` and `double` storage behind one build-time switch (`-DMAT_DOUBLE`). Econometrics workloads (OLS on ill-conditioned design matrices, MLE, GMM) often need `double`'s extra precision, while ML-style workloads are fine with, and faster in, `float`. The element type, the BLAS function prefix (`s`/`d`), and the libm family (`expf`/`exp`) all switch together off the same macro — see `docs/MATRIX_DOCUMENTATION.md` for the mechanism.
 
-Two findings from the SVD were worth more than any tuning. The secular-equation root finder was converging in three iterations and then spinning for seventy more, because `f` had reached the rounding noise of its own summation and the convergence test was still asking for a smaller step; stopping on the residual instead took it from 18.5 iterations per root to 3.6. And allocating the divide-and-conquer workspace per recursion level cost **2603 minor page faults per call against LAPACKE's 39.8** — nested `malloc`/`free` pairs at many sizes leave glibc trimming the heap back to the kernel between calls — which was 2820 µs of a 20600 µs decomposition and the entire remaining deficit. One allocation sliced through the recursion, which is why LAPACK takes an `lwork`, fixed it.
-
-Benchmark these with `make lapack-comparison-bench`, which sets `OPENBLAS_NUM_THREADS=1`. That is required, not cosmetic: OpenBLAS's pthread build spin-waits on worker threads, and on the many small BLAS calls a blocked factorization makes that overhead dominates and drifts. The same `?getrf` call on a 256x256 matrix measured 1036 µs at the start of a four-thread run and 6208 µs at the end of it — a 5.99x drift that made comparisons undecidable and reversed individual results between runs. Pinned to one thread the same check comes out at 0.98x. Each benchmark prints the drift it observed, so a contaminated run says so.
-
-Two findings during `?geev` are worth repeating because they generalise. Raising the per-block sweep budget was not optional once deflation started coming from a window rather than from the sweep itself: every matrix above n = 320 returned `info = n`, not one eigenvalue converged, because the iteration ran out of its thirty attempts before the shift queue drained. And a component rejected on measurement had to be re-measured when the schedule calling it changed — reordering the deflation window was 0.63x under one cadence and is 1.01x under the one that shipped.
-
-Until that list is empty, building the full test suite still requires `liblapacke-dev`. The `lapack-comparison` and `lapack-comparison-bench` Makefile targets are the only ones that link `-llapacke` deliberately: they hold both implementations in one binary to compare them, and are excluded from `test` and `bench.sh` so those build against OpenBLAS alone. Do not add a second dependency: no pandas, no NumPy, no matplotlib, no Eigen, no Python runtime of any kind. If something looks like it needs another library, write the usually-small piece of functionality directly against `linalg/mat.h`'s primitives first.
-
-OpenBLAS's hand-tuned, architecture-specific assembly kernels are the one piece of numerical code in this project not written by hand here; everything else — the memory model, views, element-wise kernels, orchestration, and any layer built on top of `linalg/solver.h` — stays pure C with no further dependencies. Concretely, `linalg/mat.h` delegates matrix multiplication (`cblas_?gemm`), the dot product (`cblas_?dot`), the vector norm (`cblas_?nrm2`), and the matrix norm (`?lange`) to OpenBLAS, while hand-rolling everything BLAS/LAPACK has no routine for — element-wise operations like `mat_add` and `mat_exp`, reductions like `mat_sum` and `mat_max`, `mat_trace`, views, and concatenation. `linalg/decomp.h` takes Cholesky (`?potrf`), LU (`?getrf`), QR (`?geqrf`/`?orgqr`), symmetric eigendecomposition (`?syevd`), SVD (`?gesdd`), general eigenvalues (`?geev`) and matrix inversion (`?getri`) from `linalg/factor.h`, which is CBLAS-only, keeping shape checks and packing as hand-rolled code; `mat_det`, `mat_cond` and `mat_rank` are derived from those results with no further call. `linalg/solver.h` likewise takes LU solving (`?gesv`), symmetric indefinite solving (`?sysv`), solving against an existing factorization (`?getrs`/`?potrs`), least squares (`?gels`) and rank-deficient least squares (`?gelsd`) from `linalg/factor.h`, and no longer references LAPACKE at all.
-
-If an operation has no BLAS/LAPACK routine, write it by hand in the appropriate layer, in the same `stride`-aware, `restrict`-qualified style as the rest of the codebase. Do not add a hand-written competitor to a routine OpenBLAS already provides — see [Pitfalls](#pitfalls).
-
-`linalg/mat.h` supports both `float` and `double` storage behind one build-time switch (`-DMAT_DOUBLE`). Econometrics workloads (OLS on ill-conditioned design matrices, MLE, GMM) often need `double`'s extra precision, while ML-style workloads are fine with, and faster in, `float`. The active element type, the BLAS/LAPACK function prefix (`s`/`d`), and the libm function family (`expf`/`exp`, etc.) all switch together off the same macro — see `docs/MATRIX_DOCUMENTATION.md` for the exact mechanism.
-
-Install OpenBLAS first (`pacman -S openblas`, `apt install libopenblas-dev`, or build from source), then build normally. The Makefile discovers compiler/linker flags via `pkg-config openblas` when available and falls back to `-lopenblas`.
+Install OpenBLAS first (`pacman -S openblas`, `apt install libopenblas-dev`, or build from source), then build normally. The Makefile discovers compiler and linker flags via `pkg-config openblas` when available and falls back to `-lopenblas`.
 
 ### Documentation structure
 

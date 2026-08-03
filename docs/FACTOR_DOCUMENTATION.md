@@ -82,6 +82,36 @@ included — compiles and links against `-lopenblas` alone. The only
 remaining references anywhere are in `tests/`, where they are the
 comparison itself.
 
+## Results
+
+Every routine replaced, and its worst case over the shapes its benchmark
+covers. All measured on this machine with `OPENBLAS_NUM_THREADS=1`, which
+is required rather than cosmetic — see "Measuring on this machine" below.
+Reproduce with `make lapack-comparison-bench`; each benchmark exits nonzero
+if its replacement is slower anywhere.
+
+| replaced | reached through | worst case |
+|---|---|---|
+| `?lange` | `mat_norm` | 2.15x |
+| `?potrf` | `mat_chol` | 1.21x |
+| `?trtrs`, `?potrs`, `?potri` | `vec_chol_solve`, `ad_chol_quadform`, the multivariate densities | 1.03x |
+| `?getrf` | `mat_lu`, `mat_det` | 1.18x |
+| `?getrs`, `?gesv`, `?getri` | `vec_lu_solve`, `vec_solve`, `mat_inv` | 1.58x |
+| `?geqrf`, `?orgqr` | `mat_qr` | 1.12x |
+| `?gels` | `mat_lstsq` | 1.41x |
+| `?sysv` | `vec_solve_sym`, a real Bunch-Kaufman factorization | 1.05x |
+| `?syevd` | `mat_eig_sym`, tridiagonalisation plus divide and conquer | 1.06x |
+| `?gesdd` | `mat_svd`, `mat_cond`, `mat_rank`, bidiagonal divide and conquer | 1.11x |
+| `?gelsd` | `mat_lstsq_rd`, neither orthogonal factor ever assembled | 1.10x |
+| `?geev` | `mat_eig`, balancing, blocked Hessenberg, QR with early deflation | 1.01x |
+
+The margins are not evenly earned. Most of them come from not paying
+LAPACKE's row-major transposes, which it performs on every matrix argument
+in and out; against raw column-major LAPACK several of these kernels are at
+parity rather than ahead, and each section below says which. That is a
+permanent structural win for a row-major library, not a claim of better
+arithmetic.
+
 ## `_potrf` — Cholesky
 
 ```c
