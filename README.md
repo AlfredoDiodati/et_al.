@@ -1,6 +1,6 @@
 # ET_AL. - EconomeTrics (&) ALgebra
 
-ET_AL. is a pure C11 econometrics and machine learning compute stack, built to reach the performance class of JAX, NumPy, and numba without depending on a Python runtime. It combines a dense linear algebra core, general-purpose reverse-mode automatic differentiation, probability distributions, gradient-based optimizers, a `DataFrame` layer for loading, wrangling, and querying tabular data (including a small SQL engine), a JSON serializer for parameters and diagnostics, and neural network architectures, all built as a chain of layers on the same core and shipped as single-header C files. The one dependency the whole stack links against is OpenBLAS, for BLAS and LAPACK routines; everything else, from matrix arithmetic on up through model training and SQL query execution, is C with no further external libraries.
+ET_AL. is a pure C11 econometrics and machine learning compute stack, built to reach the performance class of JAX, NumPy, and numba without depending on a Python runtime. It combines a dense linear algebra core, general-purpose reverse-mode automatic differentiation, probability distributions, gradient-based optimizers, a `DataFrame` layer for loading, wrangling, and querying tabular data (including a small SQL engine), a JSON serializer for parameters and diagnostics, and neural network architectures, all built as a chain of layers on the same core and shipped as single-header C files. The one dependency the whole stack links against is OpenBLAS; everything else, from matrix arithmetic on up through model training and SQL query execution, is C with no further external libraries.
 
 ## What can I do with this software?
 
@@ -8,9 +8,9 @@ Build Machine Learning or Econometrics models in pure C, without the overhead of
 
 ### Motivation
 
-To make efficient models in Machine Learning and Econometrics one often has to create very efficient implementations, which may require low level control. While most sequential linear algebra routines (e.g. numpy) are written in C/assembly, they often have a lot of general purpuse steps in their higher level language, adding overhead to the low-level computations. 
+To make efficient models in Machine Learning and Econometrics one often has to create very efficient implementations, which may require low level control. While most sequential linear algebra routines (e.g. numpy) are written in C/assembly, they often have a lot of general purpose steps in their higher level language, adding overhead to the low-level computations. 
 
-Traditionally, this is solved by using JIT-compilation, which has the tradeoff of forcing restrictive syntax, and making the underlying computation enginge a black-box. Due to this, optimizing the implementations becomes challenging.
+Traditionally, this is solved by using JIT-compilation, which has the tradeoff of forcing restrictive syntax, and making the underlying computation engine a black-box. Due to this, optimizing the implementations becomes challenging.
 
 Instead, this project builds a set of tools to reduce overhead in implementation of statistical models, and that are easy to optimize if assisted by an LLM, which can easily understand the low-level mechanism of the implementation.
 
