@@ -20,6 +20,13 @@ tests/correctness/*_blas_only
 tests/correctness/*.asan
 tests/performance/*_lapack_removal
 
+# compiled binaries for correctness tests that don't repeat "test" in
+# their name (the test's subject is specific enough on its own - see
+# each test's own file for the naming reasoning) - one line per binary
+# rather than a pattern, since there is no shared prefix to match.
+tests/correctness/gzip_inflate
+tests/correctness/rdata_array_read
+
 # results written by the benchmarks and by any pipeline run
 out/
 

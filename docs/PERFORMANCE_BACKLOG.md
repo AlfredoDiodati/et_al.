@@ -1631,3 +1631,29 @@ else on this list.
 
 **Status: lowest actionability of the whole list - investigate feasibility
 before committing to a fix.**
+
+## 9. `gzip_decode_symbol` table cache pressure (`gzip.h`)
+
+Not from `bench_report.txt`/`bench.sh` (`gzip.h` has no `bench_gzip.c`/`.py`
+pair yet - no external package makes sense to compare a from-scratch DEFLATE
+decoder against the way NumPy/pandas do for the rest of this list) but an
+internal before/after measurement recorded the same way: see
+`docs/GZIP_DOCUMENTATION.md`'s Performance section for the fix already
+landed (bit-by-bit Huffman walk -> direct-lookup table, 31.6% faster on
+this project's own shipped fixture).
+
+What's left: the lookup table is a single flat `2^15`-entry array (96 KB
+combined `sym[]`+`len[]`), well past L1 and likely past L2 on many cores,
+so each decode risks a cache miss despite being O(1) algorithmically.
+Real-world Huffman codes for typical data rarely exceed 9-10 bits, so a
+small (512-1024 entry) primary table with a subtable fallback for the rare
+longer codes - the standard approach (e.g. zlib's `inftrees.c`) - would
+likely close some of the remaining gap by keeping the common case entirely
+in L1. Not attempted in the same pass as the direct-lookup-table fix
+because the two-level construction and lookup logic is meaningfully more
+intricate to get right, and the single-level table already delivered a
+substantial, thoroughly-verified win on its own.
+
+**Status: hypothesis only, not measured - profiling via `perf` was not
+available in the environment this was developed in; confirm with a real
+profiler before implementing.**
