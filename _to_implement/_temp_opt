@@ -1,0 +1,3 @@
+et_al.'s own ad.h has a comment (line 75-77) from its own maintainers stating that node values aren't currently allocated through the tape's own arena — each AD node's value is its own separate aligned_alloc/mat_free pair rather than a slice of the tape's block — and that fixing this "would be worth around 7x rather than 2x... the obvious next step." That's the dominant cost,
+
+test the behaviour of ad.h when applied to a nondifferentiable function

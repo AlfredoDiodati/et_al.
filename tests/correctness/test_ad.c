@@ -1121,6 +1121,48 @@ static void test_chol_solve_bogus_factor(void) {
     tape_free(t);
 }
 
+/* ad_pow with a fractional exponent is the one op in this file with a real
+   nondifferentiable point in its domain - not a degenerate input like the
+   singular-A/bogus-factor cases above, but a place where the forward
+   function is perfectly well-defined and its derivative is not.
+
+   sqrt (p=0.5) at a=0: pow(0,0.5)=0 is exact and finite, but the true
+   derivative 0.5*a^(-0.5) is a one-sided +infinity there. ad_pow_backward
+   computes exactly that power and gets +Inf - silent, no assert, same
+   "trusts the math" contract as test_chol_solve_bogus_factor.
+
+   sqrt at a<0 is a different failure mode again: pow(negative, 0.5) is
+   already NaN in the forward value (mat_pow's own comment documents this
+   as the expected, untouched pow() convention), and the backward pass
+   just carries that NaN through. */
+static void test_pow_nondifferentiable(void) {
+    puts("ad_pow(a,0.5) at a=0: finite forward value, +Inf gradient (real nondifferentiable point, not a domain violation)");
+    {
+        Mat av = mat_lit(1, 1, 0.0f);
+        Tape *t = tape_new();
+        Node *a = ad_leaf(t, av);
+        Node *loss = ad_sum(t, ad_pow(t, a, 0.5f));
+        assert(loss->val.d[0] == 0.0f);
+        tape_backward(t, loss);
+        assert(MISINF(a->grad.d[0]));
+        mat_free(av);
+        tape_free(t);
+    }
+
+    puts("ad_pow(a,0.5) at a<0: NaN forward value, NaN gradient (outside pow()'s real domain, silent NaN not a crash)");
+    {
+        Mat av = mat_lit(1, 1, -1.0f);
+        Tape *t = tape_new();
+        Node *a = ad_leaf(t, av);
+        Node *loss = ad_sum(t, ad_pow(t, a, 0.5f));
+        assert(MISNAN(loss->val.d[0]));
+        tape_backward(t, loss);
+        assert(MISNAN(a->grad.d[0]));
+        mat_free(av);
+        tape_free(t);
+    }
+}
+
 int main(void) {
     test_dense_ops();
     test_exp_tanh();
@@ -1141,6 +1183,7 @@ int main(void) {
     test_inv_fd();
     test_singular_matrix_aborts();
     test_chol_solve_bogus_factor();
+    test_pow_nondifferentiable();
     puts("test_ad: all passed");
     return 0;
 }
