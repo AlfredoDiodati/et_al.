@@ -59,24 +59,47 @@ typedef struct Node {
     int n_parents;
     mreal aux;                /* extra scalar a backward rule may need (e.g. ad_scale's factor) */
     int aux_offset;           /* extra flat offset a backward rule may need (ad_slice's) */
+    int val_pooled;           /* 1 if val.d is carved from the tape block (tape_free must
+                                  not mat_free it), 0 if val came from an ordinary mat_* or vec_*
+                                  call and is individually owned */
     void (*backward)(struct Node *self); /* NULL for leaves - nothing to propagate to */
 } Node;
 
-/* A tape allocates one Node struct and one gradient buffer per operation, and
-   holds every one of them live until tape_free. That is the pattern a general
-   allocator handles worst, so both come from a bump allocator over large
-   blocks instead, released together. Measured in
-   tests/performance/bench_tape_pool.c: at eleven thousand nodes this halves the
-   time spent allocating, and 64 KiB blocks were the best of a sweep from 4 KiB
-   to 1 MiB.
+/* A tape allocates one Node struct, one gradient buffer, and (for every op
+   whose value is a plain elementwise computation or a small reduction) the
+   value itself, per operation, and holds every one of them live until
+   tape_free. That is the pattern a general allocator handles worst, so all
+   three come from a bump allocator over large blocks instead, released
+   together. Measured in tests/performance/bench_tape_pool.c (synthetic
+   allocation only) and, before this pooling existed, a real mvstudent
+   log-likelihood tape (ad_leaf/ad_sub/ad_solve/ad_dot/ad_log/ad_add/
+   ad_scale/ad_emul/ad_ediv/ad_lgamma per observation - the same shape
+   tests/performance/bench_tape_reset.c and tests/correctness/
+   test_tape_reset.c use, and the closest living approximation of that
+   workload's current per-iteration cost): pooling only the struct and
+   gradient was worth 1.25x-1.86x depending on node count
+   (bench_tape_pool.c); pooling the value too was worth a further
+   4.88x-11x on the synthetic benchmark and 1.36x-1.72x on the realistic
+   one, the gap between the two explained by BLAS/LAPACK-backed ops
+   (ad_matmul, ad_solve, ad_chol_solve, ad_inv) taking a growing share of
+   real wall time as node count grows - those stay unpooled below, since
+   their value comes from mat_mul/vec_solve/etc. and pooling them would mean
+   changing mat_new's allocation contract, which this does not do. 64 KiB
+   blocks were the best of a sweep from 4 KiB to 1 MiB.
 
-   Node values are not pooled. They arrive already allocated from whichever
-   mat_* call the operation made, so reaching them would mean routing every
-   op's allocation through the tape. The same benchmark shows that would be
-   worth around 7x rather than 2x, so it is the obvious next step, but it is a
-   change to linalg/mat.h's allocation contract rather than to this file. */
+   Every op below whose value is a plain elementwise computation or a small
+   (1x1) reduction writes directly into a tape-allocated buffer instead of
+   calling mat_add/mat_sub/mat_scale/mat_emul/mat_ediv/mat_exp/mat_tanh/
+   mat_log/mat_pow/mat_copy - val_pooled marks these so tape_free knows not
+   to mat_free them. ad_matmul/ad_solve/ad_chol_solve/ad_inv still call the
+   ordinary mat_mul/vec_solve/vec_chol_solve/mat_inv and own their value
+   individually, exactly as before this change. */
 #define TAPE_BLOCK_BYTES ((size_t)1 << 16)
 
+/* next is the block allocated right after this one (chronological order),
+   not before it - what makes tape_reset below able to walk back over
+   already-allocated blocks and refill them, rather than only ever growing
+   forward from t->block the way a tape that is never reset does. */
 typedef struct TapeBlock {
     struct TapeBlock *next;
     size_t used, size;
@@ -86,20 +109,31 @@ typedef struct TapeBlock {
 typedef struct {
     Node **nodes; /* creation order == topological order, see file comment */
     int n, cap;
-    TapeBlock *block;
+    TapeBlock *first; /* first block ever allocated for this tape - fixed for
+                          its lifetime, the walk-back starting point tape_reset uses */
+    TapeBlock *block; /* block currently being filled */
 } Tape;
 
 /* Chunks are rounded up to 32 bytes so anything handed out keeps the same
-   AVX2 alignment mat_new guarantees. */
+   AVX2 alignment mat_new guarantees. If the current block is full, first try
+   the block chronologically after it (already allocated, either from this
+   same build or left over from before the last tape_reset) before growing -
+   a fresh tape's chain has no such blocks yet, so this is a no-op until
+   tape_reset makes it relevant. */
 static inline void *tape_alloc(Tape *t, size_t bytes) {
     bytes = (bytes + 31u) & ~(size_t)31u;
+    while (t->block && t->block->used + bytes > t->block->size) {
+        if (t->block->next) t->block = t->block->next;
+        else break;
+    }
     if (!t->block || t->block->used + bytes > t->block->size) {
         size_t size = bytes > TAPE_BLOCK_BYTES ? bytes : TAPE_BLOCK_BYTES;
         TapeBlock *block = (TapeBlock*)malloc(sizeof(TapeBlock));
         block->data = (unsigned char*)aligned_alloc(32, size);
         block->size = size;
         block->used = 0;
-        block->next = t->block;
+        block->next = NULL;
+        if (t->block) t->block->next = block; else t->first = block;
         t->block = block;
     }
     void *out = t->block->data + t->block->used;
@@ -125,17 +159,19 @@ static inline Tape *tape_new(void) {
     t->n = 0;
     t->cap = 64;
     t->nodes = (Node**)malloc((size_t)t->cap * sizeof(Node*));
+    t->first = NULL;
     t->block = NULL;
     return t;
 }
 
-/* Free every node's value, then release the pool holding the node structs and
-   their gradients in one go. Gradients are not freed individually: they are
-   slices of a tape block, not owners. Every Node* returned by an ad_* call
-   becomes invalid after this. */
+/* Free every node's value that isn't pooled, then release the pool holding
+   the node structs, gradients, and pooled values in one go. A pooled value
+   (val_pooled == 1) is a slice of a tape block, not an owner, same as every
+   gradient. Every Node* returned by an ad_* call becomes invalid after this. */
 static inline void tape_free(Tape *t) {
-    for (int i = 0; i < t->n; i++) mat_free(t->nodes[i]->val);
-    TapeBlock *block = t->block;
+    for (int i = 0; i < t->n; i++)
+        if (!t->nodes[i]->val_pooled) mat_free(t->nodes[i]->val);
+    TapeBlock *block = t->first;
     while (block) {
         TapeBlock *next = block->next;
         free(block->data);
@@ -146,6 +182,26 @@ static inline void tape_free(Tape *t) {
     free(t);
 }
 
+/* Reuse a tape across many build/backward cycles (an optimizer's per-
+   iteration or per-epoch loop) without repeating tape_new/tape_free's
+   malloc/aligned_alloc/free of the block chain each time. Frees every
+   unpooled node value exactly as tape_free does, then keeps every
+   already-allocated block (and the node pointer array's capacity) around,
+   resetting used/n to 0 so the next build refills them instead of growing
+   new ones. Every Node* returned by an ad_* call before this becomes
+   invalid after it, same as after tape_free. Measured in
+   tests/performance/bench_tape_reset.c (mvstudent log-likelihood tape,
+   d=3): negligible at 100 observations (a single 64 KiB block already
+   covers the whole tape, nothing to reuse), 1.45x-1.65x at 1000-10000,
+   stacking with the value-pooling speedup above. */
+static inline void tape_reset(Tape *t) {
+    for (int i = 0; i < t->n; i++)
+        if (!t->nodes[i]->val_pooled) mat_free(t->nodes[i]->val);
+    t->n = 0;
+    for (TapeBlock *block = t->first; block; block = block->next) block->used = 0;
+    t->block = t->first;
+}
+
 static inline void ad_tape_push(Tape *t, Node *n) {
     if (t->n == t->cap) {
         t->cap *= 2;
@@ -154,13 +210,38 @@ static inline void ad_tape_push(Tape *t, Node *n) {
     t->nodes[t->n++] = n;
 }
 
+/* Value comes from an ordinary mat_* or vec_* call (BLAS/LAPACK-backed ops:
+   ad_matmul, ad_solve, ad_chol_solve, ad_inv, plus ad_leaf) and is
+   individually owned - freed by tape_free, not by the block release. */
 static inline Node *ad_node_new(Tape *t, Mat val, void (*backward)(Node*)) {
     Node *n = (Node*)tape_alloc(t, sizeof(Node));
     n->val = val;
+    n->val_pooled = 0;
     int count = val.r * val.c;
     mreal *grad = (mreal*)tape_alloc(t, (size_t)count * sizeof(mreal));
     for (int i = 0; i < count; i++) grad[i] = 0;
     n->grad = (Mat){ val.r, val.c, val.c, grad };
+    n->n_parents = 0;
+    n->aux = 0;
+    n->aux_offset = 0;
+    n->backward = backward;
+    ad_tape_push(t, n);
+    return n;
+}
+
+/* Value is a plain elementwise result or a small reduction - the caller
+   fills n->val.d itself, right after this returns, before the tape can be
+   read by anything else. r x c comes from the tape block, same as the
+   gradient; tape_free must not mat_free it. */
+static inline Node *ad_node_new_pooled(Tape *t, int r, int c, void (*backward)(Node*)) {
+    Node *n = (Node*)tape_alloc(t, sizeof(Node));
+    mreal *vald = (mreal*)tape_alloc(t, (size_t)r * c * sizeof(mreal));
+    n->val = (Mat){ r, c, c, vald };
+    n->val_pooled = 1;
+    int count = r * c;
+    mreal *grad = (mreal*)tape_alloc(t, (size_t)count * sizeof(mreal));
+    for (int i = 0; i < count; i++) grad[i] = 0;
+    n->grad = (Mat){ r, c, c, grad };
     n->n_parents = 0;
     n->aux = 0;
     n->aux_offset = 0;
@@ -196,7 +277,10 @@ static void ad_add_backward(Node *self) {
     ad_accum(self->parents[1]->grad, self->grad);
 }
 static inline Node *ad_add(Tape *t, Node *a, Node *b) {
-    Node *n = ad_node_new(t, mat_add(a->val, b->val), ad_add_backward);
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_add_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = a->val.d[i] + b->val.d[i];
     n->parents[0] = a; n->parents[1] = b; n->n_parents = 2;
     return n;
 }
@@ -206,7 +290,10 @@ static void ad_sub_backward(Node *self) {
     ad_accum_neg(self->parents[1]->grad, self->grad);
 }
 static inline Node *ad_sub(Tape *t, Node *a, Node *b) {
-    Node *n = ad_node_new(t, mat_sub(a->val, b->val), ad_sub_backward);
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_sub_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = a->val.d[i] - b->val.d[i];
     n->parents[0] = a; n->parents[1] = b; n->n_parents = 2;
     return n;
 }
@@ -219,7 +306,10 @@ static void ad_scale_backward(Node *self) {
     for (int i = 0; i < n; i++) a->grad.d[i] += s * self->grad.d[i];
 }
 static inline Node *ad_scale(Tape *t, Node *a, mreal s) {
-    Node *n = ad_node_new(t, mat_scale(a->val, s), ad_scale_backward);
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_scale_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = a->val.d[i] * s;
     n->parents[0] = a; n->n_parents = 1; n->aux = s;
     return n;
 }
@@ -234,7 +324,10 @@ static void ad_emul_backward(Node *self) {
     }
 }
 static inline Node *ad_emul(Tape *t, Node *a, Node *b) {
-    Node *n = ad_node_new(t, mat_emul(a->val, b->val), ad_emul_backward);
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_emul_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = a->val.d[i] * b->val.d[i];
     n->parents[0] = a; n->parents[1] = b; n->n_parents = 2;
     return n;
 }
@@ -249,7 +342,10 @@ static void ad_ediv_backward(Node *self) {
     }
 }
 static inline Node *ad_ediv(Tape *t, Node *a, Node *b) {
-    Node *n = ad_node_new(t, mat_ediv(a->val, b->val), ad_ediv_backward);
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_ediv_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = a->val.d[i] / b->val.d[i];
     n->parents[0] = a; n->parents[1] = b; n->n_parents = 2;
     return n;
 }
@@ -261,7 +357,10 @@ static void ad_exp_backward(Node *self) {
     for (int i = 0; i < n; i++) a->grad.d[i] += self->grad.d[i] * self->val.d[i];
 }
 static inline Node *ad_exp(Tape *t, Node *a) {
-    Node *n = ad_node_new(t, mat_exp(a->val), ad_exp_backward);
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_exp_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = MEXP(a->val.d[i]);
     n->parents[0] = a; n->n_parents = 1;
     return n;
 }
@@ -279,7 +378,10 @@ static void ad_tanh_backward(Node *self) {
     }
 }
 static inline Node *ad_tanh(Tape *t, Node *a) {
-    Node *n = ad_node_new(t, mat_tanh(a->val), ad_tanh_backward);
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_tanh_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = MTANH(a->val.d[i]);
     n->parents[0] = a; n->n_parents = 1;
     return n;
 }
@@ -316,14 +418,14 @@ static void ad_swish_backward(Node *self) {
     }
 }
 static inline Node *ad_swish(Tape *t, Node *a) {
-    Mat val = mat_new(a->val.r, a->val.c);
-    int n = val.r * val.c;
+    int r = a->val.r, c = a->val.c;
+    Node *node = ad_node_new_pooled(t, r, c, ad_swish_backward);
+    int n = r * c;
     for (int i = 0; i < n; i++) {
         mreal x = a->val.d[i];
         mreal s = (mreal)1 / (1 + MEXP(-x));
-        val.d[i] = x * s;
+        node->val.d[i] = x * s;
     }
-    Node *node = ad_node_new(t, val, ad_swish_backward);
     node->parents[0] = a; node->n_parents = 1;
     return node;
 }
@@ -335,7 +437,10 @@ static void ad_log_backward(Node *self) {
     for (int i = 0; i < n; i++) a->grad.d[i] += self->grad.d[i] / a->val.d[i];
 }
 static inline Node *ad_log(Tape *t, Node *a) {
-    Node *n = ad_node_new(t, mat_log(a->val), ad_log_backward);
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_log_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = MLOG(a->val.d[i]);
     n->parents[0] = a; n->n_parents = 1;
     return n;
 }
@@ -356,11 +461,11 @@ static void ad_lgamma_backward(Node *self) {
         a->grad.d[i] += self->grad.d[i] * (mreal)special_digamma((double)a->val.d[i]);
 }
 static inline Node *ad_lgamma(Tape *t, Node *a) {
-    Mat val = mat_new(a->val.r, a->val.c);
-    int m = val.r * val.c;
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_lgamma_backward);
+    int m = r * c;
     for (int i = 0; i < m; i++)
-        val.d[i] = (mreal)lgamma((double)a->val.d[i]);
-    Node *n = ad_node_new(t, val, ad_lgamma_backward);
+        n->val.d[i] = (mreal)lgamma((double)a->val.d[i]);
     n->parents[0] = a; n->n_parents = 1;
     return n;
 }
@@ -374,7 +479,17 @@ static void ad_pow_backward(Node *self) {
         a->grad.d[i] += self->grad.d[i] * p * MPOW(a->val.d[i], p - 1);
 }
 static inline Node *ad_pow(Tape *t, Node *a, mreal p) {
-    Node *n = ad_node_new(t, mat_pow(a->val, p), ad_pow_backward);
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_pow_backward);
+    int cnt = r * c;
+    int use_ipow = 0;
+    long ip = 0;
+    if (p >= -1024 && p <= 1024) {
+        ip = (long)p;
+        use_ipow = ((mreal)ip == p);
+    }
+    if (use_ipow) { for (int i = 0; i < cnt; i++) n->val.d[i] = mat_ipow(a->val.d[i], ip); }
+    else           { for (int i = 0; i < cnt; i++) n->val.d[i] = MPOW(a->val.d[i], p); }
     n->parents[0] = a; n->n_parents = 1; n->aux = p;
     return n;
 }
@@ -405,10 +520,14 @@ static void ad_slice_backward(Node *self) {
 static inline Node *ad_slice(Tape *t, Node *a, int r0, int r1, int c0, int c1) {
     assert(r0 >= 0 && r0 < r1 && r1 <= a->val.r);
     assert(c0 >= 0 && c0 < c1 && c1 <= a->val.c);
-    Mat block = mat_slice(a->val, r0, r1, c0, c1);
-    Node *n = ad_node_new(t, mat_copy(block), ad_slice_backward);
+    int parent_width = a->val.c;
+    int r = r1 - r0, c = c1 - c0;
+    Node *n = ad_node_new_pooled(t, r, c, ad_slice_backward);
+    for (int i = 0; i < r; i++)
+        for (int j = 0; j < c; j++)
+            n->val.d[i * c + j] = a->val.d[(r0 + i) * parent_width + (c0 + j)];
     n->parents[0] = a; n->n_parents = 1;
-    n->aux_offset = r0 * a->val.c + c0;
+    n->aux_offset = r0 * parent_width + c0;
     return n;
 }
 
@@ -422,8 +541,9 @@ static void ad_reshape_backward(Node *self) {
 }
 static inline Node *ad_reshape(Tape *t, Node *a, int r, int c) {
     assert(r > 0 && c > 0 && r * c == a->val.r * a->val.c);
-    Mat reshaped = mat_reshape(a->val, r, c);
-    Node *n = ad_node_new(t, mat_copy(reshaped), ad_reshape_backward);
+    Node *n = ad_node_new_pooled(t, r, c, ad_reshape_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = a->val.d[i];
     n->parents[0] = a; n->n_parents = 1;
     return n;
 }
@@ -441,9 +561,9 @@ static void ad_dot_backward(Node *self) {
     }
 }
 static inline Node *ad_dot(Tape *t, Node *x, Node *y) {
-    Mat val = mat_new(1, 1);
-    val.d[0] = vec_dot(x->val, y->val);
-    Node *n = ad_node_new(t, val, ad_dot_backward);
+    mreal v = vec_dot(x->val, y->val);
+    Node *n = ad_node_new_pooled(t, 1, 1, ad_dot_backward);
+    n->val.d[0] = v;
     n->parents[0] = x; n->parents[1] = y; n->n_parents = 2;
     return n;
 }
@@ -458,9 +578,9 @@ static void ad_sum_backward(Node *self) {
     for (int i = 0; i < n; i++) a->grad.d[i] += g;
 }
 static inline Node *ad_sum(Tape *t, Node *a) {
-    Mat val = mat_new(1, 1);
-    val.d[0] = mat_sum(a->val);
-    Node *n = ad_node_new(t, val, ad_sum_backward);
+    mreal v = mat_sum(a->val);
+    Node *n = ad_node_new_pooled(t, 1, 1, ad_sum_backward);
+    n->val.d[0] = v;
     n->parents[0] = a; n->n_parents = 1;
     return n;
 }
@@ -526,9 +646,8 @@ static inline Node *ad_huber_error(Tape *t, Node *pred, Node *target, mreal delt
         mreal ae = MABS(e);
         s += (ae <= delta) ? (mreal)0.5 * e * e : delta * (ae - (mreal)0.5 * delta);
     }
-    Mat val = mat_new(1, 1);
-    val.d[0] = s / n;
-    Node *node = ad_node_new(t, val, ad_huber_backward);
+    Node *node = ad_node_new_pooled(t, 1, 1, ad_huber_backward);
+    node->val.d[0] = s / n;
     node->parents[0] = pred; node->parents[1] = target; node->n_parents = 2;
     node->aux = delta;
     return node;
@@ -565,9 +684,8 @@ static inline Node *ad_logcosh_error(Tape *t, Node *pred, Node *target) {
         mreal ae = MABS(e);
         s += ae + MLOG1P(MEXP(-2 * ae)) - (mreal)0.6931471805599453; /* log(2) */
     }
-    Mat val = mat_new(1, 1);
-    val.d[0] = s / n;
-    Node *node = ad_node_new(t, val, ad_logcosh_backward);
+    Node *node = ad_node_new_pooled(t, 1, 1, ad_logcosh_backward);
+    node->val.d[0] = s / n;
     node->parents[0] = pred; node->parents[1] = target; node->n_parents = 2;
     return node;
 }
@@ -709,13 +827,12 @@ static inline Node *ad_chol_quadform(Tape *t, Node *L, Node *b) {
     int n = L->val.r;
     Vec w = mat_copy(b->val);
     _trtrs('L', 'N', 'N', n, 1, L->val.d, L->val.stride, w.d, w.stride);
-    Mat val = mat_new(1, 1);
     mreal q = 0;
     for (int i = 0; i < n; i++) q += w.d[i] * w.d[i];
-    val.d[0] = q;
     mat_free(w);
 
-    Node *node = ad_node_new(t, val, ad_chol_quadform_backward);
+    Node *node = ad_node_new_pooled(t, 1, 1, ad_chol_quadform_backward);
+    node->val.d[0] = q;
     node->parents[0] = L; node->parents[1] = b; node->n_parents = 2;
     return node;
 }
@@ -731,9 +848,9 @@ static void ad_det_backward(Node *self) {
     mat_free(Ainv); mat_free(AinvT);
 }
 static inline Node *ad_det(Tape *t, Node *A) {
-    Mat val = mat_new(1, 1);
-    val.d[0] = mat_det(A->val);
-    Node *n = ad_node_new(t, val, ad_det_backward);
+    mreal v = mat_det(A->val);
+    Node *n = ad_node_new_pooled(t, 1, 1, ad_det_backward);
+    n->val.d[0] = v;
     n->parents[0] = A; n->n_parents = 1;
     return n;
 }

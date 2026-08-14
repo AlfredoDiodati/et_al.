@@ -44,7 +44,7 @@ run() {
 # Every correctness suite `make test` runs, plus test_mat_special (built
 # separately - see the Makefile's test-special rule - since it deliberately
 # skips -ffast-math to get IEEE-defined NaN/Inf semantics).
-SUITES="test_mat test_mat_special test_decomp test_solver test_special test_stats test_random test_broadcast test_gauss test_student test_mvgauss test_mvstudent test_ad test_adam test_optimizer test_mlp test_frame test_csv test_txt test_npy test_json test_sql gzip_inflate rdata_array_read"
+SUITES="test_mat test_mat_special test_decomp test_solver test_special test_stats test_random test_broadcast test_gauss test_student test_mvgauss test_mvstudent test_ad test_tape_reset test_adam test_optimizer test_mlp test_frame test_csv test_txt test_npy test_json test_sql gzip_inflate rdata_array_read"
 
 printf "building...\n"
 printf "=== build ===\n" >> "$REPORT"

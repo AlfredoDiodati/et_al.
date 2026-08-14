@@ -59,17 +59,22 @@ examples/rdata_example: examples/rdata_example.c frame/rdata.h gzip.h frame/csv.
 tests/performance/bench_storage_layout: tests/performance/bench_storage_layout.c linalg/mat.h
 	$(CC) $(CFLAGS) tests/performance/bench_storage_layout.c $(LDLIBS) -o tests/performance/bench_storage_layout
 
-# Standalone design-space benchmarks for two candidate changes to ad.h, both
-# now adopted: a bump allocator for node structs and gradients, and a fused
-# quadratic form. Each compares the candidate against what it replaced on the
-# primitive itself, not on any model built over it. Deliberately not part of
-# the `test`/`bench.sh` targets - run directly:
+# Standalone design-space benchmarks for candidate changes to ad.h, all now
+# adopted: a bump allocator for node structs and gradients (bench_tape_pool),
+# a fused quadratic form (bench_chol_quadform), and reusing a tape's blocks
+# across an optimizer loop instead of tape_new/tape_free per iteration
+# (bench_tape_reset). Each compares the candidate against what it replaced
+# on the primitive itself, not on any model built over it. Deliberately not
+# part of the `test`/`bench.sh` targets - run directly:
 #   make tests/performance/bench_tape_pool && ./tests/performance/bench_tape_pool
 tests/performance/bench_tape_pool: tests/performance/bench_tape_pool.c ad.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/performance/bench_tape_pool.c $(LDLIBS) -o tests/performance/bench_tape_pool
 
 tests/performance/bench_chol_quadform: tests/performance/bench_chol_quadform.c ad.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/performance/bench_chol_quadform.c $(LDLIBS) -o tests/performance/bench_chol_quadform
+
+tests/performance/bench_tape_reset: tests/performance/bench_tape_reset.c ad.h linalg/solver.h linalg/decomp.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/bench_tape_reset.c $(LDLIBS) -o tests/performance/bench_tape_reset
 
 # Prototype of the hybrid per-column caching design for frame/sql.h
 # (see the file header and docs/PERFORMANCE_BACKLOG.md item 5) - runs
@@ -199,6 +204,9 @@ tests/correctness/test_mvstudent: tests/correctness/test_mvstudent.c dist/mv/stu
 
 tests/correctness/test_ad: tests/correctness/test_ad.c ad.h dist/gauss.h dist/student.h dist/mv/gauss.h dist/mv/student.h dist/broadcast.h special.h random.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_ad.c $(LDLIBS) -o tests/correctness/test_ad
+
+tests/correctness/test_tape_reset: tests/correctness/test_tape_reset.c ad.h linalg/solver.h linalg/decomp.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/test_tape_reset.c $(LDLIBS) -o tests/correctness/test_tape_reset
 
 tests/correctness/test_adam: tests/correctness/test_adam.c solver/adam.h solver/optimizer.h dist/gauss.h dist/broadcast.h random.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_adam.c $(LDLIBS) -o tests/correctness/test_adam
@@ -332,6 +340,28 @@ lapack-comparison-asan:
 	  rm -f $$t.asan; \
 	done
 
+# ad.h's tape pools every op's forward value (not just the Node struct and
+# gradient) whose value is a plain elementwise result or a small reduction -
+# a Node carries val_pooled recording whether tape_free must mat_free its
+# value or leave it to the block release. A bug in that bookkeeping (a value
+# that should have been marked pooled but wasn't, or the reverse) is an
+# invalid free or a heap-buffer-overflow, not a wrong number, so it would not
+# show up as a failed assert in tests/correctness/test_ad.c or test_mlp.c -
+# it needs a sanitizer to be caught at all. test_mlp.c is included because
+# nn/mlp.h's mlp_fit is the real per-epoch tape-build/backward/free consumer,
+# not just ad.h's own unit tests. test_tape_reset.c is included for the same
+# reason on tape_reset specifically: a block chain that should have been
+# reused but wasn't (or the reverse - reused when it should have grown) is
+# also a memory-safety bug, not a wrong number.
+AD_ASAN_TESTS := tests/correctness/test_ad tests/correctness/test_tape_reset tests/correctness/test_mlp
+ad-asan:
+	for t in $(AD_ASAN_TESTS); do \
+	  $(CC) -Wall -Wextra -O1 -g -fsanitize=address,undefined $(BLAS_CFLAGS) \
+	    $(if $(MAT_DOUBLE),-DMAT_DOUBLE) $$t.c $(LDLIBS) -o $$t.asan || exit 1; \
+	  STRESS=1 ./$$t.asan || exit 1; \
+	  rm -f $$t.asan; \
+	done
+
 # The timings as well. Each benchmark exits nonzero if its replacement is
 # slower than the LAPACKE routine anywhere it measured, so this target
 # failing is the signal that a kernel is not ready for production.
@@ -345,11 +375,11 @@ lapack-comparison-asan:
 lapack-comparison-bench: $(LAPACK_COMPARISON_BENCH)
 	for b in $(LAPACK_COMPARISON_BENCH); do OPENBLAS_NUM_THREADS=1 ./$$b || exit 1; done
 
-test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json tests/correctness/test_sql tests/correctness/gzip_inflate tests/correctness/rdata_array_read
-	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_special && ./tests/correctness/test_stats && ./tests/correctness/test_random && ./tests/correctness/test_broadcast && ./tests/correctness/test_gauss && ./tests/correctness/test_student && ./tests/correctness/test_mvgauss && ./tests/correctness/test_mvstudent && ./tests/correctness/test_ad && ./tests/correctness/test_adam && ./tests/correctness/test_optimizer && ./tests/correctness/test_mlp && ./tests/correctness/test_frame && ./tests/correctness/test_csv && ./tests/correctness/test_txt && ./tests/correctness/test_npy && ./tests/correctness/test_json && ./tests/correctness/test_sql && ./tests/correctness/gzip_inflate && ./tests/correctness/rdata_array_read
+test: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_ad tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json tests/correctness/test_sql tests/correctness/gzip_inflate tests/correctness/rdata_array_read
+	./tests/correctness/test_mat && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_special && ./tests/correctness/test_stats && ./tests/correctness/test_random && ./tests/correctness/test_broadcast && ./tests/correctness/test_gauss && ./tests/correctness/test_student && ./tests/correctness/test_mvgauss && ./tests/correctness/test_mvstudent && ./tests/correctness/test_ad && ./tests/correctness/test_tape_reset && ./tests/correctness/test_adam && ./tests/correctness/test_optimizer && ./tests/correctness/test_mlp && ./tests/correctness/test_frame && ./tests/correctness/test_csv && ./tests/correctness/test_txt && ./tests/correctness/test_npy && ./tests/correctness/test_json && ./tests/correctness/test_sql && ./tests/correctness/gzip_inflate && ./tests/correctness/rdata_array_read
 
-test-stress: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_ad tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json tests/correctness/test_sql tests/correctness/gzip_inflate tests/correctness/rdata_array_read
-	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_special && STRESS=1 ./tests/correctness/test_stats && STRESS=1 ./tests/correctness/test_random && STRESS=1 ./tests/correctness/test_broadcast && STRESS=1 ./tests/correctness/test_gauss && STRESS=1 ./tests/correctness/test_student && STRESS=1 ./tests/correctness/test_mvgauss && STRESS=1 ./tests/correctness/test_mvstudent && STRESS=1 ./tests/correctness/test_ad && STRESS=1 ./tests/correctness/test_adam && STRESS=1 ./tests/correctness/test_optimizer && STRESS=1 ./tests/correctness/test_mlp && STRESS=1 ./tests/correctness/test_frame && STRESS=1 ./tests/correctness/test_csv && STRESS=1 ./tests/correctness/test_txt && STRESS=1 ./tests/correctness/test_npy && STRESS=1 ./tests/correctness/test_json && STRESS=1 ./tests/correctness/test_sql && STRESS=1 ./tests/correctness/gzip_inflate && STRESS=1 ./tests/correctness/rdata_array_read
+test-stress: tests/correctness/test_mat tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_ad tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_json tests/correctness/test_sql tests/correctness/gzip_inflate tests/correctness/rdata_array_read
+	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_special && STRESS=1 ./tests/correctness/test_stats && STRESS=1 ./tests/correctness/test_random && STRESS=1 ./tests/correctness/test_broadcast && STRESS=1 ./tests/correctness/test_gauss && STRESS=1 ./tests/correctness/test_student && STRESS=1 ./tests/correctness/test_mvgauss && STRESS=1 ./tests/correctness/test_mvstudent && STRESS=1 ./tests/correctness/test_ad && STRESS=1 ./tests/correctness/test_tape_reset && STRESS=1 ./tests/correctness/test_adam && STRESS=1 ./tests/correctness/test_optimizer && STRESS=1 ./tests/correctness/test_mlp && STRESS=1 ./tests/correctness/test_frame && STRESS=1 ./tests/correctness/test_csv && STRESS=1 ./tests/correctness/test_txt && STRESS=1 ./tests/correctness/test_npy && STRESS=1 ./tests/correctness/test_json && STRESS=1 ./tests/correctness/test_sql && STRESS=1 ./tests/correctness/gzip_inflate && STRESS=1 ./tests/correctness/rdata_array_read
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754
 tests/correctness/test_mat_special: tests/correctness/test_mat_special.c linalg/mat.h
@@ -387,4 +417,4 @@ uninstall-core: uninstall-model
 	rm -f $(PKGCONFIGDIR)/et_al.-core.pc
 	-rmdir $(INCDIR) 2>/dev/null || true
 
-.PHONY: test test-stress test-special install-core install-model uninstall-core uninstall-model
+.PHONY: test test-stress test-special ad-asan install-core install-model uninstall-core uninstall-model

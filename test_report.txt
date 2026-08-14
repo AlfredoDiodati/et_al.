@@ -1,4 +1,4 @@
-test run: do 30 jul 2026 21:29:19 CEST
+test run: vr 14 aug 2026 20:09:43 CEST
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -14,6 +14,7 @@ make: 'tests/correctness/test_student' is up to date.
 make: 'tests/correctness/test_mvgauss' is up to date.
 make: 'tests/correctness/test_mvstudent' is up to date.
 make: 'tests/correctness/test_ad' is up to date.
+make: 'tests/correctness/test_tape_reset' is up to date.
 make: 'tests/correctness/test_adam' is up to date.
 make: 'tests/correctness/test_optimizer' is up to date.
 make: 'tests/correctness/test_mlp' is up to date.
@@ -23,6 +24,8 @@ make: 'tests/correctness/test_txt' is up to date.
 make: 'tests/correctness/test_npy' is up to date.
 make: 'tests/correctness/test_json' is up to date.
 make: 'tests/correctness/test_sql' is up to date.
+make: 'tests/correctness/gzip_inflate' is up to date.
+make: 'tests/correctness/rdata_array_read' is up to date.
 
 === test_mat: PASS ===
 construction
@@ -183,7 +186,14 @@ ad_det (finite-difference)
 ad_inv (finite-difference)
 ad_solve/ad_det/ad_inv on a singular A abort (fork + expect SIGABRT)
 ad_chol_solve given a non-Cholesky L (zero diagonal): silent NaN/Inf, not a crash (documents the 'trusts the factor' contract)
+ad_pow(a,0.5) at a=0: finite forward value, +Inf gradient (real nondifferentiable point, not a domain violation)
+ad_pow(a,0.5) at a<0: NaN forward value, NaN gradient (outside pow()'s real domain, silent NaN not a crash)
 test_ad: all passed
+
+=== test_tape_reset: PASS ===
+tape_reset: repeated f(x)=sum(x^2) matches independent tape_new/tape_free runs
+tape_reset: multi-block mvstudent workload, repeated, no leak/corruption under ASan
+test_tape_reset: all passed
 
 === test_adam: PASS ===
 adam_step: exact per-step arithmetic (not just convergence)
@@ -296,6 +306,33 @@ df_sql_try: malformed query text is SQL_ERR_SYNTAX, independent of the DataFrame
 df_sql_try: syntactically valid SQL that doesn't fit the schema is SQL_ERR_DATA
 test_sql: all passed
 
+=== gzip_inflate: PASS ===
+crc32 matches the standard CRC-32/ISO-HDLC check value for "123456789"
+stored (uncompressed) block round-trips exactly, with correct CRC32/size checks
+two consecutive stored blocks (BFINAL only on the second) concatenate correctly
+a stored block with a zero-length payload decompresses to zero bytes, not a crash
+a real fixed-Huffman-coded block (BTYPE=01) decompresses correctly
+gzip header optional fields (FEXTRA, FNAME, FCOMMENT, FHCRC) are skipped correctly, all four at once
+gzip_is_gzip on empty/1-byte buffers returns false rather than reading out of bounds
+malformed gzip input aborts (fork + expect SIGABRT)
+gzip_inflate: all passed
+
+=== rdata_array_read: PASS ===
+real EstimationSeriesSample1_1.Rdata: dims, dimnames, and known element values match
+real rdata_altrep_and_factor.RData: ALTREP compact sequences and factor columns resolve correctly
+df_read_rdata/df_read_rdata_slice: one call from path to DataFrame, both with and without an explicit object_name
+df_read_rdata/df_read_rdata_slice contract violations abort (fork + expect SIGABRT)
+real rdata_edge_cases.RData: empty vectors, NA in every type, nested lists, and repeated ALTREP objects all parse correctly
+real rdata_uncompressed.RData (save with compress=FALSE) loads without going through gzip at all
+real rdata_empty_workspace.RData (zero saved objects) loads to an empty RData, not a crash
+real rdata_zero_row_dataframe.RData (0 rows, 2 columns) converts to a valid empty DataFrame
+real rdata_xz_compressed.RData (an R compression this loader does not support) aborts cleanly (fork + expect SIGABRT)
+synthetic workspace: data.frame, NA string, dim matrix, and symbol back-reference all parse correctly
+REFSXP long form (explicit 4-byte index, not the packed index-in-flags form) resolves correctly
+API contract violations abort (fork + expect SIGABRT)
+malformed .RData input aborts (fork + expect SIGABRT)
+rdata_array_read: all passed
+
 
 === summary ===
-22 passed, 0 failed
+25 passed, 0 failed
