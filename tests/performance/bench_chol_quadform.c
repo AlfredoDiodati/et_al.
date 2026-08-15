@@ -19,12 +19,16 @@
                solves with both triangles to produce A^-1 b, but only
                L^-1 b is needed to form q = ||L^-1 b||^2.
      nodes     one per call, with its struct and gradient buffer.
-     backward  nothing. Working the two-node path through by hand gives
-               exactly the fused adjoint: ad_dot hands ad_chol_solve an
-               adjoint of qbar*b, so its z is qbar*x and its Asym is
-               -2 qbar x x', which is what differentiating q directly
-               produces. The n x n outer product and the multiply by L are
-               unavoidable either way.
+     backward  the fused path computes the same result as a rank-1 update
+               (x, then y = L^T x, both O(n^2)) rather than materializing
+               the n x n outer product -2*qbar*x*x' and multiplying it
+               against L (O(n^3)) the way ad_chol_solve_backward still
+               does, since ad_dot hands it a general z that only happens
+               to equal qbar*x in this specific pairing - ad_chol_solve
+               has no way to know that from inside its own backward rule,
+               so it cannot take the same shortcut. This is now the
+               larger share of what the fused version saves, measured
+               below.
 
    Neither path caches L^-1 b between the passes, since Node has nowhere to
    put it, so both backwards recompute A^-1 b with a full solve.

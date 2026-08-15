@@ -112,8 +112,24 @@ static inline void mat_eig_sym(Mat a, Vec *eigvals_out, Mat *eigvecs_out) {
     Mat v = mat_copy(a);
     Vec w = mat_new(n, 1);
 
+    /* A NaN or Inf entry can never satisfy _steqr's deflation test (every
+       comparison against one is false), so the QL iteration cannot deflate
+       and always runs to max_iter before info != 0 comes back - the same
+       return value a genuinely slow-converging but finite matrix produces.
+       Told apart here, since they mean different things: a non-finite input
+       is a contract violation by the caller (the matrix was already garbage
+       before this function saw it), not a numerical limit of the eigensolver
+       reached on legitimate data. Checked with mat_absmax_bits/MINFBITS,
+       not isnan()/isinf(), for the reason given at their definition in
+       mat.h - this file builds with -ffast-math like the rest of the
+       project. */
+    MUINT worst = mat_absmax_bits(v.d, n * n);
+    assert(worst < MINFBITS &&
+           "mat_eig_sym: input has a NaN/Inf entry - fix what produced the "
+           "matrix, this is not a slow-converging eigenproblem");
+
     int info = _syevd(v.d, n, v.stride, w.d);
-    assert(info == 0); /* an eigenvalue failed to converge */
+    assert(info == 0); /* a finite eigenvalue failed to converge within max_iter */
 
     *eigvals_out = w;
     *eigvecs_out = v;

@@ -50,7 +50,10 @@
    All ops here require exact shape matches between operands (like
    mat_add/mat_mul etc. in linalg/mat.h) - no broadcasting. dist/gauss.h's
    broadcasting is a separate, unrelated concern layered on top of plain
-   linalg/mat.h calls, not something this file's ops inherit. */
+   linalg/mat.h calls, not something this file's ops inherit. The one
+   deliberate exception is ad_broadcast_mul, for multiplying by a 1x1 node
+   whose own gradient is wanted - see its own comment and
+   docs/AD_DOCUMENTATION.md's Known limitations. */
 
 typedef struct Node {
     Mat val;                 /* forward value - an owner, freed by tape_free */
@@ -311,6 +314,37 @@ static inline Node *ad_scale(Tape *t, Node *a, mreal s) {
     int cnt = r * c;
     for (int i = 0; i < cnt; i++) n->val.d[i] = a->val.d[i] * s;
     n->parents[0] = a; n->n_parents = 1; n->aux = s;
+    return n;
+}
+
+/* c = a*s, elementwise, s a 1x1 node rather than a fixed constant - the one
+   deliberate exception to this file's "no broadcasting" rule, and
+   ad_scale's tracked-scalar counterpart: ad_scale's s has no gradient of
+   its own because it's a plain mreal with nowhere to carry one, while here
+   s is itself a Node the tape must differentiate through (see
+   docs/AD_DOCUMENTATION.md's Known limitations, and the note at this
+   file's own top comment). y = a*s is bilinear in the pair (a, s), the
+   same shape ad_dot's backward has for (x, y): abar += cbar*s (s's
+   current value, broadcast to every element), sbar += dot(cbar, a). */
+static void ad_broadcast_mul_backward(Node *self) {
+    Node *a = self->parents[0], *s = self->parents[1];
+    mreal sv = s->val.d[0];
+    int n = a->grad.r * a->grad.c;
+    mreal sbar = 0;
+    for (int i = 0; i < n; i++) {
+        a->grad.d[i] += self->grad.d[i] * sv;
+        sbar += self->grad.d[i] * a->val.d[i];
+    }
+    s->grad.d[0] += sbar;
+}
+static inline Node *ad_broadcast_mul(Tape *t, Node *a, Node *s) {
+    assert(s->val.r == 1 && s->val.c == 1);
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_broadcast_mul_backward);
+    mreal sv = s->val.d[0];
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = a->val.d[i] * sv;
+    n->parents[0] = a; n->parents[1] = s; n->n_parents = 2;
     return n;
 }
 
@@ -692,19 +726,26 @@ static inline Node *ad_logcosh_error(Tape *t, Node *pred, Node *target) {
 
 /* --- matmul --- */
 
-/* C=AB. Abar += Cbar*B^T, Bbar += A^T*Cbar (table 3 "matrix product") */
+/* C=AB. Abar += Cbar*B^T, Bbar += A^T*Cbar (table 3 "matrix product").
+   cblas_?gemm takes the transpose as a flag and accumulates into an
+   existing buffer via beta=1, so both terms land directly in a->grad/
+   b->grad with no transpose copy and no scratch buffer for the product -
+   mat_T followed by mat_mul followed by ad_accum was three passes over
+   memory (two of them full matrix copies) for what gemm does in one. */
 static void ad_matmul_backward(Node *self) {
     Node *a = self->parents[0], *b = self->parents[1];
 
-    Mat bt = mat_T(b->val);
-    Mat da = mat_mul(self->grad, bt);
-    ad_accum(a->grad, da);
-    mat_free(bt); mat_free(da);
+    /* Abar += Cbar * B^T */
+    MBLAS(gemm)(CblasRowMajor, CblasNoTrans, CblasTrans,
+                a->grad.r, a->grad.c, self->grad.c, (mreal)1,
+                self->grad.d, self->grad.stride, b->val.d, b->val.stride,
+                (mreal)1, a->grad.d, a->grad.stride);
 
-    Mat at = mat_T(a->val);
-    Mat db = mat_mul(at, self->grad);
-    ad_accum(b->grad, db);
-    mat_free(at); mat_free(db);
+    /* Bbar += A^T * Cbar */
+    MBLAS(gemm)(CblasRowMajor, CblasTrans, CblasNoTrans,
+                b->grad.r, b->grad.c, a->val.r, (mreal)1,
+                a->val.d, a->val.stride, self->grad.d, self->grad.stride,
+                (mreal)1, b->grad.d, b->grad.stride);
 }
 static inline Node *ad_matmul(Tape *t, Node *a, Node *b) {
     Node *n = ad_node_new(t, mat_mul(a->val, b->val), ad_matmul_backward);
@@ -803,6 +844,15 @@ static inline Node *ad_chol_solve(Tape *t, Node *L, Node *b) {
    tests/performance/bench_chol_quadform.c. x is recomputed in the backward
    pass rather than carried over from the forward one, since a Node has nowhere
    to keep it. */
+/* Lbar += tril(-2*seed * x * y^T), y = L^T x. The n x n outer product and
+   the O(n^3) matmul against L both existed only to compute this rank-1
+   update: product = outer * L = (-2*seed * x*x^T) * L = -2*seed * x *
+   (x^T L), and x^T L is exactly y^T. L is lower triangular, so y_j =
+   sum_{i>=j} L[i][j]*x[i] - the terms with i<j are the zero entries of L,
+   already excluded rather than summed and discarded - matching every
+   other use of L here as a Cholesky factor whose upper triangle carries
+   no information. O(n^2) throughout, one n-length buffer, instead of an
+   n x n allocation and an n x n x n matmul. */
 static void ad_chol_quadform_backward(Node *self) {
     Node *L = self->parents[0], *b = self->parents[1];
     int n = L->val.r;
@@ -811,16 +861,19 @@ static void ad_chol_quadform_backward(Node *self) {
     Vec x = vec_chol_solve(L->val, b->val);
     for (int i = 0; i < n; i++) b->grad.d[i] += 2 * seed * x.d[i];
 
-    Mat outer = mat_new(n, n);
-    for (int i = 0; i < n; i++)
-        for (int j = 0; j < n; j++)
-            AT(outer, i, j) = -2 * seed * x.d[i] * x.d[j];
-    Mat product = mat_mul(outer, L->val);
+    mreal *y = (mreal*)malloc((size_t)n * sizeof(mreal));
+    for (int j = 0; j < n; j++) {
+        mreal s = 0;
+        for (int i = j; i < n; i++) s += AT(L->val, i, j) * x.d[i];
+        y[j] = s;
+    }
+    mreal factor = -2 * seed;
     for (int i = 0; i < n; i++)
         for (int j = 0; j <= i; j++)
-            AT(L->grad, i, j) += AT(product, i, j);
+            AT(L->grad, i, j) += factor * x.d[i] * y[j];
+    free(y);
 
-    mat_free(x); mat_free(outer); mat_free(product);
+    mat_free(x);
 }
 static inline Node *ad_chol_quadform(Tape *t, Node *L, Node *b) {
     assert(L->val.r == L->val.c && b->val.r == L->val.r && b->val.c == 1);

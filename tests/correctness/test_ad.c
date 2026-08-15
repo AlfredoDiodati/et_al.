@@ -249,6 +249,105 @@ static void test_matmul(void) {
     tape_free(t);
 }
 
+static mreal ref_matmul_loss(Mat A, Mat B) {
+    Mat C = mat_mul(A, B);
+    mreal s = 0;
+    int n = C.r * C.c;
+    for (int i = 0; i < n; i++) s += C.d[i] * C.d[i];
+    mat_free(C);
+    return s;
+}
+
+static void test_matmul_nonsquare_fd(void) {
+    puts("matmul, non-square operands (finite-difference)");
+
+    /* A: 3x2, B: 2x4 - the ad_matmul_backward gemm rewrite's two calls use
+       different transpose flags for Abar and Bbar, so a square case (as in
+       test_matmul above) cannot tell a transposed-dimension mistake in one
+       from a compensating mistake in the other; non-square can. */
+    Mat A = mat_lit(3, 2, 1.f,2.f, 3.f,4.f, 5.f,6.f);
+    Mat B = mat_lit(2, 4, 1.f,0.f,2.f,1.f, -1.f,1.f,0.f,2.f);
+
+    Tape *t = tape_new();
+    Node *An = ad_leaf(t, A), *Bn = ad_leaf(t, B);
+    Node *C = ad_matmul(t, An, Bn);
+    Node *loss = ad_sum(t, ad_emul(t, C, C));
+    tape_backward(t, loss);
+
+    /* loss is exactly quadratic in A (and in B) for the other held fixed,
+       so central differences have zero truncation error at any h - the
+       only error is float32 cancellation in the subtraction, which a
+       *larger* h reduces rather than a smaller one (unlike the usual
+       truncation-vs-cancellation tradeoff). 1e-3f, this file's usual step,
+       left up to 0.05 of noise here since this loss reaches into the
+       hundreds; 5e-2f brings it under 5e-4. */
+    mreal h = 5e-2f;
+    for (int i = 0; i < A.r; i++)
+        for (int j = 0; j < A.c; j++) {
+            Mat Ap = mat_copy(A), Am = mat_copy(A);
+            AT(Ap,i,j) += h; AT(Am,i,j) -= h;
+            mreal fd = (ref_matmul_loss(Ap,B) - ref_matmul_loss(Am,B)) / (2*h);
+            assert(MABS(AT(An->grad,i,j) - fd) < TOL_FD);
+            mat_free(Ap); mat_free(Am);
+        }
+    for (int i = 0; i < B.r; i++)
+        for (int j = 0; j < B.c; j++) {
+            Mat Bp = mat_copy(B), Bm = mat_copy(B);
+            AT(Bp,i,j) += h; AT(Bm,i,j) -= h;
+            mreal fd = (ref_matmul_loss(A,Bp) - ref_matmul_loss(A,Bm)) / (2*h);
+            assert(MABS(AT(Bn->grad,i,j) - fd) < TOL_FD);
+            mat_free(Bp); mat_free(Bm);
+        }
+
+    mat_free(A); mat_free(B);
+    tape_free(t);
+}
+
+/* c = a*s, s a 1x1 node - the exception to "no broadcasting" ad_broadcast_mul
+   is. s is built from an ad_leaf via ad_scale rather than being a leaf
+   itself, so the chain rule through s is actually exercised, not just the
+   direct a-branch. */
+static mreal ref_broadcast_mul_loss(Mat a, mreal leaf_s) {
+    mreal s = 1.5f * leaf_s;
+    mreal loss = 0;
+    for (int i = 0; i < a.r; i++) {
+        mreal c = a.d[i] * s;
+        loss += c * c;
+    }
+    return loss;
+}
+
+static void test_broadcast_mul_fd(void) {
+    puts("ad_broadcast_mul (finite-difference, chain rule through s)");
+
+    Mat av = mat_lit(3, 1, 2.f, -1.f, 0.5f);
+    Mat sv = mat_lit(1, 1, 2.f);
+
+    Tape *t = tape_new();
+    Node *a = ad_leaf(t, av);
+    Node *leaf_s = ad_leaf(t, sv);
+    Node *s = ad_scale(t, leaf_s, 1.5f);
+    Node *c = ad_broadcast_mul(t, a, s);
+    Node *loss = ad_sum(t, ad_emul(t, c, c));
+    tape_backward(t, loss);
+
+    CHECK(loss->val.d[0], ref_broadcast_mul_loss(av, sv.d[0]));
+
+    mreal h = 1e-3f;
+    for (int i = 0; i < 3; i++) {
+        Mat ap = mat_copy(av), am = mat_copy(av);
+        ap.d[i] += h; am.d[i] -= h;
+        mreal fd = (ref_broadcast_mul_loss(ap, sv.d[0]) - ref_broadcast_mul_loss(am, sv.d[0])) / (2*h);
+        assert(MABS(a->grad.d[i] - fd) < TOL_FD);
+        mat_free(ap); mat_free(am);
+    }
+    mreal fd_s = (ref_broadcast_mul_loss(av, sv.d[0] + h) - ref_broadcast_mul_loss(av, sv.d[0] - h)) / (2*h);
+    assert(MABS(leaf_s->grad.d[0] - fd_s) < TOL_FD);
+
+    mat_free(av); mat_free(sv);
+    tape_free(t);
+}
+
 static void test_squared_error_and_identity(void) {
     puts("ad_squared_error / ad_identity");
 
@@ -1169,6 +1268,8 @@ int main(void) {
     test_swish();
     test_dot();
     test_matmul();
+    test_matmul_nonsquare_fd();
+    test_broadcast_mul_fd();
     test_squared_error_and_identity();
     test_huber_logcosh();
     test_gauss_equivalence();
