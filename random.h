@@ -88,6 +88,35 @@ static inline double rng_uniform(Rng *r) {
     return (double)(rng_u64(r) >> 11) * 0x1.0p-53;
 }
 
+/* Uniform integer in [0, n), n >= 1, via Lemire's multiply-shift: take
+   the high 64 bits of the 128-bit product of one draw with n, which
+   lands in [0, n) but assigns ceil(2^64/n) draws to some values and
+   floor(2^64/n) to others. The bias that introduces is removed by
+   rejecting the low 2^64 mod n products, so the surviving draws split
+   into n equally-sized buckets exactly. The rejection test itself is
+   skipped whenever the product's low half is already at least n, which
+   is the overwhelmingly common case for the small n a resampling scheme
+   asks for - so the typical call costs one draw, one multiply, one
+   compare and no division.
+
+   Not rng_u64(r) % n: that is the biased version of the same idea with
+   a 64-bit division on every call, and for an econometrics library the
+   bias is the more serious half - a bootstrap that draws some rows
+   slightly more often than others shifts every resampled statistic. */
+static inline uint64_t rng_below(Rng *r, uint64_t n) {
+    assert(n >= 1);
+    __uint128_t m = (__uint128_t)rng_u64(r) * (__uint128_t)n;
+    uint64_t low = (uint64_t)m;
+    if (low < n) {
+        uint64_t reject_below = (0 - n) % n; /* 2^64 mod n */
+        while (low < reject_below) {
+            m = (__uint128_t)rng_u64(r) * (__uint128_t)n;
+            low = (uint64_t)m;
+        }
+    }
+    return (uint64_t)(m >> 64);
+}
+
 /* Standard normal via the Marsaglia polar method: draw (u,v) uniform in
    the unit disk, map to two independent N(0,1) variates, return one and
    cache the other in the Rng (so consecutive calls cost one disk draw

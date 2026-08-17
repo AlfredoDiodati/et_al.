@@ -1,5 +1,6 @@
 #define STATS_TEST_INSTRUMENT 1
 #include "../../stats.h"
+#include "../../random.h" /* dev-tier use: the AR(1) series in the HAC tests */
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -739,6 +740,253 @@ static void test_pred_stress(void) {
     printf("  400 randomized strided runs (n up to ~300) ok\n");
 }
 
+/* Bartlett-kernel HAC long-run variance, straight from the definition
+   over a plain buffer - centers by the sample mean, divides every
+   autocovariance by n (not n-k), Bartlett weights 1 - k/(L+1). */
+static double ref_hac_var(const double *x, int n, int lag_max, StatsHACKernel kernel) {
+    double mu = ref_mean(x, n), s = 0;
+    for (int t = 0; t < n; t++) s += (x[t] - mu) * (x[t] - mu);
+    s /= n;
+    for (int k = 1; k <= lag_max; k++) {
+        double g = 0;
+        for (int t = 0; t + k < n; t++) g += (x[t] - mu) * (x[t + k] - mu);
+        g /= n;
+        double w = kernel == STATS_HAC_BARTLETT ? 1.0 - (double)k / (lag_max + 1.0) : 1.0;
+        s += 2.0 * w * g;
+    }
+    return s;
+}
+
+static void test_hac_known_values(void) {
+    puts("HAC long-run variance: known values");
+
+    /* x = [1,2,3,4]: mean 2.5, centered [-1.5,-0.5,0.5,1.5].
+       gamma_0 = (2.25+0.25+0.25+2.25)/4 = 1.25, so lag_max = 0 must
+       reproduce the population variance exactly. */
+    Mat x = mat_lit(4, 1, 1, 2, 3, 4);
+    CHECK(stats_hac_var(x, 0, STATS_HAC_BARTLETT), 1.25);
+    CHECK(stats_hac_var(x, 0, STATS_HAC_BARTLETT), stats_var(x));
+
+    /* lag_max = 1: gamma_1 = ((-1.5)(-0.5) + (-0.5)(0.5) + (0.5)(1.5))/4
+       = (0.75 - 0.25 + 0.75)/4 = 0.3125, weight 1 - 1/2 = 0.5, so
+       s = 1.25 + 2*0.5*0.3125 = 1.5625 */
+    CHECK(stats_hac_var(x, 1, STATS_HAC_BARTLETT), 1.5625);
+
+    /* lag_max = 2: gamma_2 = ((-1.5)(0.5) + (-0.5)(1.5))/4 = -0.375,
+       weights 2/3 and 1/3, so
+       s = 1.25 + 2*(2/3)*0.3125 + 2*(1/3)*(-0.375) = 1.416666... */
+    CHECK(stats_hac_var(x, 2, STATS_HAC_BARTLETT), 1.25 + (4.0 / 3.0) * 0.3125 - 0.25);
+
+    /* lag_max = n-1, the largest legal value: the last weight is
+       1/n, so the longest lag contributes but barely */
+    CHECK(stats_hac_var(x, 3, STATS_HAC_BARTLETT), (mreal)ref_hac_var((double[]){1, 2, 3, 4}, 4, 3, STATS_HAC_BARTLETT));
+    mat_free(x);
+
+    /* a row vector must give the same answer as the column vector */
+    Mat row = mat_lit(1, 4, 1, 2, 3, 4);
+    Mat col = mat_lit(4, 1, 1, 2, 3, 4);
+    for (int lag = 0; lag <= 3; lag++)
+        CHECK(stats_hac_var(row, lag, STATS_HAC_BARTLETT), stats_hac_var(col, lag, STATS_HAC_BARTLETT));
+    mat_free(row); mat_free(col);
+}
+
+static void test_hac_invariants(void) {
+    puts("HAC long-run variance: invariants");
+
+    /* a constant series has no variance at any lag */
+    Mat k = mat_fill(20, 1, 3.5f);
+    for (int lag = 0; lag <= 5; lag++) CHECK(stats_hac_var(k, lag, STATS_HAC_BARTLETT), 0);
+    mat_free(k);
+
+    /* shift invariance (centering) and scale by c^2 */
+    srand(61);
+    Mat x = mat_new(200, 1), shifted = mat_new(200, 1), scaled = mat_new(200, 1);
+    for (int i = 0; i < 200; i++) {
+        x.d[i] = (mreal)((double)(rand() % 2001 - 1000) / 100.0);
+        shifted.d[i] = x.d[i] + (mreal)17.0;
+        scaled.d[i] = x.d[i] * (mreal)3.0;
+    }
+    for (int lag = 0; lag <= 8; lag++) {
+        mreal base = stats_hac_var(x, lag, STATS_HAC_BARTLETT);
+        assert(MABS(stats_hac_var(shifted, lag, STATS_HAC_BARTLETT) - base) < 1e-3f);
+        assert(MABS(stats_hac_var(scaled, lag, STATS_HAC_BARTLETT) - 9 * base) < 1e-2f);
+    }
+    mat_free(x); mat_free(shifted); mat_free(scaled);
+
+    /* positive serial correlation raises the long-run variance above
+       the sample variance, negative correlation lowers it - the whole
+       reason a HAC estimate exists. AR(1) with rho = +/-0.7 over 4000
+       observations, where the sign of the effect is far outside
+       sampling noise. */
+    for (int s = 0; s < 2; s++) {
+        double rho = s == 0 ? 0.7 : -0.7;
+        Mat a = mat_new(4000, 1);
+        Rng r = rng_new(71 + (unsigned)s, 0);
+        double prev = 0;
+        for (int i = 0; i < 4000; i++) {
+            prev = rho * prev + rng_normal(&r);
+            a.d[i] = (mreal)prev;
+        }
+        double v0 = (double)stats_hac_var(a, 0, STATS_HAC_BARTLETT);
+        double v12 = (double)stats_hac_var(a, 12, STATS_HAC_BARTLETT);
+        if (rho > 0) assert(v12 > 1.5 * v0); else assert(v12 < 0.7 * v0);
+        /* and the theoretical long-run variance of an AR(1) driven by
+           unit-variance noise is 1/(1-rho)^2 - the Bartlett estimate is
+           downward biased at a finite lag, so this is a band, not a
+           point check */
+        double lrv = 1.0 / ((1 - rho) * (1 - rho));
+        assert(v12 > 0.6 * lrv && v12 < 1.4 * lrv);
+        mat_free(a);
+    }
+}
+
+static void test_hac_views(void) {
+    puts("HAC long-run variance: strided views vs contiguous twins");
+    srand(62);
+    Mat parent = mat_new(60, 5);
+    for (int i = 0; i < 60 * 5; i++)
+        parent.d[i] = (mreal)((double)(rand() % 2001 - 1000) / 100.0);
+
+    /* an interior column of a 5-wide matrix: stride 5, count 1 */
+    Mat colview = mat_slice(parent, 0, 60, 2, 3);
+    assert(colview.stride != colview.c);
+    Mat contig = mat_copy(colview);
+    for (int lag = 0; lag <= 10; lag++)
+        assert(MABS(stats_hac_var(colview, lag, STATS_HAC_BARTLETT) - stats_hac_var(contig, lag, STATS_HAC_BARTLETT)) < 1e-3f);
+    mat_free(contig);
+
+    /* an interior row: contiguous in memory but sliced out of a wider
+       parent, so it exercises the r == 1 branch */
+    Mat rowview = mat_slice(parent, 7, 8, 0, 5);
+    Mat rowcopy = mat_copy(rowview);
+    for (int lag = 0; lag <= 4; lag++)
+        assert(MABS(stats_hac_var(rowview, lag, STATS_HAC_BARTLETT) - stats_hac_var(rowcopy, lag, STATS_HAC_BARTLETT)) < 1e-3f);
+    mat_free(rowcopy);
+    mat_free(parent);
+}
+
+static void test_hac_adversarial(void) {
+    puts("HAC long-run variance: adversarial inputs");
+
+    /* single observation: gamma_0 is zero and lag_max can only be 0 */
+    Mat one = mat_lit(1, 1, 4.0f);
+    CHECK(stats_hac_var(one, 0, STATS_HAC_BARTLETT), 0);
+    mat_free(one);
+
+    /* two observations, the shortest series with any variance:
+       x = [0, 2], centered [-1, 1], gamma_0 = 1, gamma_1 = -1/2,
+       weight 1/2, so lag_max = 1 gives 1 - 1/2 = 0.5 */
+    Mat two = mat_lit(2, 1, 0, 2);
+    CHECK(stats_hac_var(two, 0, STATS_HAC_BARTLETT), 1);
+    CHECK(stats_hac_var(two, 1, STATS_HAC_BARTLETT), 0.5);
+    mat_free(two);
+
+    /* an exactly alternating series is the worst case for the sign of
+       the correction: every odd autocovariance is maximally negative.
+       The Bartlett weighting must still leave the result >= 0 at every
+       lag - that non-negativity is the whole reason it is the MCS's
+       kernel - while the rectangular window has no such guarantee and
+       must actually go negative here, which is the case dm_test's
+       DM_NEGATIVE_VARIANCE path exists for. gamma_0 = 1 and
+       gamma_1 = -(n-1)/n, so at lag_max = 1 the rectangular estimate is
+       1 - 2*63/64 = -0.96875 exactly. */
+    Mat alt = mat_new(64, 1);
+    for (int i = 0; i < 64; i++) alt.d[i] = (i % 2) ? (mreal)1 : (mreal)-1;
+    for (int lag = 0; lag < 64; lag++) assert(stats_hac_var(alt, lag, STATS_HAC_BARTLETT) >= 0);
+    CHECK(stats_hac_var(alt, 1, STATS_HAC_RECTANGULAR), -0.96875);
+    assert(stats_hac_var(alt, 1, STATS_HAC_RECTANGULAR) < 0);
+    mat_free(alt);
+
+    /* badly scaled magnitudes, both directions */
+    for (int s = 0; s < 2; s++) {
+        double scale = s == 0 ? 1e6 : 1e-6;
+        Mat b = mat_new(100, 1);
+        double *ref = (double *)malloc(100 * sizeof *ref);
+        srand(63 + s);
+        for (int i = 0; i < 100; i++) {
+            ref[i] = scale * ((double)(rand() % 2001 - 1000) / 1000.0);
+            b.d[i] = (mreal)ref[i];
+        }
+        for (int lag = 0; lag <= 6; lag++) {
+            double got = (double)stats_hac_var(b, lag, STATS_HAC_BARTLETT), want = ref_hac_var(ref, 100, lag, STATS_HAC_BARTLETT);
+            assert(fabs(got - want) < 1e-3 * (1 + fabs(want)));
+        }
+        free(ref); mat_free(b);
+    }
+}
+
+static void test_hac_rectangular_known_values(void) {
+    puts("HAC long-run variance: rectangular window known values");
+
+    /* x = [1,2,3,4]: gamma_0 = 1.25, gamma_1 = 0.3125, gamma_2 = -0.375.
+       The rectangular window weights every included autocovariance by 1,
+       so lag_max = 1 gives 1.25 + 2*0.3125 = 1.875 and lag_max = 2 gives
+       1.875 + 2*(-0.375) = 1.125. */
+    Mat x = mat_lit(4, 1, 1, 2, 3, 4);
+    CHECK(stats_hac_var(x, 1, STATS_HAC_RECTANGULAR), 1.875);
+    CHECK(stats_hac_var(x, 2, STATS_HAC_RECTANGULAR), 1.125);
+
+    /* at lag_max = 0 there are no lag terms to weight, so the two
+       windows must agree exactly with each other and with stats_var */
+    CHECK(stats_hac_var(x, 0, STATS_HAC_RECTANGULAR), stats_hac_var(x, 0, STATS_HAC_BARTLETT));
+    CHECK(stats_hac_var(x, 0, STATS_HAC_RECTANGULAR), stats_var(x));
+
+    /* the rectangular window puts weight 1 where Bartlett puts less, so
+       it gives the larger estimate wherever the included autocovariances
+       are positive - true here at lag_max = 1, where gamma_1 = 0.3125,
+       and deliberately not asserted beyond it, since gamma_2 = -0.375 is
+       negative and the inequality reverses */
+    assert(stats_hac_var(x, 1, STATS_HAC_RECTANGULAR) > stats_hac_var(x, 1, STATS_HAC_BARTLETT));
+
+    /* a constant series is zero under either window */
+    Mat k = mat_fill(20, 1, 3.5f);
+    for (int lag = 0; lag <= 5; lag++) CHECK(stats_hac_var(k, lag, STATS_HAC_RECTANGULAR), 0);
+    mat_free(k); mat_free(x);
+}
+
+static void run_hac_ref_comparison(int runs, int max_n) {
+    for (int run = 0; run < runs; run++) {
+        int n = 3 + rand() % (max_n - 2);
+        int lag = rand() % n;
+        StatsHACKernel kernel = (run % 2) ? STATS_HAC_RECTANGULAR : STATS_HAC_BARTLETT;
+        /* always through a strided interior view, so the stride path is
+           what gets compared against the reference */
+        Mat parent = mat_new(n, 3);
+        for (int i = 0; i < n * 3; i++)
+            parent.d[i] = (mreal)((double)(rand() % 4001 - 2000) / 100.0);
+        Mat v = mat_slice(parent, 0, n, 1, 2);
+        assert(n == 1 || v.stride != v.c);
+
+        double *ref = (double *)malloc((size_t)n * sizeof *ref);
+        for (int i = 0; i < n; i++) ref[i] = (double)AT(v, i, 0);
+        double expected = ref_hac_var(ref, n, lag, kernel);
+        double got = (double)stats_hac_var(v, lag, kernel);
+        assert(fabs(got - expected) < 1e-3 * (1 + fabs(expected)));
+
+        /* the buffer-level entry point must agree with the Mat one on
+           the same data, once the caller does its own centering */
+        double mu = ref_mean(ref, n);
+        for (int i = 0; i < n; i++) ref[i] -= mu;
+        assert(fabs(stats_hac_var_centered(ref, n, lag, kernel) - expected) < 1e-9 * (1 + fabs(expected)));
+
+        free(ref); mat_free(parent);
+    }
+}
+
+static void test_hac_vs_reference(void) {
+    puts("HAC long-run variance: randomized vs independent reference (fixed seed)");
+    srand(64);
+    run_hac_ref_comparison(300, 60);
+}
+
+static void test_hac_stress(void) {
+    if (!getenv("STRESS")) return;
+    puts("  HAC long-run variance stress");
+    srand(65);
+    run_hac_ref_comparison(600, 400);
+    printf("  600 randomized strided runs (n up to ~400) ok\n");
+}
+
 int main(void) {
     test_known_values();
     test_invariants();
@@ -757,6 +1005,13 @@ int main(void) {
     test_pred_adversarial();
     test_pred_vs_reference();
     test_pred_stress();
+    test_hac_known_values();
+    test_hac_rectangular_known_values();
+    test_hac_invariants();
+    test_hac_views();
+    test_hac_adversarial();
+    test_hac_vs_reference();
+    test_hac_stress();
     puts("test_stats: all passed");
     return 0;
 }

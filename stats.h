@@ -3,7 +3,8 @@
 
 /* Sample statistics: descriptive statistics of observed data - sample
    mean, variance, Pearson correlation, autocorrelation, per-column
-   (vector) means, lag-k autocovariance matrices, median and rank
+   (vector) means, lag-k autocovariance matrices, the HAC
+   (Newey-West) long-run variance, median and rank
    (stats_rank enables Spearman rank correlation), and a family of
    prediction-quality metrics (mean/median absolute error, RMSE, MAPE,
    RMSLE, R^2, Huber loss) comparing an actual sample against a predicted
@@ -267,6 +268,90 @@ static inline Mat stats_autocov_f32(Mat x, int lag) {
     for (int t = 0; t < d * d; t++) o.d[t] = (mreal)(acc[t] / m);
     free(mu); free(xc); free(acc);
     return o;
+}
+
+/* Lag window for the HAC long-run variance below.
+
+   STATS_HAC_BARTLETT weights the lag-k autocovariance by
+   1 - k/(lag_max+1), the Newey-West (1987) choice. Its spectral window
+   is the non-negative Fejer kernel, so the estimate can never come out
+   negative whatever the series, at the cost of needing lag_max to grow
+   with the sample for consistency.
+
+   STATS_HAC_RECTANGULAR weights every included autocovariance by 1 and
+   drops the rest. It is the right window when the series is known to be
+   m-dependent and lag_max is that m, because then the excluded
+   autocovariances are zero in population and the unit weights leave the
+   included ones unshrunk - Diebold and Mariano (1995) recommend exactly
+   this for an h-step forecast loss differential at lag_max = h-1. Its
+   spectral window is the Dirichlet kernel, which dips below zero, so
+   the estimate is not guaranteed non-negative and the caller has to
+   decide what a negative one means. */
+typedef enum { STATS_HAC_BARTLETT, STATS_HAC_RECTANGULAR } StatsHACKernel;
+
+static inline double stats_hac_weight(StatsHACKernel kernel, int k, int lag_max) {
+    return kernel == STATS_HAC_BARTLETT ? 1.0 - (double)k / ((double)lag_max + 1.0) : 1.0;
+}
+
+/* HAC long-run variance of an already-centered contiguous double series:
+
+     s = gamma_0 + 2 * sum_{k=1..lag_max} w(k) * gamma_k
+     gamma_k = (1/n) * sum_{t=0..n-1-k} xc[t] * xc[t+k]
+
+   with w(k) from the chosen lag window. Every gamma_k divides by n
+   rather than the n-k pairs that actually contribute; that is the
+   normalization the Bartlett window's non-negativity guarantee is
+   stated for, and the one Diebold and Mariano's spectral density
+   estimate uses. Dividing by n-k gives an unbiased gamma_k and forfeits
+   both.
+
+   Takes a plain double buffer rather than a Mat, unlike the rest of
+   this file, because its callers evaluate it thousands of times inside
+   a bootstrap loop on scratch series they already own, and this project
+   does not allocate inside a hot loop. stats_hac_var below is the Mat
+   entry point for everyone else. The buffer must already be centered:
+   an uncentered series makes gamma_0 a raw second moment, not a
+   variance. Under STATS_HAC_RECTANGULAR the result may be negative;
+   that is a property of the window, not an error, so it is returned as
+   computed rather than clamped here. */
+static inline double stats_hac_var_centered(const double *restrict xc, int n, int lag_max,
+                                            StatsHACKernel kernel) {
+    assert(n >= 1 && lag_max >= 0 && lag_max < n);
+    double s = 0;
+    for (int t = 0; t < n; t++) s += xc[t] * xc[t];
+    for (int k = 1; k <= lag_max; k++) {
+        double gk = 0;
+        for (int t = 0; t + k < n; t++) gk += xc[t] * xc[t + k];
+        s += 2.0 * stats_hac_weight(kernel, k, lag_max) * gk;
+    }
+    return s / n;
+}
+
+/* HAC long-run variance of a vector (n x 1 or 1 x n), centered by its
+   own sample mean. lag_max = 0 reduces exactly to stats_var, the
+   population variance, under either window; larger lag_max adds the
+   serial correlation the sample variance alone misses, which is what
+   makes it the right denominator for a mean computed from dependent
+   data.
+
+   The variance of the sample mean itself is this value divided by n -
+   that division is left to the caller, since the long-run variance is
+   the object with a standard name and the caller knows which of the two
+   it wants. lag_max must be in [0, n-1]; the usual rules of thumb
+   (floor(4*(n/100)^(2/9)) for Bartlett, or the dependence order itself
+   for the rectangular window) are the caller's to apply. */
+static inline mreal stats_hac_var(Mat x, int lag_max, StatsHACKernel kernel) {
+    assert(x.r == 1 || x.c == 1);
+    int n = x.r == 1 ? x.c : x.r;
+    assert(n >= 1 && lag_max >= 0 && lag_max < n);
+    double mu = stats_dmean(x);
+    double *xc = (double *)malloc((size_t)n * sizeof *xc);
+    assert(xc);
+    for (int i = 0; i < n; i++)
+        xc[i] = (double)(x.r == 1 ? AT(x, 0, i) : AT(x, i, 0)) - mu;
+    double s = stats_hac_var_centered(xc, n, lag_max, kernel);
+    free(xc);
+    return (mreal)s;
 }
 
 /* --- order statistics and rank correlation: unlike everything above,

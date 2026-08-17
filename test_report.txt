@@ -1,4 +1,4 @@
-test run: vr 14 aug 2026 20:14:01 CEST
+test run: Mon Aug 17 12:37:51 PM CEST 2026
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -8,6 +8,7 @@ make: 'tests/correctness/test_solver' is up to date.
 make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
+make: 'tests/correctness/test_mcs' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
 make: 'tests/correctness/test_student' is up to date.
@@ -89,6 +90,8 @@ test_solver: all passed
 
 === test_special: PASS ===
 known values
+normal CDF known values
+normal CDF invariants: symmetry, monotonicity, pdf by finite difference
 recurrence psi(x+1) = psi(x) + 1/x
 vs central finite differences of lgamma
 large-x asymptotics
@@ -110,15 +113,49 @@ prediction-quality metrics: views (stride != c)
 prediction-quality metrics: invariants
 prediction-quality metrics: adversarial (minimal sizes, ties, badly scaled)
 prediction-quality metrics: randomized vs independent reference (fixed seed)
+HAC long-run variance: known values
+HAC long-run variance: rectangular window known values
+HAC long-run variance: invariants
+HAC long-run variance: strided views vs contiguous twins
+HAC long-run variance: adversarial inputs
+HAC long-run variance: randomized vs independent reference (fixed seed)
 test_stats: all passed
 
 === test_random: PASS ===
 reproducibility + stream independence
+bounded integers: range, degenerate bound, reproducibility, uniformity
+  9 bounds x 5000 draws, 2^63/2^64-1 bounds, 7-bucket uniformity, lags 1..5 ok
 uniform: range + moments
 normal: first four moments
 gamma: mean/variance across shapes (incl. shape < 1 boost)
 independence: serial autocorrelation + cross-stream/seed correlation
 test_random: all passed
+
+=== test_mcs: PASS ===
+mcs_loss: known values, column naming, string columns ignored
+mcs_block_indices: range, block structure, degenerate lengths, reproducibility
+t-statistics: hand-computed two-model case
+dm_test: the paper's rectangular window at truncation h-1, vs Bartlett
+dm_test: the paper's rule for a negative spectral density estimate
+t-statistics: randomized vs independent reference, both statistics (fixed seed)
+  120 randomized (n up to ~70, m up to 6, lag up to 11) runs ok
+dm_test: identical series, antisymmetry, statistic sign
+dm_test: randomized vs independent reference, both windows (fixed seed)
+  200 randomized (n up to ~128, lag up to 14) runs ok
+dm_test: rejects a real gap, does not reject a shared one
+  3/40 rejections under the null, 10/10 under a 2-sigma-per-observation gap
+mcs: result structure invariants over randomized inputs
+  30 randomized runs, both statistics, structure ok
+mcs: result names are deep copies, valid after the DataFrame is freed
+mcs: a clearly worse model is dropped first, a clearly better one survives
+mcs: same (seed, stream) reproduces, different stream is an independent run
+mcs: adversarial options and degenerate inputs
+mcs_in_set: agrees with the surviving array it summarizes
+mcs_fwrite_report: contents, alignment, both termination cases
+mcs_effective_hac_lag: derived once, and the run agrees with it
+mcs_pvalue_frame: same numbers as the report, as data
+dm_fwrite_report: one branch per status
+test_mcs: all passed
 
 === test_broadcast: PASS ===
 dim resolution
@@ -172,6 +209,8 @@ ad_exp / ad_tanh (elementwise activations)
 ad_swish (x * sigmoid(x))
 ad_dot
 matmul
+matmul, non-square operands (finite-difference)
+ad_broadcast_mul (finite-difference, chain rule through s)
 ad_squared_error / ad_identity
 ad_huber_error / ad_logcosh_error
 ad-computed gradient vs analytical gauss_dlogpdf_loc/scale
@@ -335,4 +374,4 @@ rdata_array_read: all passed
 
 
 === summary ===
-25 passed, 0 failed
+26 passed, 0 failed

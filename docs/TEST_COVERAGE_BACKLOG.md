@@ -2,7 +2,8 @@
 
 Public functions identified as undertested against `tests/correctness/*.c`,
 audited 2026-08-14 against `./check.sh`'s 25 passing suites (all suites
-passed at audit time - these are coverage gaps, not known bugs). Update this
+passed at audit time - these are coverage gaps, not known bugs). The suite
+count is 26 since `test_mcs` was added. Update this
 file as items are picked up: check the box, note the test added and where.
 
 Coverage bar, from `README.md`'s "Testing requirements": every function
@@ -184,8 +185,10 @@ signals agree.
 
 ## Well-covered (verified during audit, no action needed)
 
-`frame/csv.h`, `frame/sql.h`'s 2 public functions, `stats.h` (all 18),
-`special.h`'s `special_digamma`, `dist/gauss.h`/`dist/student.h`/
+`frame/csv.h`, `frame/sql.h`'s 2 public functions, `stats.h` (all 20,
+including `stats_hac_var`/`stats_hac_var_centered`), `mcs.h` (all 18 public
+functions, including the report/export writers and `dm_test`), `random.h`'s `rng_below`, `special.h`'s
+`special_digamma` and `special_norm_cdf`, `dist/gauss.h`/`dist/student.h`/
 `dist/broadcast.h`/`dist/mv/gauss.h`/`dist/mv/student.h`'s main pdf/logpdf/
 gradient/sample functions, `solver/adam.h`'s `adam_step` and init/free
 functions, `solver/optimizer.h` (no public functions, interface exercised

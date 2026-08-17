@@ -191,8 +191,82 @@ static void test_stress(void) {
     printf("  4 normal streams (n=1e6) + gamma shape sweep + autocorr lags 1..10 ok\n");
 }
 
+static void test_below(void) {
+    puts("bounded integers: range, degenerate bound, reproducibility, uniformity");
+
+    /* n = 1 has exactly one legal answer, and must consume draws
+       without ever looping forever on the rejection test */
+    {
+        Rng r = rng_new(11, 0);
+        for (int i = 0; i < 1000; i++) assert(rng_below(&r, 1) == 0);
+    }
+
+    /* every value strictly inside the bound, across bounds that are
+       powers of two (no rejection ever fires), one below a power of two
+       (rejection fires often), and prime */
+    {
+        static const uint64_t bounds[] = { 2, 3, 7, 64, 63, 97, 1000, 65536, 65535 };
+        Rng r = rng_new(12, 3);
+        for (size_t b = 0; b < sizeof(bounds) / sizeof(bounds[0]); b++)
+            for (int i = 0; i < 5000; i++) {
+                uint64_t v = rng_below(&r, bounds[b]);
+                assert(v < bounds[b]);
+            }
+    }
+
+    /* the largest bounds the 128-bit product has to be right for */
+    {
+        Rng r = rng_new(13, 0);
+        uint64_t big = UINT64_MAX, half = (uint64_t)1 << 63;
+        for (int i = 0; i < 1000; i++) {
+            assert(rng_below(&r, big) < big);
+            assert(rng_below(&r, half) < half);
+        }
+    }
+
+    /* same (seed, stream) reproduces; different stream diverges */
+    {
+        Rng a = rng_new(7, 0), b = rng_new(7, 0), c = rng_new(7, 1);
+        int diverged = 0;
+        for (int i = 0; i < 200; i++) {
+            uint64_t x = rng_below(&a, 1000), y = rng_below(&b, 1000);
+            assert(x == y);
+            diverged += (x != rng_below(&c, 1000));
+        }
+        assert(diverged > 150);
+    }
+
+    /* uniformity over a bound that is not a power of two, which is
+       exactly where a modulo-based draw would over-represent the low
+       values: 1e6 draws over 7 buckets, expected 142857 each, standard
+       error ~350, so a 5000-wide band is >14 standard errors while a
+       modulo bias at this bound would be far larger */
+    {
+        int n = 1000000, k = 7;
+        long counts[7] = { 0 };
+        Rng r = rng_new(21, 5);
+        for (int i = 0; i < n; i++) counts[rng_below(&r, (uint64_t)k)]++;
+        long expected = n / k;
+        for (int i = 0; i < k; i++) assert(labs(counts[i] - expected) < 5000);
+    }
+
+    /* consecutive draws independent: lag-1..5 autocorrelation of 2e5
+       draws over a 1000-wide bound (se ~ 0.002) */
+    {
+        int n = 200000;
+        Mat x = mat_new(n, 1);
+        Rng r = rng_new(22, 9);
+        for (int i = 0; i < n; i++) x.d[i] = (mreal)rng_below(&r, 1000);
+        for (int lag = 1; lag <= 5; lag++)
+            assert(fabs((double)stats_autocorr(x, lag)) < 0.012);
+        mat_free(x);
+    }
+    printf("  9 bounds x 5000 draws, 2^63/2^64-1 bounds, 7-bucket uniformity, lags 1..5 ok\n");
+}
+
 int main(void) {
     test_reproducibility();
+    test_below();
     test_uniform();
     test_normal();
     test_gamma();

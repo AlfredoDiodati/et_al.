@@ -75,8 +75,54 @@ static void test_stress(void) {
     printf("  2000 log-spaced x in [1e-2, 1e6] ok\n");
 }
 
+static void test_norm_cdf_known_values(void) {
+    puts("normal CDF known values");
+    assert(fabs(special_norm_cdf(0.0) - 0.5) < TOL);
+    assert(fabs(special_norm_cdf(1.0) - 0.84134474606854293) < TOL);
+    assert(fabs(special_norm_cdf(-1.0) - 0.15865525393145707) < TOL);
+    assert(fabs(special_norm_cdf(1.959963984540054) - 0.975) < TOL);
+    assert(fabs(special_norm_cdf(2.5758293035489004) - 0.995) < TOL);
+    /* far tails: the point of evaluating on erfc rather than erf, so
+       these are checked on a relative scale - an absolute tolerance
+       would pass on any implementation that simply returned 0 */
+    double p6 = special_norm_cdf(-6.0), p6_exp = 9.865876450376946e-10;
+    assert(fabs(p6 - p6_exp) < 1e-12 * p6_exp);
+    double p10 = special_norm_cdf(-10.0), p10_exp = 7.619853024160525e-24;
+    assert(fabs(p10 - p10_exp) < 1e-12 * p10_exp);
+    /* saturation, both ends */
+    assert(special_norm_cdf(40.0) == 1.0);
+    assert(special_norm_cdf(-40.0) >= 0.0 && special_norm_cdf(-40.0) < 1e-300);
+}
+
+static void test_norm_cdf_invariants(void) {
+    puts("normal CDF invariants: symmetry, monotonicity, pdf by finite difference");
+    srand(51);
+    double prev = special_norm_cdf(-8.0);
+    for (int i = -800; i <= 800; i++) {
+        double x = i / 100.0;
+        double f = special_norm_cdf(x);
+        /* Phi(-x) = 1 - Phi(x), exact identity; checked on an absolute
+           scale since the identity itself loses the tail */
+        assert(fabs(special_norm_cdf(-x) - (1.0 - f)) < 1e-14);
+        assert(f >= prev - 1e-15);        /* nondecreasing */
+        assert(f >= 0.0 && f <= 1.0);
+        prev = f;
+    }
+    /* d/dx Phi(x) is the standard normal pdf, checked by central
+       difference where the difference itself is well conditioned */
+    for (int i = 0; i < 200; i++) {
+        double x = -4.0 + 8.0 * (double)(rand() % 10001) / 10000.0;
+        double h = 1e-4;
+        double fd = (special_norm_cdf(x + h) - special_norm_cdf(x - h)) / (2 * h);
+        double pdf = exp(-0.5 * x * x) / 2.5066282746310002;
+        assert(fabs(fd - pdf) < 1e-7);
+    }
+}
+
 int main(void) {
     test_known_values();
+    test_norm_cdf_known_values();
+    test_norm_cdf_invariants();
     test_recurrence();
     test_vs_lgamma_fd();
     test_asymptotic();

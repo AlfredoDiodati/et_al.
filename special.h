@@ -4,8 +4,9 @@
 
 /* Scalar special functions - general-purpose math tools that are not
    linear algebra (so they don't belong in linalg/) and not tied to any
-   one distribution (so they don't belong in a dist/ file). Standalone
-   like json.h: no dependency on linalg/mat.h.
+   one distribution (so they don't belong in a dist/ file). Currently
+   the digamma function and the standard normal CDF. Standalone like
+   json.h: no dependency on linalg/mat.h.
 
    Everything here is double-in/double-out regardless of the library's
    mreal build - the same deliberate exception to the M* macro
@@ -17,6 +18,22 @@
    The macro discipline exists to keep files correct under both
    precision builds; double unconditionally is correct under both.
    Callers cast the final combined result to mreal. */
+
+/* Standard normal CDF Phi(x) = P(Z <= x) for Z ~ N(0,1), evaluated as
+   erfc(-x/sqrt(2))/2 on libm's erfc.
+
+   The algebraically equal (1 + erf(x/sqrt(2)))/2 is not used because it
+   cancels in the left tail: at x = -6 it subtracts two numbers agreeing
+   to nine digits and returns the ~1e-9 tail probability with almost no
+   correct digits left, while erfc computes that tail directly. The
+   caller that cares is a two-sided p-value, which is the tail
+   probability itself, so its relative accuracy is the whole answer;
+   for the same reason a caller wanting the upper tail should ask for
+   special_norm_cdf(-x) rather than 1 - special_norm_cdf(x). */
+static inline double special_norm_cdf(double x) {
+    const double sqrt1_2 = 0.70710678118654752440084436210485;
+    return 0.5 * erfc(-x * sqrt1_2);
+}
 
 /* Digamma psi(x) = d/dx log(Gamma(x)), for x > 0. x <= 0 is a contract
    violation (assert) - the reflection formula for negative arguments is
