@@ -197,6 +197,88 @@ static inline ColType df_col_type(const DataFrame *df, const char *name) {
     return COL_NUMERIC;
 }
 
+/* Appends metadata for a numeric column whose values the caller has
+   already written directly into out->numeric at column index
+   numeric_idx - the ColumnMeta/columns-array bookkeeping half of what
+   df_add_numeric_col does, without that function's O(n * n_cols) copy-
+   and-grow half. Shared by frame/sql.h (row-gather stages: WHERE,
+   GROUP BY, ORDER BY) and frame/join.h, both of which pre-size
+   out->numeric in one allocation and write each column directly into
+   its final slot rather than growing it one df_add_numeric_col call at
+   a time. */
+static inline void frame_append_numeric_meta(DataFrame *out, const char *name, int numeric_idx) {
+    out->columns = (ColumnMeta*)realloc(out->columns, (size_t)(out->n_cols + 1) * sizeof(ColumnMeta));
+    out->columns[out->n_cols].type = COL_NUMERIC;
+    out->columns[out->n_cols].name = frame_strdup(name);
+    out->columns[out->n_cols].index = numeric_idx;
+    out->n_cols++;
+}
+
+/* Open-addressing hash table for bucketing a DataFrame's rows by an
+   in-memory key column's value - shared by frame/sql.h's GROUP BY and
+   frame/join.h's equi-join. Ported from real Polars source
+   (crates/polars-utils/src/hashing.rs, crates/polars-utils/src/
+   total_ord.rs, tag py-1.38.1): DirtyHash's top-bits-only multiply, and
+   canonical_f32/canonical_f64's -0.0/+0.0 and NaN folding so that
+   hashing and equality both treat all NaNs as one value and +0/-0 as
+   one value.
+
+   `group[]` holds a caller-defined bucket index (-1 if the slot is
+   empty); what the index points to (frame/sql.h's SqlGroupBuild,
+   frame/join.h's JoinBucket) differs per caller, so the table itself
+   stays opaque to it. Growing the table (doubling + full rehash) needs
+   each bucket's cached hash, which lives in the caller-specific bucket
+   array, so that step is implemented once per caller instead of here. */
+#define FRAME_DIRTY_HASH_ODD   0x55fbfd6bfc5458e9ULL
+#define FRAME_HASH_BOOST_CONST 0x9e3779b9ULL /* Boost's own hash_combine constant */
+
+/* Multiplication by a 'random' odd constant gives a universal hash in
+   the TOP bits only (DirtyHash's own documented property) - every
+   table-slot lookup below extracts the HIGH bits of this hash, not the
+   low ones, since the low bits of a multiplicative hash cluster badly
+   for small-integer keys (a real, measured 32x construction slowdown
+   the first time this table was built, from a table clustering so
+   badly nearly every lookup meant a long linear-probe chain). */
+static inline uint64_t frame_dirty_hash_u64(uint64_t bits) {
+    return bits * FRAME_DIRTY_HASH_ODD;
+}
+static inline uint64_t frame_hash_combine(uint64_t l, uint64_t r) {
+    return l ^ (r + FRAME_HASH_BOOST_CONST + (l << 6) + (r >> 2));
+}
+static inline uint32_t frame_canonical_f32_bits(float x) {
+    if (x == 0.0f) x = 0.0f;
+    if (MISNAN(x)) return 0x7fc00000u;
+    uint32_t bits; memcpy(&bits, &x, sizeof bits);
+    return bits;
+}
+static inline uint64_t frame_canonical_f64_bits(double x) {
+    if (x == 0.0) x = 0.0;
+    if (MISNAN(x)) return 0x7ff8000000000000ull;
+    uint64_t bits; memcpy(&bits, &x, sizeof bits);
+    return bits;
+}
+
+typedef struct { uint64_t *hash; int *group; size_t cap, mask; int shift; } FrameHashTable;
+
+/* `h >> shift` extracts the top log2(cap) bits of the hash as the
+   table's initial probe slot - see frame_dirty_hash_u64's own comment
+   for why the bottom bits are the wrong choice here. The collision-
+   probe wraparound step (`(pos + 1) & mask`) is unrelated and
+   unaffected - `mask` is still the correct way to keep a linearly-
+   probed index within [0, cap), only the very first slot computed from
+   a fresh hash needed to change. */
+static inline size_t frame_hash_table_index(const FrameHashTable *t, uint64_t h) {
+    return (size_t)(h >> t->shift);
+}
+static inline void frame_hash_table_init(FrameHashTable *t, size_t cap_pow2) {
+    t->cap = cap_pow2; t->mask = cap_pow2 - 1;
+    t->shift = 64 - __builtin_ctzll(cap_pow2);
+    t->hash = (uint64_t*)malloc(cap_pow2 * sizeof(uint64_t));
+    t->group = (int*)malloc(cap_pow2 * sizeof(int));
+    for (size_t i = 0; i < cap_pow2; i++) t->group[i] = -1;
+}
+static inline void frame_hash_table_free(FrameHashTable *t) { free(t->hash); free(t->group); }
+
 /* Prints a simple tabular dump: row names (if present) as a leading
    column, then every column in declaration order - numeric values as
    %8.4f (matching mat_print's formatting), strings as-is. Debug/inspection

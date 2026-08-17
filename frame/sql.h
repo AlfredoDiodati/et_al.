@@ -866,22 +866,6 @@ static SqlEvalResult sql_eval(const SqlExpr *e, const DataFrame *df) {
    the next" with no shared-ownership bookkeeping.
    --------------------------------------------------------------------- */
 
-/* Appends metadata for a numeric column whose values the caller has
-   already written directly into out->numeric at column index
-   numeric_idx - the ColumnMeta/columns-array bookkeeping half of what
-   df_add_numeric_col does, without that function's O(n * n_cols) copy-
-   and-grow half (df_add_numeric_col's own comment: "not optimized for
-   adding many columns one at a time" - every caller below is exactly
-   that, called once per column in a loop, so out->numeric is always
-   pre-sized to its final column count in one mat_new instead). */
-static void sql_append_numeric_meta(DataFrame *out, const char *name, int numeric_idx) {
-    out->columns = (ColumnMeta*)realloc(out->columns, (size_t)(out->n_cols + 1) * sizeof(ColumnMeta));
-    out->columns[out->n_cols].type = COL_NUMERIC;
-    out->columns[out->n_cols].name = frame_strdup(name);
-    out->columns[out->n_cols].index = numeric_idx;
-    out->n_cols++;
-}
-
 /* Row-gather, keeping every column of df - used directly for WHERE (see
    sql_apply_where below) and once per group inside GROUP BY aggregation
    (sql_apply_group_select), so its own cost compounds across however
@@ -905,7 +889,7 @@ static DataFrame sql_select_rows(const DataFrame *df, const int *rows, int n) {
         ColumnMeta cm = df->columns[j];
         if (cm.type == COL_NUMERIC) {
             for (int i = 0; i < n; i++) AT(out.numeric, i, numeric_idx) = AT(df->numeric, rows[i], cm.index);
-            sql_append_numeric_meta(&out, cm.name, numeric_idx);
+            frame_append_numeric_meta(&out, cm.name, numeric_idx);
             numeric_idx++;
         } else {
             char **col = (char**)malloc((size_t)n * sizeof(char*));
@@ -1353,7 +1337,7 @@ static DataFrame sql_where_select_rows(const DataFrame *df, const SqlBitmask *ma
     for (int j = 0; j < df->n_cols; j++) {
         ColumnMeta cm = df->columns[j];
         if (cm.type == COL_NUMERIC) {
-            sql_append_numeric_meta(&out, cm.name, numeric_idx);
+            frame_append_numeric_meta(&out, cm.name, numeric_idx);
             numeric_idx++;
         } else {
             char **col = (char**)malloc((size_t)total_selected * sizeof(char*));
@@ -1486,7 +1470,7 @@ static DataFrame sql_where_select_rows_mt(const DataFrame *df, const SqlBitmask 
     for (int j = 0; j < df->n_cols; j++) {
         ColumnMeta cm = df->columns[j];
         if (cm.type == COL_NUMERIC) {
-            sql_append_numeric_meta(&out, cm.name, numeric_idx);
+            frame_append_numeric_meta(&out, cm.name, numeric_idx);
             numeric_idx++;
         } else {
             char **col = (char**)malloc((size_t)total * sizeof(char*));
@@ -1603,45 +1587,6 @@ static DataFrame sql_apply_where(const SqlExpr *where, const DataFrame *df) {
 
 typedef struct { int *rows; int n; } SqlGroup;
 
-/* Multiplication by a 'random' odd constant gives a universal hash in
-   the TOP bits only - `crates/polars-utils/src/hashing.rs`'s own
-   `DirtyHash` trait documents this explicitly ("Only the top bits of
-   the hash are decent, such as used in hash_to_partition"). Getting
-   this backwards (indexing an open-addressing table by the LOW bits
-   instead) was the first of the two real bugs found while building
-   this: for small-integer group keys (a handful of category codes,
-   the common case), the low bits of this hash cluster badly, and every
-   `sql_group_table_index` call below deliberately extracts the HIGH
-   bits instead - see that function's own comment for the measured
-   effect (32x on the construction step alone, from a table clustering
-   so badly nearly every lookup meant a long linear-probe chain). */
-#define SQL_GROUP_RANDOM_ODD  0x55fbfd6bfc5458e9ULL
-#define SQL_GROUP_BOOST_CONST 0x9e3779b9ULL /* Boost's own hash_combine constant */
-
-static inline uint64_t sql_group_dirty_hash_u64(uint64_t bits) {
-    return bits * SQL_GROUP_RANDOM_ODD;
-}
-static inline uint64_t sql_group_boost_combine(uint64_t l, uint64_t r) {
-    return l ^ (r + SQL_GROUP_BOOST_CONST + (l << 6) + (r >> 2));
-}
-/* Matches `canonical_f32`/`canonical_f64` (`crates/polars-utils/src/
-   total_ord.rs`): -0.0 folds into +0.0, and every NaN folds into one
-   canonical quiet-NaN bit pattern, before hashing - so hashing and
-   equality both treat all NaNs as one group and +0/-0 as one group,
-   matching real Polars GROUP BY semantics. */
-static inline uint32_t sql_group_canonical_f32_bits(float x) {
-    if (x == 0.0f) x = 0.0f;
-    if (MISNAN(x)) return 0x7fc00000u;
-    uint32_t bits; memcpy(&bits, &x, sizeof bits);
-    return bits;
-}
-static inline uint64_t sql_group_canonical_f64_bits(double x) {
-    if (x == 0.0) x = 0.0;
-    if (MISNAN(x)) return 0x7ff8000000000000ull;
-    uint64_t bits; memcpy(&bits, &x, sizeof bits);
-    return bits;
-}
-
 /* Combines every group column's hash for one row - numeric columns via
    the canonicalized-bits dirty hash above; string columns via a plain
    FNV-1a (not a Polars port - Polars precomputes a different upstream
@@ -1660,12 +1605,12 @@ static uint64_t sql_group_row_hash(const DataFrame *df, char *const *cols, int n
         } else {
             mreal v = AT(df_col_numeric(df, cols[c]), row, 0);
 #ifdef MAT_DOUBLE
-            ch = sql_group_dirty_hash_u64(sql_group_canonical_f64_bits((double)v));
+            ch = frame_dirty_hash_u64(frame_canonical_f64_bits((double)v));
 #else
-            ch = sql_group_dirty_hash_u64((uint64_t)sql_group_canonical_f32_bits((float)v));
+            ch = frame_dirty_hash_u64((uint64_t)frame_canonical_f32_bits((float)v));
 #endif
         }
-        h = (c == 0) ? ch : sql_group_boost_combine(h, ch);
+        h = (c == 0) ? ch : frame_hash_combine(h, ch);
     }
     return h;
 }
@@ -1701,34 +1646,11 @@ static int sql_group_row_eq(const DataFrame *df, char *const *cols, int n_cols, 
    from `hash` directly, never re-touching DataFrame columns). */
 typedef struct { int *rows; int n; int cap; uint64_t hash; } SqlGroupBuild;
 
-/* Open-addressing hash table used only during construction (never
-   exposed past this section) - linear probing, not hashbrown's
-   SwissTable (a distinct, general-purpose hash-table library, not part
-   of "the group-by algorithm" itself; investigated as a possible
-   further fix for a small remaining gap at one specific data shape -
-   near-unique group keys - and deliberately not pursued: real
-   engineering effort and correctness risk for a narrow payoff, see
-   docs/PERFORMANCE_BACKLOG.md item 2 for the full cost/benefit). */
-typedef struct { uint64_t *hash; int *group; size_t cap, mask; int shift; } SqlGroupTable;
-
-/* `h >> shift` extracts the top `log2(cap)` bits of the hash as the
-   table's initial probe slot - see this section's opening comment for
-   why the bottom bits (`h & mask`) are the wrong choice for this
-   specific hash. The collision-probe WRAPAROUND step (`(pos + 1) &
-   mask`) is unrelated and unaffected - `mask` is still the correct way
-   to keep a linearly-probed index within `[0, cap)`, only the very
-   first slot computed from a fresh hash needed to change. */
-static inline size_t sql_group_table_index(const SqlGroupTable *t, uint64_t h) {
-    return (size_t)(h >> t->shift);
-}
-static void sql_group_table_init(SqlGroupTable *t, size_t cap_pow2) {
-    t->cap = cap_pow2; t->mask = cap_pow2 - 1;
-    t->shift = 64 - __builtin_ctzll(cap_pow2);
-    t->hash = (uint64_t*)malloc(cap_pow2 * sizeof(uint64_t));
-    t->group = (int*)malloc(cap_pow2 * sizeof(int));
-    for (size_t i = 0; i < cap_pow2; i++) t->group[i] = -1;
-}
-static void sql_group_table_grow(SqlGroupTable *t, const SqlGroupBuild *groups, int n_groups) {
+/* FrameHashTable itself (frame_hash_table_init/frame_hash_table_index)
+   is shared with frame/join.h - see frame/frame.h. Only the growth
+   step stays here: it needs SqlGroupBuild's cached hash per group,
+   which is specific to this file's bucket type. */
+static void sql_group_table_grow(FrameHashTable *t, const SqlGroupBuild *groups, int n_groups) {
     size_t newcap = t->cap * 2;
     size_t newmask = newcap - 1;
     int newshift = 64 - __builtin_ctzll(newcap);
@@ -1749,8 +1671,8 @@ static void sql_group_table_grow(SqlGroupTable *t, const SqlGroupBuild *groups, 
    whenever the single-column fast path below doesn't apply. */
 static SqlGroup *sql_build_groups_generic(const DataFrame *df, char *const *group_cols, int n_group_cols, int *n_groups_out) {
     int n = df->r;
-    SqlGroupTable t;
-    sql_group_table_init(&t, 16);
+    FrameHashTable t;
+    frame_hash_table_init(&t, 16);
 
     int groups_cap = 16;
     SqlGroupBuild *groups = (SqlGroupBuild*)malloc((size_t)groups_cap * sizeof(SqlGroupBuild));
@@ -1758,7 +1680,7 @@ static SqlGroup *sql_build_groups_generic(const DataFrame *df, char *const *grou
 
     for (int i = 0; i < n; i++) {
         uint64_t h = sql_group_row_hash(df, group_cols, n_group_cols, i);
-        size_t pos = sql_group_table_index(&t, h);
+        size_t pos = frame_hash_table_index(&t, h);
         int found = -1;
         while (t.group[pos] != -1) {
             int g = t.group[pos];
@@ -1802,8 +1724,8 @@ static SqlGroup *sql_build_groups_generic(const DataFrame *df, char *const *grou
 static SqlGroup *sql_build_groups_1col(const DataFrame *df, const char *col, int *n_groups_out) {
     int n = df->r;
     Mat c = df_col_numeric(df, col);
-    SqlGroupTable t;
-    sql_group_table_init(&t, 16);
+    FrameHashTable t;
+    frame_hash_table_init(&t, 16);
 
     int groups_cap = 16;
     SqlGroupBuild *groups = (SqlGroupBuild*)malloc((size_t)groups_cap * sizeof(SqlGroupBuild));
@@ -1812,11 +1734,11 @@ static SqlGroup *sql_build_groups_1col(const DataFrame *df, const char *col, int
     for (int i = 0; i < n; i++) {
         mreal v = AT(c, i, 0);
 #ifdef MAT_DOUBLE
-        uint64_t h = sql_group_dirty_hash_u64(sql_group_canonical_f64_bits((double)v));
+        uint64_t h = frame_dirty_hash_u64(frame_canonical_f64_bits((double)v));
 #else
-        uint64_t h = sql_group_dirty_hash_u64((uint64_t)sql_group_canonical_f32_bits((float)v));
+        uint64_t h = frame_dirty_hash_u64((uint64_t)frame_canonical_f32_bits((float)v));
 #endif
-        size_t pos = sql_group_table_index(&t, h);
+        size_t pos = frame_hash_table_index(&t, h);
         int found = -1;
         while (t.group[pos] != -1) {
             int g = t.group[pos];
@@ -1860,7 +1782,7 @@ static SqlGroup *sql_build_groups_1col(const DataFrame *df, const char *col, int
 static inline uint64_t sql_group_hash_to_partition(uint64_t h, int n_partitions) {
     /* Matches Polars' own `hash_to_partition` (`crates/polars-utils/src/
        hashing.rs`): `(h as u128 * n_partitions) >> 64` - the same "top
-       bits of a multiply" principle sql_group_table_index uses for
+       bits of a multiply" principle frame_hash_table_index uses for
        table-slot indexing, generalized to an arbitrary partition count
        via `unsigned __int128` (a GCC/Clang extension; this project
        already assumes that toolchain family for its AVX2 intrinsics and
@@ -1900,18 +1822,18 @@ static SqlGroup *sql_build_groups_1col_mt(const DataFrame *df, const char *col, 
         int cap = 16;
         SqlGroupBuild *groups = (SqlGroupBuild*)malloc((size_t)cap * sizeof(SqlGroupBuild));
         int n_groups = 0;
-        SqlGroupTable t;
-        sql_group_table_init(&t, 16);
+        FrameHashTable t;
+        frame_hash_table_init(&t, 16);
 
         for (int i = 0; i < n; i++) {
             mreal v = AT(c, i, 0);
 #ifdef MAT_DOUBLE
-            uint64_t h = sql_group_dirty_hash_u64(sql_group_canonical_f64_bits((double)v));
+            uint64_t h = frame_dirty_hash_u64(frame_canonical_f64_bits((double)v));
 #else
-            uint64_t h = sql_group_dirty_hash_u64((uint64_t)sql_group_canonical_f32_bits((float)v));
+            uint64_t h = frame_dirty_hash_u64((uint64_t)frame_canonical_f32_bits((float)v));
 #endif
             if ((int)sql_group_hash_to_partition(h, n_threads) != tid) continue;
-            size_t pos = sql_group_table_index(&t, h);
+            size_t pos = frame_hash_table_index(&t, h);
             int found = -1;
             while (t.group[pos] != -1) {
                 int g = t.group[pos];
@@ -2292,7 +2214,7 @@ static DataFrame sql_apply_group_select(const SqlQuery *q, const DataFrame *df) 
             free(string_acc[it]);
         } else {
             for (int g = 0; g < n_groups; g++) AT(out.numeric, g, numeric_idx) = numeric_acc[it].d[g];
-            sql_append_numeric_meta(&out, name, numeric_idx);
+            frame_append_numeric_meta(&out, name, numeric_idx);
             numeric_idx++;
         }
         mat_free(numeric_acc[it]);
@@ -2343,7 +2265,7 @@ static DataFrame sql_project(const SqlQuery *q, const DataFrame *df) {
             int full = (r.numeric.r == df->r);
             for (int k = 0; k < df->r; k++)
                 AT(out.numeric, k, numeric_idx) = full ? AT(r.numeric, k, 0) : r.numeric.d[0];
-            sql_append_numeric_meta(&out, name, numeric_idx);
+            frame_append_numeric_meta(&out, name, numeric_idx);
             numeric_idx++;
         }
         sql_eval_free(&r);
