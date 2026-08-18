@@ -50,6 +50,9 @@ examples/mcs_example: examples/mcs_example.c mcs.h stats.h random.h special.h fr
 examples/rdata_example: examples/rdata_example.c frame/rdata.h gzip.h frame/csv.h frame/frame.h stats.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/rdata_example.c $(LDLIBS) -o examples/rdata_example
 
+examples/join_example: examples/join_example.c frame/join.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) -I. examples/join_example.c $(LDLIBS) -o examples/join_example
+
 # --- benchmarks (tests/performance/) ---
 
 # Standalone design-space benchmark (no Python/ctypes, no pandas/NumPy
