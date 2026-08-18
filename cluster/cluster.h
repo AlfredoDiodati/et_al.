@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <time.h>
+#include <sys/time.h>
 
 /* Distributed execution of an embarrassingly parallel map across a few
    machines on one local network, coordinated so that no task index is ever
