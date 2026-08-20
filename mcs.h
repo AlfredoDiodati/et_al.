@@ -53,12 +53,35 @@
    MCS_TMAX costs O(M) t-statistics per round against MCS_TR's
    O(M^2), and is the default for that reason as much as any other.
 
-   Every t-statistic here divides a mean loss differential by the square
-   root of stats.h's HAC variance of that mean, not by the plain sample
-   variance - loss differentials are serially correlated, and the plain
-   variance would understate the standard error and reject far too
-   often. The two procedures default to different lag windows, each
-   following its own source: the MCS uses Bartlett, and dm_test uses the
+   Every t-statistic divides a mean loss differential by an estimate of
+   the standard error of that mean, never by the plain sample variance:
+   loss differentials are serially correlated, and the plain variance
+   would understate the standard error and reject far too often. Three
+   estimates are available, chosen with MCSOptions.variance, and they
+   differ in what carries the serial correlation:
+
+   - MCS_VARIANCE_BOOTSTRAP, the default, is Hansen, Lunde and Nason's
+     own: the variance of the resampled mean over the bootstrap draws,
+     v_k = (1/B) sum_b (dbar_k(b) - dbar_k)^2. The block bootstrap is
+     what carries the dependence, so nothing else has to, and the MCS
+     needs no lag window at all.
+   - MCS_VARIANCE_HAC is stats.h's Bartlett HAC of the differential
+     series divided by T, computed once from the data and used for the
+     observed statistic and every bootstrap statistic alike.
+   - MCS_VARIANCE_HAC_RESAMPLE is that same Bartlett HAC recomputed on
+     each resample, so a bootstrap statistic is divided by its own
+     draw's standard error rather than the sample's.
+
+   The three do not agree. A block resample has no dependence across
+   block boundaries, so a HAC computed on it is smaller than the same
+   HAC computed on the data; under MCS_VARIANCE_HAC_RESAMPLE that
+   inflates every bootstrap t-statistic, raises the p-value, and returns
+   a larger confidence set. The other two agree closely with each other.
+   tests/correctness/test_mcs_variance.c measures both statements on
+   this code path and writes out/mcs_variance_size.txt;
+   docs/MCS_DOCUMENTATION.md quotes the table.
+
+   dm_test has a lag window of its own and its own default, the
    rectangular window at truncation h-1 that Diebold and Mariano
    specify. See dm_test's own comment for why.
 
@@ -91,11 +114,19 @@
      what the reference implementation does too; a set of models that
      are literally the same is a question about the caller's data, not
      an answer this procedure can give.
-   - The MCS p-value reported for a model that survives the procedure is
-     1, matching the Python implementation this was translated from
-     rather than Hansen, Lunde and Nason, who report the p-value of the
-     test that stopped the elimination. That number is available on its
-     own as MCSResult.final_pvalue.
+   - The elimination runs all the way to the last model even after a
+     test has been accepted. Definition 4 defines a surviving model's
+     MCS p-value as the p-value of the round that would eventually have
+     dropped it, and that round has to be run for the number to exist.
+     Only the rounds up to the accepted one decide the set; the rest
+     exist to fill in p-values, which is what makes the p-value column
+     readable at any alpha rather than only the one the run used.
+   - A round is accepted at p >= alpha, so Theorem 4's "a model is in
+     the set if and only if its MCS p-value is at least alpha" holds on
+     the returned numbers exactly. arch.bootstrap.MCS accepts at
+     p > alpha instead; the two differ only when a p-value lands exactly
+     on alpha, which a Monte Carlo estimate over finitely many draws
+     does with positive probability.
 
    Every MCSResult owns its arrays, including deep copies of the model
    names - free with mcs_free. A result therefore outlives the
@@ -115,6 +146,12 @@
 
 typedef enum { MCS_TMAX, MCS_TR } MCSStat;
 typedef enum { MCS_LOSS_MSE, MCS_LOSS_MAE, MCS_LOSS_QLIKE } MCSLoss;
+
+/* Which estimate of the standard error a t-statistic divides by. See
+   the header comment for what separates them and which one Hansen,
+   Lunde and Nason use. MCSOptions.hac_lag is read by the two HAC
+   variants and ignored by MCS_VARIANCE_BOOTSTRAP. */
+typedef enum { MCS_VARIANCE_BOOTSTRAP, MCS_VARIANCE_HAC, MCS_VARIANCE_HAC_RESAMPLE } MCSVariance;
 
 /* Smallest variance an MCS t-statistic will divide by. See the header
    comment: this exists to keep two identical models from producing a
@@ -265,19 +302,30 @@ static inline double mcs_center(const double *restrict s, int n, double *restric
     return mu;
 }
 
-/* t-statistic of one differential series: its mean divided by the
-   standard error of that mean, the HAC long-run variance over n.
-   scratch must hold n doubles; mean_out receives the series mean, which
-   the bootstrap needs later to recenter its own draws. Bartlett only -
-   the MCS is the caller, and the floor below assumes a non-negative
-   estimate to floor. */
+/* Apply MCS_VAR_FLOOR. Every variance a t-statistic divides by passes
+   through here, whichever of the three estimates produced it. */
+static inline double mcs_floor_var(double v) {
+    return v < MCS_VAR_FLOOR ? MCS_VAR_FLOOR : v;
+}
+
+/* Variance of the mean of one differential series under the two HAC
+   variants: stats.h's Bartlett long-run variance over n, floored.
+   scratch must hold n doubles and comes back holding the centered
+   series; mean_out receives the series mean, which the bootstrap needs
+   later to recenter its own draws. Bartlett only - the MCS is the
+   caller, and the floor assumes a non-negative estimate to floor. */
+static inline double mcs_hac_var_mean(const double *restrict s, int n, int hac_lag,
+                                      double *restrict scratch, double *mean_out) {
+    *mean_out = mcs_center(s, n, scratch);
+    return mcs_floor_var(stats_hac_var_centered(scratch, n, hac_lag, STATS_HAC_BARTLETT) / n);
+}
+
+/* t-statistic of one differential series under the two HAC variants:
+   its mean over the standard error of that mean. */
 static inline double mcs_tstat(const double *restrict s, int n, int hac_lag,
                                double *restrict scratch, double *mean_out) {
-    double mu = mcs_center(s, n, scratch);
-    double v = stats_hac_var_centered(scratch, n, hac_lag, STATS_HAC_BARTLETT) / n;
-    if (v < MCS_VAR_FLOOR) v = MCS_VAR_FLOOR;
-    *mean_out = mu;
-    return mu / sqrt(v);
+    double v = mcs_hac_var_mean(s, n, hac_lag, scratch, mean_out);
+    return *mean_out / sqrt(v);
 }
 
 /* Reduce per-series t-statistics to the round's test statistic:
@@ -304,41 +352,250 @@ static inline void mcs_gather(const DataFrame *losses, double *restrict out) {
             out[(size_t)t * num.c + i] = (double)AT(num, t, i);
 }
 
+/* Procedural options for mcs(). alpha is the test size, so the returned
+   set has confidence level 1-alpha. bootstrap is the number of
+   resamples every round's p-value is estimated from, and is the only
+   thing standing between the caller and a p-value with visible Monte
+   Carlo noise. block_length is the moving block bootstrap's block
+   length. variance selects the standard error every t-statistic divides
+   by, which the header comment describes; hac_lag is the truncation lag
+   the two HAC variants use and MCS_VARIANCE_BOOTSTRAP ignores. A
+   negative hac_lag means block_length - 1, the conventional pairing
+   (the bootstrap already assumes dependence dies out past a block, so
+   the HAC estimate assumes the same), and any value is clamped to at
+   most T-1. seed and stream select the random.h stream, so a given pair
+   reproduces a run exactly and different stream values give independent
+   runs off one seed. */
+typedef struct {
+    double alpha;
+    int bootstrap;
+    int block_length;
+    int hac_lag;
+    MCSStat stat;
+    MCSVariance variance;
+    uint64_t seed;
+    uint64_t stream;
+} MCSOptions;
+
+/* alpha = 0.05, 2000 bootstrap resamples, blocks of 10, MCS_TMAX, the
+   bootstrap variance Hansen, Lunde and Nason use, hac_lag derived from
+   the block length in case a caller switches to a HAC variant, stream 0
+   of seed 123. */
+static inline MCSOptions mcs_options_default(void) {
+    MCSOptions o;
+    o.alpha = 0.05;
+    o.bootstrap = 2000;
+    o.block_length = 10;
+    o.hac_lag = -1;
+    o.stat = MCS_TMAX;
+    o.variance = MCS_VARIANCE_BOOTSTRAP;
+    o.seed = 123;
+    o.stream = 0;
+    return o;
+}
+
+/* The truncation lag a run will actually use: opt.hac_lag when it is
+   nonnegative, block_length - 1 otherwise, clamped to at most T-1.
+   Public, and called by mcs() itself rather than duplicated inside it,
+   so a report of a run and the run cannot disagree about the lag - the
+   README's "do not let a piece of bookkeeping state drift out of sync
+   with what a function actually computed", applied before it can.
+   Derived whatever the variance is, so that switching to a HAC variant
+   does not also change what the lag means. */
+static inline int mcs_effective_hac_lag(const DataFrame *losses, MCSOptions opt) {
+    int lag = opt.hac_lag < 0 ? opt.block_length - 1 : opt.hac_lag;
+    if (lag > losses->r - 1) lag = losses->r - 1;
+    return lag;
+}
+
+/* Working memory for the procedure, sized for the first round's series
+   count and reused as the set shrinks, so that nothing allocates inside
+   the bootstrap loop. d holds the loss differentials series-major, the
+   layout mcs_build_diffs writes; dbar, var and t hold one entry per
+   series; scratch, resampled and idx hold one entry per observation.
+
+   keep_draws is how many resampled means have to be held at once:
+   opt.bootstrap when the round divides both sides by one standard error
+   per series, since the draws are needed again after the variance is
+   formed from them, and 0 under MCS_VARIANCE_HAC_RESAMPLE, which
+   reduces each draw as it is made, or for a caller that only wants HAC
+   t-statistics and no bootstrap at all. */
+typedef struct {
+    double *d;
+    double *dbar;
+    double *var;
+    double *t;
+    double *bmean;
+    double *scratch;
+    double *resampled;
+    int *idx;
+} MCSScratch;
+
+static inline MCSScratch mcs_scratch_new(int n, int k_max, int keep_draws) {
+    assert(n >= 1 && k_max >= 1 && keep_draws >= 0);
+    MCSScratch sc;
+    sc.d = (double *)malloc((size_t)k_max * n * sizeof *sc.d);
+    sc.dbar = (double *)malloc((size_t)k_max * sizeof *sc.dbar);
+    sc.var = (double *)malloc((size_t)k_max * sizeof *sc.var);
+    sc.t = (double *)malloc((size_t)k_max * sizeof *sc.t);
+    sc.bmean = keep_draws ? (double *)malloc((size_t)k_max * keep_draws * sizeof *sc.bmean) : NULL;
+    sc.scratch = (double *)malloc((size_t)n * sizeof *sc.scratch);
+    sc.resampled = (double *)malloc((size_t)n * sizeof *sc.resampled);
+    sc.idx = (int *)malloc((size_t)n * sizeof *sc.idx);
+    assert(sc.d && sc.dbar && sc.var && sc.t && sc.scratch && sc.resampled && sc.idx);
+    assert(!keep_draws || sc.bmean);
+    return sc;
+}
+
+static inline void mcs_scratch_free(MCSScratch *sc) {
+    free(sc->d); free(sc->dbar); free(sc->var); free(sc->t);
+    free(sc->bmean); free(sc->scratch); free(sc->resampled); free(sc->idx);
+    sc->d = sc->dbar = sc->var = sc->t = sc->bmean = NULL;
+    sc->scratch = sc->resampled = NULL;
+    sc->idx = NULL;
+}
+
+/* One equivalence test on the k_count differential series already in
+   sc->d. Fills sc->dbar, sc->var and sc->t, writes the round's
+   statistic to stat_out and returns its bootstrap p-value, the fraction
+   of resampled statistics strictly above the observed one. rng is
+   advanced by opt.bootstrap block draws rather than reseeded, so a loop
+   over rounds walks one stream.
+
+   The null is imposed by recentering each resampled mean on the
+   empirical mean dbar[k]: the p-value has to come from the null's
+   distribution, not from data that may well violate it.
+
+   Under MCS_VARIANCE_HAC_RESAMPLE each draw is divided by its own HAC
+   and discarded. Under the other two the draws are kept as deviations
+   from dbar, which is both the null-imposed bootstrap statistic and,
+   squared and averaged, the bootstrap variance - so sc->bmean must hold
+   opt.bootstrap * k_count doubles there. */
+static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
+                               Rng *rng, MCSScratch *sc, double *stat_out) {
+    assert(n >= 2 && k_count >= 1 && opt.bootstrap >= 1);
+    assert(hac_lag >= 0 && hac_lag < n);
+    assert(opt.block_length >= 1 && opt.block_length <= n);
+
+    for (int k = 0; k < k_count; k++) {
+        if (opt.variance == MCS_VARIANCE_BOOTSTRAP)
+            sc->dbar[k] = mcs_center(sc->d + (size_t)k * n, n, sc->scratch);
+        else
+            sc->var[k] = mcs_hac_var_mean(sc->d + (size_t)k * n, n, hac_lag,
+                                          sc->scratch, &sc->dbar[k]);
+    }
+
+    int exceedances = 0;
+
+    if (opt.variance == MCS_VARIANCE_HAC_RESAMPLE) {
+        for (int k = 0; k < k_count; k++) sc->t[k] = sc->dbar[k] / sqrt(sc->var[k]);
+        double t_emp = mcs_reduce(sc->t, k_count, opt.stat);
+        for (int b = 0; b < opt.bootstrap; b++) {
+            mcs_block_indices(rng, n, opt.block_length, sc->idx);
+            double t_star = -DBL_MAX;
+            for (int k = 0; k < k_count; k++) {
+                const double *restrict src = sc->d + (size_t)k * n;
+                for (int i = 0; i < n; i++) sc->resampled[i] = src[sc->idx[i]];
+                double mu;
+                double v = mcs_hac_var_mean(sc->resampled, n, hac_lag, sc->scratch, &mu);
+                double tk = (mu - sc->dbar[k]) / sqrt(v);
+                double val = opt.stat == MCS_TR ? fabs(tk) : tk;
+                if (val > t_star) t_star = val;
+            }
+            if (t_star > t_emp) exceedances++;
+        }
+        *stat_out = t_emp;
+        return (double)exceedances / opt.bootstrap;
+    }
+
+    assert(sc->bmean && "mcs_round: this variance needs the draws kept");
+    for (int b = 0; b < opt.bootstrap; b++) {
+        mcs_block_indices(rng, n, opt.block_length, sc->idx);
+        double *restrict row = sc->bmean + (size_t)b * k_count;
+        for (int k = 0; k < k_count; k++) {
+            const double *restrict src = sc->d + (size_t)k * n;
+            double mu = 0;
+            for (int i = 0; i < n; i++) mu += src[sc->idx[i]];
+            row[k] = mu / n - sc->dbar[k];
+        }
+    }
+    if (opt.variance == MCS_VARIANCE_BOOTSTRAP)
+        for (int k = 0; k < k_count; k++) {
+            double ss = 0;
+            for (int b = 0; b < opt.bootstrap; b++) {
+                double e = sc->bmean[(size_t)b * k_count + k];
+                ss += e * e;
+            }
+            sc->var[k] = mcs_floor_var(ss / opt.bootstrap);
+        }
+    for (int k = 0; k < k_count; k++) sc->t[k] = sc->dbar[k] / sqrt(sc->var[k]);
+    double t_emp = mcs_reduce(sc->t, k_count, opt.stat);
+    for (int b = 0; b < opt.bootstrap; b++) {
+        const double *restrict row = sc->bmean + (size_t)b * k_count;
+        double t_star = -DBL_MAX;
+        for (int k = 0; k < k_count; k++) {
+            double tk = row[k] / sqrt(sc->var[k]);
+            double val = opt.stat == MCS_TR ? fabs(tk) : tk;
+            if (val > t_star) t_star = val;
+        }
+        if (t_star > t_emp) exceedances++;
+    }
+    *stat_out = t_emp;
+    return (double)exceedances / opt.bootstrap;
+}
+
 /* Every loss differential's t-statistic for one loss DataFrame, written
-   into t_out, which must hold mcs_n_series(stat, M) doubles in the
-   series order mcs_n_series documents. hac_lag must be in [0, T-1].
+   into t_out, which must hold mcs_n_series(opt.stat, M) doubles in the
+   series order mcs_n_series documents.
 
    This and the two functions below it are the procedure's structural
    primitives, public so a caller can run their own elimination loop or
    check a single round by hand - mcs() is convenience built on top of
    them, not a replacement for them. Unlike mcs() they allocate their
-   own scratch per call, which is why mcs() does not use them. */
-static inline void mcs_tstats(const DataFrame *losses, MCSStat stat, int hac_lag,
-                              double *t_out) {
+   own scratch per call, which is why mcs() does not use them.
+
+   They take the whole MCSOptions rather than a statistic and a lag
+   because under MCS_VARIANCE_BOOTSTRAP a t-statistic is not a function
+   of the data alone: its standard error comes from the resamples, so
+   the block length, the draw count and the stream all enter it. They
+   draw from rng_new(opt.seed, opt.stream) in the order mcs() does, so
+   with the same options they return mcs()'s first round exactly. Under
+   the two HAC variants no resampling happens here at all. */
+static inline void mcs_tstats(const DataFrame *losses, MCSOptions opt, double *t_out) {
     int n = losses->r, m = mcs_n_models(losses);
-    assert(n >= 2 && m >= 2 && hac_lag >= 0 && hac_lag < n);
-    int k_count = mcs_n_series(stat, m);
+    assert(n >= 2 && m >= 2);
+    int hac_lag = mcs_effective_hac_lag(losses, opt);
+    int k_count = mcs_n_series(opt.stat, m);
+    int keep = opt.variance == MCS_VARIANCE_BOOTSTRAP ? opt.bootstrap : 0;
+    MCSScratch sc = mcs_scratch_new(n, k_count, keep);
     double *buf = (double *)malloc((size_t)n * m * sizeof *buf);
-    double *d = (double *)malloc((size_t)k_count * n * sizeof *d);
-    double *scratch = (double *)malloc((size_t)n * sizeof *scratch);
-    assert(buf && d && scratch);
+    assert(buf);
+    assert(losses->numeric.r == n && losses->numeric.c == m);
     mcs_gather(losses, buf);
-    mcs_build_diffs(buf, n, m, stat, d);
-    for (int k = 0; k < k_count; k++) {
-        double mu;
-        t_out[k] = mcs_tstat(d + (size_t)k * n, n, hac_lag, scratch, &mu);
+    mcs_build_diffs(buf, n, m, opt.stat, sc.d);
+    if (opt.variance == MCS_VARIANCE_BOOTSTRAP) {
+        Rng rng = rng_new(opt.seed, opt.stream);
+        double stat;
+        mcs_round(n, k_count, opt, hac_lag, &rng, &sc, &stat);
+    } else {
+        for (int k = 0; k < k_count; k++) {
+            double mu;
+            sc.t[k] = mcs_tstat(sc.d + (size_t)k * n, n, hac_lag, sc.scratch, &mu);
+        }
     }
-    free(buf); free(d); free(scratch);
+    for (int k = 0; k < k_count; k++) t_out[k] = sc.t[k];
+    mcs_scratch_free(&sc);
+    free(buf);
 }
 
 /* The empirical test statistic of one round: the value mcs() compares
    its bootstrap distribution against. */
-static inline double mcs_statistic(const DataFrame *losses, MCSStat stat, int hac_lag) {
-    int k_count = mcs_n_series(stat, mcs_n_models(losses));
+static inline double mcs_statistic(const DataFrame *losses, MCSOptions opt) {
+    int k_count = mcs_n_series(opt.stat, mcs_n_models(losses));
     double *t = (double *)malloc((size_t)k_count * sizeof *t);
     assert(t);
-    mcs_tstats(losses, stat, hac_lag, t);
-    double s = mcs_reduce(t, k_count, stat);
+    mcs_tstats(losses, opt, t);
+    double s = mcs_reduce(t, k_count, opt.stat);
     free(t);
     return s;
 }
@@ -374,63 +631,16 @@ static inline int mcs_worst_from_tstats(const double *restrict t, int m, MCSStat
 
 /* The model mcs() would eliminate from this loss DataFrame, as a model
    index (mcs_model_name turns it into a name). */
-static inline int mcs_worst(const DataFrame *losses, MCSStat stat, int hac_lag) {
+static inline int mcs_worst(const DataFrame *losses, MCSOptions opt) {
     int m = mcs_n_models(losses);
-    int k_count = mcs_n_series(stat, m);
+    int k_count = mcs_n_series(opt.stat, m);
     double *t = (double *)malloc((size_t)k_count * sizeof *t);
     double *rowmax = (double *)malloc((size_t)m * sizeof *rowmax);
     assert(t && rowmax);
-    mcs_tstats(losses, stat, hac_lag, t);
-    int worst = mcs_worst_from_tstats(t, m, stat, rowmax);
+    mcs_tstats(losses, opt, t);
+    int worst = mcs_worst_from_tstats(t, m, opt.stat, rowmax);
     free(t); free(rowmax);
     return worst;
-}
-
-/* Procedural options for mcs(). alpha is the test size, so the returned
-   set has confidence level 1-alpha. bootstrap is the number of
-   resamples every round's p-value is estimated from, and is the only
-   thing standing between the caller and a p-value with visible Monte
-   Carlo noise. block_length is the moving block bootstrap's block
-   length. hac_lag is the truncation lag; a negative value means
-   block_length - 1, the conventional pairing (the bootstrap already
-   assumes dependence dies out past a block, so the HAC estimate assumes
-   the same), and any value is clamped to at most T-1. seed and stream
-   select the random.h stream, so a given pair reproduces a run exactly
-   and different stream values give independent runs off one seed. */
-typedef struct {
-    double alpha;
-    int bootstrap;
-    int block_length;
-    int hac_lag;
-    MCSStat stat;
-    uint64_t seed;
-    uint64_t stream;
-} MCSOptions;
-
-/* alpha = 0.05, 2000 bootstrap resamples, blocks of 10, hac_lag derived
-   from the block length, MCS_TMAX, stream 0 of seed 123. */
-static inline MCSOptions mcs_options_default(void) {
-    MCSOptions o;
-    o.alpha = 0.05;
-    o.bootstrap = 2000;
-    o.block_length = 10;
-    o.hac_lag = -1;
-    o.stat = MCS_TMAX;
-    o.seed = 123;
-    o.stream = 0;
-    return o;
-}
-
-/* The truncation lag a run will actually use: opt.hac_lag when it is
-   nonnegative, block_length - 1 otherwise, clamped to at most T-1.
-   Public, and called by mcs() itself rather than duplicated inside it,
-   so a report of a run and the run cannot disagree about the lag - the
-   README's "do not let a piece of bookkeeping state drift out of sync
-   with what a function actually computed", applied before it can. */
-static inline int mcs_effective_hac_lag(const DataFrame *losses, MCSOptions opt) {
-    int lag = opt.hac_lag < 0 ? opt.block_length - 1 : opt.hac_lag;
-    if (lag > losses->r - 1) lag = losses->r - 1;
-    return lag;
 }
 
 /* The surviving set, the order everything else left in, and the
@@ -439,25 +649,34 @@ static inline int mcs_effective_hac_lag(const DataFrame *losses, MCSOptions opt)
    surviving holds n_surviving model indices, ascending, and
    surviving_names the matching names; elimination_order holds the other
    n_eliminated in the order they were dropped, worst first, with
-   elimination_names alongside. pvalue has one entry per model, in the
-   DataFrame's numeric-column order: for an eliminated model, the
-   largest round p-value seen up to and including the round that dropped
-   it (so it increases along elimination_order, as an MCS p-value must);
-   for a survivor, 1, per this file's header comment.
+   elimination_names alongside. Those two together are every model, so
+   n_surviving + n_eliminated is m0.
+
+   pvalue has one entry per model, in the DataFrame's numeric-column
+   order, and is Definition 4's MCS p-value: the largest round p-value
+   seen up to and including the round that dropped that model, with 1
+   for the model left at the end, whose null hypothesis is that it is as
+   good as itself. It increases along elimination_order, as an MCS
+   p-value must, and it satisfies Theorem 4 - pvalue[j] >= alpha exactly
+   for the models in surviving, and for no others. A model in the set
+   therefore carries a real number, not a placeholder, and the same
+   result can be read at a stricter alpha than the run used without
+   rerunning anything.
 
    The name arrays are deep copies, not views into the DataFrame, so a
    result stays valid after its input is freed - MCSResult is an owning
    type and a dangling model name is a far worse failure than the copy
    costs.
 
-   converged says whether the procedure stopped because a round's test
-   was not rejected, which is the only way it terminates with a set
-   whose confidence level means anything. It is 0 when elimination ran
-   all the way down to a single model without ever failing to reject -
-   the surviving set is then that one model by exhaustion rather than by
-   evidence, and final_pvalue is the last round's p-value, which was at
-   most alpha. When converged is 1, final_pvalue is the p-value of the
-   round that stopped it. */
+   converged says whether a round's test was ever accepted, which is the
+   only way the procedure ends with a set whose confidence level means
+   anything. It is 0 when every round down to the last two models
+   rejected - the surviving set is then one model by exhaustion rather
+   than by evidence, and final_pvalue is the last round's p-value, which
+   was below alpha. When converged is 1, final_pvalue is the p-value of
+   the round that decided the set. Elimination continues past that round
+   either way, but only to fill in pvalue; the rounds after it change
+   nothing about surviving or elimination_order. */
 typedef struct {
     int m0;
     int n_surviving;
@@ -503,13 +722,14 @@ static inline int mcs_in_set(const MCSResult *res, int j) {
    columns are the competing models. Caller must mcs_free() the result.
 
    Each round forms the loss differentials of the models still in the
-   set, computes the round's statistic, simulates its null distribution
-   by drawing opt.bootstrap moving-block resamples of the observation
-   index and recentering each resampled mean on the empirical one, and
-   takes the p-value as the fraction of resampled statistics exceeding
-   the empirical one. A p-value above alpha stops the procedure; at or
-   below it, the elimination rule drops one model and the next round
-   begins.
+   set, computes the round's statistic and its bootstrap p-value, and
+   drops the model the elimination rule names. The first round whose
+   p-value reaches alpha decides the surviving set; the rounds after it
+   run anyway, because a surviving model's MCS p-value is the p-value of
+   the round that would have dropped it and there is no other way to
+   learn it. That is m0-1 rounds always, so the cost does not depend on
+   how early the procedure settles, and the rounds get cheaper as the
+   set shrinks.
 
    All scratch is allocated once, sized for the first round's M, and
    reused as the set shrinks - there is no allocation anywhere inside
@@ -526,17 +746,13 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
     assert(hac_lag >= 0);
 
     int k_max = mcs_n_series(opt.stat, m0);
+    int keep = opt.variance == MCS_VARIANCE_HAC_RESAMPLE ? 0 : opt.bootstrap;
+    MCSScratch sc = mcs_scratch_new(n, k_max, keep);
     double *all = (double *)malloc((size_t)n * m0 * sizeof *all);
     double *active_losses = (double *)malloc((size_t)n * m0 * sizeof *active_losses);
-    double *d = (double *)malloc((size_t)k_max * n * sizeof *d);
-    double *dbar = (double *)malloc((size_t)k_max * sizeof *dbar);
-    double *t = (double *)malloc((size_t)k_max * sizeof *t);
     double *rowmax = (double *)malloc((size_t)m0 * sizeof *rowmax);
-    double *scratch = (double *)malloc((size_t)n * sizeof *scratch);
-    double *resampled = (double *)malloc((size_t)n * sizeof *resampled);
-    int *idx = (int *)malloc((size_t)n * sizeof *idx);
     int *active = (int *)malloc((size_t)m0 * sizeof *active);
-    assert(all && active_losses && d && dbar && t && rowmax && scratch && resampled && idx && active);
+    assert(all && active_losses && rowmax && active);
 
     mcs_gather(losses, all);
     for (int i = 0; i < m0; i++) active[i] = i;
@@ -557,6 +773,7 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
 
     Rng rng = rng_new(opt.seed, opt.stream);
     int m = m0;
+    int decided = 0;
     double best_p = 0;
 
     while (m >= 2) {
@@ -565,58 +782,47 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
                 active_losses[(size_t)t_i * m + i] = all[(size_t)t_i * m0 + active[i]];
 
         int k_count = mcs_n_series(opt.stat, m);
-        mcs_build_diffs(active_losses, n, m, opt.stat, d);
-        for (int k = 0; k < k_count; k++)
-            t[k] = mcs_tstat(d + (size_t)k * n, n, hac_lag, scratch, &dbar[k]);
-        double t_emp = mcs_reduce(t, k_count, opt.stat);
-
-        /* The bootstrap null: each resampled series is recentered on the
-           empirical mean dbar[k], which is what imposes equal expected
-           loss on a resample drawn from data that may well violate it -
-           the p-value has to come from the null's distribution, not the
-           data's. */
-        int exceedances = 0;
-        for (int b = 0; b < opt.bootstrap; b++) {
-            mcs_block_indices(&rng, n, opt.block_length, idx);
-            double t_star = -DBL_MAX;
-            for (int k = 0; k < k_count; k++) {
-                const double *restrict src = d + (size_t)k * n;
-                for (int i = 0; i < n; i++) resampled[i] = src[idx[i]];
-                double mu = mcs_center(resampled, n, scratch);
-                double v = stats_hac_var_centered(scratch, n, hac_lag, STATS_HAC_BARTLETT) / n;
-                if (v < MCS_VAR_FLOOR) v = MCS_VAR_FLOOR;
-                double tk = (mu - dbar[k]) / sqrt(v);
-                double val = opt.stat == MCS_TR ? fabs(tk) : tk;
-                if (val > t_star) t_star = val;
-            }
-            if (t_star > t_emp) exceedances++;
-        }
-        double p = (double)exceedances / opt.bootstrap;
+        mcs_build_diffs(active_losses, n, m, opt.stat, sc.d);
+        double t_emp;
+        double p = mcs_round(n, k_count, opt, hac_lag, &rng, &sc, &t_emp);
         if (p > best_p) best_p = p;
-        res.final_pvalue = p;
 
-        if (p > opt.alpha) {
-            res.converged = 1;
-            break;
+        /* Theorem 4 puts a model in the set exactly when its MCS
+           p-value reaches alpha, so a round at alpha is accepted. */
+        if (!decided) {
+            res.final_pvalue = p;
+            if (p >= opt.alpha) {
+                decided = 1;
+                res.converged = 1;
+                res.n_surviving = m;
+                for (int i = 0; i < m; i++) {
+                    res.surviving[i] = active[i];
+                    res.surviving_names[i] = frame_strdup(mcs_model_name(losses, active[i]));
+                }
+            }
         }
 
-        int worst = mcs_worst_from_tstats(t, m, opt.stat, rowmax);
-        res.elimination_names[res.n_eliminated] = frame_strdup(mcs_model_name(losses, active[worst]));
-        res.elimination_order[res.n_eliminated++] = active[worst];
+        int worst = mcs_worst_from_tstats(sc.t, m, opt.stat, rowmax);
         res.pvalue[active[worst]] = best_p;
+        if (!decided) {
+            res.elimination_names[res.n_eliminated] = frame_strdup(mcs_model_name(losses, active[worst]));
+            res.elimination_order[res.n_eliminated++] = active[worst];
+        }
         for (int i = worst; i < m - 1; i++) active[i] = active[i + 1];
         m--;
     }
 
-    res.n_surviving = m;
-    for (int i = 0; i < m; i++) {
-        res.surviving[i] = active[i];
-        res.surviving_names[i] = frame_strdup(mcs_model_name(losses, active[i]));
-        res.pvalue[active[i]] = 1;
+    /* The last model's null hypothesis is that it is as good as itself,
+       so Definition 4 gives it a p-value of 1 by convention. */
+    res.pvalue[active[0]] = 1;
+    if (!decided) {
+        res.n_surviving = 1;
+        res.surviving[0] = active[0];
+        res.surviving_names[0] = frame_strdup(mcs_model_name(losses, active[0]));
     }
 
-    free(all); free(active_losses); free(d); free(dbar); free(t);
-    free(rowmax); free(scratch); free(resampled); free(idx); free(active);
+    mcs_scratch_free(&sc);
+    free(all); free(active_losses); free(rowmax); free(active);
     return res;
 }
 
@@ -661,8 +867,8 @@ static inline void mcs_fwrite_report(FILE *f, const char *title,
     fprintf(f, "  eliminated, worst first:");
     if (res->n_eliminated == 0) fprintf(f, " none");
     for (int i = 0; i < res->n_eliminated; i++) fprintf(f, " %s", res->elimination_names[i]);
-    fprintf(f, "\n  stopped on a non-rejection: %s (p = %.3f)\n",
-            res->converged ? "yes" : "no, eliminated down to one model",
+    fprintf(f, "\n  set decided by an accepted test: %s (p = %.3f)\n",
+            res->converged ? "yes" : "no, every test rejected down to one model",
             res->final_pvalue);
 }
 
@@ -677,8 +883,12 @@ static inline void mcs_fwrite_options(FILE *f, const DataFrame *losses, MCSOptio
                                                       : "Tmax, each model against the field");
     fprintf(f, "  test      alpha = %.3f, %d moving-block resamples of %d observations\n",
             opt.alpha, opt.bootstrap, opt.block_length);
-    fprintf(f, "  variance  Bartlett HAC, truncation lag %d\n",
-            mcs_effective_hac_lag(losses, opt));
+    if (opt.variance == MCS_VARIANCE_BOOTSTRAP)
+        fprintf(f, "  variance  bootstrap variance of the resampled mean\n");
+    else
+        fprintf(f, "  variance  Bartlett HAC%s, truncation lag %d\n",
+                opt.variance == MCS_VARIANCE_HAC ? " of the sample" : " recomputed on each resample",
+                mcs_effective_hac_lag(losses, opt));
     fprintf(f, "  stream    seed %llu, stream %llu\n",
             (unsigned long long)opt.seed, (unsigned long long)opt.stream);
 }

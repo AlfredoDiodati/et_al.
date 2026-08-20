@@ -148,6 +148,19 @@ static DataFrame losses_from(int n, int m, const double *values, const char *con
     return df;
 }
 
+/* Options naming a HAC t-statistic at a given truncation lag: the form
+   the independent references above compute, and the form mcs() uses
+   under MCS_VARIANCE_HAC. Under the default bootstrap variance a
+   t-statistic depends on the resamples too, so the primitives take the
+   whole options struct and there is no lag-only call. */
+static MCSOptions hac_opts(MCSStat stat, int lag) {
+    MCSOptions o = mcs_options_default();
+    o.stat = stat;
+    o.variance = MCS_VARIANCE_HAC;
+    o.hac_lag = lag;
+    return o;
+}
+
 static void test_loss_known_values(void) {
     puts("mcs_loss: known values, column naming, string columns ignored");
 
@@ -199,7 +212,7 @@ static void test_loss_known_values(void) {
     assert(mcs_n_models(&mse2) == 2);
     assert(strcmp(mcs_model_name(&mse2, 1), "f2") == 0);
     /* and the statistic is unchanged by the string column's presence */
-    CHECKD(mcs_statistic(&mse2, MCS_TMAX, 0), mcs_statistic(&mse, MCS_TMAX, 0));
+    CHECKD(mcs_statistic(&mse2, hac_opts(MCS_TMAX, 0)), mcs_statistic(&mse, hac_opts(MCS_TMAX, 0)));
 
     df_free(&src); df_free(&mse); df_free(&mae); df_free(&ql); df_free(&mse2);
 }
@@ -284,24 +297,24 @@ static void test_tstats_known_values(void) {
     const double t_expected = 1.5 / sqrt(0.3125);
 
     double t_pair[1];
-    mcs_tstats(&L, MCS_TR, 0, t_pair);
+    mcs_tstats(&L, hac_opts(MCS_TR, 0), t_pair);
     assert(fabs(t_pair[0] - t_expected) < 1e-4);
 
     /* with two models, "against the mean of the others" is just the
        other model, so MCS_TMAX gives the same t for model a and its
        negation for model b */
     double t_dot[2];
-    mcs_tstats(&L, MCS_TMAX, 0, t_dot);
+    mcs_tstats(&L, hac_opts(MCS_TMAX, 0), t_dot);
     assert(fabs(t_dot[0] - t_expected) < 1e-4);
     assert(fabs(t_dot[1] + t_expected) < 1e-4);
 
-    CHECKD(mcs_statistic(&L, MCS_TR, 0), t_expected);
-    CHECKD(mcs_statistic(&L, MCS_TMAX, 0), t_expected);
+    CHECKD(mcs_statistic(&L, hac_opts(MCS_TR, 0)), t_expected);
+    CHECKD(mcs_statistic(&L, hac_opts(MCS_TMAX, 0)), t_expected);
 
     /* model a has the larger losses, so it is the one to drop */
-    assert(mcs_worst(&L, MCS_TR, 0) == 0);
-    assert(mcs_worst(&L, MCS_TMAX, 0) == 0);
-    assert(strcmp(mcs_model_name(&L, mcs_worst(&L, MCS_TMAX, 0)), "a") == 0);
+    assert(mcs_worst(&L, hac_opts(MCS_TR, 0)) == 0);
+    assert(mcs_worst(&L, hac_opts(MCS_TMAX, 0)) == 0);
+    assert(strcmp(mcs_model_name(&L, mcs_worst(&L, hac_opts(MCS_TMAX, 0))), "a") == 0);
 
     /* the same two columns through dm_test must give the same
        statistic - at horizon 1 the truncation lag is 0, where the
@@ -416,7 +429,7 @@ static void test_tstats_vs_reference(void) {
             MCSStat stat = s == 0 ? MCS_TMAX : MCS_TR;
             int k_count = mcs_n_series(stat, m);
             double *t = (double *)malloc((size_t)k_count * sizeof *t);
-            mcs_tstats(&L, stat, lag, t);
+            mcs_tstats(&L, hac_opts(stat, lag), t);
 
             /* every stored series against the reference, in the order
                mcs_n_series documents */
@@ -439,10 +452,10 @@ static void test_tstats_vs_reference(void) {
             }
             free(d);
 
-            double got_stat = (double)mcs_statistic(&L, stat, lag);
+            double got_stat = (double)mcs_statistic(&L, hac_opts(stat, lag));
             double want_stat = ref_statistic(ref, n, m, stat, lag);
             assert(fabs(got_stat - want_stat) < 1e-3 * (1 + fabs(want_stat)));
-            assert(mcs_worst(&L, stat, lag) == ref_worst(ref, n, m, stat, lag));
+            assert(mcs_worst(&L, hac_opts(stat, lag)) == ref_worst(ref, n, m, stat, lag));
 
             free(t);
         }
@@ -585,7 +598,13 @@ static void check_result_structure(const MCSResult *r, const DataFrame *losses) 
     for (int i = 0; i < r->m0; i++) assert(r->pvalue[i] >= 0 && r->pvalue[i] <= 1);
     for (int i = 1; i < r->n_eliminated; i++)
         assert(r->pvalue[r->elimination_order[i]] >= r->pvalue[r->elimination_order[i - 1]]);
-    for (int i = 0; i < r->n_surviving; i++) assert(r->pvalue[r->surviving[i]] == 1.0);
+    /* Theorem 4: in the set exactly when the MCS p-value reaches alpha.
+       check_result_structure has no alpha, so it checks the weaker
+       consequence that every survivor beats every eliminated model. */
+    for (int i = 0; i < r->n_surviving; i++)
+        for (int j = 0; j < r->n_eliminated; j++)
+            assert(r->pvalue[r->surviving[i]] > r->pvalue[r->elimination_order[j]]);
+    assert(r->n_surviving + r->n_eliminated == r->m0);
     assert(r->final_pvalue >= 0 && r->final_pvalue <= 1);
 }
 
@@ -606,9 +625,9 @@ static void test_mcs_structure(void) {
         o.stat = (run % 2) ? MCS_TR : MCS_TMAX;
         MCSResult r = mcs(&L, o);
         check_result_structure(&r, &L);
-        /* the procedure either stopped on a non-rejection, or ran out
-           of models to eliminate - and only the second leaves a single
-           survivor with no evidence behind it */
+        /* either a round was accepted, or every round down to the last
+           two rejected - and only the second leaves a single survivor
+           with no evidence behind it */
         if (!r.converged) assert(r.n_surviving == 1);
         mcs_free(&r);
         mcs_free(&r); /* freeing twice must be safe */
@@ -665,10 +684,116 @@ static void test_mcs_separates_models(void) {
         df_free(&L);
     }
 
-    /* the same data through the structural primitives: the model the
-       first round drops is the one mcs_worst names */
-    DataFrame L = make_losses(400, 4, base, 0.3, 0.3, 1000);
-    assert(strcmp(mcs_model_name(&L, mcs_worst(&L, MCS_TMAX, 9)), "m3") == 0);
+    /* the same data through the structural primitives: given the options
+       a run used, the model mcs_worst names is the one that run dropped
+       first, under every variance */
+    for (int v = 0; v < 3; v++) {
+        DataFrame L = make_losses(400, 4, base, 0.3, 0.3, 1000);
+        MCSOptions o = mcs_options_default();
+        o.bootstrap = 300;
+        o.seed = 55;
+        o.variance = v == 0 ? MCS_VARIANCE_BOOTSTRAP
+                   : v == 1 ? MCS_VARIANCE_HAC
+                            : MCS_VARIANCE_HAC_RESAMPLE;
+        MCSResult r = mcs(&L, o);
+        assert(mcs_worst(&L, o) == r.elimination_order[0]);
+        assert(strcmp(mcs_model_name(&L, mcs_worst(&L, o)), "m3") == 0);
+        mcs_free(&r);
+        df_free(&L);
+    }
+}
+
+/* Definition 4's MCS p-value and Theorem 4's membership rule, which
+   together are the reason the elimination keeps running after a test is
+   accepted: a model in the set has to carry the p-value of the round
+   that would eventually have dropped it, not a placeholder. */
+static void test_mcs_pvalues(void) {
+    puts("mcs: Definition 4 p-values, Theorem 4's membership rule");
+    double base[5] = { 1.0, 1.0, 1.4, 2.0, 2.8 };
+    for (int v = 0; v < 3; v++) {
+        DataFrame L = make_losses(300, 5, base, 0.3, 0.4, 7700);
+        MCSOptions o = mcs_options_default();
+        o.bootstrap = 400;
+        o.seed = 7;
+        o.variance = v == 0 ? MCS_VARIANCE_BOOTSTRAP
+                   : v == 1 ? MCS_VARIANCE_HAC
+                            : MCS_VARIANCE_HAC_RESAMPLE;
+        MCSResult r = mcs(&L, o);
+        check_result_structure(&r, &L);
+
+        /* Theorem 4, on the returned numbers: in the set exactly when
+           the MCS p-value reaches alpha */
+        for (int j = 0; j < r.m0; j++)
+            assert(mcs_in_set(&r, j) == (r.pvalue[j] >= o.alpha));
+
+        /* the convention P(H_0,M_m0) = 1 belongs to the one model left
+           at the end and to no other */
+        int ones = 0;
+        for (int j = 0; j < r.m0; j++) ones += (r.pvalue[j] == 1.0);
+        assert(ones == 1);
+
+        /* the two models tied at the bottom both survive, and at least
+           one of them carries a p-value that came out of a round rather
+           than out of that convention - which is what the procedure
+           could not report if it stopped at the accepted test */
+        assert(r.n_surviving >= 2);
+        int below_one = 0;
+        for (int i = 0; i < r.n_surviving; i++)
+            below_one += (r.pvalue[r.surviving[i]] < 1.0);
+        assert(below_one >= 1);
+
+        assert(r.converged && r.final_pvalue >= o.alpha);
+        mcs_free(&r);
+        df_free(&L);
+    }
+}
+
+/* The three variance estimates, on one dataset and one stream. Each
+   round draws its block indices the same number of times in the same
+   order whichever estimate is in force, so the resamples are identical
+   across the three and the comparison below is paired. */
+static void test_mcs_variances(void) {
+    puts("mcs: the three variance estimates, on shared draws");
+
+    /* the null: every model has the same expected loss, so the first
+       round is accepted and final_pvalue is that round's p-value */
+    double base[4] = { 1.0, 1.0, 1.0, 1.0 };
+    DataFrame L = make_losses(250, 4, base, 0.5, 0.4, 8800);
+
+    MCSOptions o = mcs_options_default();
+    o.bootstrap = 500;
+    o.block_length = 10;
+    o.seed = 31;
+    double p[3];
+    for (int v = 0; v < 3; v++) {
+        o.variance = v == 0 ? MCS_VARIANCE_BOOTSTRAP
+                   : v == 1 ? MCS_VARIANCE_HAC
+                            : MCS_VARIANCE_HAC_RESAMPLE;
+        MCSResult r = mcs(&L, o);
+        assert(r.converged);
+        p[v] = r.final_pvalue;
+        mcs_free(&r);
+    }
+
+    /* a block resample carries no dependence across block boundaries,
+       so a HAC computed on one is smaller than the same HAC on the
+       data; dividing every bootstrap statistic by that smaller number
+       inflates it and raises the p-value */
+    assert(p[2] > p[1]);
+    /* while the two that divide both sides by one standard error per
+       series land close to each other */
+    assert(fabs(p[0] - p[1]) < 0.1);
+
+    /* the observed t-statistics do not depend on which of the two HAC
+       variants is asked for: they differ only in the bootstrap */
+    o.hac_lag = 5;
+    double t_hac[4], t_res[4];
+    o.variance = MCS_VARIANCE_HAC;
+    mcs_tstats(&L, o, t_hac);
+    o.variance = MCS_VARIANCE_HAC_RESAMPLE;
+    mcs_tstats(&L, o, t_res);
+    for (int k = 0; k < 4; k++) assert(t_hac[k] == t_res[k]);
+
     df_free(&L);
 }
 
@@ -746,6 +871,7 @@ static void test_mcs_adversarial(void) {
         MCSOptions o = mcs_options_default();
         o.bootstrap = 50;
         o.block_length = 4;
+        o.variance = MCS_VARIANCE_HAC;
         o.hac_lag = 500;
         MCSResult r = mcs(&L, o);
         check_result_structure(&r, &L);
@@ -816,13 +942,13 @@ static void test_mcs_adversarial(void) {
         check_result_structure(&r, &L);
         assert(r.n_surviving == 1 && !r.converged);
         assert(r.final_pvalue == 0);
-        CHECKD(mcs_statistic(&L, MCS_TR, 3), 0);
+        CHECKD(mcs_statistic(&L, hac_opts(MCS_TR, 3)), 0);
         mcs_free(&r);
 
         o.stat = MCS_TMAX;
         MCSResult rm = mcs(&L, o);
         check_result_structure(&rm, &L);
-        double s_tmax = mcs_statistic(&L, MCS_TMAX, 3);
+        double s_tmax = mcs_statistic(&L, hac_opts(MCS_TMAX, 3));
         assert(!mat_isnan_f64(s_tmax) && !mat_isinf_f64(s_tmax));
         mcs_free(&rm);
         free(vals); df_free(&L);
@@ -840,8 +966,8 @@ static void test_mcs_adversarial(void) {
             static const char *const three[3] = { "a", "b", "c" };
             DataFrame S = losses_from(60, 3, vals, three);
             for (int lag = 0; lag <= 6; lag += 3) {
-                double got = (double)mcs_statistic(&S, MCS_TMAX, lag);
-                double want = (double)mcs_statistic(&L, MCS_TMAX, lag);
+                double got = (double)mcs_statistic(&S, hac_opts(MCS_TMAX, lag));
+                double want = (double)mcs_statistic(&L, hac_opts(MCS_TMAX, lag));
                 assert(fabs(got - want) < 1e-2 * (1 + fabs(want)));
             }
             free(vals); df_free(&S);
@@ -972,7 +1098,7 @@ static void test_mcs_report(void) {
     easy.alpha = 0.001;
     MCSResult stopped = mcs(&L, easy);
     char *t2 = render_mcs_report("early stop", &L, &stopped);
-    assert(strstr(t2, stopped.converged ? "stopped on a non-rejection: yes"
+    assert(strstr(t2, stopped.converged ? "set decided by an accepted test: yes"
                                         : "eliminated down to one model"));
     assert((strstr(t2, "worst first: none") != NULL) == (stopped.n_eliminated == 0));
     free(t2); mcs_free(&stopped); df_free(&L);
@@ -989,7 +1115,7 @@ static void test_mcs_report(void) {
         char *et = render_mcs_report(NULL, &E, &er);
         if (er.n_eliminated == 0) {
             assert(strstr(et, "eliminated, worst first: none"));
-            assert(strstr(et, "stopped on a non-rejection: yes"));
+            assert(strstr(et, "set decided by an accepted test: yes"));
             for (int j = 0; j < er.m0; j++) assert(mcs_in_set(&er, j));
         }
         free(et); mcs_free(&er); df_free(&E);
@@ -1042,6 +1168,7 @@ static void test_effective_hac_lag(void) {
     derived.bootstrap = 100;
     derived.block_length = 7;
     derived.seed = 404;
+    derived.variance = MCS_VARIANCE_HAC;   /* the variance that reads a lag */
     MCSOptions spelled = derived;
     spelled.hac_lag = mcs_effective_hac_lag(&L, derived);
     MCSResult a = mcs(&L, derived), b = mcs(&L, spelled);
@@ -1055,6 +1182,7 @@ static void test_effective_hac_lag(void) {
        would break */
     MCSOptions explicit_lag = mcs_options_default();
     explicit_lag.block_length = 10;
+    explicit_lag.variance = MCS_VARIANCE_HAC;
     explicit_lag.hac_lag = 3;
     char *buf = NULL;
     size_t len = 0;
@@ -1067,6 +1195,19 @@ static void test_effective_hac_lag(void) {
     assert(strstr(buf, "TR") || strstr(buf, "Tmax"));
     assert(strstr(buf, "seed 123"));
     free(buf);
+
+    /* and the default variance reads no lag, so it must not report one
+       the run never used */
+    {
+        char *nb = NULL;
+        size_t nl = 0;
+        FILE *nf = open_memstream(&nb, &nl);
+        mcs_fwrite_options(nf, &L, mcs_options_default());
+        fclose(nf);
+        assert(strstr(nb, "truncation lag") == NULL);
+        assert(strstr(nb, "bootstrap variance"));
+        free(nb);
+    }
 
     /* the statistic line names whichever statistic was set */
     for (int st = 0; st < 2; st++) {
@@ -1279,6 +1420,8 @@ int main(void) {
     test_mcs_structure();
     test_mcs_names_outlive_input();
     test_mcs_separates_models();
+    test_mcs_pvalues();
+    test_mcs_variances();
     test_mcs_reproducibility();
     test_mcs_adversarial();
     test_in_set();

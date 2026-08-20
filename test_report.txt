@@ -1,4 +1,4 @@
-test run: di 18 aug 2026 17:34:59 CEST
+test run: Thu Aug 20 11:21:59 AM CEST 2026
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -9,6 +9,7 @@ make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
 make: 'tests/correctness/test_mcs' is up to date.
+make: 'tests/correctness/test_mcs_variance' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
 make: 'tests/correctness/test_student' is up to date.
@@ -149,6 +150,8 @@ mcs: result structure invariants over randomized inputs
   30 randomized runs, both statistics, structure ok
 mcs: result names are deep copies, valid after the DataFrame is freed
 mcs: a clearly worse model is dropped first, a clearly better one survives
+mcs: Definition 4 p-values, Theorem 4's membership rule
+mcs: the three variance estimates, on shared draws
 mcs: same (seed, stream) reproduces, different stream is an independent run
 mcs: adversarial options and degenerate inputs
 mcs_in_set: agrees with the surviving array it summarizes
@@ -157,6 +160,11 @@ mcs_effective_hac_lag: derived once, and the run agrees with it
 mcs_pvalue_frame: same numbers as the report, as data
 dm_fwrite_report: one branch per status
 test_mcs: all passed
+
+=== test_mcs_variance: PASS ===
+mcs: size of the equivalence test under the three variance estimates
+  400 replications per panel, both panels written to out/mcs_variance_size.txt
+test_mcs_variance: all passed
 
 === test_broadcast: PASS ===
 dim resolution
@@ -251,8 +259,69 @@ adam_optimizer_init matches calling adam_init/adam_step directly
 test_optimizer: all passed
 
 === test_cluster: PASS ===
+cluster: 127.0.0.1:9531 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9531 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9532 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9532 failed, trying it as an already-running worker
+cluster: could not connect to 127.0.0.1:1 to deploy
+cluster: deploy to 127.0.0.1:1 failed, trying it as an already-running worker
 cluster: no answer from 127.0.0.1:1, continuing without it
+cluster: 127.0.0.1:9533 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9533 failed, trying it as an already-running worker
 cluster: 127.0.0.1:9533 dropped before the job started
+cluster: could not connect to 127.0.0.1:9533 to deploy
+cluster: 127.0.0.1:9534 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9534 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9535 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9535 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
 queue: every index handed out exactly once, no gaps, no repeats
 queue: a range reclaimed from a lost machine is handed out again, and only that range
 framing: a multi-megabyte message arrives whole and unchanged
@@ -394,4 +463,4 @@ rdata_array_read: all passed
 
 
 === summary ===
-27 passed, 0 failed
+28 passed, 0 failed

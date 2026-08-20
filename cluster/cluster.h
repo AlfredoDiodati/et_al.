@@ -13,6 +13,7 @@
 #include <signal.h>
 #include <time.h>
 #include <sys/time.h>
+#include <ifaddrs.h>
 
 /* Distributed execution of an embarrassingly parallel map across a few
    machines on one local network, coordinated so that no task index is ever
@@ -140,6 +141,14 @@ typedef struct {
 
 typedef void (*ClusterTask)(ClusterChunk *chunk);
 
+/* Called from inside cluster_map_stream (never from cluster_map) the moment
+   one range's results are ready, whichever machine computed them - columns
+   [lo, hi) of the job, d_out rows, a view valid only for the call, not
+   ownership of anything. The point of this over cluster_map's all-at-once
+   Mat is a caller that wants to persist each range as it lands rather than
+   hold everything in memory until the whole job ends. */
+typedef void (*ClusterResultCallback)(int lo, int hi, Mat result, void *cb_ctx);
+
 typedef struct {
     int chunk;        /* task indices per dispatch; 0 picks a value from the job size */
     int include_self; /* coordinator computes as well as dispatches (default 1) */
@@ -147,12 +156,33 @@ typedef struct {
     int discover_ms;  /* how long to wait for machines to answer a discovery broadcast */
     int deploy;       /* send this executable to any daemon found (default 1) */
     int verbose;
+    int range_timeout_ms; /* a dispatched range with no result by this long is treated as a
+                              dead peer, requeued, and retried periodically afterward; <= 0
+                              picks the same default cluster_options_default() sets rather
+                              than waiting forever - a coordinator handed only one task per
+                              call, the shape a caller saving each result immediately
+                              produces, has nothing else to fall back on the moment its one
+                              peer stalls, so there is no way to ask for no ceiling at all.
+                              Not measured against any particular task's per-item cost - a
+                              conservative starting point, long enough not to abort a
+                              genuinely slow range, short enough that a peer that has
+                              actually gone silent (network drop, sleep, a stuck worker with
+                              the socket still open) is caught in minutes rather than found
+                              by a human checking hours later, which is what happened
+                              without this check. */
 } ClusterOptions;
 
 typedef struct {
     int fd;
     int lo, hi;       /* range currently out at this peer; lo == hi means idle */
-    char addr[64];
+    long deadline;    /* _cluster_now_ms() value past which this range is considered dead;
+                          meaningless while lo == hi */
+    long retry_after; /* _cluster_now_ms() value at which to next try reconnecting this
+                          peer's ip/port; meaningless while fd >= 0 */
+    char ip[64];
+    int port;
+    char addr[64];    /* "ip:port", for messages only - ip/port above are what reconnecting
+                          actually uses */
 } ClusterPeer;
 
 typedef struct {
@@ -183,6 +213,7 @@ static inline ClusterOptions cluster_options_default(void) {
     o.discover_ms = 400;
     o.deploy = 1;
     o.verbose = 0;
+    o.range_timeout_ms = 600000;
     return o;
 }
 
@@ -327,6 +358,17 @@ static inline int _cluster_connect(const char *ip, int port, int timeout_ms) {
     }
     fcntl(fd, F_SETFL, flags);
     _cluster_set_nodelay(fd);
+    /* _cluster_send_all/_cluster_recv_all block on plain send()/recv() with
+       no deadline of their own - without this, a peer that completes the TCP
+       handshake and then never speaks the protocol (a captive-portal or
+       security gateway that intercepts unanswered ports, observed on a real
+       network this ran on) hangs the exchange indefinitely instead of just
+       failing the handshake. This bounds each individual send or recv call,
+       not the whole message - a real, slow transfer still completes as long
+       as every call makes some progress within the window. */
+    struct timeval tv = { 5, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     return fd;
 }
 
@@ -778,16 +820,19 @@ static inline int _cluster_handshake(int fd) {
 static inline int _cluster_deploy_to(const char *ip, int daemon_port, int verbose) {
     size_t n = 0;
     unsigned char *image = _cluster_read_self(&n);
-    if (!image) return -1;
+    if (!image) { fprintf(stderr, "cluster: could not read this executable's own image (/proc/self/exe) to deploy\n"); return -1; }
     int fd = _cluster_connect(ip, daemon_port, 1000);
-    if (fd < 0) { free(image); return -1; }
+    if (fd < 0) { fprintf(stderr, "cluster: could not connect to %s:%d to deploy\n", ip, daemon_port); free(image); return -1; }
     int rc = _cluster_send_msg(fd, CLUSTER_DEPLOY, 0, 0, image, n);
     free(image);
-    if (rc != 0) { close(fd); return -1; }
+    if (rc != 0) { fprintf(stderr, "cluster: sending this executable's image to %s:%d failed partway\n", ip, daemon_port); close(fd); return -1; }
 
     ClusterHeader h;
     void *payload = NULL;
-    if (_cluster_recv_msg(fd, &h, &payload) != 0 || h.kind != CLUSTER_DEPLOY_OK) {
+    int recv_rc = _cluster_recv_msg(fd, &h, &payload);
+    if (recv_rc != 0 || h.kind != CLUSTER_DEPLOY_OK) {
+        fprintf(stderr, "cluster: %s:%d did not confirm the deploy (%s)\n", ip, daemon_port,
+                recv_rc != 0 ? "no valid reply" : "wrong message kind back");
         free(payload);
         close(fd);
         return -1;
@@ -804,6 +849,7 @@ static inline int _cluster_deploy_to(const char *ip, int daemon_port, int verbos
         struct timespec ts = { 0, 100 * 1000 * 1000 };
         nanosleep(&ts, NULL);
     }
+    fprintf(stderr, "cluster: %s never came up on worker port %d after deploy\n", ip, wport);
     return -1;
 }
 
@@ -812,6 +858,9 @@ static inline void _cluster_add_peer(Cluster *c, int fd, const char *ip, int por
     ClusterPeer *p = &c->peers[c->n_peers++];
     p->fd = fd;
     p->lo = p->hi = 0;
+    p->retry_after = 0;
+    snprintf(p->ip, sizeof p->ip, "%.63s", ip);
+    p->port = port;
     snprintf(p->addr, sizeof p->addr, "%.47s:%d", ip, port); /* bounded: the field is a label, an IPv4 string never reaches it */
 }
 
@@ -901,10 +950,167 @@ static inline void _cluster_discover(Cluster *c) {
     }
 }
 
+/* Falls back to a direct TCP sweep of the local subnet when the broadcast in
+   _cluster_discover finds nobody: a router that does not forward broadcast
+   between wifi and ethernet, or a firewall dropping the UDP datagram, still
+   lets an ordinary TCP connect through. Every candidate address gets a
+   nonblocking connect at once, polled together under one shared deadline,
+   which is what keeps a /24 sweep to under a second instead of 254 serial
+   timeouts. Whoever answers on the port is tried as a freshly started daemon
+   first, since that is the only thing this machine ever asked the other one
+   to do, then as an already-running worker.
+
+   Restricted to /22 or narrower (1022 host addresses) so a misconfigured
+   interface cannot turn this into a sweep of an entire /8 or /16. */
+static inline void _cluster_scan_subnet(Cluster *c) {
+    struct ifaddrs *ifap;
+    if (getifaddrs(&ifap) != 0) return;
+
+    uint32_t self = 0, mask = 0;
+    for (struct ifaddrs *p = ifap; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
+        if (!p->ifa_netmask) continue;
+        uint32_t addr = ntohl(((struct sockaddr_in*)p->ifa_addr)->sin_addr.s_addr);
+        if ((addr >> 24) == 127) continue; /* loopback: 127.0.0.0/8, checked on the address
+                                               itself rather than IFF_LOOPBACK, which needs a
+                                               glibc feature-test macro this file does not set */
+        self = addr;
+        mask = ntohl(((struct sockaddr_in*)p->ifa_netmask)->sin_addr.s_addr);
+        break;
+    }
+    freeifaddrs(ifap);
+    if (self == 0) return;
+
+    uint32_t network = self & mask;
+    uint32_t hosts = ~mask;
+    if (hosts == 0 || hosts > 1022) return;
+
+    enum { CLUSTER_SCAN_MAX = 1022 };
+    int fds[CLUSTER_SCAN_MAX];
+    uint32_t ips[CLUSTER_SCAN_MAX];
+    int n = 0;
+    for (uint32_t h = 1; h < hosts && n < CLUSTER_SCAN_MAX; h++) {
+        uint32_t addr = network | h;
+        if (addr == self) continue;
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) continue;
+        int flags = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        struct sockaddr_in a;
+        memset(&a, 0, sizeof a);
+        a.sin_family = AF_INET;
+        a.sin_port = htons((uint16_t)c->opts.port);
+        a.sin_addr.s_addr = htonl(addr);
+        connect(fd, (struct sockaddr*)&a, sizeof a); /* EINPROGRESS expected, checked below */
+        fds[n] = fd;
+        ips[n] = addr;
+        n++;
+    }
+
+    struct pollfd pfd[CLUSTER_SCAN_MAX];
+    for (int i = 0; i < n; i++) { pfd[i].fd = fds[i]; pfd[i].events = POLLOUT; pfd[i].revents = 0; }
+
+    long deadline = _cluster_now_ms() + 800;
+    int pending = n;
+    while (pending > 0) {
+        long left = deadline - _cluster_now_ms();
+        if (left <= 0) break;
+        if (poll(pfd, (nfds_t)n, (int)left) <= 0) break;
+        for (int i = 0; i < n; i++) {
+            if (pfd[i].fd < 0 || !pfd[i].revents) continue;
+            pfd[i].fd = -1; /* stop polling this slot; fds[i] still holds the real descriptor */
+            pending--;
+        }
+    }
+
+    /* Some networks answer every unopened port with a completed TCP
+       handshake anyway - a security gateway intercepting connections to
+       serve a captive-portal or "blocked" page, observed on a real network
+       this ran on. Left uncapped, that turns every address in the subnet
+       into a candidate, and each false one still costs a real connect
+       attempt below. Trying only the first handful keeps a scan on a
+       network like that bounded to a few seconds instead of minutes; it
+       costs nothing on a normal network, where an open port actually means
+       something is there. */
+    enum { CLUSTER_SCAN_TRY_MAX = 6 };
+    char open_ip[CLUSTER_SCAN_TRY_MAX][64];
+    int n_open = 0;
+    int n_seen_open = 0;
+    for (int i = 0; i < n; i++) {
+        int err = 0;
+        socklen_t len = sizeof err;
+        int ok = getsockopt(fds[i], SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err == 0;
+        if (ok) {
+            n_seen_open++;
+            if (n_open < CLUSTER_SCAN_TRY_MAX) {
+                struct in_addr a; a.s_addr = htonl(ips[i]);
+                snprintf(open_ip[n_open], sizeof open_ip[n_open], "%s", inet_ntoa(a));
+                n_open++;
+            }
+        }
+        close(fds[i]);
+    }
+
+    if (n_open == 0) {
+        fprintf(stderr, "cluster: subnet scan found nobody listening on port %d\n", c->opts.port);
+        return;
+    }
+    if (n_seen_open > n_open)
+        fprintf(stderr, "cluster: %d addresses answered on port %d, trying only the first %d "
+                        "(a network that answers everywhere is not really answering)\n",
+                        n_seen_open, c->opts.port, n_open);
+    for (int i = 0; i < n_open; i++) {
+        fprintf(stderr, "cluster: %s answers on port %d, deploying\n", open_ip[i], c->opts.port);
+        int fd = _cluster_deploy_to(open_ip[i], c->opts.port, c->opts.verbose);
+        if (fd < 0) {
+            fprintf(stderr, "cluster: deploy to %s failed, trying it as an already-running worker\n", open_ip[i]);
+            fd = _cluster_connect(open_ip[i], c->opts.port, 1000);
+        }
+        if (fd < 0) {
+            fprintf(stderr, "cluster: %s stopped answering before the connection finished, skipping it\n", open_ip[i]);
+            continue;
+        }
+        if (_cluster_handshake(fd) != 0) {
+            fprintf(stderr, "cluster: %s runs a different build of this program, skipping it\n", open_ip[i]);
+            close(fd);
+            continue;
+        }
+        _cluster_add_peer(c, fd, open_ip[i], c->opts.port);
+    }
+}
+
+/* Deploy-then-connect-then-handshake against one known address, the shared
+   core of cluster_open_addrs and of reconnecting a peer that cluster_map_id
+   has marked dead - both need the exact same sequence, and both need it to
+   fail quietly (a caller decides what a -1 means) rather than print on
+   every attempt, which a periodic retry would otherwise spam. */
+static inline int _cluster_connect_by_addr(const char *ip, int port, ClusterOptions opts, int report) {
+    int fd = -1;
+    if (opts.deploy) {
+        fd = _cluster_deploy_to(ip, port, opts.verbose);
+        if (fd < 0 && report) fprintf(stderr, "cluster: deploy to %s:%d failed, trying it as an already-running worker\n", ip, port);
+    }
+    if (fd < 0) fd = _cluster_connect(ip, port, 1000);
+    if (fd < 0) return -1;
+    if (_cluster_handshake(fd) != 0) {
+        if (report) fprintf(stderr, "cluster: %s:%d runs a different build of this program, skipping it\n", ip, port);
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
 /* Connects to machines listed by address instead of discovered, for a
    network where a broadcast does not reach (two subnets, a VPN) or where the
    set of machines should be fixed rather than whatever happens to answer.
-   Each entry is "ip" or "ip:port". */
+   Each entry is "ip" or "ip:port".
+
+   Tries a daemon deploy first, same as discovery and the subnet scan do, and
+   falls back to a plain worker connect only if that fails - a bare
+   _cluster_connect + _cluster_handshake here would treat every address as an
+   already-running --cluster-worker and misreport a --cluster-daemon target
+   as "runs a different build of this program", when the real reason is that
+   a daemon expects a CLUSTER_DEPLOY message first, not a HELLO. */
 static inline Cluster cluster_open_addrs(ClusterOptions opts, const char *const *addrs, int n_addrs) {
     Cluster c;
     memset(&c, 0, sizeof c);
@@ -923,14 +1129,9 @@ static inline Cluster cluster_open_addrs(ClusterOptions opts, const char *const 
         } else {
             snprintf(ip, sizeof ip, "%s", addrs[i]);
         }
-        int fd = _cluster_connect(ip, port, 1000);
+        int fd = _cluster_connect_by_addr(ip, port, opts, 1);
         if (fd < 0) {
             fprintf(stderr, "cluster: no answer from %s:%d, continuing without it\n", ip, port);
-            continue;
-        }
-        if (_cluster_handshake(fd) != 0) {
-            fprintf(stderr, "cluster: %s:%d runs a different build of this program, skipping it\n", ip, port);
-            close(fd);
             continue;
         }
         _cluster_add_peer(&c, fd, ip, port);
@@ -944,6 +1145,10 @@ static inline Cluster cluster_open_opts(ClusterOptions opts) {
     c.opts = opts;
     c.ctx = _cluster_ctx;
     _cluster_discover(&c);
+    if (c.n_peers == 0) {
+        fprintf(stderr, "cluster: no answer to the broadcast, scanning the local network directly\n");
+        _cluster_scan_subnet(&c);
+    }
     return c;
 }
 
@@ -994,7 +1199,19 @@ static inline void cluster_close(Cluster *c) {
    leaves the machine's cores entirely to whatever parallelizes the range
    internally. Ranges sized so that each machine gets several of them keep
    the delay small; opts.chunk is there for a workload where it does not. */
-static inline Mat cluster_map_id(Cluster *c, int task_id, Mat inputs, Mat shared, int d_out) {
+/* The shared loop behind both cluster_map_id (on_result NULL, every range
+   just lands in the results Mat this returns) and cluster_map_stream_id
+   (on_result set, called with each range the moment it is ready - the
+   results Mat is still built and returned underneath, since a range
+   computed locally is written into it directly by _cluster_run_range, but a
+   caller using the callback has no reason to look at it and should
+   mat_free it unread). One loop rather than two copies of it: the two
+   entry points differ only in what happens to a range the instant it
+   completes, never in how ranges are found, dispatched, retried, or
+   reclaimed - keeping that one copy is what keeps a fix or a change from
+   applying to only one of them by accident. */
+static inline Mat _cluster_map_core(Cluster *c, int task_id, Mat inputs, Mat shared, int d_out,
+                                     ClusterResultCallback on_result, void *cb_ctx) {
     assert(task_id >= 0 && task_id < _cluster_n_tasks);
     assert(inputs.c > 0 && d_out > 0);
 
@@ -1006,6 +1223,26 @@ static inline Mat cluster_map_id(Cluster *c, int task_id, Mat inputs, Mat shared
     if (machines < 1) machines = 1;
     int chunk = c->opts.chunk > 0 ? c->opts.chunk : n / (4 * machines);
     if (chunk < 1) chunk = 1;
+
+    /* range_timeout_ms <= 0 no longer means "wait forever" - it means "no
+       value was chosen", and falls back to the same default
+       cluster_options_default() sets. A caller that wants a longer ceiling
+       sets range_timeout_ms explicitly; there is no way to ask for no
+       ceiling at all. A machine that is only ever handed one task per call
+       (chunk 1, the common case for a caller that saves each result the
+       moment it is ready rather than a whole range at a time) has nothing
+       else to fall back on the moment its one peer stalls, so an infinite
+       wait here is not a tuning choice, it is this machine doing nothing
+       for as long as the process keeps running - which is what actually
+       happened running this job overnight, once. */
+    long range_timeout = c->opts.range_timeout_ms > 0 ? c->opts.range_timeout_ms : 600000;
+
+    /* How often a dead peer gets another connection attempt. Reuses
+       range_timeout above - a peer that just timed out is not worth
+       retrying any sooner than that, and a peer that disconnected cleanly
+       is in no more of a hurry; not measured, a reasonable starting
+       point. */
+    long retry_interval = range_timeout;
 
     ClusterJobDesc desc;
     desc.task_id = (uint32_t)task_id;
@@ -1078,14 +1315,67 @@ static inline Mat cluster_map_id(Cluster *c, int task_id, Mat inputs, Mat shared
                     fprintf(stderr, "cluster: %s stopped answering, its work goes back in the queue\n", p->addr);
                     close(p->fd);
                     p->fd = -1;
+                    p->retry_after = _cluster_now_ms() + retry_interval;
                     _cluster_requeue(&q, p->lo, p->hi);
                     p->lo = p->hi = 0;
                     continue;
                 }
                 Mat got = { d_out, k, k, (mreal*)payload };
                 _cluster_unpack_cols(results, got, p->lo);
+                if (c->opts.verbose)
+                    fprintf(stderr, "cluster: %s finished columns %d-%d\n", p->addr, p->lo, p->hi);
+                if (on_result) on_result(p->lo, p->hi, got, cb_ctx);
                 free(payload);
                 done += k;
+                p->lo = p->hi = 0;
+            }
+        }
+
+        /* A peer whose range never comes back and whose socket never closes
+           either - asleep, off the network without a clean disconnect, or
+           genuinely stuck with the connection still open - is otherwise
+           invisible to every check above: it is not bad (recv just never
+           returns anything to inspect) and it is not live-with-no-work (lo
+           < hi, so the dispatch loop below skips it too). Without this, done
+           never reaches n and cluster_map never returns, silently, for as
+           long as this process keeps running. */
+        {
+            long now = _cluster_now_ms();
+            for (int i = 0; i < c->n_peers; i++) {
+                ClusterPeer *p = &c->peers[i];
+                if (p->fd < 0 || p->lo >= p->hi) continue;
+                if (now < p->deadline) continue;
+                fprintf(stderr, "cluster: %s has not answered its range in %ld ms, "
+                                "treating it as dead and requeuing\n", p->addr, range_timeout);
+                close(p->fd);
+                p->fd = -1;
+                p->retry_after = _cluster_now_ms() + retry_interval;
+                _cluster_requeue(&q, p->lo, p->hi);
+                p->lo = p->hi = 0;
+            }
+        }
+
+        /* A dead peer gets tried again periodically instead of being given
+           up on for the rest of the job - the machine on the other end of a
+           network drop, a sleep, or a reboot is often back before this job
+           is done, and cluster_map otherwise has no way to notice short of
+           the caller opening a whole new Cluster. Reconnecting reuses
+           _cluster_connect_by_addr, the same deploy-then-worker-connect
+           sequence the peer was found through the first time, quietly - a
+           peer that stays down would otherwise print a failure every
+           retry_interval for as long as the job runs. */
+        {
+            long now = _cluster_now_ms();
+            for (int i = 0; i < c->n_peers; i++) {
+                ClusterPeer *p = &c->peers[i];
+                if (p->fd >= 0 || now < p->retry_after) continue;
+                int fd = _cluster_connect_by_addr(p->ip, p->port, c->opts, 0);
+                if (fd < 0) {
+                    p->retry_after = now + retry_interval;
+                    continue;
+                }
+                fprintf(stderr, "cluster: %s answered again, back in the job\n", p->addr);
+                p->fd = fd;
                 p->lo = p->hi = 0;
             }
         }
@@ -1106,12 +1396,16 @@ static inline Mat cluster_map_id(Cluster *c, int task_id, Mat inputs, Mat shared
                 fprintf(stderr, "cluster: %s stopped answering, its work goes back in the queue\n", p->addr);
                 close(p->fd);
                 p->fd = -1;
+                p->retry_after = _cluster_now_ms() + retry_interval;
                 live--;
                 _cluster_requeue(&q, lo, hi);
                 continue;
             }
             p->lo = lo;
             p->hi = hi;
+            p->deadline = _cluster_now_ms() + range_timeout;
+            if (c->opts.verbose)
+                fprintf(stderr, "cluster: sent columns %d-%d to %s\n", lo, hi, p->addr);
         }
 
         /* Every machine gone and this one was only meant to dispatch: finish
@@ -1124,15 +1418,25 @@ static inline Mat cluster_map_id(Cluster *c, int task_id, Mat inputs, Mat shared
             compute_here = 1;
         }
 
-        /* One task at a time here, not a whole range. A range is sized to
-           amortize a network round trip, and this machine's own work has no
-           round trip to amortize - batching it would only delay the moment
-           this loop next looks at the sockets, which is what leaves a
-           machine that has just finished waiting for work. */
+        /* A whole range here too, the same size as what a remote peer gets,
+           not one task. A task function that parallelizes its own loop -
+           the only way any machine in this job, including this one, ever
+           uses more than one core, since cluster_map_id's own parallelism
+           is between machines, not within one - has nothing to parallelize
+           across if handed a single task. This does delay the next look at
+           the sockets by however long the local range takes, but a range
+           computed on every core finishes far sooner than the same range
+           would one task at a time on one, so it costs less responsiveness
+           than it looks like it does. */
         if (compute_here) {
             int lo, hi;
-            if (_cluster_take(&q, &lo, &hi, 1)) {
+            if (_cluster_take(&q, &lo, &hi, chunk)) {
+                if (c->opts.verbose)
+                    fprintf(stderr, "cluster: this machine started columns %d-%d\n", lo, hi);
                 _cluster_run_range(task_id, inputs, shared, results, lo, hi, c->ctx);
+                if (c->opts.verbose)
+                    fprintf(stderr, "cluster: this machine finished columns %d-%d\n", lo, hi);
+                if (on_result) on_result(lo, hi, mat_slice(results, 0, d_out, lo, hi), cb_ctx);
                 done += hi - lo;
             }
         }
@@ -1143,11 +1447,34 @@ static inline Mat cluster_map_id(Cluster *c, int task_id, Mat inputs, Mat shared
     return results;
 }
 
+static inline Mat cluster_map_id(Cluster *c, int task_id, Mat inputs, Mat shared, int d_out) {
+    return _cluster_map_core(c, task_id, inputs, shared, d_out, NULL, NULL);
+}
+
 #define CLUSTER_NO_SHARED ((Mat){ 0, 0, 0, NULL })
 
 /* The single-task form: runs the function cluster_init was given. */
 static inline Mat cluster_map(Cluster *c, Mat inputs, Mat shared, int d_out) {
     return cluster_map_id(c, 0, inputs, shared, d_out);
+}
+
+/* Same distributed map as cluster_map, except on_result is called with each
+   range's own columns the instant that range is ready, from whichever
+   machine computed it, instead of only being able to look at anything once
+   the entire job is done. The intended use is a caller that wants to
+   persist each range as it lands - a crash or a kill then costs at most
+   whatever is still in flight, one range's worth on each machine actually
+   working, not the whole job. Frees the underlying results Mat itself;
+   on_result must not keep the Mat it is given past its own return. */
+static inline void cluster_map_stream_id(Cluster *c, int task_id, Mat inputs, Mat shared, int d_out,
+                                          ClusterResultCallback on_result, void *cb_ctx) {
+    Mat results = _cluster_map_core(c, task_id, inputs, shared, d_out, on_result, cb_ctx);
+    mat_free(results);
+}
+
+static inline void cluster_map_stream(Cluster *c, Mat inputs, Mat shared, int d_out,
+                                       ClusterResultCallback on_result, void *cb_ctx) {
+    cluster_map_stream_id(c, 0, inputs, shared, d_out, on_result, cb_ctx);
 }
 
 /* Call this at the top of main, before anything else this file offers.

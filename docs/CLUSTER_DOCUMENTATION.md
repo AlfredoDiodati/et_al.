@@ -162,7 +162,7 @@ Filling every column of `results` is its whole contract. `inputs` and `results` 
 
 `inputs` is `d_in x n`, one column per task, matching the one-sample-per-column convention `nn/mlp.h`'s `train_X` and every `dist/mv` observation matrix already use. `shared` is sent once per machine per job and handed to every range; pass `CLUSTER_NO_SHARED` when there is none. A strided `inputs` or `shared` is fine - both are gathered before they go on the wire.
 
-`ClusterOptions` covers the rest: `chunk` (range width, 0 picks `n / (4 * machines)`), `include_self` (whether the coordinator computes as well as dispatches, default on), `port`, `discover_ms`, `deploy`, `verbose`.
+`ClusterOptions` covers the rest: `chunk` (range width, 0 picks `n / (4 * machines)`), `include_self` (whether the coordinator computes as well as dispatches, default on), `port`, `discover_ms`, `deploy`, `verbose`, `range_timeout_ms` (a dispatched range with no result by this long is treated as a dead peer, closed, and requeued; default, and the floor for any value `<= 0`, is 600000 (10 minutes) - there is no way to wait forever, since a coordinator handed only one task per call has nothing else to do the moment its one peer stalls). A dead peer is retried periodically afterward, at the same interval as `range_timeout_ms`, using the address it was originally connected through - it rejoins the job automatically if it answers again, with nothing printed while it keeps failing.
 
 ## Memory ownership
 
