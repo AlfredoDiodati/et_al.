@@ -279,6 +279,10 @@ make lapack-comparison-bench  # timings; nonzero exit if a kernel is slower
 
 They need `liblapacke-dev` installed. Nothing else in the project does.
 
+They reach LAPACKE through `tests/lapacke_dispatch.h`, which carries the
+`MLAPACK(fn)` precision switch (`LAPACKE_s*` by default, `LAPACKE_d*` under
+`-DMAT_DOUBLE`) so a comparison builds under either precision.
+
 
 ## `_trtrs`, `_potrs`, `_potri` — the triangular solves
 

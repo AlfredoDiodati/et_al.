@@ -29,7 +29,7 @@
 */
 
 #include "../../linalg/factor.h"
-#include <lapacke.h>
+#include "../lapacke_dispatch.h"
 #include <stdio.h>
 
 static int failures = 0;

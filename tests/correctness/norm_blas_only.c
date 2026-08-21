@@ -19,7 +19,7 @@
 */
 
 #include "../../linalg/mat.h"
-#include <lapacke.h>
+#include "../lapacke_dispatch.h"
 #include <stdio.h>
 
 #define TOL 1e-5f
@@ -35,7 +35,7 @@ static void check_close(const char *what, mreal got, mreal exp, mreal tol) {
     failures++;
 }
 
-/* The reference arm: the exact call mat_norm makes today. */
+/* The reference arm: the call mat_norm used to make. */
 static mreal lange_ref(Mat m, char kind) {
     return MLAPACK(lange)(LAPACK_ROW_MAJOR, kind, m.r, m.c, m.d, m.stride);
 }

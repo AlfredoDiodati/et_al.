@@ -105,7 +105,7 @@ make test                   # build and run all correctness tests
 make test-special           # special value tests (built without -ffast-math)
 make test-stress            # stress tests with larger inputs
 
-make MAT_DOUBLE=1 test      # same targets, built against cblas_d*/LAPACKE_d* (float64)
+make MAT_DOUBLE=1 test      # same targets, built against cblas_d* (float64)
 ```
 
 All targets link against OpenBLAS (`-lopenblas`, discovered via `pkg-config openblas` when available). Install it first — see [Dependencies](#dependencies).
@@ -198,7 +198,7 @@ The same reasoning ruled out zlib for `frame/rdata.h` (reads R's `.RData`/`.rds`
 
 Every LAPACKE routine has since been reimplemented against CBLAS in `linalg/factor.h` — all seventeen, each required to match the routine it replaced on correctness *and* to be no slower before going into production. The per-routine results, the algorithms, and the failed experiments are in `docs/FACTOR_DOCUMENTATION.md`; how that dependency got in without anyone choosing it is in [Pitfalls](#pitfalls).
 
-The comparison tests are the one place `-llapacke` is still linked deliberately, because they hold both implementations in one binary to check and time them against each other. They are reached only through the `lapack-comparison` and `lapack-comparison-bench` targets, which are excluded from `test` and `bench.sh` so the suite itself builds against OpenBLAS alone. Run them on a machine with `liblapacke-dev` installed; nothing else needs it.
+The comparison tests are the one place `-llapacke` is still linked deliberately, because they hold both implementations in one binary to check and time them against each other. They reach it through `tests/lapacke_dispatch.h`, the only file in the project that includes `lapacke.h`. They are reached only through the `lapack-comparison` and `lapack-comparison-bench` targets, which are excluded from `test` and `bench.sh` so the suite itself builds against OpenBLAS alone. Run them on a machine with `liblapacke-dev` installed; nothing else needs it.
 
 **Do not add a second dependency.** No pandas, no NumPy, no matplotlib, no Eigen, no Python runtime of any kind. If something looks like it needs another library, write the usually-small piece of functionality directly against `linalg/mat.h`'s primitives first.
 
@@ -286,7 +286,7 @@ For every operation OpenBLAS provides, the hot inner loop is OpenBLAS's, a hand-
 
 ### 4. Separate raw computation from user-facing logic
 
-Functions in `linalg/mat.h` do one thing: compute. They do not handle high-level concerns like broadcasting, automatic differentiation, or solver orchestration. `linalg/mat.h`'s heaviest kernels and `linalg/decomp.h`/`linalg/solver.h`'s factorizations and solves call directly into OpenBLAS — this project's own code is the orchestration layer, meaning shape checks, view/stride handling, and packing into and out of the layout LAPACKE expects, not a second implementation of the kernel itself. The same separation holds all the way up the stack: `frame/sql.h`'s evaluator reuses `linalg/mat.h`'s element-wise operations and reductions rather than a second arithmetic implementation, and `nn/mlp.h`'s training loop reuses `ad.h` for gradients and `solver/optimizer.h` for parameter updates rather than a bespoke training loop of its own. When adding higher-level functionality, put it in a separate header that calls the layer below it — do not entangle "how the numbers move in memory" with "what the user is trying to solve," since the two have different change rates and different correctness criteria.
+Functions in `linalg/mat.h` do one thing: compute. They do not handle high-level concerns like broadcasting, automatic differentiation, or solver orchestration. `linalg/mat.h`'s heaviest kernels and `linalg/decomp.h`/`linalg/solver.h`'s factorizations and solves call directly into OpenBLAS — this project's own code is the orchestration layer, meaning shape checks, view/stride handling, and packing into and out of the layout those kernels expect, not a second implementation of the kernel itself. The same separation holds all the way up the stack: `frame/sql.h`'s evaluator reuses `linalg/mat.h`'s element-wise operations and reductions rather than a second arithmetic implementation, and `nn/mlp.h`'s training loop reuses `ad.h` for gradients and `solver/optimizer.h` for parameter updates rather than a bespoke training loop of its own. When adding higher-level functionality, put it in a separate header that calls the layer below it — do not entangle "how the numbers move in memory" with "what the user is trying to solve," since the two have different change rates and different correctness criteria.
 
 ### 5. Tests and benchmarks are both first-class, and stay separate
 

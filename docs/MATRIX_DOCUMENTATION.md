@@ -74,7 +74,7 @@ typedef Mat Vec;
 | CBLAS | `cblas_sgemm`, `cblas_sdot`, `cblas_snrm2`, ... | `cblas_dgemm`, `cblas_ddot`, `cblas_dnrm2`, ... |
 | libm | `expf`, `logf`, `fabsf`, `sqrtf`, `powf` | `exp`, `log`, `fabs`, `sqrt`, `pow` |
 
-Dispatch is a small set of macros near the top of `linalg/mat.h` (`MBLAS(fn)` -> `cblas_s##fn` or `cblas_d##fn`, `MEXP`/`MLOG`/`MABS`/`MSQRT`/`MPOW` for libm; `MLAPACK(fn)` is still defined but expanded only by the tests under `tests/` that compare a kernel against the LAPACKE routine it replaced) so call sites read the same regardless of which precision is active. Do not call `cblas_s*`/`cblas_d*` or an `f`-suffixed/unsuffixed libm function directly in library code - always go through the macro, so the file stays correct under both builds. 32-byte alignment in `mat_new` holds under both precisions (one AVX2 register: 8 `float`s or 4 `double`s).
+Dispatch is a small set of macros near the top of `linalg/mat.h` (`MBLAS(fn)` -> `cblas_s##fn` or `cblas_d##fn`, plus `MEXP`/`MLOG`/`MABS`/`MSQRT`/`MPOW` for libm) so call sites read the same regardless of which precision is active. The LAPACKE half of the same switch, `MLAPACK(fn)`, lives in `tests/lapacke_dispatch.h`, which only the comparison tests include. Do not call `cblas_s*`/`cblas_d*` or an `f`-suffixed/unsuffixed libm function directly in library code - always go through the macro, so the file stays correct under both builds. 32-byte alignment in `mat_new` holds under both precisions (one AVX2 register: 8 `float`s or 4 `double`s).
 
 ### `MISNAN`/`MISINF` - NaN/infinity detection that survives `-ffast-math`
 
@@ -238,7 +238,7 @@ infinity alone staying infinity, negative zero reading as zero, subnormals not
 flushing). Passes under both `float` and `-DMAT_DOUBLE`.
 
 ### Element-wise operations
-Every element-wise function checks `stride == c` first. If the matrix is contiguous in memory, a single flat loop over all elements is used with `restrict`-qualified pointers (telling the compiler the inputs and output do not overlap). This lets the compiler turn the loop into wide CPU instructions automatically, regardless of whether `mreal` is `float` or `double`. The strided fallback uses nested loops and works correctly on slices. These operations have no BLAS/LAPACK equivalent, so they stay hand-written.
+Every element-wise function checks `stride == c` first. If the matrix is contiguous in memory, a single flat loop over all elements is used with `restrict`-qualified pointers (telling the compiler the inputs and output do not overlap). This lets the compiler turn the loop into wide CPU instructions automatically, regardless of whether `mreal` is `float` or `double`. The strided fallback uses nested loops and works correctly on slices. These operations have no BLAS equivalent, so they stay hand-written.
 
 ### Matrix multiply
 `mat_mul` is a thin wrapper around `cblas_?gemm` (`sgemm` or `dgemm`, selected by `MAT_DOUBLE`). It validates shapes, allocates the output with `mat_new`, and calls into OpenBLAS with `CblasRowMajor` and `lda`/`ldb`/`ldc` taken from each operand's `stride`, so strided views pass through without a copy. All cache blocking, register tiling, and SIMD micro-kernel selection is OpenBLAS's responsibility - this project does not attempt to match it with hand-written C.
@@ -297,4 +297,4 @@ Do not use `isnan()` or `isinf()` in new functions that will be compiled with `-
 - No axis-wise reductions (sum along rows/columns)
 - `linalg/mat.h` itself has no linear algebra beyond transpose, dot product, and norm - Cholesky/LU/QR live in `linalg/decomp.h`, solving in `linalg/solver.h`; see `docs/DECOMP_DOCUMENTATION.md`/`docs/SOLVER_DOCUMENTATION.md`
 - `mat_slice` and `mat_reshape` produce views with no lifetime tracking — freeing the owner while a view is alive is undefined behavior
-- OpenBLAS is a required runtime and link-time dependency. This library cannot be dropped into a project as a single header with zero linking; `linalg/mat.h` stays single-header for the code we write, but the build needs `-lopenblas` and OpenBLAS's own headers (`cblas.h`, `lapacke.h`) on the include path
+- OpenBLAS is a required runtime and link-time dependency. This library cannot be dropped into a project as a single header with zero linking; `linalg/mat.h` stays single-header for the code we write, but the build needs `-lopenblas` and OpenBLAS's own header (`cblas.h`) on the include path

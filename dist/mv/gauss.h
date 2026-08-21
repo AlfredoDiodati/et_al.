@@ -17,7 +17,7 @@
    Unlike the univariate dist/gauss.h, nothing here is element-wise: the
    density couples the d components of each observation through cov, via
    one Cholesky factorization (mat_chol) shared by all n observations and
-   BLAS/LAPACK triangular solves against all n right-hand sides at once.
+   triangular solves against all n right-hand sides at once.
    That is why this file lives in dist/mv/ (multivariate distributions,
    which need linalg/decomp.h) rather than as more functions in
    dist/gauss.h (element-wise formulas needing only linalg/mat.h).
@@ -38,7 +38,7 @@ static inline void mvgauss_check(Mat x, Mat loc, Mat cov) {
 
 /* Build the d x n matrix whose column i is (row i of x) - (its loc row),
    transposed so each observation is contiguous down a column - the
-   layout the LAPACK/BLAS multi-right-hand-side calls below want. Reads
+   layout the multi-right-hand-side calls below want. Reads
    through AT so strided views of x/loc work. */
 static inline Mat mvgauss_diff_t(Mat x, Mat loc) {
     Mat dt = mat_new(x.c, x.r);

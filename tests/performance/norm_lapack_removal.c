@@ -31,7 +31,7 @@
 */
 
 #include "../../linalg/mat.h"
-#include <lapacke.h>
+#include "../lapacke_dispatch.h"
 #include <time.h>
 #include <sys/stat.h>
 
@@ -44,7 +44,7 @@ static double now(void) {
 /* Keeps the optimizer from deleting a norm whose result is unused. */
 static volatile mreal sink;
 
-/* The arm being replaced: exactly the call linalg/mat.h makes today. */
+/* The arm being replaced: the call linalg/mat.h used to make. */
 static mreal norm_lange(Mat m, char kind) {
     return MLAPACK(lange)(LAPACK_ROW_MAJOR, kind, m.r, m.c, m.d, m.stride);
 }

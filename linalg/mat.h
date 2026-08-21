@@ -9,23 +9,16 @@
 #include <cblas.h>
 
 /* mreal is the one element type every function in this library is written
-   against. -DMAT_DOUBLE switches it (and the BLAS/LAPACK/libm call sites
+   against. -DMAT_DOUBLE switches it (and the BLAS/libm call sites
    dispatched through the macros below) from float to double. Never call
    cblas_s-prefixed or cblas_d-prefixed functions, or an f-suffixed /
    unsuffixed libm function, directly - always go through
-   MBLAS/MLAPACK/M{EXP,LOG,ABS,SQRT,POW,EPS} so the file stays correct
-   under both builds. Nothing in this library calls LAPACK any more, so
-   this file includes only cblas.h. MLAPACK is kept because it is part of
-   the same precision switch and the tests that compare a replacement
-   against the LAPACKE routine it replaced still need it; those include
-   lapacke.h themselves, so each one's dependencies stay visible locally.
-   It is expanded nowhere else, and a macro that is not expanded costs
-   nothing. Expanding it in this library would put back the dependency
-   linalg/factor.h exists to remove. */
+   MBLAS/M{EXP,LOG,ABS,SQRT,POW,EPS} so the file stays correct under both
+   builds. The LAPACKE half of the same switch is tests/lapacke_dispatch.h,
+   reachable only from tests/. */
 #ifdef MAT_DOUBLE
 typedef double mreal;
-#define MBLAS(fn)   cblas_d##fn
-#define MLAPACK(fn) LAPACKE_d##fn
+#define MBLAS(fn) cblas_d##fn
 #define MEXP  exp
 #define MLOG  log
 #define MLOG1P log1p
@@ -36,8 +29,7 @@ typedef double mreal;
 #define MEPS  DBL_EPSILON
 #else
 typedef float mreal;
-#define MBLAS(fn)   cblas_s##fn
-#define MLAPACK(fn) LAPACKE_s##fn
+#define MBLAS(fn) cblas_s##fn
 #define MEXP  expf
 #define MLOG  logf
 #define MLOG1P log1pf
@@ -535,10 +527,10 @@ static inline mreal mat_trace(Mat m) {
    following LAPACK. An unrecognised kind is a programmer error and
    asserts.
 
-   Every kind is computed here against CBLAS and plain loops; none of them
-   calls LAPACK. The one-norm keeps a c-element column accumulator and
-   walks the input in row order, which is the traversal a row-major matrix
-   wants, rather than reading down strided columns. The infinity-norm sums
+   Every kind is computed here against CBLAS and plain loops. The one-norm
+   keeps a c-element column accumulator and walks the input in row order,
+   which is the traversal a row-major matrix wants, rather than reading
+   down strided columns. The infinity-norm sums
    each row with cblas_?asum, whose elements are contiguous whatever
    m.stride is. The max-element norm goes through mat_absmax_bits, which
    compares sign-cleared bit patterns as integers.

@@ -13,7 +13,7 @@
    deficiency instead of asserting on it. */
 
 /* Solve a*x = b for x via LU factorization with partial pivoting
-   (LAPACK ?gesv). a must be square; b is a single right-hand-side column
+   (factor.h's _gesv). a must be square; b is a single right-hand-side column
    vector with b.r == a.r. Returns a new owner; a and b are not modified. */
 static inline Vec vec_solve(Mat a, Vec b) {
     assert(a.r == a.c && b.r == a.r && b.c == 1);
@@ -62,12 +62,12 @@ static inline Vec vec_solve_sym(Mat a, Vec b) {
 }
 
 /* Solve a*x = b for x using an LU factorization already computed by
-   mat_lu (LAPACK ?getrs) - skips re-factoring, for reusing one
+   mat_lu (factor.h's _getrs) - skips re-factoring, for reusing one
    factorization across many right-hand sides (Newton iterations, Kalman
    filters, anything that solves against the same matrix repeatedly).
    lu/piv must be exactly what mat_lu(a, &piv) returned for the a this is
    meant to solve against - passing a factorization for a different
-   matrix silently produces the wrong answer, since ?getrs trusts the
+   matrix silently produces the wrong answer, since _getrs trusts the
    factorization without re-checking it against any original a. b is a
    single right-hand-side column vector with b.r == lu.r. Returns a new
    owner; lu and b are not modified. */
@@ -80,7 +80,7 @@ static inline Vec vec_lu_solve(Mat lu, lapack_int *piv, Vec b) {
 }
 
 /* Solve a*x = b for x using a Cholesky factor already computed by
-   mat_chol (LAPACK ?potrs) - skips re-factoring, same motivation and
+   mat_chol (factor.h's _potrs) - skips re-factoring, same motivation and
    same "must match the original a" caveat as vec_lu_solve. l must be
    exactly what mat_chol(a) returned. b is a single right-hand-side
    column vector with b.r == l.r. Returns a new owner; l and b are not

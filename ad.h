@@ -33,7 +33,7 @@
    re-derived and verified independently. Deferred (see Known limitations
    in docs/AD_DOCUMENTATION.md): raw LU/Cholesky *factorization* adjoints
    (getrf/potrf) - the paper's formulae for these are a bottom-up,
-   right-to-left triangular back-substitution, not a single BLAS/LAPACK
+   right-to-left triangular back-substitution, not a single BLAS
    call, and are not needed as long as solves/determinant are differentiated
    directly (the common case for MLE-style log-likelihood gradients).
 
@@ -83,7 +83,7 @@ typedef struct Node {
    gradient was worth 1.25x-1.86x depending on node count
    (bench_tape_pool.c); pooling the value too was worth a further
    4.88x-11x on the synthetic benchmark and 1.36x-1.72x on the realistic
-   one, the gap between the two explained by BLAS/LAPACK-backed ops
+   one, the gap between the two explained by BLAS-backed ops
    (ad_matmul, ad_solve, ad_chol_solve, ad_inv) taking a growing share of
    real wall time as node count grows - those stay unpooled below, since
    their value comes from mat_mul/vec_solve/etc. and pooling them would mean
@@ -213,7 +213,7 @@ static inline void ad_tape_push(Tape *t, Node *n) {
     t->nodes[t->n++] = n;
 }
 
-/* Value comes from an ordinary mat_* or vec_* call (BLAS/LAPACK-backed ops:
+/* Value comes from an ordinary mat_* or vec_* call (BLAS-backed ops:
    ad_matmul, ad_solve, ad_chol_solve, ad_inv, plus ad_leaf) and is
    individually owned - freed by tape_free, not by the block release. */
 static inline Node *ad_node_new(Tape *t, Mat val, void (*backward)(Node*)) {

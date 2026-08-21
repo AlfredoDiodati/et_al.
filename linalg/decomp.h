@@ -5,9 +5,8 @@
 /* Decompositions - Cholesky, LU, QR, symmetric eigendecomposition, SVD -
    plus the derived quantities (determinant, inverse, condition number,
    rank, general eigenvalues) built on top of them.
-   All functions here call mat.h primitives, and the factorization kernels
-   in factor.h for the ones already migrated off LAPACKE. mat.h never
-   includes this file. Every function copies its input(s) first - the
+   All functions here call mat.h primitives and the factorization kernels
+   in factor.h. mat.h never includes this file. Every function copies its input(s) first - the
    kernels factorize in place, but functions here return new matrices and
    never mutate their arguments, matching the convention in mat.h.
 
@@ -158,8 +157,8 @@ static inline void mat_svd(Mat a, Mat *u_out, Vec *s_out, Mat *vt_out) {
 }
 
 /* Determinant of square a, via the diagonal of an LU factorization (no
-   extra LAPACK call beyond mat_lu). Sign follows the parity of the row
-   interchanges LAPACK's pivoting performed. a must be nonsingular - same
+   extra factorization beyond mat_lu). Sign follows the parity of the row
+   interchanges the pivoting performed. a must be nonsingular - same
    contract as mat_lu. */
 static inline mreal mat_det(Mat a) {
     assert(a.r == a.c);
@@ -185,8 +184,8 @@ static inline mreal mat_det(Mat a) {
     return det;
 }
 
-/* Inverse of square a, via LU factorization followed by LAPACK's
-   dedicated inverse-from-factors routine (?getri) - the standard way to
+/* Inverse of square a, via LU factorization followed by factor.h's
+   dedicated inverse-from-factors routine (_getri) - the standard way to
    compute a full inverse, faster than n separate solves. a must be
    nonsingular. Caller must mat_free().
 

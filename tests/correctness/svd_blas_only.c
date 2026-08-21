@@ -35,7 +35,7 @@
 */
 
 #include "../../linalg/factor.h"
-#include <lapacke.h>
+#include "../lapacke_dispatch.h"
 #include <stdio.h>
 
 #define TOL 1e-3f

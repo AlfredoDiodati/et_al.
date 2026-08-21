@@ -4,7 +4,7 @@
 
 **Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy).
 
-`linalg/decomp.h` implements the core dense factorizations - Cholesky, LU, QR, symmetric eigendecomposition, SVD - as thin wrappers over the kernels in `linalg/factor.h`, which are CBLAS-only, plus derived quantities built on top of them (determinant, inverse, condition number, rank, general eigenvalues) that don't need a separate conceptual home. It includes `linalg/mat.h` and is included by `linalg/solver.h`; `linalg/mat.h` never includes this file. Like `linalg/mat.h`, every function is `static inline` in a single header, and uses `mreal`/`MLAPACK` so it builds correctly under both the default `float` and `-DMAT_DOUBLE` precisions (see `docs/MATRIX_DOCUMENTATION.md`'s Precision section).
+`linalg/decomp.h` implements the core dense factorizations - Cholesky, LU, QR, symmetric eigendecomposition, SVD - as thin wrappers over the kernels in `linalg/factor.h`, which are CBLAS-only, plus derived quantities built on top of them (determinant, inverse, condition number, rank, general eigenvalues) that don't need a separate conceptual home. It includes `linalg/mat.h` and is included by `linalg/solver.h`; `linalg/mat.h` never includes this file. Like `linalg/mat.h`, every function is `static inline` in a single header, and uses `mreal` so it builds correctly under both the default `float` and `-DMAT_DOUBLE` precisions (see `docs/MATRIX_DOCUMENTATION.md`'s Precision section).
 
 Every function here copies its input(s) with `mat_copy` before calling into the kernel, because `linalg/factor.h` factorizes in place but functions in this library return new matrices and never mutate their arguments. This also means inputs may be views (non-contiguous slices) - `mat_copy` handles the strided case, so a sliced submatrix works exactly like a freshly allocated owner.
 
@@ -57,11 +57,11 @@ Calls `linalg/factor.h`'s `_gesdd`, which is CBLAS-only: bidiagonal reduction, t
 
 ### `mat_det`
 
-Determinant of square `a`, computed from the diagonal of an LU factorization (calls `mat_lu` internally - no extra LAPACK call beyond it) with sign taken from the parity of LAPACK's pivoting. Same nonsingularity contract as `mat_lu`.
+Determinant of square `a`, computed from the diagonal of an LU factorization (calls `mat_lu` internally - no extra factorization beyond it) with sign taken from the parity of the row interchanges the pivoting performed. Same nonsingularity contract as `mat_lu`.
 
 ### `mat_inv`
 
-Inverse of square `a`, via `?getrf` followed by LAPACK's dedicated inverse-from-factors routine `?getri` - the standard, faster-than-`n`-separate-solves way to compute a full inverse. Caller must `mat_free()`. Per the root `README.md`'s "Do not make matrix inversion the primary linear algebra operation" pitfall: prefer `vec_solve`/`mat_lstsq` (in `linalg/solver.h`) for solving a system, and reach for `mat_inv` only when the inverse itself is the object of interest - e.g. reporting `(X^T*X)^-1` as a coefficient variance-covariance matrix, which is exactly the kind of thing the econometrics layer built on top of this will need.
+Inverse of square `a`, via `linalg/factor.h`'s `_getrf` followed by its dedicated inverse-from-factors routine `_getri` - the standard, faster-than-`n`-separate-solves way to compute a full inverse. Caller must `mat_free()`. Per the root `README.md`'s "Do not make matrix inversion the primary linear algebra operation" pitfall: prefer `vec_solve`/`mat_lstsq` (in `linalg/solver.h`) for solving a system, and reach for `mat_inv` only when the inverse itself is the object of interest - e.g. reporting `(X^T*X)^-1` as a coefficient variance-covariance matrix, which is exactly the kind of thing the econometrics layer built on top of this will need.
 
 ### `mat_cond`
 
@@ -73,7 +73,7 @@ Numerical rank of `a` via `mat_svd`'s singular values, using the same default to
 
 ### `mat_eig`
 
-Eigenvalues of square `a`, possibly non-symmetric, via `?geev`. Eigenvectors are **not** computed: a real non-symmetric matrix can have complex eigenvectors, and this library has no complex type to hold them (`mreal` is real-only) - see Known limitations below. `*wr_out`/`*wi_out` receive new `n`x`1` `Vec`s holding the real and imaginary parts of each eigenvalue. A real eigenvalue has its `wi` entry `== 0`. Complex eigenvalues always occur in conjugate pairs at adjacent indices, per LAPACK convention: `(wr[j], wi[j])` and `(wr[j+1], -wi[j+1])` with `wi[j] > 0`. Caller must `mat_free()` both. This exists mainly for time-series stability analysis (e.g. checking the eigenvalues of a VAR companion matrix lie inside the unit circle), which only needs eigenvalues, not eigenvectors - hence the narrower scope compared to `mat_eig_sym`.
+Eigenvalues of square `a`, possibly non-symmetric, via `linalg/factor.h`'s `_geev`. Eigenvectors are **not** computed: a real non-symmetric matrix can have complex eigenvectors, and this library has no complex type to hold them (`mreal` is real-only) - see Known limitations below. `*wr_out`/`*wi_out` receive new `n`x`1` `Vec`s holding the real and imaginary parts of each eigenvalue. A real eigenvalue has its `wi` entry `== 0`. Complex eigenvalues always occur in conjugate pairs at adjacent indices, per LAPACK convention: `(wr[j], wi[j])` and `(wr[j+1], -wi[j+1])` with `wi[j] > 0`. Caller must `mat_free()` both. This exists mainly for time-series stability analysis (e.g. checking the eigenvalues of a VAR companion matrix lie inside the unit circle), which only needs eigenvalues, not eigenvectors - hence the narrower scope compared to `mat_eig_sym`.
 
 ## Memory ownership
 
@@ -87,7 +87,7 @@ Every function is also exercised on a non-contiguous view (a principal submatrix
 
 ## Benchmark results
 
-Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_qr` call the real library functions end to end, including their internal `mat_copy`, not a direct-LAPACKE bypass - see `tests/performance/bench_decomp.c`):
+Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_qr` call the real library functions end to end, including their internal `mat_copy`, not a bypass straight to the factorization kernel - see `tests/performance/bench_decomp.c`):
 
 | n | `mat_chol` ms | numpy ms | max err | `mat_lu` ms | `mat_qr` (m=2n) ms | numpy QR ms |
 |---|---|---|---|---|---|---|
@@ -97,7 +97,7 @@ Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_q
 
 `bench_decomp.py` also covers `mat_eig_sym` vs `numpy.linalg.eigh` (~1.6-2.5x ahead across n=64..512), `mat_svd` vs `numpy.linalg.svd` (1.26x at n=64, 1.58x at n=128, 1.90x at n=256), and `mat_inv` vs `numpy.linalg.inv` (at parity to ~2.6x ahead at n=512). The `mat_inv` and `mat_eig_sym` margins are a shorter dispatch path over the same algorithms; `mat_svd`'s margin now also includes not paying LAPACKE's row-major transposes, which is why it grows with n.
 
-`mat_chol` and `mat_qr` are consistently at or ahead of `numpy.linalg.cholesky`/`numpy.linalg.qr` - both call the same OpenBLAS/LAPACK under the hood, and this library's wrapper (one `mat_copy` plus the LAPACKE call) has less overhead than NumPy's dispatch path. `mat_lu` has no direct NumPy equivalent to compare against (NumPy does not expose raw `getrf`); its absolute timings sit in the same range as `mat_chol`'s, which is the expected relationship since both are O(n^3) with similar constants. Errors against NumPy (`max err`, and reconstruction error for QR) stay in the 1e-6 to 1e-7 range at every size tested - both floating-point roundoff, not an algorithmic discrepancy.
+`mat_chol` and `mat_qr` are consistently at or ahead of `numpy.linalg.cholesky`/`numpy.linalg.qr` - this library's wrapper is one `mat_copy` plus the factorization call, less overhead than NumPy's dispatch path. `mat_lu` has no direct NumPy equivalent to compare against (NumPy does not expose raw `getrf`); its absolute timings sit in the same range as `mat_chol`'s, which is the expected relationship since both are O(n^3) with similar constants. Errors against NumPy (`max err`, and reconstruction error for QR) stay in the 1e-6 to 1e-7 range at every size tested - both floating-point roundoff, not an algorithmic discrepancy.
 
 `mat_det`, `mat_cond`, `mat_rank` (all built on `mat_lu`/`mat_svd` above), and `mat_eig` (the general, non-symmetric eigendecomposition - `mat_eig_sym` above is the symmetric-only path):
 

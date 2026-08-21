@@ -23,7 +23,7 @@
 */
 
 #include "../../linalg/factor.h"
-#include <lapacke.h>
+#include "../lapacke_dispatch.h"
 #include <time.h>
 #include <sys/stat.h>
 
