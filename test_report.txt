@@ -1,4 +1,4 @@
-test run: Fri Aug 21 11:08:34 AM CEST 2026
+test run: Sat Aug 22 11:38:07 AM CEST 2026
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -15,6 +15,12 @@ make: 'tests/correctness/test_gauss' is up to date.
 make: 'tests/correctness/test_student' is up to date.
 make: 'tests/correctness/test_mvgauss' is up to date.
 make: 'tests/correctness/test_mvstudent' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_matgauss.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_matgauss
+tests/correctness/test_matgauss.c: In function ‘expect_abort’:
+tests/correctness/test_matgauss.c:610:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+  610 |         freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+make: 'tests/correctness/test_matgauss_recovery' is up to date.
 make: 'tests/correctness/test_ad' is up to date.
 make: 'tests/correctness/test_tape_reset' is up to date.
 make: 'tests/correctness/test_adam' is up to date.
@@ -211,6 +217,33 @@ non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)
 degenerate nu (undocumented, unguarded - pinning current behavior)
 sampling: moments + row independence + zero-score at truth (fixed seed)
 test_mvstudent: all passed
+
+=== test_matgauss: PASS ===
+known values
+vec(x) ~ N(vec(loc), colcov kron rowcov) vs dist/mv/gauss.h
+single column / single row collapse to dist/mv/gauss.h
+diagonal covariances = sum of univariate logpdfs
+correlated covariances vs independent reference
+analytic derivatives vs finite differences of the reference
+rowcov/colcov scale redundancy
+views
+badly scaled covariances
+pdf underflow floor
+   pdf first returns zero at 10x10 (n*p = 100); logpdf exact to 32x32
+bad shapes and non-positive-definite covariances abort
+standard draw == stacked standard normal vectors
+sampling: empirical vec covariance vs the Kronecker product (fixed seed)
+mean score at the true parameters is zero
+test_matgauss: all passed
+
+=== test_matgauss_recovery: PASS ===
+matgauss: covariance recovery from simulated samples
+  homogeneous diagonal   converged in <= 8 sweeps, score 4.9e-07
+  diagonal               converged in <= 8 sweeps, score 2.4e-06
+  sparse                 converged in <= 8 sweeps, score 8.4e-07
+  dense                  converged in <= 8 sweeps, score 2.4e-06
+  30 replications per case per sample size, written to out/matgauss_recovery_report.txt
+test_matgauss_recovery: all passed
 
 === test_ad: PASS ===
 dense ops (add/sub/scale/emul/ediv/pow, fan-out)
@@ -463,4 +496,4 @@ rdata_array_read: all passed
 
 
 === summary ===
-28 passed, 0 failed
+30 passed, 0 failed
