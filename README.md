@@ -157,7 +157,22 @@ cc myproject.c $(pkg-config --cflags --libs et_al.-core) -o myproject
 #include <sd/qvarma.h>  /* likewise */
 ```
 
-`et_al.-model.pc` declares `Requires: et_al.-core`, so referencing `et_al.-model` alone pulls in everything, including the OpenBLAS/`libm` flags baked into `et_al.-core.pc` at install time, with no need to reference both `.pc` files yourself. If `pkg-config --cflags et_al.-core` can't find it after installing to a non-default `PREFIX`, add that prefix's `lib/pkgconfig` to `PKG_CONFIG_PATH` (for example `export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig`), since most systems don't search non-standard prefixes by default.
+`et_al.-model.pc` declares `Requires: et_al.-core`, so referencing `et_al.-model` alone pulls in everything, including the OpenBLAS/`libm` flags baked into `et_al.-core.pc` at install time, with no need to reference both `.pc` files yourself.
+
+Both install targets print a summary rather than their own commands — what went where, how many headers, which OpenBLAS the `.pc` file baked in, and the compile line to use:
+
+```
+et_al. 0.1.0 - model tier installed
+  installed    3 headers -> /usr/local/include/et_al.
+               under nn/ sd/
+  pkg-config   et_al.-model.pc -> /usr/local/lib/pkgconfig
+  requires     et_al.-core, so naming this alone pulls in both tiers
+
+  build against it
+    cc myproject.c $(pkg-config --cflags --libs et_al.-model) -o myproject
+```
+
+If the chosen `PREFIX` is one `pkg-config` does not search, the install says so and prints the `export PKG_CONFIG_PATH=...` line needed to fix it. That is checked against `pkg-config --variable pc_path pkg-config` at install time rather than guessed from whether the prefix looks standard, so the note appears exactly when it is needed and not otherwise.
 
 `make uninstall-core` / `make uninstall-model` (same `PREFIX`) reverse the corresponding install; `uninstall-core` also removes the model tier if present, since a model install with no core underneath it is broken either way and leaving it dangling isn't a safer default. There is no `install-dev`/third-tier install target: per [Installation tiers](#installation-tiers), development-tier content (tests, benchmarks, examples) is only relevant if you're working on ET_AL. itself, and is available simply by having the repo cloned; it is never copied to another system.
 

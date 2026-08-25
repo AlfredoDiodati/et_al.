@@ -533,30 +533,77 @@ test-special: tests/correctness/test_mat_special
 
 # --- install (core / model tiers - see README.md's "Installation tiers") ---
 
+# The recipes below are silenced with @ and print a summary instead. What a
+# person needs after an install is where the headers went, how many, which
+# pkg-config name to ask for and whether pkg-config will find it - not the
+# install(1) and printf(1) invocations that put them there.
+
+# Printed only when the tier was asked for directly, so `install-model` (which
+# depends on install-core) shows one build line naming the model tier rather
+# than two naming both.
+CORE_IS_GOAL := $(filter install-core,$(MAKECMDGOALS))
+
+# pkg-config searches a fixed list of directories; a prefix outside it needs
+# PKG_CONFIG_PATH set or the .pc file is invisible however correctly it was
+# written. Checked rather than guessed from whether PREFIX looks standard.
+PC_SEARCH_PATH := $(shell pkg-config --variable pc_path pkg-config 2>/dev/null)
+PKGCONFIG_IS_SEARCHED := $(filter $(PKGCONFIGDIR),$(subst :, ,$(PC_SEARCH_PATH)))
+
+# $(call) splits its arguments on commas, so any comma inside one has to
+# arrive as $(COMMA).
+COMMA := ,
+
+# One tier's summary. The header count is taken by the shell at recipe run
+# time rather than by $(shell) at read time, which would count the directory
+# as it was before the install and always report zero.
+#   $(1) tier name   $(2) directories it installed   $(3) note under pkg-config
+define tier_summary
+	@n=$$(find $(addprefix $(INCDIR)/,$(2)) -maxdepth 1 -name '*.h' 2>/dev/null | wc -l); \
+	printf '\net_al. $(VERSION) - $(1) tier installed\n'; \
+	printf '  %-12s %s headers -> %s\n' "installed" "$$n" "$(INCDIR)"; \
+	printf '  %-12s %s\n' "" "$(3)"; \
+	printf '  %-12s et_al.-$(1).pc -> %s\n' "pkg-config" "$(PKGCONFIGDIR)"
+endef
+
+# How to compile against what was just installed, plus the one thing that
+# silently breaks it.
+define build_hint
+	@printf '\n  build against it\n'
+	@printf '    cc myproject.c $$(pkg-config --cflags --libs et_al.-$(1)) -o myproject\n'
+	$(if $(PKGCONFIG_IS_SEARCHED),,@printf '\n  pkg-config does not search that directory$(COMMA) so export it first\n    export PKG_CONFIG_PATH=$(PKGCONFIGDIR)\n')
+	@printf '\n'
+endef
+
 install-core:
-	install -d $(INCDIR) $(PKGCONFIGDIR)
-	install -m 644 $(CORE_HEADERS) $(INCDIR)/
-	for d in $(CORE_SUBDIRS); do install -d $(INCDIR)/$$d; install -m 644 $$d/*.h $(INCDIR)/$$d/; done
-	printf 'prefix=%s\nincludedir=$${prefix}/include/et_al.\n\nName: et_al.-core\nDescription: ET_AL. core - dense linear algebra, autodiff, and general-purpose statistics\nVersion: %s\nCflags: -I$${includedir} %s\nLibs: -lm %s\n' \
+	@install -d $(INCDIR) $(PKGCONFIGDIR)
+	@install -m 644 $(CORE_HEADERS) $(INCDIR)/
+	@for d in $(CORE_SUBDIRS); do install -d $(INCDIR)/$$d; install -m 644 $$d/*.h $(INCDIR)/$$d/; done
+	@printf 'prefix=%s\nincludedir=$${prefix}/include/et_al.\n\nName: et_al.-core\nDescription: ET_AL. core - dense linear algebra, autodiff, and general-purpose statistics\nVersion: %s\nCflags: -I$${includedir} %s\nLibs: -lm %s\n' \
 		"$(PREFIX)" "$(VERSION)" "$(BLAS_CFLAGS)" "$(BLAS_LIBS)" > $(PKGCONFIGDIR)/et_al.-core.pc
-	@echo "installed et_al.-core to $(INCDIR) (pkg-config: et_al.-core)"
+	$(call tier_summary,core,. $(CORE_SUBDIRS),$(words $(CORE_HEADERS)) at the root$(COMMA) the rest under $(addsuffix /,$(CORE_SUBDIRS)))
+	@printf '  %-12s -lm %s\n' "links" "$(strip $(BLAS_LIBS))"
+	$(if $(CORE_IS_GOAL),$(call build_hint,core))
 
 install-model: install-core
-	for d in $(MODEL_SUBDIRS); do install -d $(INCDIR)/$$d; install -m 644 $$d/*.h $(INCDIR)/$$d/; done
-	printf 'prefix=%s\nincludedir=$${prefix}/include/et_al.\n\nName: et_al.-model\nDescription: ET_AL. model layer - model architectures with fitting APIs (nn/, sd/)\nVersion: %s\nRequires: et_al.-core\nCflags: -I$${includedir}\nLibs:\n' \
+	@for d in $(MODEL_SUBDIRS); do install -d $(INCDIR)/$$d; install -m 644 $$d/*.h $(INCDIR)/$$d/; done
+	@printf 'prefix=%s\nincludedir=$${prefix}/include/et_al.\n\nName: et_al.-model\nDescription: ET_AL. model layer - model architectures with fitting APIs (nn/, sd/)\nVersion: %s\nRequires: et_al.-core\nCflags: -I$${includedir}\nLibs:\n' \
 		"$(PREFIX)" "$(VERSION)" > $(PKGCONFIGDIR)/et_al.-model.pc
-	@echo "installed et_al.-model to $(INCDIR) (pkg-config: et_al.-model)"
+	$(call tier_summary,model,$(MODEL_SUBDIRS),under $(addsuffix /,$(MODEL_SUBDIRS)))
+	@printf '  %-12s et_al.-core$(COMMA) so naming this alone pulls in both tiers\n' "requires"
+	$(call build_hint,model)
 
 # uninstall-core also removes model - a model install with no core underneath
 # it is broken either way, so leaving it dangling is not a safer default.
 uninstall-model:
-	for d in $(MODEL_SUBDIRS); do rm -rf $(INCDIR)/$$d; done
-	rm -f $(PKGCONFIGDIR)/et_al.-model.pc
+	@for d in $(MODEL_SUBDIRS); do rm -rf $(INCDIR)/$$d; done
+	@rm -f $(PKGCONFIGDIR)/et_al.-model.pc
+	@printf 'et_al. - model tier removed ($(addsuffix /,$(MODEL_SUBDIRS)) and et_al.-model.pc)\n'
 
 uninstall-core: uninstall-model
-	rm -f $(addprefix $(INCDIR)/,$(CORE_HEADERS))
-	for d in $(CORE_SUBDIRS); do rm -rf $(INCDIR)/$$d; done
-	rm -f $(PKGCONFIGDIR)/et_al.-core.pc
-	-rmdir $(INCDIR) 2>/dev/null || true
+	@rm -f $(addprefix $(INCDIR)/,$(CORE_HEADERS))
+	@for d in $(CORE_SUBDIRS); do rm -rf $(INCDIR)/$$d; done
+	@rm -f $(PKGCONFIGDIR)/et_al.-core.pc
+	@-rmdir $(INCDIR) 2>/dev/null || true
+	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
 .PHONY: test test-stress test-special ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model
