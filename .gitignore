@@ -27,6 +27,21 @@ tests/performance/*_lapack_removal
 tests/correctness/gzip_inflate
 tests/correctness/rdata_array_read
 
+# the statistical test and model suites, named for the question they answer
+# rather than the file they test - see README's "Adding files and headers".
+# Pattern-based on the question suffix, so a new <subject>_correctness.c
+# added later is ignored automatically.
+tests/correctness/*_correctness
+tests/correctness/qvarma_identification
+tests/correctness/qvarma_recovery_study
+tests/performance/qvarma_performance
+tests/performance/lbfgs_candidates
+tests/performance/lbfgs_performance
+tests/performance/lbfgs_direction_threshold
+tests/performance/lbfgs_largest_threshold
+tests/performance/lbfgs_copy_threshold
+!tests/performance/*.c
+
 # results written by the benchmarks and by any pipeline run
 out/
 

@@ -9,7 +9,7 @@
 The file has two halves:
 
 - **Structure** - `mlp_init`/`mlp_forward`/`mlp_free` define the network, initialize its weights, and run its forward pass through `ad.h`'s tape, so gradients come for free via `tape_backward()`. Fully decoupled from `solver/` - a forward pass needs no optimizer.
-- **Orchestration** - `mlp_fit`/`mlp_forecast`/`mlp_fit_free` train and predict, implementing this project's **Model fit/forecast API** (see README's Policies section) - the standard shape every statistical/ML model header follows. This half is what pulls `solver/optimizer.h` in as a dependency: training genuinely needs both gradient production (`ad.h`) and consumption (an `Optimizer`) in one place, which is why this file - unlike before - now includes `solver/`.
+- **Orchestration** - `mlp_fit`/`mlp_forecast`/`mlp_fit_free` train and predict, implementing the supervised half of this project's **Model fitting API** (see README's Policies section) - the shape every model header trained on paired inputs and targets follows; the likelihood-fitted models in `sd/` follow the other half, stated in the same policy. This half is what pulls `solver/optimizer.h` in as a dependency: training genuinely needs both gradient production (`ad.h`) and consumption (an `Optimizer`) in one place, which is why this file - unlike before - now includes `solver/`.
 
 Weight initialization uses Glorot (Xavier) uniform init:
 

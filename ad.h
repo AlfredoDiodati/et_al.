@@ -214,7 +214,8 @@ static inline void ad_tape_push(Tape *t, Node *n) {
 }
 
 /* Value comes from an ordinary mat_* or vec_* call (BLAS-backed ops:
-   ad_matmul, ad_solve, ad_chol_solve, ad_inv, plus ad_leaf) and is
+   ad_matmul, ad_solve, ad_chol_solve, ad_triangular_solve, ad_inv, plus
+   ad_leaf) and is
    individually owned - freed by tape_free, not by the block release. */
 static inline Node *ad_node_new(Tape *t, Mat val, void (*backward)(Node*)) {
     Node *n = (Node*)tape_alloc(t, sizeof(Node));
@@ -821,6 +822,50 @@ static void ad_chol_solve_backward(Node *self) {
 static inline Node *ad_chol_solve(Tape *t, Node *L, Node *b) {
     Node *n = ad_node_new(t, vec_chol_solve(L->val, b->val), ad_chol_solve_backward);
     n->parents[0] = L; n->parents[1] = b; n->n_parents = 2;
+    return n;
+}
+
+/* x = triangular_solve(L, b, trans): L*x = b when trans == 'N', L^T*x = b
+   when trans == 'T'. L is lower triangular, so uplo is fixed at 'L'
+   rather than being a parameter - the callers that need this all
+   parametrize a scale matrix by its lower Cholesky factor and want the
+   half-solve, Sigma^-1/2 v, rather than the full Sigma^-1 v that
+   ad_chol_solve gives.
+
+   The backward rule is Table 7's "getrs" row restricted to a triangular
+   parametrization: with z = triangular_solve(L, xbar, opposite trans),
+   bbar += z and Lbar += tril(-z*x^T) for trans == 'N', tril(-x*z^T) for
+   trans == 'T'. Only the lower triangle is accumulated, the same
+   restriction ad_chol_solve applies for the same reason - the upper
+   triangle is structurally zero, not a parameter. Checked against finite
+   differences in tests/correctness/test_ad.c rather than assumed correct
+   by analogy with ad_chol_solve.
+
+   trans rides on the node's aux field, the extra scalar a backward rule
+   may need. */
+static void ad_triangular_solve_backward(Node *self) {
+    Node *L = self->parents[0], *b = self->parents[1];
+    int n = L->val.r;
+    char trans = self->aux > (mreal)0.5 ? 'T' : 'N';
+    char z_trans = trans == 'T' ? 'N' : 'T';
+    Vec z = vec_triangular_solve(L->val, self->grad, 'L', z_trans, 'N');
+    Vec x = self->val;
+
+    if (trans == 'N')
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j <= i; j++) AT(L->grad, i, j) += -z.d[i] * x.d[j];
+    else
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j <= i; j++) AT(L->grad, i, j) += -x.d[i] * z.d[j];
+
+    ad_accum(b->grad, z);
+    mat_free(z);
+}
+static inline Node *ad_triangular_solve(Tape *t, Node *L, Node *b, char trans) {
+    Node *n = ad_node_new(t, vec_triangular_solve(L->val, b->val, 'L', trans, 'N'),
+                          ad_triangular_solve_backward);
+    n->parents[0] = L; n->parents[1] = b; n->n_parents = 2;
+    n->aux = (trans == 'T') ? (mreal)1 : (mreal)0;
     return n;
 }
 

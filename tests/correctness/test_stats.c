@@ -987,6 +987,240 @@ static void test_hac_stress(void) {
     printf("  600 randomized strided runs (n up to ~400) ok\n");
 }
 
+
+/* --- series accessors, quantile, Ljung-Box --- */
+
+/* The obvious quantile: sort everything, then interpolate. Slow, and
+   exactly the definition NumPy's type 7 states, so a selection bug in
+   stats_quantile cannot agree with it by accident. */
+static int ref_cmp_double(const void *a, const void *b) {
+    double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+static double ref_quantile(const double *x, int n, double p) {
+    double *sorted = (double *)malloc((size_t)n * sizeof *sorted);
+    for (int i = 0; i < n; i++) sorted[i] = x[i];
+    qsort(sorted, (size_t)n, sizeof *sorted, ref_cmp_double);
+    double position = p * (n - 1);
+    int lower = (int)floor(position);
+    int upper = (int)ceil(position);
+    double weight = position - lower;
+    double q = (1.0 - weight) * sorted[lower] + weight * sorted[upper];
+    free(sorted);
+    return q;
+}
+
+static void test_series_accessors(void) {
+    puts("series length and element access, both orientations");
+    Mat row = mat_new(1, 5);
+    Mat col = mat_new(5, 1);
+    for (int i = 0; i < 5; i++) { AT(row, 0, i) = (mreal)(i + 1); AT(col, i, 0) = (mreal)(i + 1); }
+    assert(stats_series_length(row) == 5 && stats_series_length(col) == 5);
+    for (int t = 0; t < 5; t++) {
+        CHECK(stats_series_at(row, t), t + 1);
+        CHECK(stats_series_at(col, t), t + 1);
+    }
+    /* a strided view: one row out of a wider matrix, whose stride is the
+       parent's column count rather than its own */
+    Mat wide = mat_new(3, 7);
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 7; j++) AT(wide, i, j) = (mreal)(10 * i + j);
+    Mat middle = mat_slice(wide, 1, 2, 0, 7);
+    assert(middle.stride == 7 && stats_series_length(middle) == 7);
+    for (int t = 0; t < 7; t++) CHECK(stats_series_at(middle, t), 10 + t);
+    mat_free(row); mat_free(col); mat_free(wide);
+}
+
+static void test_quantile_known_values(void) {
+    puts("quantile against hand-computed interpolations");
+    /* 1..5 in scrambled order, where every order statistic is its own
+       rank and the interpolation can be done by hand */
+    mreal values[5] = { 4, 1, 5, 2, 3 };
+    Mat x = mat_new(1, 5);
+    for (int i = 0; i < 5; i++) AT(x, 0, i) = values[i];
+    struct { double p, want; } cases[] = {
+        { 0.0, 1.0 }, { 0.1, 1.4 }, { 0.25, 2.0 }, { 0.5, 3.0 },
+        { 0.75, 4.0 }, { 0.9, 4.6 }, { 1.0, 5.0 }
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++)
+        CHECK(stats_quantile(x, (mreal)cases[i].p), cases[i].want);
+    /* the median of an odd count is the middle value, so the two agree */
+    CHECK(stats_quantile(x, (mreal)0.5), stats_median(x));
+    mat_free(x);
+
+    /* and on an even count, where the median interpolates */
+    Mat even = mat_new(4, 1);
+    AT(even, 0, 0) = 3; AT(even, 1, 0) = 1; AT(even, 2, 0) = 4; AT(even, 3, 0) = 2;
+    CHECK(stats_quantile(even, (mreal)0.5), stats_median(even));
+    CHECK(stats_quantile(even, (mreal)0.5), 2.5);
+    mat_free(even);
+}
+
+static void test_quantile_views_and_adversarial(void) {
+    puts("quantile on views and degenerate samples");
+    /* a column slice of a wider matrix, so the walk must respect stride */
+    Mat wide = mat_new(6, 4);
+    for (int i = 0; i < 6; i++)
+        for (int j = 0; j < 4; j++) AT(wide, i, j) = (mreal)(100 * j + (5 - i));
+    Mat column = mat_slice(wide, 0, 6, 2, 3);
+    assert(column.stride == 4);
+    /* that column holds 205..200 descending, so its p-quantile is 200 + p*5 */
+    for (int k = 0; k <= 10; k++) {
+        double p = 0.1 * k;
+        CHECK(stats_quantile(column, (mreal)p), 200.0 + p * 5.0);
+    }
+    mat_free(wide);
+
+    /* one element: every quantile is that element */
+    Mat one = mat_new(1, 1);
+    AT(one, 0, 0) = (mreal)7.5;
+    for (int k = 0; k <= 4; k++) CHECK(stats_quantile(one, (mreal)(0.25 * k)), 7.5);
+    mat_free(one);
+
+    /* every element equal: no interpolation can move the answer */
+    Mat flat = mat_new(3, 3);
+    for (int i = 0; i < 9; i++) flat.d[i] = (mreal)-2;
+    for (int k = 0; k <= 4; k++) CHECK(stats_quantile(flat, (mreal)(0.25 * k)), -2);
+    mat_free(flat);
+
+    /* the copying form must not disturb its input, which is the whole
+       difference between it and stats_quantile_inplace */
+    Mat keep = mat_new(1, 6);
+    mreal before[6] = { 9, 2, 7, 1, 8, 3 };
+    for (int i = 0; i < 6; i++) AT(keep, 0, i) = before[i];
+    (void)stats_quantile(keep, (mreal)0.4);
+    for (int i = 0; i < 6; i++) assert(AT(keep, 0, i) == before[i]);
+    mat_free(keep);
+}
+
+static void test_quantile_vs_reference(void) {
+    puts("quantile against a full-sort reference, fixed seed");
+    srand(4242);
+    for (int trial = 0; trial < 200; trial++) {
+        int n = 1 + rand() % 60;
+        Mat x = mat_new(1, n);
+        double *reference = (double *)malloc((size_t)n * sizeof *reference);
+        for (int i = 0; i < n; i++) {
+            /* biased toward ties and repeated values, where a selection
+               that mishandles equal keys goes wrong and uniform noise
+               would never notice */
+            double v = (double)(rand() % 5) - 2.0;
+            if (rand() % 3 == 0) v += 1e-9 * (rand() % 100);
+            AT(x, 0, i) = (mreal)v;
+            reference[i] = (double)AT(x, 0, i);
+        }
+        for (int k = 0; k <= 20; k++) {
+            double p = 0.05 * k;
+            double got = (double)stats_quantile(x, (mreal)p);
+            double want = ref_quantile(reference, n, p);
+            assert(fabs(got - want) < 1e-4);
+        }
+        /* the in-place form answers the same question on its own buffer */
+        mreal *scratch = (mreal *)malloc((size_t)n * sizeof *scratch);
+        for (int k = 0; k <= 4; k++) {
+            for (int i = 0; i < n; i++) scratch[i] = AT(x, 0, i);
+            double p = 0.25 * k;
+            assert(fabs((double)stats_quantile_inplace(scratch, n, (mreal)p)
+                        - ref_quantile(reference, n, p)) < 1e-4);
+        }
+        free(scratch); free(reference); mat_free(x);
+    }
+}
+
+/* Q = T(T+2) sum_k rho_k^2 / (T-k), written out from the definition over a
+   plain buffer with its own autocorrelation, so neither stats_autocorr nor
+   the scaling can be wrong in both places at once. */
+static double ref_ljung_box(const double *x, int T, int lags) {
+    double sum = 0;
+    for (int k = 1; k <= lags; k++) {
+        /* stats_autocorr is the Pearson correlation of the two shifted
+           views, each centred on its own mean, so the reference matches
+           that definition rather than the textbook single-mean one */
+        double mx = 0, my = 0;
+        int m = T - k;
+        for (int t = 0; t < m; t++) { mx += x[t]; my += x[t + k]; }
+        mx /= m; my /= m;
+        double sxy = 0, sxx = 0, syy = 0;
+        for (int t = 0; t < m; t++) {
+            sxy += (x[t] - mx) * (x[t + k] - my);
+            sxx += (x[t] - mx) * (x[t] - mx);
+            syy += (x[t + k] - my) * (x[t + k] - my);
+        }
+        double rho = sxy / sqrt(sxx * syy);
+        sum += rho * rho / (double)(T - k);
+    }
+    return (double)T * (double)(T + 2) * sum;
+}
+
+static void test_ljung_box(void) {
+    puts("Ljung-Box against the definition and on known series");
+    Rng rng = rng_new(9091, 0);
+
+    /* against the definition, on a series with real autocorrelation in it */
+    int T = 300;
+    Mat x = mat_new(1, T);
+    double *buffer = (double *)malloc((size_t)T * sizeof *buffer);
+    mreal level = 0;
+    for (int t = 0; t < T; t++) {
+        level = (mreal)(0.6 * level + rng_normal(&rng));
+        AT(x, 0, t) = level;
+        buffer[t] = (double)level;
+    }
+    for (int lags = 1; lags <= 12; lags++) {
+        StatsLjungBox got = stats_ljung_box(x, lags);
+        assert(got.lags == lags);
+        assert(fabs(got.statistic - ref_ljung_box(buffer, T, lags)) < 1e-3);
+        /* the p-value is the chi-squared tail of that statistic, nothing more */
+        assert(fabs(got.p_value
+                    - special_chi_squared_sf(got.statistic, (double)lags)) < 1e-12);
+        assert(got.statistic >= 0 && got.p_value >= 0 && got.p_value <= 1);
+    }
+    /* an AR(1) at 0.6 over 300 periods is not white noise and the test
+       must say so */
+    assert(stats_ljung_box(x, 10).p_value < 1e-6);
+
+    /* the same series as a column, and as a strided view, must give the
+       same answer - the accessors are the only thing that differs */
+    Mat column = mat_new(T, 1);
+    for (int t = 0; t < T; t++) AT(column, t, 0) = AT(x, 0, t);
+    assert(fabs(stats_ljung_box(column, 8).statistic
+                - stats_ljung_box(x, 8).statistic) < 1e-6);
+    Mat wide = mat_new(2, T);
+    for (int t = 0; t < T; t++) { AT(wide, 0, t) = 0; AT(wide, 1, t) = AT(x, 0, t); }
+    Mat viewed = mat_slice(wide, 1, 2, 0, T);
+    assert(viewed.stride == T);
+    assert(fabs(stats_ljung_box(viewed, 8).statistic
+                - stats_ljung_box(x, 8).statistic) < 1e-6);
+
+    /* the largest legal lag, where stats_autocorr has exactly two
+       overlapping pairs left and one more would be a contract violation */
+    {
+        Mat shortish = mat_new(1, 12);
+        for (int t = 0; t < 12; t++) AT(shortish, 0, t) = (mreal)rng_normal(&rng);
+        StatsLjungBox edge = stats_ljung_box(shortish, 10);
+        assert(edge.lags == 10 && edge.statistic >= 0);
+        assert(edge.p_value >= 0 && edge.p_value <= 1);
+        mat_free(shortish);
+    }
+
+    /* white noise: over 40 draws at T = 400 the test should reject at the
+       5 per cent level roughly 5 per cent of the time, so a handful at
+       most. A count is checked rather than a single draw, since one
+       unlucky series proves nothing either way. */
+    int rejections = 0;
+    for (int draw = 0; draw < 40; draw++) {
+        Mat noise = mat_new(1, 400);
+        for (int t = 0; t < 400; t++) AT(noise, 0, t) = (mreal)rng_normal(&rng);
+        if (stats_ljung_box(noise, 10).p_value < 0.05) rejections++;
+        mat_free(noise);
+    }
+    printf("  white noise rejected at 5 per cent on %d of 40 draws\n", rejections);
+    assert(rejections <= 8);
+
+    free(buffer); mat_free(x); mat_free(column); mat_free(wide);
+}
+
 int main(void) {
     test_known_values();
     test_invariants();
@@ -1012,6 +1246,11 @@ int main(void) {
     test_hac_adversarial();
     test_hac_vs_reference();
     test_hac_stress();
+    test_series_accessors();
+    test_quantile_known_values();
+    test_quantile_views_and_adversarial();
+    test_quantile_vs_reference();
+    test_ljung_box();
     puts("test_stats: all passed");
     return 0;
 }

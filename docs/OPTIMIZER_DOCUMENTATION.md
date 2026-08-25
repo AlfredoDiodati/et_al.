@@ -4,7 +4,7 @@
 
 **Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy).
 
-`solver/optimizer.h` defines the shape every gradient-based optimizer in this project can be used through: a small vtable-style interface (a `void*` state plus `step`/`free` function pointers), not a concrete algorithm. It exists so a model's `fit()` (see `nn/mlp.h`'s `mlp_fit`, and README's "Model fit/forecast API" policy) can accept *any* optimizer - Adam today, SGD or RMSprop later - without hardcoding which one, and without changing `fit()`'s signature when a new one is added.
+`solver/optimizer.h` defines the shape every gradient-based optimizer in this project can be used through: a small vtable-style interface (a `void*` state plus `step`/`free` function pointers), not a concrete algorithm. It exists so a model's `fit()` (see `nn/mlp.h`'s `mlp_fit`, and README's "Model fitting API" policy) can accept *any* optimizer - Adam today, SGD or RMSprop later - without hardcoding which one, and without changing `fit()`'s signature when a new one is added.
 
 This is the lowest file in `solver/`'s own small internal chain: `solver/optimizer.h` (interface) `<-` `solver/adam.h` (implementation), mirroring the same "interface below, implementation above" shape as `linalg/mat.h <- linalg/decomp.h <- linalg/solver.h` at the top level, just at a smaller scale and one level up.
 

@@ -2,9 +2,12 @@
 
 Public functions identified as undertested against `tests/correctness/*.c`,
 audited 2026-08-14 against `./check.sh`'s 25 passing suites (all suites
-passed at audit time - these are coverage gaps, not known bugs). The suite
-count is 26 since `test_mcs` was added. Update this
-file as items are picked up: check the box, note the test added and where.
+passed at audit time - these are coverage gaps, not known bugs). `check.sh`
+now runs 47, the difference being `test_mcs`, `test_join` and the fifteen
+statistical test and model suites; nothing below has been re-audited against
+those, so this file understates current coverage rather than overstating it.
+Update this file as items are picked up: check the box, note the test added
+and where.
 
 Coverage bar, from `README.md`'s "Testing requirements": every function
 needs at minimum a known-output case or invariant check, a view/strided-input
@@ -14,10 +17,12 @@ where called out explicitly below.
 
 ## Zero coverage
 
-- [ ] `vec_triangular_solve` - `linalg/solver.h:106` - never called in any
-      test. Needs known-output solve for both `uplo` ('L'/'U') and both
-      `diag` ('N'/'U'), a strided/view input, near-zero-diagonal adversarial
-      case.
+- [ ] `vec_triangular_solve` - `linalg/solver.h:106` - partially covered
+      since `ad_triangular_solve` was added: `tests/correctness/test_ad.c`
+      checks the forward residual `L*x - b` and `L^T*x - b` at `uplo` 'L',
+      `diag` 'N', and `sd/score_driven_location.h` exercises it every period
+      of every filter. Still missing: `uplo` 'U', `diag` 'U', a strided/view
+      input, and a near-zero-diagonal adversarial case.
 - [ ] `mat_isnan_f32` / `mat_isnan_f64` - `linalg/mat.h:67,71` - only reached
       via the `MISNAN` macro inside `mat_max`/`mat_min`, never called
       directly. Needs direct calls on NaN, -NaN, and finite boundary values.

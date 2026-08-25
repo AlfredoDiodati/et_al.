@@ -1,19 +1,21 @@
 #pragma once
 #include "linalg/mat.h"
+#include "special.h"
 
 /* Sample statistics: descriptive statistics of observed data - sample
    mean, variance, Pearson correlation, autocorrelation, per-column
-   (vector) means, lag-k autocovariance matrices, the HAC
-   (Newey-West) long-run variance, median and rank
-   (stats_rank enables Spearman rank correlation), and a family of
-   prediction-quality metrics (mean/median absolute error, RMSE, MAPE,
-   RMSLE, R^2, Huber loss) comparing an actual sample against a predicted
-   one. A standalone core layer directly above linalg/mat.h, the same
-   include direction as every other layer; rows are observations and
-   columns are components for the matrix-valued statistics, matching
-   dist/mv/'s convention. First concrete consumer: the independence tests
-   on random.h and the dist/ samplers, which assert these statistics
-   vanish where iid draws say they must.
+   (vector) means, lag-k autocovariance matrices, the HAC (Newey-West)
+   long-run variance, the Ljung-Box portmanteau test, median, arbitrary
+   quantile and rank (stats_rank enables Spearman rank correlation), and
+   a family of prediction-quality metrics (mean/median absolute error,
+   RMSE, MAPE, RMSLE, R^2, Huber loss) comparing an actual sample against
+   a predicted one. A standalone core layer directly above linalg/mat.h,
+   reaching sideways to special.h for the chi-squared tail the Ljung-Box
+   p-value needs; rows are observations and columns are components for
+   the matrix-valued statistics, matching dist/mv/'s convention. First
+   concrete consumer: the independence tests on random.h and the dist/
+   samplers, which assert these statistics vanish where iid draws say
+   they must.
 
    Two deliberate conventions, stated once:
 
@@ -112,6 +114,20 @@ static inline mreal stats_corr(Mat x, Mat y) {
     return (mreal)(sxy / sqrt(sxx * syy));
 }
 
+/* A time series held as a 1 x n row or an n x 1 column, either of which
+   may be a strided view: its length, and its t-th observation. Which of
+   the two orientations a caller holds is an accident of how the data was
+   loaded, not a modelling choice, so every function taking one series
+   accepts both rather than making the caller transpose. */
+static inline int stats_series_length(Mat series) {
+    assert(series.r == 1 || series.c == 1);
+    return series.r == 1 ? series.c : series.r;
+}
+
+static inline mreal stats_series_at(Mat series, int t) {
+    return series.r == 1 ? AT(series, 0, t) : AT(series, t, 0);
+}
+
 /* Sample autocorrelation of a vector (n x 1 or 1 x n) at lag >= 1:
    Pearson correlation of the two lag-shifted zero-copy views, so it
    needs at least two overlapping pairs (lag <= n - 2). */
@@ -122,6 +138,46 @@ static inline mreal stats_autocorr(Mat x, int lag) {
     Mat a = x.r == 1 ? mat_slice(x, 0, 1, 0, n - lag) : mat_slice(x, 0, n - lag, 0, 1);
     Mat b = x.r == 1 ? mat_slice(x, 0, 1, lag, n) : mat_slice(x, lag, n, 0, 1);
     return stats_corr(a, b);
+}
+
+/* The Ljung-Box portmanteau statistic,
+
+     Q = T(T+2) sum_{k=1}^{lags} rho_k^2 / (T-k),
+
+   which under the null of no autocorrelation up to lag `lags` is
+   chi-squared(lags); the p-value is that distribution's upper tail, from
+   special.h. x is a single series, 1 x T or T x 1. stats_autocorr above
+   supplies each rho_k, so this adds only the sum, the scaling and the
+   tail probability, not a second autocorrelation estimator.
+
+   No adjustment for estimated parameters is made to the degrees of
+   freedom. A caller checking a fitted model's residuals across many
+   specifications with different parameter counts, against the same fixed
+   number of lags every time, is why `lags` is a plain argument here
+   rather than derived from a model's degrees of freedom: the question is
+   "is there autocorrelation left in the first `lags` lags", which is the
+   same question however many parameters produced the residual. */
+typedef struct {
+    double statistic;
+    int lags;
+    double p_value;
+} StatsLjungBox;
+
+static inline StatsLjungBox stats_ljung_box(Mat x, int lags) {
+    int T = stats_series_length(x);
+    /* stats_autocorr above needs two overlapping pairs at every lag it is
+       asked for, so the binding limit is T - 2 rather than T - 1 */
+    assert(lags >= 1 && lags <= T - 2);
+    double sum = 0;
+    for (int k = 1; k <= lags; k++) {
+        double rho = (double)stats_autocorr(x, k);
+        sum += rho * rho / (double)(T - k);
+    }
+    StatsLjungBox result;
+    result.lags = lags;
+    result.statistic = (double)T * (double)(T + 2) * sum;
+    result.p_value = special_chi_squared_sf(result.statistic, (double)lags);
+    return result;
 }
 
 /* Column means of an n x d sample (rows = observations), as 1 x d.
@@ -437,6 +493,46 @@ static inline mreal stats_median(Mat x) {
     }
     free(tmp);
     return m;
+}
+
+/* The sample quantile at probability p by linear interpolation between
+   the two order statistics bracketing position p*(n-1) - the definition
+   NumPy's np.quantile and R's type 7 both use.
+
+   This variant permutes values[0..n-1] in place, for a caller that
+   already owns a scratch buffer and asks for several quantiles of it;
+   stats_quantile below is the copying form. One quickselect, not two:
+   selecting the lower order statistic already leaves every element to
+   its right no smaller than it, so the upper one is that part's minimum,
+   found in one more O(n) pass - the same reasoning stats_median uses for
+   its even-count case. */
+static inline mreal stats_quantile_inplace(mreal *values, int n, mreal p) {
+    assert(n >= 1 && p >= 0 && p <= 1);
+    double position = (double)(n - 1) * (double)p;
+    int lower_index = (int)position;
+    double weight = position - lower_index;
+    stats_quickselect(values, 0, n - 1, lower_index);
+    mreal at_lower = values[lower_index];
+    if (weight <= 0 || lower_index + 1 >= n) return at_lower;
+    mreal at_upper = values[lower_index + 1];
+    for (int i = lower_index + 2; i < n; i++)
+        if (values[i] < at_upper) at_upper = values[i];
+    return (mreal)((1.0 - weight) * (double)at_lower + weight * (double)at_upper);
+}
+
+/* The same quantile over all elements of x (any shape, strided views
+   included), on a copy: x is never mutated. */
+static inline mreal stats_quantile(Mat x, mreal probability) {
+    assert(x.r >= 1 && x.c >= 1);
+    int n = x.r * x.c;
+    mreal *tmp = (mreal*)malloc((size_t)n * sizeof(mreal));
+    assert(tmp);
+    int k = 0;
+    for (int i = 0; i < x.r; i++)
+        for (int j = 0; j < x.c; j++) tmp[k++] = AT(x, i, j);
+    mreal q = stats_quantile_inplace(tmp, n, probability);
+    free(tmp);
+    return q;
 }
 
 typedef struct { mreal val; int idx; } StatsIdxVal;

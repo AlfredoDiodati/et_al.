@@ -1657,3 +1657,37 @@ substantial, thoroughly-verified win on its own.
 **Status: hypothesis only, not measured - profiling via `perf` was not
 available in the environment this was developed in; confirm with a real
 profiler before implementing.**
+
+## 10. The model tier has no performance harness at all (`nn/`, `sd/`)
+
+Per the root `README.md`'s "Benchmarking policy across installation tiers",
+the model tier is deliberately not benchmarked against external packages: a
+fitted model's wall-clock is dominated by training-procedure choices (epochs,
+optimizer, per-sample versus batched passes) that differ structurally between
+libraries, so cross-package model timings compare configurations rather than
+implementations. It is meant to be compared **between versions of this package
+itself** — same model, same hyperparameters, previous release against current.
+
+**That harness does not exist.** `nn/mlp.h`, `sd/qvarma.h` and
+`sd/score_driven_location.h` therefore have no performance tests, and no speed
+claim should be made about any of them.
+
+What does exist is narrower and worth not confusing with it.
+`tests/performance/qvarma_performance.c` and `tests/performance/lbfgs_*.c`
+compare a candidate implementation against the one it would replace, inside one
+build, on one machine — enough to answer "is this change worth adopting", which
+is the question they were written for, and not enough to answer "has this got
+slower since the last release". They also record a real measurement hazard
+worth reusing: a straight A-then-B comparison on `sd/qvarma.h` once reported
+3.42 ms against 5.62 ms for two builds of *identical* code, which is why those
+files use interleaved best-of-N rather than one timing of each version.
+
+**What a fix looks like.** A `bench_model.py`-shaped driver that fixes the seed,
+the data, the shape and every hyperparameter, times `fit` end to end, and
+records the result against a stored baseline keyed by git revision rather than
+against another library. The awkward part is the baseline store, not the timing:
+a per-release checked-in number goes stale silently, and a rebuild-the-old-
+revision harness needs the old revision to still compile against the current
+core, which is exactly what a model-tier interface change breaks.
+
+**Status: not started.** No numbers, no harness, no baseline format chosen.

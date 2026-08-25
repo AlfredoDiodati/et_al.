@@ -904,6 +904,107 @@ static void test_chol_solve_fd(void) {
     tape_free(t);
 }
 
+
+static mreal ref_triangular_solve_loss(Mat L, Mat b, char trans) {
+    Vec x = vec_triangular_solve(L, b, 'L', trans, 'N');
+    mreal s = 0;
+    for (int i = 0; i < x.r; i++) s += AT(x,i,0) * AT(x,i,0) * (mreal)(i + 1);
+    mat_free(x);
+    return s;
+}
+
+/* Both transposes, and a 3x3 rather than a 2x2, since the backward rule
+   differs between them by which index of the outer product is which - on
+   a 2x2 an off-by-one transpose there is far easier to pass by accident.
+   The loss weights the components unequally so no symmetry of the sum can
+   hide a swapped pair. */
+static void test_triangular_solve_fd(void) {
+    puts("ad_triangular_solve (finite-difference, both transposes)");
+    Mat L = mat_lit(3, 3, 2.f,0.f,0.f, -1.f,3.f,0.f, 0.5f,1.f,4.f);
+    Mat b = mat_lit(3, 1, 4.f,3.f,-2.f);
+    char transposes[2] = { 'N', 'T' };
+
+    for (int which = 0; which < 2; which++) {
+        char trans = transposes[which];
+        Tape *t = tape_new();
+        Node *Ln = ad_leaf(t, L), *bn = ad_leaf(t, b);
+        Node *x = ad_triangular_solve(t, Ln, bn, trans);
+        Mat weight = mat_lit(3, 1, 1.f, 2.f, 3.f);
+        Node *loss = ad_sum(t, ad_emul(t, ad_emul(t, x, x), ad_leaf(t, weight)));
+        tape_backward(t, loss);
+
+        mreal h = 1e-3f;
+        /* only the lower triangle is a parameter; the upper is structurally
+           zero and its gradient must stay untouched at zero */
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j <= i; j++) {
+                Mat Lp = mat_copy(L), Lm = mat_copy(L);
+                AT(Lp,i,j) += h; AT(Lm,i,j) -= h;
+                mreal fd = (ref_triangular_solve_loss(Lp,b,trans)
+                            - ref_triangular_solve_loss(Lm,b,trans)) / (2*h);
+                assert(MABS(AT(Ln->grad,i,j) - fd) < TOL_FD);
+                mat_free(Lp); mat_free(Lm);
+            }
+        for (int i = 0; i < 3; i++)
+            for (int j = i + 1; j < 3; j++)
+                assert(AT(Ln->grad,i,j) == 0);
+        for (int i = 0; i < 3; i++) {
+            Mat bp = mat_copy(b), bm = mat_copy(b);
+            AT(bp,i,0) += h; AT(bm,i,0) -= h;
+            mreal fd = (ref_triangular_solve_loss(L,bp,trans)
+                        - ref_triangular_solve_loss(L,bm,trans)) / (2*h);
+            assert(MABS(AT(bn->grad,i,0) - fd) < TOL_FD);
+            mat_free(bp); mat_free(bm);
+        }
+        mat_free(weight);
+        tape_free(t);
+    }
+
+    /* the forward value against the system it solves, both directions:
+       L x = b and L^T x = b, residual under tolerance */
+    for (int which = 0; which < 2; which++) {
+        char trans = transposes[which];
+        Tape *t = tape_new();
+        Node *x = ad_triangular_solve(t, ad_leaf(t, L), ad_leaf(t, b), trans);
+        Mat Lt = mat_T(L);
+        Mat product = mat_mul(trans == 'N' ? L : Lt, x->val);
+        for (int i = 0; i < 3; i++) assert(MABS(AT(product,i,0) - AT(b,i,0)) < TOL);
+        mat_free(product); mat_free(Lt);
+        tape_free(t);
+    }
+
+    /* two of these composed is one ad_chol_solve: L^-T L^-1 b solves
+       (L L^T) x = b, which is a second, independent statement of the
+       backward rule since the two ops derive their adjoints separately */
+    {
+        Tape *t = tape_new();
+        Node *Ln = ad_leaf(t, L), *bn = ad_leaf(t, b);
+        Node *composed = ad_triangular_solve(t, Ln, ad_triangular_solve(t, Ln, bn, 'N'), 'T');
+        Node *loss = ad_sum(t, ad_emul(t, composed, composed));
+        tape_backward(t, loss);
+        Mat composed_grad_L = mat_copy(Ln->grad);
+        Mat composed_grad_b = mat_copy(bn->grad);
+        Mat composed_value = mat_copy(composed->val);
+        tape_free(t);
+
+        Tape *t2 = tape_new();
+        Node *Ln2 = ad_leaf(t2, L), *bn2 = ad_leaf(t2, b);
+        Node *direct = ad_chol_solve(t2, Ln2, bn2);
+        Node *loss2 = ad_sum(t2, ad_emul(t2, direct, direct));
+        tape_backward(t2, loss2);
+        for (int i = 0; i < 3; i++) {
+            assert(MABS(AT(composed_value,i,0) - AT(direct->val,i,0)) < TOL);
+            assert(MABS(AT(composed_grad_b,i,0) - AT(bn2->grad,i,0)) < TOL_FD);
+            for (int j = 0; j <= i; j++)
+                assert(MABS(AT(composed_grad_L,i,j) - AT(Ln2->grad,i,j)) < TOL_FD);
+        }
+        mat_free(composed_grad_L); mat_free(composed_grad_b); mat_free(composed_value);
+        tape_free(t2);
+    }
+
+    mat_free(L); mat_free(b);
+}
+
 static mreal ref_det_loss(Mat A) {
     mreal d = mat_det(A);
     return d * d;
@@ -1279,6 +1380,7 @@ int main(void) {
     test_slice_reshape();
     test_solve_fd();
     test_chol_solve_fd();
+    test_triangular_solve_fd();
     test_chol_quadform();
     test_det_fd();
     test_inv_fd();

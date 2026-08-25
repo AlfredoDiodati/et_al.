@@ -20,7 +20,7 @@ printf "test run: %s%s\n\n" "$(date)" "${STRESS:+ (STRESS=1)}" >> "$REPORT"
 run() {
     local label=$1
     shift
-    printf "  %-24s" "$label"
+    printf "  %-34s" "$label"
     # Only actually set STRESS in the child's environment when the caller
     # asked for it - the test binaries check getenv("STRESS") for a non-NULL
     # pointer, so STRESS="" (unset-but-defined) would wrongly enable it.
@@ -44,7 +44,11 @@ run() {
 # Every correctness suite `make test` runs, plus test_mat_special (built
 # separately - see the Makefile's test-special rule - since it deliberately
 # skips -ffast-math to get IEEE-defined NaN/Inf semantics).
-SUITES="test_mat test_mat_special test_decomp test_solver test_special test_stats test_random test_mcs test_mcs_variance test_broadcast test_gauss test_student test_mvgauss test_mvstudent test_matgauss test_matgauss_recovery test_ad test_tape_reset test_adam test_optimizer test_cluster test_mlp test_frame test_csv test_txt test_npy test_json test_sql gzip_inflate rdata_array_read"
+#
+# The statistical test and model suites at the end of the list are built at
+# float64 whatever MAT_DOUBLE says, through the Makefile's STAT_CFLAGS - see
+# the note above it for why that is mandatory rather than advisable.
+SUITES="test_mat test_mat_special test_decomp test_solver test_special test_stats test_random test_mcs test_mcs_variance test_broadcast test_gauss test_student test_mvgauss test_mvstudent test_matgauss test_matgauss_recovery test_ad test_tape_reset test_adam test_optimizer test_cluster test_mlp test_frame test_csv test_txt test_npy test_json test_sql test_join gzip_inflate rdata_array_read adf_correctness kpss_correctness dfgls_correctness otto_correctness hlt_union_correctness hlt_break_correctness hhlt_correctness zivot_andrews_correctness johansen_correctness engle_granger_correctness maki_correctness qlr_test_correctness lbfgs_correctness score_driven_location_correctness qvarma_correctness qvarma_identification"
 
 printf "building...\n"
 printf "=== build ===\n" >> "$REPORT"

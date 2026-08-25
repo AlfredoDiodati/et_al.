@@ -5,8 +5,9 @@
 /* Scalar special functions - general-purpose math tools that are not
    linear algebra (so they don't belong in linalg/) and not tied to any
    one distribution (so they don't belong in a dist/ file). Currently
-   the digamma function and the standard normal CDF. Standalone like
-   json.h: no dependency on linalg/mat.h.
+   the digamma function, the standard normal CDF, the regularized
+   incomplete gamma function and the chi-squared survival function built
+   on it. Standalone like json.h: no dependency on linalg/mat.h.
 
    Everything here is double-in/double-out regardless of the library's
    mreal build - the same deliberate exception to the M* macro
@@ -60,4 +61,78 @@ static inline double special_digamma(double x) {
     double f = 1 / (x * x);
     return r + log(x) - 0.5 / x
          - f * (1.0/12 - f * (1.0/120 - f * (1.0/252 - f * (1.0/240 - f * (1.0/132)))));
+}
+
+/* The regularized incomplete gamma function P(a,x) and its complement
+   Q(a,x) = 1 - P(a,x), for a > 0 and x >= 0. Both are needed by any
+   chi-squared tail probability, which is what a portmanteau or Wald
+   statistic is compared against.
+
+   Two evaluations, split at x = a + 1: the series expansion below the
+   split, the continued fraction above it. The series converges quickly
+   for x < a+1 and slowly past it; the continued fraction is the other
+   way round, which is why the split is where it is (Numerical Recipes,
+   section 6.2). Both stop once a term stops moving the accumulator at
+   double precision, with an iteration cap so a pathological argument
+   cannot spin forever. */
+static inline double special_gammainc_series(double a, double x) {
+    double sum = 1.0 / a;
+    double term = sum;
+    double n = a;
+    for (int i = 0; i < 500; i++) {
+        n += 1.0;
+        term *= x / n;
+        sum += term;
+        if (fabs(term) < fabs(sum) * 1e-15) break;
+    }
+    return sum * exp(-x + a * log(x) - lgamma(a));
+}
+
+/* The modified Lentz evaluation of the continued fraction: tiny guards a
+   denominator that lands on zero, which would otherwise divide by it. */
+static inline double special_gammainc_continued_fraction(double a, double x) {
+    double tiny = 1e-300;
+    double b = x + 1.0 - a;
+    double c = 1.0 / tiny;
+    double d = 1.0 / b;
+    double h = d;
+    for (int i = 1; i < 500; i++) {
+        double an = -(double)i * ((double)i - a);
+        b += 2.0;
+        d = an * d + b;
+        if (fabs(d) < tiny) d = tiny;
+        c = b + an / c;
+        if (fabs(c) < tiny) c = tiny;
+        d = 1.0 / d;
+        double delta = d * c;
+        h *= delta;
+        if (fabs(delta - 1.0) < 1e-15) break;
+    }
+    return h * exp(-x + a * log(x) - lgamma(a));
+}
+
+/* P(a,x). Out-of-domain arguments return NaN rather than aborting: a tail
+   probability is routinely evaluated at a statistic a caller computed, and
+   a degenerate statistic is a result to report, not a programmer error. */
+static inline double special_gammainc_p(double a, double x) {
+    if (x < 0 || a <= 0) return (double)NAN;
+    if (x == 0) return 0;
+    return x < a + 1.0 ? special_gammainc_series(a, x)
+                       : 1.0 - special_gammainc_continued_fraction(a, x);
+}
+
+/* Q(a,x). Computed from whichever of the two evaluations is accurate in
+   the region, rather than as 1 - special_gammainc_p(a, x), so the upper
+   tail keeps its relative accuracy where P is close to one - the same
+   reasoning special_norm_cdf gives for preferring erfc. */
+static inline double special_gammainc_q(double a, double x) {
+    if (x < 0 || a <= 0) return (double)NAN;
+    if (x == 0) return 1;
+    return x < a + 1.0 ? 1.0 - special_gammainc_series(a, x)
+                       : special_gammainc_continued_fraction(a, x);
+}
+
+/* P(X > x) for X ~ chi-squared(df), via chi-squared(df) = Gamma(df/2, 2). */
+static inline double special_chi_squared_sf(double x, double df) {
+    return special_gammainc_q(df * 0.5, x * 0.5);
 }

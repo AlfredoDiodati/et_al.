@@ -4,7 +4,7 @@
 
 **Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy) — a general-purpose math utility, usable independently of any distribution or model, the analogue of `scipy.special`.
 
-`special.h` holds scalar special functions: general math tools that are not linear algebra (so they don't belong in `linalg/`) and not tied to any one distribution (so they don't belong in a `dist/` file). It is a standalone root-level header like `json.h` — it includes only `<assert.h>` and `<math.h>`, with no dependency on `linalg/mat.h` — and follows the root-header naming pattern (`<noun>.h`, functions prefixed `special_`). It currently contains two functions: digamma, added because `dist/student.h`/`dist/mv/student.h` needed it for their `_dlogpdf_nu` scores, and the standard normal CDF, added because `mcs.h`'s Diebold-Mariano test needed a normal tail probability for its p-value. Future special functions (incomplete gamma, trigamma, ...) belong here when something concretely needs them, not before.
+`special.h` holds scalar special functions: general math tools that are not linear algebra (so they don't belong in `linalg/`) and not tied to any one distribution (so they don't belong in a `dist/` file). It is a standalone root-level header like `json.h` — it includes only `<assert.h>` and `<math.h>`, with no dependency on `linalg/mat.h` — and follows the root-header naming pattern (`<noun>.h`, functions prefixed `special_`). It currently contains four entry points: digamma, added because `dist/student.h`/`dist/mv/student.h` needed it for their `_dlogpdf_nu` scores; the standard normal CDF, added because `mcs.h`'s Diebold-Mariano test needed a normal tail probability for its p-value; and the regularized incomplete gamma function with the chi-squared survival function built on it, added because `stats.h`'s Ljung-Box p-value needed a chi-squared tail. Future special functions (trigamma, incomplete beta, ...) belong here when something concretely needs them, not before.
 
 ## Double precision by design
 
@@ -13,8 +13,11 @@ Everything in this file is **double-in/double-out regardless of the library's `m
 ## API reference
 
 ```c
-double special_digamma(double x)   /* psi(x) = d/dx log(Gamma(x)), x > 0 */
-double special_norm_cdf(double x)  /* Phi(x) = P(Z <= x), Z ~ N(0,1) */
+double special_digamma(double x)                /* psi(x) = d/dx log(Gamma(x)), x > 0 */
+double special_norm_cdf(double x)               /* Phi(x) = P(Z <= x), Z ~ N(0,1) */
+double special_gammainc_p(double a, double x)   /* P(a,x), regularized lower incomplete gamma */
+double special_gammainc_q(double a, double x)   /* Q(a,x) = 1 - P(a,x) */
+double special_chi_squared_sf(double x, double df)  /* P(X > x), X ~ chi-squared(df) */
 ```
 
 `SPECIAL_SQRT1_2` is not exported; `special_norm_cdf` keeps `1/sqrt(2)` as a local constant.
@@ -40,6 +43,18 @@ This lives here rather than in `dist/gauss.h` because it is a scalar function of
 
 Note `special.h` is standalone by design, so there is no `dist/` dependency in either direction: `mcs.h` includes `special.h` directly.
 
+### `special_gammainc_p`, `special_gammainc_q`
+
+The regularized incomplete gamma function and its complement, for `a > 0` and `x >= 0`. Both return NaN outside that domain rather than aborting: unlike `special_digamma`, whose argument is a shape parameter an internal caller controls, these are evaluated at a statistic the caller just computed, and a degenerate statistic is a result to report rather than a programmer error.
+
+Two evaluations split at `x = a + 1`: the series expansion `P(a,x) = x^a e^-x / Gamma(a+1) * sum_n x^n / ((a+1)...(a+n))` below the split, the continued fraction for `Q(a,x)` above it, in modified Lentz form (Numerical Recipes, section 6.2). The split is where it is because the series converges quickly for `x < a+1` and slowly past it, and the continued fraction the other way round. Both loops stop once a term stops moving the accumulator at double precision, with a 500-iteration cap so a pathological argument cannot spin forever.
+
+`special_gammainc_q` computes the upper tail from whichever of the two evaluations is accurate in that region rather than as `1 - special_gammainc_p(a, x)`, for the same reason `special_norm_cdf` prefers `erfc`: the upper tail is what a p-value *is*, so its relative accuracy is the whole answer, and forming it by subtraction from something near one throws that away.
+
+### `special_chi_squared_sf`
+
+`P(X > x)` for `X ~ chi-squared(df)`, which is `special_gammainc_q(df/2, x/2)` since chi-squared with `df` degrees of freedom is `Gamma(df/2, 2)`. This is the p-value of any Wald or portmanteau statistic; `stats.h`'s `stats_ljung_box` is the first caller.
+
 ## Testing
 
 `tests/correctness/test_special.c` checks known closed-form values to 1e-9 (`psi(1) = -euler_gamma`, `psi(1/2) = -euler_gamma - 2 log 2`, `psi(2) = 1 - euler_gamma`, `psi(10) = -euler_gamma + H_9`); the exact recurrence identity `psi(x+1) = psi(x) + 1/x` at points spanning the near-pole region (`x = 1e-3`), both sides of the `x = 6` series threshold, and `x = 1e4`; central finite differences of libm's `lgamma` — an implementation entirely independent of the shift-plus-series evaluation, and the defining property of digamma, so a formula error cannot hide; and the large-`x` asymptotic `psi(x) -> log(x) - 1/(2x)` at `x = 1e8`. `STRESS=1` adds 2000 log-spaced random points in `[1e-2, 1e6]` re-checking the recurrence everywhere and the `lgamma` finite difference where the FD itself is well-conditioned. The downstream `_dlogpdf_nu` tests in `test_student.c`/`test_mvstudent.c` provide a further end-to-end check through a completely digamma-free reference (finite differences of the log-pdf).
@@ -53,6 +68,7 @@ Note `special.h` is standalone by design, so there is no `dist/` dependency in e
 ## Known limitations and future work
 
 - `x > 0` only — no reflection formula for negative arguments, deferred until needed.
-- Only digamma and the normal CDF so far. Trigamma (`psi'`, needed for Fisher information of `nu`) and the incomplete gamma/beta functions are natural future residents, each added when a concrete caller appears — same YAGNI stance as everywhere else in this project.
+- Trigamma (`psi'`, needed for Fisher information of `nu`) and the incomplete beta function are natural future residents, each added when a concrete caller appears — same YAGNI stance as everywhere else in this project.
+- No inverse of `special_gammainc_p`, so no chi-squared *quantile*. The callers here compare a statistic against a tail probability, not against a critical value read off the inverse.
 - No normal *quantile* function (the inverse of `special_norm_cdf`). Nothing needs it yet: the p-values in `mcs.h` go through the CDF, not its inverse. A caller wanting a confidence interval rather than a p-value would need it, and that is the point at which to add it.
 - `special_norm_cdf` is untimed — `bench_special.py` covers digamma only.
