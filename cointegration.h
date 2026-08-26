@@ -113,6 +113,7 @@ static inline JohansenResult johansen(Mat data, int lags) {
     int rows = periods - lags - 1;
     int covariate_columns = n * lags + 1;
     assert(rows > n + covariate_columns && "too few periods for this many variables and lags");
+    assert(mat_all_finite(data) && "johansen: non-finite element in the data");
 
     Mat difference = mat_new(rows, n);
     Mat level = mat_new(rows, n);
@@ -289,6 +290,7 @@ static inline EngleGrangerResult engle_granger(Mat data, int dependent, int lags
                                                int second_step_deterministic) {
     int n = data.r, periods = data.c;
     assert(n >= 2 && dependent >= 0 && dependent < n && lags >= 0);
+    assert(mat_all_finite(data) && "engle_granger: non-finite element in the data");
 
     Mat design = mat_new(periods, n); /* a constant plus the n - 1 other variables */
     Mat target = mat_new(periods, 1);
@@ -524,6 +526,7 @@ static inline MakiResult maki(Mat data, int dependent, int model, int max_breaks
     assert(lags >= 0 && trim > 0 && trim < (mreal)0.5);
     int gap = (int)((double)trim * (double)periods);
     assert(gap >= 1 && "the trim is too small for this sample");
+    assert(mat_all_finite(data) && "maki: non-finite element in the data");
     assert(periods > _maki_columns(model, n - 1, max_breaks) + lags + 8
            && "too few periods for this model, break count and lag order");
 

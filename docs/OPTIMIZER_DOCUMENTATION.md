@@ -55,6 +55,8 @@ static Optimizer sgd_optimizer_init(const void *hp, int r, int c) {
 
 `tests/correctness/test_optimizer.c` proves the interface is genuinely pluggable two ways: (1) the hand-rolled SGD above, built with zero dependency on `solver/adam.h`, checked against the known-output update rule `param -= lr*grad` over several steps; (2) a cross-check that `solver/adam.h`'s `adam_optimizer_init` adapter produces the identical parameter trajectory as calling `adam_init`/`adam_step` directly with the same sequence of random gradients - confirming the adapter is plumbing, not a second, possibly-diverging implementation of Adam.
 
+Neither of those reaches a model, though, so everything `mlp_fit` assumes about this interface held because Adam happened to satisfy it. `tests/integration/optimizer_swap.c` closes that: it fits an MLP through an SGD-with-momentum implementation of this interface, which unlike the stateless SGD above keeps a velocity buffer of the parameter's own shape, allocated in `init` from the `(r, c)` `mlp_fit` passes and released exactly once in `free`. It counts the instances created and freed (one per weight matrix and one per bias vector), asserts every instance was built at its own tensor's shape, asserts the step count is exactly tensors x epochs x samples, and requires momentum at 0.9 and at 0 to land in different places - which is what proves the state persists across epochs rather than being rebuilt. Run under `make test-integration-asan`, where a leaked or doubly-freed instance is an error rather than a silence.
+
 ## Known limitations and future work
 
 - No learning-rate schedule/decay concept at the interface level - if an optimizer wants one, it lives entirely inside that optimizer's own `state` and `step`, invisible to this interface.

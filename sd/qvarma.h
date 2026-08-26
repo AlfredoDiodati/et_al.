@@ -1217,7 +1217,16 @@ static inline QvarmaImpulseBands qvarma_impulse_bands(Rng *rng, const QvarmaPara
                 }
     } else {
         /* One entry at a time: values holds that entry over the kept
-           rotations, which is what the three percentiles are taken of. */
+           rotations, which is what the three percentiles are taken of.
+
+           stats_quantile_inplace leaves the finiteness check to its caller
+           (see the note on the order statistics in stats.h), and this is a
+           caller that does not need one: every value below is a sum of
+           products of a fitted model's own coefficients and an orthogonal
+           rotation, both finite by the time the fit returned, and the
+           n_accepted == 0 case that has no values at all was handled above.
+           Checking here would run three scans per band entry, over the whole
+           loop nest, for a question already answered. */
         mreal *values = (mreal*)malloc((size_t)bands.n_accepted * sizeof(mreal));
         assert(values);
         for (int c = 0; c < QVARMA_N_IMPULSE_COMPONENTS; c++)

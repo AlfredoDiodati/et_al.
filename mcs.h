@@ -738,6 +738,19 @@ static inline int mcs_in_set(const MCSResult *res, int j) {
 static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
     int n = losses->r, m0 = mcs_n_models(losses);
     assert(n >= 2 && m0 >= 2);
+    /* A hole in one model's losses does not show up in the answer: it comes
+       back as a confidence set like any other, with finite p-values. Measured
+       on three models over 200 periods with one NaN placed in the second
+       model's column, everything else identical: the clean data kept all three
+       at p = 1.00, 0.48, 0.48, and the holed data rejected the first two at
+       p = 0.0000 and kept only the third. Rejecting a model on the strength of
+       a missing value is the same failure the order statistics in stats.h
+       guard against, and the reason the check is here rather than left to the
+       caller is the same one: a p-value read off a comparison cannot reveal
+       it. One scan against a block bootstrap of opt.bootstrap resamples is
+       not a cost worth weighing. */
+    assert(mat_all_finite(losses->numeric)
+           && "mcs: non-finite element in the loss matrix");
     assert(opt.bootstrap >= 1);
     assert(opt.block_length >= 1 && opt.block_length <= n);
     assert(opt.alpha > 0 && opt.alpha < 1);
@@ -1010,6 +1023,12 @@ static inline DieboldMariano dm_test(const DataFrame *losses, const char *loss_a
     assert(n >= 2 && opt.horizon >= 1);
     Mat a = df_col_numeric(losses, loss_a);
     Mat b = df_col_numeric(losses, loss_b);
+    /* Same reasoning as mcs above: this returns a statistic a caller compares
+       against a normal quantile, and a NaN loses that comparison whichever way
+       it is written. Only the two columns actually used, not the whole
+       frame. */
+    assert(mat_all_finite(a) && mat_all_finite(b)
+           && "dm_test: non-finite element in a loss column");
 
     int lag = opt.hac_lag < 0 ? opt.horizon - 1 : opt.hac_lag;
     if (lag > n - 1) lag = n - 1;

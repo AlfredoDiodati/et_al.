@@ -521,6 +521,22 @@ has to run separately: a fit that cannot put a number on its own precision is
 telling you the region is unreliable, in the same output that reports the
 estimate.
 
+### `tests/integration/frame_to_model.c`, `tests/integration/pipeline_ownership.c`
+
+What this header does when its input comes from another module, which the files
+above cannot cover because they generate their own data. `frame_to_model.c`
+requires the log-likelihood to be the same on a `y` that is a column range of a
+longer sample - genuinely strided, which the filter's per-period `mat_slice`
+into `ad_leaf` has never been given - as on a contiguous copy, and under
+`STRESS=1` requires a full fit through the two to take the same number of
+iterations as well as reach the same likelihood. `pipeline_ownership.c` requires
+a `QvarmaFitResult` to still report its likelihood and still compute
+`qvarma_max_eigenvalue_modulus` after the `DataFrame` and the `y` it was fit on
+have both been freed, requires a cached fit to reload into a fresh model after
+the original is gone, and runs `qvarma_impulse_bands` under a sanitizer at a
+draw count high enough to turn a per-draw leak into a report. See
+`docs/INTEGRATION_TESTS_DOCUMENTATION.md`.
+
 ### `tests/performance/qvarma_performance.c`, `tests/performance/lbfgs_candidates.c`
 
 Benchmarks, never part of `make test`. Measured with interleaved best-of-N

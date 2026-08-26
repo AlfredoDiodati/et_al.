@@ -42,11 +42,23 @@ tests/performance/lbfgs_largest_threshold
 tests/performance/lbfgs_copy_threshold
 !tests/performance/*.c
 
+# compiled integration binaries. Every file in tests/integration/ is a test,
+# and none of them shares a prefix or a suffix with another - each is named
+# for the seam it covers - so this ignores the whole directory except its
+# sources, rather than growing a line per binary.
+tests/integration/*
+!tests/integration/*.c
+
 # results written by the benchmarks and by any pipeline run
 out/
 
 # compiled example binaries: one per examples/<noun>_example.c source, same
-# auto-covering reasoning as above.
+# auto-covering reasoning as above. encoder is named separately because it is
+# the one example whose name does not end in _example; it is also tracked in
+# git from before this rule existed, so `git rm --cached examples/encoder`
+# is still owed.
 examples/*_example
 !examples/*_example.c
+examples/encoder
+!examples/encoder.c
 mat_example

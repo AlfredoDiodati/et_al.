@@ -1094,6 +1094,55 @@ static void test_quantile_views_and_adversarial(void) {
     mat_free(keep);
 }
 
+/* stats_all_finite is what a caller of stats_quantile_inplace runs before
+   handing it a buffer, since that entry point deliberately does not check for
+   itself (see the note on the order statistics in stats.h). The Mat-taking
+   forms check on their caller's behalf, so this is the only place the raw
+   form is exercised directly. */
+static void test_all_finite(void) {
+    puts("stats_all_finite: NaN, both infinities, and the finite boundary values");
+
+    mreal values[8] = { 0, -1, 3.5f, 1e10f, -1e10f, (mreal)0.25, -7, 12 };
+    CHECK(stats_all_finite(values, 8), 1);
+    CHECK(stats_all_finite(values, 1), 1);
+
+    /* the largest finite magnitude the build has must still pass, since the
+       test is an ordering against infinity's bit pattern rather than against
+       an arbitrary bound */
+    mreal huge[2] = { (mreal)(sizeof(mreal) == sizeof(double) ? DBL_MAX : FLT_MAX), 0 };
+    CHECK(stats_all_finite(huge, 2), 1);
+    huge[1] = -huge[0];
+    CHECK(stats_all_finite(huge, 2), 1);
+
+    /* a NaN anywhere in the buffer, including the first and last slots */
+    for (int position = 0; position < 8; position++) {
+        mreal holed[8];
+        for (int i = 0; i < 8; i++) holed[i] = values[i];
+        holed[position] = (mreal)NAN;
+        CHECK(stats_all_finite(holed, 8), 0);
+    }
+
+    /* both infinities, and a negative NaN, which has a different sign bit and
+       must still be caught since the test clears the sign */
+    mreal special[3] = { 1, 0, -3 };
+    special[1] = (mreal)INFINITY;
+    CHECK(stats_all_finite(special, 3), 0);
+    special[1] = (mreal)(-INFINITY);
+    CHECK(stats_all_finite(special, 3), 0);
+    special[1] = (mreal)(-NAN);
+    CHECK(stats_all_finite(special, 3), 0);
+
+    /* and it agrees with mat_all_finite on the same values, since the two are
+       the raw-buffer and the Mat form of one question */
+    Mat m = mat_new(1, 3);
+    for (int i = 0; i < 3; i++) AT(m, 0, i) = values[i];
+    CHECK(mat_all_finite(m) == stats_all_finite(m.d, 3), 1);
+    AT(m, 0, 1) = (mreal)NAN;
+    CHECK(mat_all_finite(m) == stats_all_finite(m.d, 3), 1);
+    CHECK(mat_all_finite(m), 0);
+    mat_free(m);
+}
+
 static void test_quantile_vs_reference(void) {
     puts("quantile against a full-sort reference, fixed seed");
     srand(4242);
@@ -1249,6 +1298,7 @@ int main(void) {
     test_series_accessors();
     test_quantile_known_values();
     test_quantile_views_and_adversarial();
+    test_all_finite();
     test_quantile_vs_reference();
     test_ljung_box();
     puts("test_stats: all passed");

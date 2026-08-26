@@ -149,7 +149,12 @@ mreal mat_sum(Mat m)   // sum of all elements
 mreal mat_mean(Mat m)  // mean of all elements
 mreal mat_max(Mat m)   // maximum element
 mreal mat_min(Mat m)   // minimum element
+int mat_all_finite(Mat m)  // 0 if any element is NaN or infinite, 1 otherwise
 ```
+
+`mat_all_finite` is the predicate form of the question `mat_max`/`mat_min` answer as a side effect. They report a NaN by returning one, which means a caller has to know that a NaN return says "there was one" rather than "the maximum was one", and they say nothing at all about an infinity. It reuses `mat_absmax_bits` rather than testing each element (see Special value behavior below for why that is the cheap way to ask), and costs one pass: roughly 1.7x a double-accumulated mean over the same buffer, 584 us against 335 us at 1,000,000 float64 elements, `-O3 -march=native -ffast-math`, best of 30 interleaved rounds.
+
+That cost is why callers above this layer split on it rather than all checking: `stats.h`'s sorting functions and every statistical test that returns a verdict assert on it, while the accumulating reductions let a NaN propagate instead. See `docs/FRAME_DOCUMENTATION.md`'s note on missing values for that rule.
 
 ### Concatenation
 
@@ -287,9 +292,9 @@ Verified behavior under IEEE 754 (tested in `tests/correctness/test_mat_special.
 | Any NaN input to arithmetic | NaN propagates to output |
 | Any inf input to arithmetic | inf propagates to output |
 
-NaN propagates correctly through all operations. `mat_max` and `mat_min` use `__builtin_isnan` rather than `isnan` to ensure propagation is not silently suppressed by `-ffinite-math-only` (which is part of `-ffast-math`).
+NaN propagates correctly through all operations. `mat_max`, `mat_min` and `mat_all_finite` detect it through `MISNAN`/`mat_absmax_bits`, which read the IEEE754 exponent and mantissa fields out of a `memcpy`'d integer, so `-ffinite-math-only` has no floating-point comparison to fold away.
 
-Do not use `isnan()` or `isinf()` in new functions that will be compiled with `-ffast-math`. Use `__builtin_isnan()` and `__builtin_isinf()` instead.
+Do not use `isnan()`, `isinf()`, `__builtin_isnan()` or `__builtin_isinf()` in new code compiled with `-ffast-math`. All four were verified directly to return false on an actual NaN or infinity under this project's own flags - `__builtin_isnan`/`__builtin_isinf` included, which an earlier version of this section wrongly recommended as the workaround. Use `MISNAN`/`MISINF` for a single value, or `mat_all_finite` for a whole matrix. `tests/correctness/test_mat.c`'s `test_nan_propagation_under_fast_math` and `test_all_finite` prove both hold under the default build, not only under `test-special`'s separate non-fast-math target.
 
 ## Known limitations and future work
 

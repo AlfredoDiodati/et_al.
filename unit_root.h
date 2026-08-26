@@ -147,6 +147,7 @@ static inline AdfResult adf_with_deterministic(Mat series, int lags, int first_o
                                                int deterministic) {
     int n_series = stats_series_length(series);
     assert(lags >= 0 && first_observation >= 1 + lags);
+    assert(mat_all_finite(series) && "adf: non-finite element in the series");
     int rows = n_series - first_observation;
     /* The enum's value is the number of deterministic columns it asks for. */
     int n_deterministic = deterministic;
@@ -279,6 +280,7 @@ smaller threshold.
 static inline KpssResult kpss(Mat series, int bandwidth, int deterministic) {
     int n = stats_series_length(series);
     assert(bandwidth >= 0 && bandwidth < n);
+    assert(mat_all_finite(series) && "kpss: non-finite element in the series");
 
     Vec residual = mat_new(n, 1);
     if (deterministic == KPSS_TREND) {
@@ -411,6 +413,7 @@ static inline DfglsResult dfgls(Mat series, int lags, int deterministic) {
     int n = stats_series_length(series);
     int n_deterministic = deterministic == DFGLS_CONSTANT_TREND ? 2 : 1;
     assert(lags >= 0 && n > n_deterministic + lags + 4);
+    assert(mat_all_finite(series) && "dfgls: non-finite element in the series");
     mreal c_bar = deterministic == DFGLS_CONSTANT_TREND ? (mreal)13.5 : (mreal)7.0;
 
     Mat terms = mat_new(n, n_deterministic);
@@ -641,6 +644,7 @@ static inline OttoResult otto(Mat series, int block, int level_index, int asympt
     assert(block >= 2 && block < n && "the block length must lie between 2 and T");
     assert(level_index >= 0 && level_index < OTTO_TABLE_LEVELS);
     assert(n > 8);
+    assert(mat_all_finite(series) && "otto: non-finite element in the series");
 
     mreal top, bottom;
     _otto_pooled_sums(series, block, &top, &bottom);
@@ -1086,6 +1090,7 @@ static inline HltBreakResult hlt_break(Mat series, int model, int level,
     assert(model >= 0 && model < 2 && level >= 0 && level < 3);
     assert(trim_lower > 0 && trim_lower < trim_upper && trim_upper < 1);
     assert(g1 > 0 && g2 > 0 && n > 20);
+    assert(mat_all_finite(series) && "hlt_break: non-finite element in the series");
     int first = (int)((double)trim_lower * (double)n);
     int last = (int)((double)trim_upper * (double)n);
     assert(last > first && "the trimming leaves no candidate break dates");
@@ -1366,6 +1371,7 @@ static inline HhltResult hhlt(Mat series, int lags, mreal g, int level,
     assert(lags >= 0 && g > 0 && level >= 0 && level < 3);
     assert(trim_lower > 0 && trim_lower < trim_upper && trim_upper < 1);
     assert(n > lags + 12 && "too few observations");
+    assert(mat_all_finite(series) && "hhlt: non-finite element in the series");
 
     mreal tilde = _hhlt_first_difference_fraction(series, trim_lower, trim_upper);
     mreal wald = _hhlt_wald(series, tilde);
@@ -1518,6 +1524,7 @@ static inline ZivotAndrewsResult zivot_andrews(Mat series, int lags, int model,
                                                mreal trim) {
     int n = stats_series_length(series);
     assert(lags >= 0 && trim > 0 && trim < (mreal)0.5);
+    assert(mat_all_finite(series) && "zivot_andrews: non-finite element in the series");
     int first_break = (int)((double)trim * (double)n);
     int last_break = n - first_break;
     int has_level = model == ZA_INTERCEPT || model == ZA_BOTH;

@@ -9,6 +9,16 @@ those, so this file understates current coverage rather than overstating it.
 Update this file as items are picked up: check the box, note the test added
 and where.
 
+This file is about coverage of individual functions. The separate question of
+whether the hand-off between two modules holds is `tests/integration/`'s, and
+its own backlog is the "What this directory does not cover" section of
+`docs/INTEGRATION_TESTS_DOCUMENTATION.md`. Three items below are now partly
+covered from there rather than here, and say so in place: `ad_leaf` with a
+strided input, `mlp_fit` with a second optimizer, and `mlp_forecast` on a model
+no Adam state touched. Partly, not fully - an integration test drives a
+function through a real caller, which is not the same as the direct
+known-output call this file asks for, so none of the three boxes is checked.
+
 Coverage bar, from `README.md`'s "Testing requirements": every function
 needs at minimum a known-output case or invariant check, a view/strided-input
 case, and one adversarial input. "Test the public API, not `static inline`
@@ -141,10 +151,13 @@ targets the function itself.
       `student_lognorm`.
 - [ ] `mvstudent_dlognorm_dnu` - `dist/mv/student.h:134` - indirect only, via
       `mvstudent_dlogpdf_nu`.
-- [ ] `ad_leaf` - `ad.h:269` - every fixture across ad.h/dist/mlp tests is
-      contiguous (`mat_lit`/`mat_new`/`mat_fill`); no test passes a strided
-      view (`mat_slice`) into it. Needs `ad_leaf(t, mat_slice(...))` with a
-      stride check on the copy.
+- [ ] `ad_leaf` - `ad.h:269` - every fixture across ad.h/dist/mlp tests was
+      contiguous (`mat_lit`/`mat_new`/`mat_fill`); none passed a strided view
+      (`mat_slice`) into it. Now covered from `tests/integration/frame_to_model.c`,
+      which drives it through `sd/qvarma.h`'s filter on a `y` that is a column
+      range of a wider matrix, and through `nn/mlp.h` on a windowed design
+      matrix, requiring the same answer as a contiguous copy in both cases. A
+      direct call with a stride check on the copy is still worth adding here.
 - [ ] `ad_log` - `ad.h:439` - no standalone known-output/finite-difference
       test, only exercised compositionally inside gauss/student/mv gradient
       checks, where local cancellation could mask a bug. Needs a direct
@@ -157,10 +170,16 @@ targets the function itself.
       adapter functions by name.
 - [ ] `mlp_fit` - `nn/mlp.h:297` - only exercised via XOR (n=4) and an
       epoch-callback test; no isolated call with n=1 or a constant/
-      degenerate target.
+      degenerate target. The optimizer half of this gap is closed:
+      `tests/integration/optimizer_swap.c` fits through a non-Adam
+      implementation of the `Optimizer` interface and counts the instances
+      created, their shapes, the steps taken and the frees.
 - [ ] `mlp_forecast` - `nn/mlp.h:366` - covered via the same XOR/save-load
       tests; no isolated single-sample/single-feature case (`mlp_forward`,
-      which it wraps, does have one).
+      which it wraps, does have one). It is now also driven from
+      `tests/integration/pipeline_ownership.c` after its training data has
+      been freed, and from `optimizer_swap.c` on a model no Adam state
+      touched.
 
 ## Systemic gap (not per-function)
 

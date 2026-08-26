@@ -489,6 +489,77 @@ static void test_reductions(void) {
    propagation check doesn't cover: it never ran under the flags this
    project's `make test` actually uses. Checking the result here with
    MISNAN too, not isnan() - same reason, this file has the same flags. */
+/* mat_all_finite asks as a predicate what mat_max/mat_min answer as a side
+   effect, and answers it for infinities too, which they do not. Under the
+   default -ffast-math build, since that is the flag the bit-level detection
+   exists to survive - a version written with isnan()/isinf() passes nothing
+   here. */
+static void test_all_finite(void) {
+    puts("mat_all_finite: NaN, both infinities, the finite boundary, and the strided path, under -ffast-math");
+
+    {
+        Mat a = mat_lit(1, 4, 1.f, -2.f, 3.5f, 0.f);
+        assert(mat_all_finite(a));
+        mat_free(a);
+    }
+
+    /* the largest finite magnitude this build has must pass: the test is an
+       ordering against infinity's bit pattern, not against a chosen bound */
+    {
+        mreal biggest = sizeof(mreal) == sizeof(double) ? (mreal)DBL_MAX : (mreal)FLT_MAX;
+        Mat a = mat_lit(1, 2, 0.f, 0.f);
+        AT(a, 0, 0) = biggest;
+        AT(a, 0, 1) = -biggest;
+        assert(mat_all_finite(a));
+        mat_free(a);
+    }
+
+    /* a NaN in each position in turn, so a check that only looks at one end
+       of the buffer cannot pass */
+    for (int position = 0; position < 4; position++) {
+        Mat a = mat_lit(2, 2, 1.f, 2.f, 3.f, 4.f);
+        a.d[position] = (mreal)NAN;
+        assert(!mat_all_finite(a));
+        mat_free(a);
+    }
+
+    /* both infinities, and a negative NaN, whose sign bit differs and which
+       must still be caught since the test clears the sign */
+    {
+        Mat a = mat_lit(1, 3, 1.f, 0.f, -3.f);
+        AT(a, 0, 1) = (mreal)INFINITY;
+        assert(!mat_all_finite(a));
+        AT(a, 0, 1) = (mreal)(-INFINITY);
+        assert(!mat_all_finite(a));
+        AT(a, 0, 1) = (mreal)(-NAN);
+        assert(!mat_all_finite(a));
+        mat_free(a);
+    }
+
+    /* strided: the hole must be found when it is inside the view, and must be
+       ignored when it sits in the parent outside it */
+    {
+        Mat wide = mat_lit(2, 4, 1,2,3,4, 5,NAN,7,8);
+        Mat covering = mat_slice(wide, 0, 2, 0, 2); /* [[1,2],[5,NaN]] */
+        assert(covering.stride == 4);
+        assert(!mat_all_finite(covering));
+
+        Mat clear = mat_slice(wide, 0, 2, 2, 4);    /* [[3,4],[7,8]] */
+        assert(clear.stride == 4);
+        assert(mat_all_finite(clear));
+        mat_free(wide);
+    }
+
+    /* single element, both ways */
+    {
+        Mat one = mat_lit(1, 1, 5.f);
+        assert(mat_all_finite(one));
+        one.d[0] = (mreal)NAN;
+        assert(!mat_all_finite(one));
+        mat_free(one);
+    }
+}
+
 static void test_nan_propagation_under_fast_math(void) {
     puts("mat_max/mat_min propagate NaN correctly even under -ffast-math");
 
@@ -677,6 +748,7 @@ int main(void) {
     test_matmul();
     test_reductions();
     test_nan_propagation_under_fast_math();
+    test_all_finite();
     test_concatenation();
     test_linalg();
     puts("test_mat: all passed");

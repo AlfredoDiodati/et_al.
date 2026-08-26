@@ -6,14 +6,16 @@
 #include <stdlib.h>
 
 /*
-What the unit root, co-integration and break test files share: two counting
-assertion macros, the failure counter behind them, and the simulated series more
-than one of them needs.
+What the unit root, co-integration and break test files share with the
+integration suites under tests/integration/: three counting assertion macros,
+the failure counter behind them, and the simulated series more than one of them
+needs.
 
 It is not a test itself and so is not named for a question the way the test files
 are. It exists because eleven files checking eleven statistical tests would
 otherwise carry eleven copies of the same macros, and a copy that drifts is worse
-than no copy at all. It sits beside tests/lapacke_dispatch.h, the other header
+than no copy at all. tests/integration/ reaches it through ../check.h for the
+same reason. It sits beside tests/lapacke_dispatch.h, the other header
 here that is shared machinery rather than a test.
 
 Why counting rather than aborting: each of those files checks a family of related
@@ -37,6 +39,21 @@ static int failures = 0;
     if (!(fabs(got_value - want_value) <= (double)(tol))) { \
         printf("  FAIL %s:%d: %s: got %.10g, want %.10g, tolerance %g\n", \
                __FILE__, __LINE__, label, got_value, want_value, (double)(tol)); \
+        failures++; } \
+} while (0)
+
+/* A relative tolerance, for a comparison whose magnitude is set by the data
+   rather than chosen by the test. The absolute form above needs a number
+   picked per quantity, which is workable for a statistic of order one and
+   useless for a sum of squares in the millions; here the tolerance scales with
+   the larger of the two values, and falls back to absolute near zero. */
+#define CHECK_CLOSE(got, want, relative_tol, label) do { \
+    double got_value = (double)(got), want_value = (double)(want); \
+    double scale = fabs(got_value) > fabs(want_value) ? fabs(got_value) : fabs(want_value); \
+    if (scale < 1.0) scale = 1.0; \
+    if (!(fabs(got_value - want_value) <= (double)(relative_tol) * scale)) { \
+        printf("  FAIL %s:%d: %s: got %.17g, want %.17g, relative tolerance %g\n", \
+               __FILE__, __LINE__, label, got_value, want_value, (double)(relative_tol)); \
         failures++; } \
 } while (0)
 

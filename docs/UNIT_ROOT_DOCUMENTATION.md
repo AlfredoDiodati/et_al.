@@ -329,6 +329,27 @@ One file per test, all in `make test`:
 file needs; it is not a test and so is not named for a question the way the test
 files are.
 
+Two further checks on these tests live in `tests/integration/` rather than
+here, because their subject is what happens when a statistic meets a value from
+another module rather than the statistic itself. `frame_to_model.c` requires
+ADF, ADF with a trend, KPSS, DF-GLS and the HLT trend union to give the same
+answer on a `DataFrame`'s own strided column view as on a contiguous copy of it,
+and the same answer on a column-oriented series as on a row-oriented one - the
+two branches of `stats_series_at`, of which a frame drives one and every file
+above drives the other. `join_missing_values.c` covers what a hole in the
+data does. Every test in this file asserts that its series is finite at entry,
+and that check is there rather than at the call site for a specific reason: a
+`NaN` statistic fails every comparison a caller can write against a critical
+value, so the branch taken is always the non-rejecting one. KPSS rejects by
+being large and ADF by being small, so a hole read as "stationary" from one and
+"unit root" from the other - the outcome that says nothing is wrong in both
+cases, from tests with opposite nulls, so running both and looking for
+disagreement did not reveal it. The check costs nothing measurable against the
+regression each test runs (27.6 us against 28.3 us for `adf` at n=200, 1382
+against 1395 at n=2,000, guarded against the same source at `-DNDEBUG`). See
+`docs/INTEGRATION_TESTS_DOCUMENTATION.md` and `docs/FRAME_DOCUMENTATION.md`'s
+note on missing values.
+
 All of these are built with `-DMAT_DOUBLE`, unconditionally, whatever precision
 the rest of the suite is built at. The regressions underneath these statistics
 are ill-conditioned by construction - a levels regressor against its own

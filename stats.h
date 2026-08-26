@@ -42,6 +42,33 @@
    to any correlation is a contract violation (assert) - correlation is
    undefined there, and this project fails loudly, not with a NaN.
 
+   A non-finite element in a sample is handled two ways here, and which one
+   applies is a property of the function, not an oversight:
+
+   - The accumulating functions (mean, variance, HAC variance, autocovariance,
+     and the error measures that average rather than sort) let it through. A
+     NaN reaches the answer on its own, the caller gets a NaN back, and
+     detecting it up front would cost a full extra pass over the data -
+     measured at roughly 1.7x the cost of the mean itself, see mat_all_finite
+     in linalg/mat.h.
+   - The sorting functions (median, quantile, rank, Spearman, and medae, which
+     is a median) assert instead, because a sort cannot carry a NaN through to
+     the answer: it returns a finite wrong number rather than a NaN. See the
+     note above that section.
+   - stats_corr asserts too, and so do autocorrelation and Ljung-Box through
+     it, but for a different reason: it already accumulates the sums of squares
+     the test needs, so the check is on two scalars rather than on the samples
+     and costs nothing.
+
+   The statistical tests built on this file (unit_root.h, cointegration.h) all
+   assert, whatever they accumulate, because each returns a verdict a caller
+   reads off a comparison and a NaN fails every comparison it is put through -
+   the branch taken is always the one that says nothing is wrong.
+
+   A caller holding data that might have holes checks with mat_all_finite
+   before calling anything here. frame/join.h's unmatched rows are the only
+   route by which a NaN gets into a numeric column of a DataFrame.
+
    Every Mat returned from this file is an owner - caller must
    mat_free(). All functions are stride-aware and accept views. */
 
@@ -110,6 +137,13 @@ static inline mreal stats_corr(Mat x, Mat y) {
                 syy += b * b;
             }
     }
+    /* Both of these fire on `sxx > 0` being false, and they are different
+       faults with different fixes, so they are separated rather than left to
+       one message that names only the commoner one. A NaN anywhere in either
+       sample reaches sxx as a NaN, and `NaN > 0` is false. The test is on the
+       two accumulated scalars, not on the samples, so it costs nothing. */
+    assert(!MISNAN(sxx) && !MISNAN(syy)
+           && "stats_corr: non-finite element in the sample");
     assert(sxx > 0 && syy > 0); /* constant input: correlation undefined */
     return (mreal)(sxy / sqrt(sxx * syy));
 }
@@ -414,6 +448,58 @@ static inline mreal stats_hac_var(Mat x, int lag_max, StatsHACKernel kernel) {
    these sort rather than accumulate, so there is no double-vs-mreal
    precision question - sort order is exact regardless of precision. --- */
 
+/* A non-finite element is a contract violation for everything in this
+   section, and only for this section.
+
+   The reductions above accumulate, so a NaN in the sample reaches the answer:
+   the caller gets a NaN back and can see it. These sort, and a sort cannot
+   carry one. Every comparison against a NaN is false, so a partition built
+   from those comparisons is not an ordering and the element selected is not
+   the order statistic that was asked for - a finite, plausible, wrong number,
+   with nothing to distinguish it from a right one. Measured on a 120-element
+   ramp with twenty holes in the tail: stats_median returned 59.5 where the
+   complete-case answer was 49.5.
+
+   So this is the one place in the file that pays for a scan rather than
+   letting the value through, on the same reasoning as stats_corr's
+   constant-input assert directly above: the function cannot answer the
+   question it was asked, and this project says so rather than returning
+   something. Callers clean the sample first; mat_all_finite (linalg/mat.h) is
+   the check, and frame/join.h's unmatched rows are where a NaN gets into a
+   numeric column in the first place.
+
+   stats_median and stats_quantile fold the test into the copy loop they
+   already run rather than making a second pass over the scratch buffer; in
+   isolation that is worth 17 per cent at n = 2,000 and 38 per cent at
+   n = 100,000 over copy-then-scan. What it costs end to end, the same source
+   built with and without NDEBUG, 41 rounds of a Gaussian sample, float64,
+   -O3 -march=native -ffast-math, OPENBLAS_NUM_THREADS=1, best and
+   median-of-rounds within 3 per cent of each other:
+
+     n         guarded    unguarded   overhead
+     200        0.486 us    0.373 us    +30%
+     2,000     20.08 us    18.70 us     +7%
+     20,000   155.8 us    149.8 us      +4%
+     200,000 1497 us     1418 us        +6%
+
+   The fixed part dominates at 200 and the selection dominates above it. An
+   assert is what this is, so a caller who has profiled and wants the last few
+   per cent back compiles with NDEBUG, the same as for every other
+   precondition in this project.
+
+   stats_quantile_inplace does not test, and that is the one deliberate hole:
+   it exists for a caller that already owns the buffer and asks for several
+   quantiles of the same one, so a test inside it is paid once per quantile
+   rather than once per buffer. sd/qvarma.h's impulse bands call it three
+   times per band entry over a buffer they filled themselves from an already
+   fitted model, where the values cannot be anything but finite and the test
+   would be a third of the function's cost. That entry point owes the check to
+   its caller, the same way it already owes them the buffer; stats_all_finite
+   is what they call. */
+static inline int stats_all_finite(const mreal *restrict values, int n) {
+    return mat_absmax_bits(values, n) < MINFBITS;
+}
+
 static inline void stats_swap_mreal(mreal *a, mreal *b) { mreal t = *a; *a = *b; *b = t; }
 
 /* Median-of-three: sorts arr[lo], arr[mid], arr[hi] into ascending order
@@ -475,8 +561,17 @@ static inline mreal stats_median(Mat x) {
     mreal *tmp = (mreal*)malloc((size_t)n * sizeof(mreal));
     assert(tmp);
     int k = 0;
+    MUINT magnitude = 0;
     for (int i = 0; i < x.r; i++)
-        for (int j = 0; j < x.c; j++) tmp[k++] = AT(x, i, j);
+        for (int j = 0; j < x.c; j++) {
+            mreal v = AT(x, i, j);
+            tmp[k++] = v;
+            MUINT bits;
+            memcpy(&bits, &v, sizeof bits);
+            bits &= MABSMASK;
+            if (bits > magnitude) magnitude = bits;
+        }
+    assert(magnitude < MINFBITS && "stats_median: non-finite element in the sample");
 
     int mid = n / 2;
     stats_quickselect(tmp, 0, n - 1, mid);
@@ -501,7 +596,12 @@ static inline mreal stats_median(Mat x) {
 
    This variant permutes values[0..n-1] in place, for a caller that
    already owns a scratch buffer and asks for several quantiles of it;
-   stats_quantile below is the copying form. One quickselect, not two:
+   stats_quantile below is the copying form. The caller owes it a buffer with
+   no NaN and no infinity in it - stats_all_finite tests that - for the reason
+   given in this section's opening note: a sort cannot carry a non-finite
+   value through to the answer, so it returns a finite wrong number instead.
+   stats_quantile checks on its caller's behalf; this one does not, so that a
+   caller taking several quantiles of one buffer pays for the check once. One quickselect, not two:
    selecting the lower order statistic already leaves every element to
    its right no smaller than it, so the upper one is that part's minimum,
    found in one more O(n) pass - the same reasoning stats_median uses for
@@ -528,8 +628,17 @@ static inline mreal stats_quantile(Mat x, mreal probability) {
     mreal *tmp = (mreal*)malloc((size_t)n * sizeof(mreal));
     assert(tmp);
     int k = 0;
+    MUINT magnitude = 0;
     for (int i = 0; i < x.r; i++)
-        for (int j = 0; j < x.c; j++) tmp[k++] = AT(x, i, j);
+        for (int j = 0; j < x.c; j++) {
+            mreal v = AT(x, i, j);
+            tmp[k++] = v;
+            MUINT bits;
+            memcpy(&bits, &v, sizeof bits);
+            bits &= MABSMASK;
+            if (bits > magnitude) magnitude = bits;
+        }
+    assert(magnitude < MINFBITS && "stats_quantile: non-finite element in the sample");
     mreal q = stats_quantile_inplace(tmp, n, probability);
     free(tmp);
     return q;
@@ -548,6 +657,7 @@ static int stats_cmp_idxval(const void *a, const void *b) {
    caller must mat_free(). */
 static inline Mat stats_rank(Mat x) {
     assert(x.r >= 1 && x.c >= 1);
+    assert(mat_all_finite(x) && "stats_rank: non-finite element in the sample");
     int n = x.r * x.c;
     StatsIdxVal *iv = (StatsIdxVal*)malloc((size_t)n * sizeof(StatsIdxVal));
     assert(iv);
