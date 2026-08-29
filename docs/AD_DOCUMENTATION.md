@@ -105,8 +105,8 @@ in dispatch than in arithmetic and where four concurrent threads serialize
 inside OpenBLAS's per-process buffer table. Measured on `sd/qvarma.h` at
 `K = 5`, `T = 400`, 42 parameters, float64, best of 5 rounds on an Intel
 i5-7400 with `openblas_set_num_threads(1)`: one taped value-and-gradient
-evaluation went from 1.380 ms to 0.376 ms at one thread, and from 9.755 ms to
-0.480 ms at four - a four-thread throughput scaling of 0.57 before and 3.13
+evaluation went from 1.380 ms to 0.379 ms at one thread, and from 9.755 ms to
+0.476 ms at four - a four-thread throughput scaling of 0.57 before and 3.18
 after, on a workload that is embarrassingly parallel and was running slower
 with four threads than with one. `tests/performance/qvarma_fused_filter.c` is
 the benchmark; `linalg/mat.h`'s `MAT_GEMM_SMALL` is where the threshold comes
@@ -197,6 +197,15 @@ Neither rewrite has a dedicated entry in `bench_ad.py` isolated from JAX-compari
 `ad_broadcast_mul` has no benchmark, isolated or otherwise - it is a new op, not a rewrite of a timed one, and no comparison point (a `gemm`-based `ad_matmul` route, or the `ad_repeat`+`ad_emul` alternative considered and not taken) has been built to compare it against.
 
 ## Known limitations and future work
+
+- Every ratio quoted above for `ad_matmul` and `ad_chol_quadform` is one
+  machine's, against one build of OpenBLAS. The two mechanisms behind them
+  differ in how well they travel: removing an allocation and removing an
+  indirection are arithmetic and memory, and carry anywhere, while the share
+  that comes from `mat_gemm` and `_trtrs` not calling BLAS at small sizes
+  depends on a crossover that is a property of the machine and the BLAS build.
+  `docs/MATRIX_DOCUMENTATION.md`'s "The four dispatch thresholds are measured
+  on one machine" states what to re-measure and when.
 
 - No raw factorization adjoints (`mat_lu`/`mat_chol` themselves as differentiable tape ops) - see Scope above.
 - No `ad_transpose`, `ad_qr`, `ad_eig_sym`, `ad_svd` yet - straightforward to add following the same pattern (transpose's adjoint is just a transpose; the others are more involved matrix-calculus results not yet needed by anything built on this file).

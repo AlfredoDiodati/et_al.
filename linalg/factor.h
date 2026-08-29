@@ -193,8 +193,11 @@ static inline int _potrf(mreal *a, int n, int lda) {
    loop streams it n(n+1)/2 times and loses. dist/mv's densities solve for a
    whole sample at once, so that point is reachable. TRSM_SMALL_NRHS is where
    the measurement stops rather than where the loop starts losing - at n = 12
-   and 4096 columns it still wins 2.2x in float64 and 1.4x in float32 - so
-   raising it needs the benchmark extended first. */
+   and 4096 columns it still wins 2.4x in float64 and 1.4x in float32 - so
+   raising it needs the benchmark extended first.
+
+   Both were measured on one machine against one build of OpenBLAS, the same
+   caveat linalg/mat.h's MAT_GEMM_SMALL carries and stated in full there. */
 #define TRSM_SMALL_N 12
 #define TRSM_SMALL_NRHS 4096
 

@@ -644,6 +644,16 @@ Built at float64. Worst disagreement over the sweep: 4e-16 relative on the
 value, 3e-14 on the paths, 3e-13 on a gradient coordinate. Both gradients sit
 5e-8 from the central difference, which is the difference's own accuracy.
 
+Why float64 rather than the model tier's usual float32, measured rather than
+asserted: the same binary built at float32 disagrees by 1e-7 on the value,
+1e-5 on the paths and 3e-4 on a gradient coordinate, which is the float32
+rounding floor over a few thousand accumulations and not a defect. A real
+gradient error of relative size 1e-4 would be invisible there. The central
+difference is worse still at float32 - both gradients land 6 to 37 in relative
+terms from it, since differencing a likelihood of order 1e3 at a step of 1e-5
+leaves nothing. The float64 build buys about nine orders of discrimination on
+the gradient comparison and makes the difference check usable at all.
+
 ### `tests/correctness/qvarma_identification.c`
 
 Which parameters the data can pin down, and which it cannot at any sample size.
@@ -736,25 +746,40 @@ At the ABM pipeline's shape, `K = 5`, `K_star = 3`, `p = q = 1`, `r = 2`,
 |---|---|---|---|---|---|---|---|---|
 | value only, before the `ad.h` work | 0.680 ms | 0.047 ms | 14.4 | 3.558 ms | 0.049 ms | 72.0 | 0.76 | 3.82 |
 | value+gradient, before | 1.380 ms | 0.112 ms | 12.4 | 9.755 ms | 0.117 ms | 83.6 | 0.57 | 3.83 |
-| value only, after | 0.215 ms | 0.047 ms | 4.5 | 0.244 ms | 0.049 ms | 4.9 | 3.52 | 3.84 |
-| value+gradient, after | 0.376 ms | 0.111 ms | 3.4 | 0.480 ms | 0.118 ms | 4.1 | 3.13 | 3.76 |
+| value only, after | 0.209 ms | 0.040 ms | 5.2 | 0.247 ms | 0.043 ms | 5.7 | 3.39 | 3.75 |
+| value+gradient, after | 0.379 ms | 0.099 ms | 3.8 | 0.476 ms | 0.105 ms | 4.5 | 3.18 | 3.75 |
 
 "before" is the same benchmark with `ad.h`, `linalg/mat.h` and
 `linalg/factor.h` restored to the versions that called BLAS at every size. The
 two rows separate what each change bought. The small-kernel dispatch alone
-took the taped value-and-gradient from 1.380 ms to 0.376 ms, 3.7x, and its
-four-thread scaling from 0.57 to 3.13 - that is the contention fix, and every
-score-driven model in the library gets it. The fused filter is a further 3.4x
-on top, and would have been 12.4x against the tape as it was.
+took the taped value-and-gradient from 1.380 ms to 0.379 ms, 3.6x, and its
+four-thread scaling from 0.57 to 3.18 - that is the contention fix, and every
+score-driven model in the library gets it. The fused filter is a further 3.8x
+on top, and would have been 14x against the tape as it was.
 
 Against the pipeline as it actually ran before any of this, one
-value-and-gradient evaluation on four threads went from 9.755 ms to 0.118 ms,
-82.6x. The `K = 12` row is where the taped arm is worst: 2.452 ms per
-evaluation at four threads against 0.278 ms fused, and a taped four-thread
-scaling of 1.35.
+value-and-gradient evaluation on four threads went from 9.755 ms to 0.105 ms,
+93x. The float32 build is a little faster on both arms, 0.037 ms and 0.094 ms
+at one thread.
 
-The float32 build is close to the float64 one on the fused arm and slightly
-faster on the taped one; the full table for both is in `out/`.
+Two things in the fused loop were worth removing, together 12 percent of an
+evaluation. `Omega_inv`'s diagonal is divided by twice per period, once in the
+forward substitution and once in the backward one, and the reciprocal cannot
+be hoisted by the compiler because the parameters and the path it writes are
+slices of one allocation, so it is hoisted by hand into
+`Omega_inv_reciprocal`: `2*K*T` divisions become that many multiplies. The
+backward's ring slots were `t % ring`, an integer division by a runtime value
+five times per period, and now walk backwards with the loop. `restrict` on the
+hot pointers was measured at no gain and kept only because `linalg/mat.h`'s
+own kernels carry it.
+
+Tried and not kept: copying the observations into the workspace with the
+period axis outermost, so a period's K values are one cache line rather than
+K strided reads. It measured 5 percent faster at `K = 12` and slightly slower
+at `K = 5`, where the whole series already sits in L1 and the copy is pure
+cost. `K = 5` is the shape this model is tuned for, so it was reverted.
+
+The full table for both builds and all four shapes is in `out/`.
 
 ## Where the model is unreliable
 
@@ -768,6 +793,33 @@ the setup stated per number.
 
 ## Known gaps
 
+- **The fused filter's speedup splits into a portable half and a
+  machine-specific one, and only the split is worth quoting elsewhere.**
+  Against the taped path at one thread the fused evaluator is 3.8x once
+  `linalg/mat.h` and `linalg/factor.h` dispatch small shapes away from BLAS,
+  and 14x against the taped path as it was before that. The first factor is
+  fewer allocations, no tape nodes and no indirection - arithmetic and memory,
+  which carry to any hardware. The second includes the small-call dispatch,
+  which does not: it depends on a crossover measured on one Intel i5-7400
+  against one build of OpenBLAS 0.3.26. The four-thread figures depend on it
+  more heavily still, since what they mostly measure is OpenBLAS's
+  per-process buffer table, whose severity scales with core count and which a
+  different BLAS may not have at all. See
+  `docs/MATRIX_DOCUMENTATION.md`'s "The four dispatch thresholds are measured
+  on one machine"; on new hardware run `make bench-small_blas_threshold` and
+  `make bench-qvarma_fused_filter` before quoting any number in this file.
+- **The line search costs about three gradient evaluations per iteration.**
+  At `K = 3`, `T = 600`, float32, a fit ran 65 iterations in 0.018 s, 0.269 ms
+  per iteration, against 0.084 ms for one value-and-gradient evaluation - so
+  roughly 3.2 evaluations per iteration where a well-scaled problem would take
+  one or two. `solver/lbfgs.h`'s strong Wolfe search needs the directional
+  derivative and therefore the full gradient at every trial point, so the
+  value-only path is never used inside a fit at all. This is now the largest
+  remaining factor in the wall time of a fit, larger than anything left in the
+  filter, and it is a solver and scaling question rather than a filter one:
+  the curvature of this likelihood spans five to six orders of magnitude (see
+  `qvarma_identification.c`), which is exactly what makes a line search hunt.
+  Not investigated further.
 - **18 of 156 fits in the study still fail**, 14 at the 4000-iteration budget
   and 4 in the line search. Whether the 14 would converge at 20000 or sit on a
   permanently flat ridge is untested.

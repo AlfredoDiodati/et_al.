@@ -35,6 +35,16 @@ float32 (MODEL_CFLAGS): it times the recursion, and the Makefile's precision
 note says a script that only times the model is built that way. Build it with
 STAT_CFLAGS to time the other one.
 
+What these ratios are worth on other hardware. The part of the gain that is
+fewer allocations, no tape nodes and no indirection carries anywhere. The part
+that is small shapes not reaching BLAS does not: it rests on a crossover
+measured on this machine against this OpenBLAS build, and the four-thread
+columns rest on OpenBLAS's per-process buffer table, whose severity scales
+with core count and which another BLAS may not have. Run
+tests/performance/small_blas_threshold.c first on a new machine, then this;
+docs/MATRIX_DOCUMENTATION.md's "The four dispatch thresholds are measured on
+one machine" is the full statement.
+
 Standalone, no Python driver. Build and run:
   make tests/performance/qvarma_fused_filter && ./tests/performance/qvarma_fused_filter
 */

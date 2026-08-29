@@ -747,6 +747,7 @@ typedef struct {
     mreal *path;
 
     mreal *c, *Phi, *Psi_star, *Psi_dag, *Omega_inv, *alpha, *beta;
+    mreal *Omega_inv_reciprocal; /* 1/diagonal, so the substitutions multiply */
     mreal nu, half_log_det_Sigma, log_sum;
 
     mreal *c_bar, *Phi_bar, *Psi_star_bar, *Psi_dag_bar, *Omega_inv_bar;
@@ -790,6 +791,7 @@ static inline void _qvarma_fused_layout(QvarmaFused *f, QvarmaFusedLayout *layou
     f->Psi_star = _qvarma_fused_take(layout, (size_t)f->q * square);
     f->Psi_dag = _qvarma_fused_take(layout, (size_t)f->lags * square);
     f->Omega_inv = _qvarma_fused_take(layout, square);
+    f->Omega_inv_reciprocal = _qvarma_fused_take(layout, (size_t)K);
     f->alpha = _qvarma_fused_take(layout, (size_t)f->lags * f->K_dag * f->R);
     f->beta = _qvarma_fused_take(layout, (size_t)f->betas * f->R * f->K_dag);
 
@@ -940,26 +942,35 @@ static inline mreal _qvarma_fused_forward(QvarmaFused *f, Mat y) {
     mreal nu = f->nu;
     mreal log_sum = 0;
 
+    /* Both substitutions divide by the same K diagonal entries every period.
+       The compiler cannot hoist the reciprocal itself, since the parameters
+       and the path it writes are slices of one allocation and it has to
+       assume they alias, so it is hoisted here: 2*K*T divisions become that
+       many multiplies. Computed after the caller's usability guard, so no
+       entry here is zero. */
+    for (int i = 0; i < K; i++)
+        f->Omega_inv_reciprocal[i] = (mreal)1 / f->Omega_inv[(size_t)i * K + i];
+
     for (int t = 0; t < T; t++) {
         mreal *slot = f->path + (size_t)t * stride;
-        mreal *v = slot + (size_t)QVARMA_FUSED_V * K;
-        mreal *z = slot + (size_t)QVARMA_FUSED_Z * K;
-        mreal *u = slot + (size_t)QVARMA_FUSED_U * K;
-        mreal *mu_star = slot + (size_t)QVARMA_FUSED_MU_STAR * K;
-        mreal *mu_dag = slot + (size_t)QVARMA_FUSED_MU_DAG * K;
+        mreal *restrict v = slot + (size_t)QVARMA_FUSED_V * K;
+        mreal *restrict z = slot + (size_t)QVARMA_FUSED_Z * K;
+        mreal *restrict u = slot + (size_t)QVARMA_FUSED_U * K;
+        mreal *restrict mu_star = slot + (size_t)QVARMA_FUSED_MU_STAR * K;
+        mreal *restrict mu_dag = slot + (size_t)QVARMA_FUSED_MU_DAG * K;
 
         for (int i = 0; i < K; i++) mu_star[i] = 0;
         if (t >= f->w_star) {
             for (int i = 1; i <= f->p; i++) {
-                const mreal *lag = _qvarma_fused_slot(f, t - i, QVARMA_FUSED_MU_STAR);
+                const mreal *restrict lag = _qvarma_fused_slot(f, t - i, QVARMA_FUSED_MU_STAR);
                 mreal phi = f->Phi[i - 1];
                 for (int k = 0; k < K; k++) mu_star[k] += phi * lag[k];
             }
             for (int j = 1; j <= f->q; j++) {
-                const mreal *lag = _qvarma_fused_slot(f, t - j, QVARMA_FUSED_U);
+                const mreal *restrict lag = _qvarma_fused_slot(f, t - j, QVARMA_FUSED_U);
                 const mreal *psi = f->Psi_star + (size_t)(j - 1) * K * K;
                 for (int a = 0; a < f->psi_rows; a++) {
-                    const mreal *row = psi + (size_t)a * K;
+                    const mreal *restrict row = psi + (size_t)a * K;
                     mreal acc = 0;
                     for (int b = 0; b < K; b++) acc += row[b] * lag[b];
                     mu_star[a] += acc;
@@ -969,13 +980,13 @@ static inline mreal _qvarma_fused_forward(QvarmaFused *f, Mat y) {
 
         for (int i = 0; i < K; i++) mu_dag[i] = 0;
         if (f->lags && t >= f->w_dag) {
-            const mreal *previous = _qvarma_fused_slot(f, t - 1, QVARMA_FUSED_MU_DAG);
+            const mreal *restrict previous = _qvarma_fused_slot(f, t - 1, QVARMA_FUSED_MU_DAG);
             for (int i = 0; i < K; i++) mu_dag[i] = previous[i];
             for (int l = 1; l <= f->r; l++) {
-                const mreal *lag = _qvarma_fused_slot(f, t - l, QVARMA_FUSED_U);
+                const mreal *restrict lag = _qvarma_fused_slot(f, t - l, QVARMA_FUSED_U);
                 const mreal *psi = f->Psi_dag + (size_t)(l - 1) * K * K;
                 for (int a = f->K_star; a < K; a++) {
-                    const mreal *row = psi + (size_t)a * K;
+                    const mreal *restrict row = psi + (size_t)a * K;
                     mreal acc = 0;
                     for (int b = f->K_star; b < K; b++) acc += row[b] * lag[b];
                     mu_dag[a] += acc;
@@ -987,10 +998,10 @@ static inline mreal _qvarma_fused_forward(QvarmaFused *f, Mat y) {
 
         mreal quadratic = 0;
         for (int i = 0; i < K; i++) {
-            const mreal *row = f->Omega_inv + (size_t)i * K;
+            const mreal *restrict row = f->Omega_inv + (size_t)i * K;
             mreal acc = v[i];
             for (int j = 0; j < i; j++) acc -= row[j] * z[j];
-            z[i] = acc / row[i];
+            z[i] = acc * f->Omega_inv_reciprocal[i];
             quadratic += z[i] * z[i];
         }
 
@@ -1139,14 +1150,19 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
                  + (mreal)T * (-(mreal)0.5 * (mreal)special_digamma(0.5 * (double)nu)
                                - (mreal)K * (mreal)0.5 / nu + half_nu_K / nu);
 
+    /* The ring slot walks backwards with the loop rather than being recomputed
+       as t % ring: that modulo is an integer division by a runtime value, and
+       there are one per period plus one per lag read. */
+    int u_at = (T - 1) % f->u_ring, star_at = (T - 1) % f->star_ring;
+
     for (int t = T - 1; t >= 0; t--) {
         const mreal *slot = f->path + (size_t)t * stride;
-        const mreal *v = slot + (size_t)QVARMA_FUSED_V * K;
-        const mreal *z = slot + (size_t)QVARMA_FUSED_Z * K;
+        const mreal *restrict v = slot + (size_t)QVARMA_FUSED_V * K;
+        const mreal *restrict z = slot + (size_t)QVARMA_FUSED_Z * K;
         mreal s = slot[5 * (size_t)K];
-        mreal *u_bar = f->u_bar + (size_t)(t % f->u_ring) * K;
-        mreal *v_bar = f->v_bar;
-        mreal *w = f->w;
+        mreal *restrict u_bar = f->u_bar + (size_t)u_at * K;
+        mreal *restrict v_bar = f->v_bar;
+        mreal *restrict w = f->w;
 
         /* u_t = v_t * (nu/s_t) */
         mreal scale = nu / s, scale_bar = 0;
@@ -1165,19 +1181,19 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
         for (int i = K - 1; i >= 0; i--) {
             mreal acc = z[i];
             for (int j = i + 1; j < K; j++) acc -= f->Omega_inv[(size_t)j * K + i] * w[j];
-            w[i] = acc / f->Omega_inv[(size_t)i * K + i];
+            w[i] = acc * f->Omega_inv_reciprocal[i];
         }
         mreal factor = -2 * q_bar;
         for (int i = 0; i < K; i++) {
             v_bar[i] += 2 * q_bar * w[i];
             mreal scaled = factor * w[i];
-            mreal *row = f->Omega_inv_bar + (size_t)i * K;
+            mreal *restrict row = f->Omega_inv_bar + (size_t)i * K;
             for (int j = 0; j <= i; j++) row[j] += scaled * z[j];
         }
 
         /* v_t = y_t - c - mu_star_t - mu_dag_t, with either location component
            taken out where the warm-up holds it at a constant zero. */
-        mreal *star_bar = f->mu_star_bar + (size_t)(t % f->star_ring) * K;
+        mreal *restrict star_bar = f->mu_star_bar + (size_t)star_at * K;
         int star_is_free = t >= f->w_star;
         int dag_is_free = f->lags && t >= f->w_dag;
         for (int i = 0; i < K; i++) f->c_bar[i] -= v_bar[i];
@@ -1188,13 +1204,14 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
             const mreal *d = f->mu_dag_bar;
             for (int l = 1; l <= f->r; l++) {
                 const mreal *lag = _qvarma_fused_slot(f, t - l, QVARMA_FUSED_U);
-                mreal *lag_bar = f->u_bar + (size_t)((t - l) % f->u_ring) * K;
+                int lag_at = u_at - l < 0 ? u_at - l + f->u_ring : u_at - l;
+                mreal *restrict lag_bar = f->u_bar + (size_t)lag_at * K;
                 const mreal *psi = f->Psi_dag + (size_t)(l - 1) * K * K;
                 mreal *psi_bar = f->Psi_dag_bar + (size_t)(l - 1) * K * K;
                 for (int a = f->K_star; a < K; a++) {
                     mreal d_a = d[a];
-                    const mreal *row = psi + (size_t)a * K;
-                    mreal *row_bar = psi_bar + (size_t)a * K;
+                    const mreal *restrict row = psi + (size_t)a * K;
+                    mreal *restrict row_bar = psi_bar + (size_t)a * K;
                     for (int b = f->K_star; b < K; b++) {
                         row_bar[b] += d_a * lag[b];
                         lag_bar[b] += row[b] * d_a;
@@ -1210,7 +1227,8 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
         if (star_is_free) {
             for (int i = 1; i <= f->p; i++) {
                 const mreal *lag = _qvarma_fused_slot(f, t - i, QVARMA_FUSED_MU_STAR);
-                mreal *lag_bar = f->mu_star_bar + (size_t)((t - i) % f->star_ring) * K;
+                int lag_at = star_at - i < 0 ? star_at - i + f->star_ring : star_at - i;
+                mreal *restrict lag_bar = f->mu_star_bar + (size_t)lag_at * K;
                 mreal phi = f->Phi[i - 1], dot = 0;
                 for (int k = 0; k < K; k++) {
                     dot += star_bar[k] * lag[k];
@@ -1220,13 +1238,14 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
             }
             for (int j = 1; j <= f->q; j++) {
                 const mreal *lag = _qvarma_fused_slot(f, t - j, QVARMA_FUSED_U);
-                mreal *lag_bar = f->u_bar + (size_t)((t - j) % f->u_ring) * K;
+                int lag_at = u_at - j < 0 ? u_at - j + f->u_ring : u_at - j;
+                mreal *restrict lag_bar = f->u_bar + (size_t)lag_at * K;
                 const mreal *psi = f->Psi_star + (size_t)(j - 1) * K * K;
                 mreal *psi_bar = f->Psi_star_bar + (size_t)(j - 1) * K * K;
                 for (int a = 0; a < f->psi_rows; a++) {
                     mreal m_a = star_bar[a];
-                    const mreal *row = psi + (size_t)a * K;
-                    mreal *row_bar = psi_bar + (size_t)a * K;
+                    const mreal *restrict row = psi + (size_t)a * K;
+                    mreal *restrict row_bar = psi_bar + (size_t)a * K;
                     for (int b = 0; b < K; b++) {
                         row_bar[b] += m_a * lag[b];
                         lag_bar[b] += row[b] * m_a;
@@ -1235,6 +1254,8 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
             }
         }
         for (int i = 0; i < K; i++) star_bar[i] = 0;
+        if (--u_at < 0) u_at = f->u_ring - 1;
+        if (--star_at < 0) star_at = f->star_ring - 1;
     }
 
     _qvarma_fused_factor_adjoint(f);

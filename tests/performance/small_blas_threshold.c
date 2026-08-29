@@ -41,6 +41,13 @@ which is faster. Writes out/small_blas_threshold_float32.txt or the float64
 name, since the crossover is a property of the element size and both builds
 are compared.
 
+Every number here is one machine's, against one build of OpenBLAS, so this is
+the file to run first on new hardware: the four constants it reports at the
+bottom are what is compiled in, and the table above them says whether they are
+still in the right place. What travels and what does not is written out in
+docs/MATRIX_DOCUMENTATION.md, "The four dispatch thresholds are measured on one
+machine".
+
 Standalone, no Python driver. Build and run:
   make bench-small_blas_threshold
 */

@@ -341,7 +341,14 @@ exactly one of "A is upper" and "op transposes" holds, and an upper triangle
 is solved from the last row backwards where a lower one is solved from the
 first row forwards; that is the only thing the four combinations change.
 
-Both bounds are crossovers measured in
+Both bounds are crossovers measured on one machine against one build of
+OpenBLAS, and what does and does not carry to other hardware is written once
+in `docs/MATRIX_DOCUMENTATION.md`'s "The four dispatch thresholds are measured
+on one machine", which covers these two as well as `MAT_GEMM_SMALL` and
+`MAT_GEMM_VECTOR`. The short version: the mechanism is general, the numbers
+are not, and `make bench-small_blas_threshold` re-derives them.
+
+The measurements are from
 `tests/performance/small_blas_threshold.c`, which writes
 `out/small_blas_threshold_float32.txt` and the float64 name. At `n = 12` the
 substitution wins 1.4x in float64 at one right-hand side and 3.0x at 256, and

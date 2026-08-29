@@ -314,6 +314,52 @@ Do not use `isnan()`, `isinf()`, `__builtin_isnan()` or `__builtin_isinf()` in n
 
 ## Known limitations and future work
 
+### The four dispatch thresholds are measured on one machine
+
+`MAT_GEMM_SMALL`, `MAT_GEMM_VECTOR` (here) and `TRSM_SMALL_N`,
+`TRSM_SMALL_NRHS` (`linalg/factor.h`) are crossovers measured on one Intel
+i5-7400, against one build of OpenBLAS 0.3.26, at `-O3 -march=native
+-ffast-math`. They are not properties of the arithmetic, and this is the one
+place in the library where a constant was chosen from a measurement on the
+machine it was developed on. This section is the cross-cutting note for all
+four; `linalg/factor.h`'s two are the same fact in a different kernel.
+
+What does carry to other hardware, and does not need re-measuring:
+
+- A BLAS call costs more than fifty floating point operations. Dispatch is on
+  the order of a hundred nanoseconds on any x86 machine, and the arithmetic in
+  a 5x5 by 5x1 product is nanoseconds, so a loop wins at small sizes anywhere.
+  Only where it stops winning moves.
+- The concurrency collapse. OpenBLAS keeps one buffer table per process, so
+  concurrent callers serialize inside it. That is a property of the library,
+  not of the chip, and a machine with more cores should show it worse, not
+  better.
+
+What does not carry:
+
+- The magnitudes. Every ratio quoted in this file and in
+  `docs/FACTOR_DOCUMENTATION.md`, `docs/AD_DOCUMENTATION.md` and
+  `docs/QVARMA_DOCUMENTATION.md` is this machine's.
+- The crossover itself. A wider vector unit or a better-tuned OpenBLAS moves
+  it down, since both make the call's own arithmetic cheaper relative to the
+  loop's: on AVX-512 the square-product crossover would plausibly sit below 8,
+  and a product at 8 would then be handed to a loop that loses. The cost of
+  that is bounded and small - the sizes just past the measured crossover run
+  at 0.53x to 0.93x in this benchmark's own rows, so under 2x on shapes in a
+  narrow band, against a factor of 8 to 11 gained under concurrency at the
+  sizes below it - but it is a real loss and not a rounding error.
+- A different BLAS. Anything that inlines or shortcuts small calls, such as
+  MKL's direct-call mode, removes most of what these thresholds exist to
+  avoid, and they should then be set to zero rather than re-measured.
+  Nothing in the library detects which BLAS it is linked against.
+
+What to do about it: run `make bench-small_blas_threshold` on the new machine.
+It re-derives all four crossovers at one and four threads in both precisions
+and prints the constants currently compiled in, so the answer is one command
+rather than an argument. Changing a constant needs nothing but the `#define`.
+
+### Other limitations
+
 - No in-place operation variants (would avoid intermediate allocations in chained expressions)
 - No axis-wise reductions (sum along rows/columns)
 - `linalg/mat.h` itself has no linear algebra beyond transpose, dot product, and norm - Cholesky/LU/QR live in `linalg/decomp.h`, solving in `linalg/solver.h`; see `docs/DECOMP_DOCUMENTATION.md`/`docs/SOLVER_DOCUMENTATION.md`

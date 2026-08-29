@@ -1,7 +1,16 @@
 /*
-How fast qvarma.h is, and where the time goes. Nothing here checks a result:
-correctness is qvarma_correctness.c's job, and mixing the two makes a fast
-wrong answer look like progress.
+How fast the traced path through qvarma.h is, and where the time goes inside
+it. Nothing here checks a result: correctness is qvarma_correctness.c's job,
+and mixing the two makes a fast wrong answer look like progress.
+
+The phase table below times _qvarma_link and _qvarma_filter on the tape, which
+a fit no longer runs: qvarma_negative_log_likelihood goes through the fused
+filter instead, and the traced path survives as the reference that one is
+checked against. The table is still what says where the tape's time goes, and
+the node counts are still the reason it goes there, but read
+tests/performance/qvarma_fused_filter.c for what an evaluation inside a fit
+actually costs. The fit line at the bottom of this file is the one number here
+that measures the path a caller takes.
 
 Run with make bench-performance. Build against the development et_al. instead
 of the installed one with make bench-performance ETAL_DEV=1, which is how a

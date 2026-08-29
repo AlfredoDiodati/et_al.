@@ -239,7 +239,14 @@ static inline Mat mat_sub(Mat a, Mat b) {
    overhead still dominates at dimensions where a square product has long
    since become worth handing to OpenBLAS. MAT_GEMM_VECTOR is where the
    measurement stops rather than where the loop starts losing - it still wins
-   3.7x at 64 - so raising it needs the benchmark extended first. */
+   3.2x at 64 - so raising it needs the benchmark extended first.
+
+   Both, and linalg/factor.h's two, were measured on one machine against one
+   build of OpenBLAS. They are the only constants in this library chosen that
+   way, and a wider vector unit or a better-tuned BLAS moves them down. Run
+   make bench-small_blas_threshold on new hardware before trusting them; what
+   carries and what does not is in docs/MATRIX_DOCUMENTATION.md's "The four
+   dispatch thresholds are measured on one machine". */
 #define MAT_GEMM_SMALL 8
 #define MAT_GEMM_VECTOR 64
 
