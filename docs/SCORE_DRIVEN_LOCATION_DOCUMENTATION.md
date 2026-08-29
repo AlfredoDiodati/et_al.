@@ -11,10 +11,6 @@ A `K`-variable score-driven mean model under a Student-t shock, with no co-integ
 
 `(.)` is elementwise, `b` and `a` are the diagonals of the two matrices the model calls `B` and `A`, `m0` is the unconditional mean, and `s_t` is the scaled score.
 
-It is the simpler of the two models in `sd/`. `sd/qvarma.h` is the same family with a VARMA component, a co-integrated block, a lag structure and impulse responses; this one has a diagonal recursion at one lag and nothing else. Read it as the reference for what a score-driven filter looks like without the structure, and as the model the `qlr_test.h` machinery is easiest to apply to.
-
-Above `ad.h`, `json.h`, `linalg/decomp.h`, `linalg/solver.h`, `random.h`, `dist/mv/student.h` and `solver/lbfgs.h`.
-
 Every entry point carries the `sdloc_` prefix and every type the `Sdloc` one, because a header-only library has a single flat namespace and `sd/qvarma.h` would otherwise export a second `fit` and a second `Params`. The prefix is a short tag rather than the full header noun, which would put `score_driven_location_` at every call site.
 
 ## The scaled score
@@ -38,7 +34,7 @@ Computing `Sigma^-1/2 v_t` as a differentiable node needs a one-sided triangular
 
 ## Initialization
 
-`m_1 = m0`: the filter starts at its unconditional mean, and **that first observation still contributes to the likelihood** rather than being dropped as a warm-up period the way a longer lag structure needs. `sd/qvarma.h` follows the same convention, so the two models' log-likelihoods on the same data are comparable without an offset.
+`m_1 = m0`: the filter starts at its unconditional mean, and **that first observation still contributes to the likelihood** rather than being dropped as a warm-up period the way a longer lag structure needs.
 
 ## Three types, kept distinct
 
@@ -58,8 +54,6 @@ typedef struct {
 ```
 
 `Sigma` and `half_log_det_Sigma` are derived, never set by hand. A `SdlocParams` filled in field by field reaches the link — and so gets them — by a round trip through `theta`: `_sdloc_unlink` then `sdloc_params_from_theta`. Every other entry point (`sdloc_simulate`, `sdloc_fit`, `sdloc_params_from_theta`) already does this on its way in.
-
-There is no separate `Spec` type. `K` is the only structural dimension, and it is what the parameter shapes already imply, so it lives on `SdlocParams` rather than in a second struct that would have to be passed alongside it everywhere.
 
 `SdlocFitOptions` is procedural — iteration cap, tolerances, solver memory, first step, an optional trace stream — and never affects what the model is. `SdlocFitResult` bundles the fitted parameters with the diagnostics and owns their memory.
 
@@ -155,7 +149,7 @@ A parameter whose error cannot be computed is a result: it says the sample does 
 
 ## Testing
 
-`tests/correctness/score_driven_location_correctness.c`, built with `-DMAT_DOUBLE` unconditionally like the other model-tier binaries — see `docs/QVARMA_DOCUMENTATION.md`'s Building section for the `mat_eig_sym` abort that makes this mandatory rather than advisable.
+`tests/correctness/score_driven_location_correctness.c`, built with `-DMAT_DOUBLE` unconditionally. `sd/qvarma.h` no longer is: it chooses per script, and `docs/QVARMA_DOCUMENTATION.md`'s Building section measures what each precision costs there.
 
 The failure this file is built against is a filter that returns a plausible log-likelihood from the wrong recursion, so the checks are identities rather than numbers copied from somewhere:
 
@@ -172,11 +166,8 @@ The failure this file is built against is a filter that returns a plausible log-
 
 ## Known limitations and future work
 
-- **One lag, diagonal only.** `A` and `B` are diagonal by construction, so no cross-series feedback in the recursion. A full matrix `A` or `B` is a different model, not an option here.
-- **No co-integration.** `sd/qvarma.h` is the model for an I(1) block.
 - **No forecast function.** `sdloc_simulate` draws from the model and `_sdloc_filter` reports residuals, but there is no `sdloc_forecast` producing conditional means at horizon `h`.
-- **No impulse responses.** `sd/qvarma.h` has them; this file does not.
-- **Standard errors for derived quantities** — `Sigma` — are not available, since each is a function of several coordinates at once and needs the off-diagonal covariance rather than the diagonal entries the estimated parameters use. Same gap as `sd/qvarma.h`.
+
 - **The symmetric square root is not implemented**, only the triangular one; see the section above.
-- **Not benchmarked.** Per README's benchmarking policy the model tier is compared between versions of this package rather than against external packages, and that harness does not exist yet, so no speed claim is made here.
+
 - **`nu` is a free parameter with no lower bound beyond 2.** A fit can drive it close to 2, where the shock's variance diverges; nothing here warns about it beyond the standard errors going flat.

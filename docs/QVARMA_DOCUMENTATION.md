@@ -237,9 +237,17 @@ estimated parameter moves, and that it moves by the stated derivative - run on
 the rank-two shape, where a coupling would appear if the `beta` normalization
 introduced one. Measured: 55 coordinates, at most one parameter moved by any.
 
-`H` is inverted through its eigendecomposition, which separates two failures
+`H` is inverted through its eigendecomposition, which separates three failures
 that mean different things:
 
+- **`hessian_is_usable == 0`**: `H` did not decompose at the precision this
+  script was built at, either because differencing the gradient left a
+  non-finite entry in it or because an eigenvalue did not converge. Every error
+  comes back not-a-number, `smallest_curvature` and `condition` too, and there
+  is nothing to say about the shape of the likelihood here. This is what a
+  `float32` build meets on ordinary fits; the same parameters on the same data
+  decompose at `float64`. The call reports it and returns - it does not abort,
+  which is what it used to do, through `mat_eig_sym`'s assert.
 - **`is_maximum == 0`**: a direction of negative curvature. The estimate is not
   a maximum, so no variance is defined and every error comes back
   not-a-number - including coordinates that look well behaved on their own,
@@ -248,6 +256,10 @@ that mean different things:
 - **`n_flat > 0`**: directions whose curvature cannot be told from zero. Not a
   failure of the fit but an unidentified combination. Coordinates overlapping
   such a direction come back not-a-number; the rest are unaffected.
+
+`estimate` is filled before any of this and is never not-a-number on account of
+it: it holds the constrained parameters the errors would have belonged to, so a
+caller that gets no errors still gets the fit back in the paper's units.
 
 Post-estimation:
 
@@ -392,28 +404,61 @@ stops changing.
     make examples/qvarma_example                    a tour of the API
     make study-qvarma_recovery                      the Monte Carlo recovery study
     make tests/performance/qvarma_performance       timings, never part of make test
+    make bench-qvarma_precision                     both precisions side by side
 
 The first two are in `make test` and `make test-stress`; the study and the
 benchmark are not.
 
-**Every binary that touches this model is built with `-DMAT_DOUBLE`,
-unconditionally**, whatever precision the rest of the suite is built at. This is
-not a preference. Under `float32`, `qvarma_correctness` aborts:
+**Precision is chosen one script at a time**, not once for the model. A fit runs
+at either precision and the API reports what it could and could not compute
+there, so the Makefile builds a script that only estimates, forecasts or times
+the model with `MODEL_CFLAGS` (`float32`) and one whose result depends on the
+curvature of the likelihood with `STAT_CFLAGS` (`float64`). Each target says
+which it uses and why. As things stand `qvarma_identification` and
+`qvarma_performance` are `float32`; `qvarma_correctness`, the recovery study and
+the example are `float64`.
 
-    mat_eig_sym: Assertion `info == 0' failed.
+What `float32` costs, and what it saves. The timings are
+`tests/performance/qvarma_precision.c`, run through `make bench-qvarma_precision`,
+which builds it both ways and writes `out/qvarma_precision_float32.txt` and
+`out/qvarma_precision_float64.txt`; the numbers below are from an Intel i5-7400
+with gcc `-O3 -march=native -ffast-math` against OpenBLAS, best of 7 interleaved
+rounds, whole run repeated 3 times. The convergence and standard error figures
+come from fits of a t-QVARMA(1,1,1) with $K = 3$, $K_{star} = 1$, $R = 1$, at
+seeds 1 to 6:
 
-That is `_syevd` (`linalg/factor.h`) via `mat_eig_sym` (`linalg/decomp.h`),
-reached from `qvarma_standard_errors` on the Hessian of a fitted log-likelihood.
-`_syevd`'s divide-and-conquer recursion falls back to `_steqr`, an implicit QL
-iteration capped at 50 iterations per eigenvalue; in single precision that cap is
-reached on this Hessian, `_syevd` returns a nonzero `info`, and `mat_eig_sym`
-asserts against it. Under `float64` the same matrix decomposes cleanly.
-Reproduces at `test_standard_errors_against_sample_size`'s seed, 1709. Recorded
-as a `mat_eig_sym` limitation in `docs/DECOMP_DOCUMENTATION.md`, since the abort
-is in the decomposition rather than in this model.
+- **Speed: nothing at the sizes this model is usually run at.** One fit
+  iteration, forward plus backward, at $T = 600$: 2.47 ms `float64` against
+  2.36 ms `float32` at $K = 3$, and 2.70 against 2.61 at $K = 8$. The cost there
+  is tape bookkeeping, not arithmetic - 17 nodes per period either way, and a
+  `Node` is 96 bytes against 88. It becomes worth something once the per-node
+  matrices are large: 5.27 ms against 3.93 at $K = 20$, and 25.9 ms against
+  13.8 at $K = 40$.
+- **Convergence: worse.** Over 12 fits (seeds 1 to 6, $T \in \{500, 2000\}$,
+  $K = 3$), `float32` reported convergence 4 times and stopped at gradient norms
+  between 0.87 and 90.7. `float64` on the same shape converged at 0.004 to
+  0.016. `examples/qvarma_example` stops after 44 iterations at gradient norm
+  7.36 in `float32`, and converges in 231 at 0.0057 in `float64`.
+- **Standard errors: usually available, sometimes not.** In those same 12 fits
+  every call returned usable errors. At the parameters and data where both
+  precisions succeed, the two agree to a median relative difference of 0.0013
+  and a worst of 0.0145 over the 23 entries. But `qvarma_correctness`'s
+  `test_standard_errors_against_sample_size` (seed 1709) reaches a Hessian at
+  `float32` that will not decompose, and there the call returns
+  `hessian_is_usable == 0` and no numbers.
 
-Float64 was already needed for the finite-difference gradient check to be
-informative; the analytic gradient is identical in both builds.
+So the rule for a script of your own: fit at `float32` if the cross-section is
+large and you want the estimates, and build that script at `float64` when you
+need the errors or when the fit will not converge. `float64` is also what makes
+the finite-difference gradient check informative; the analytic gradient itself
+is identical in both builds.
+
+A fit does not have to be repeated to change precision. `qvarma_save_params`
+writes the fitted parameters as JSON and `qvarma_load_params` reads them back
+into a model of the same shape, so a `float32` script can fit and save, and a
+`float64` script can load those parameters, pass them to
+`qvarma_standard_errors` with the same data, and get the errors at the point the
+cheap run found.
 
 Results go to `out/`, never to the terminal.
 

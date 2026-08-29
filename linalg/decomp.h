@@ -105,33 +105,58 @@ static inline void mat_qr(Mat a, Mat *q_out, Mat *r_out) {
    reduction to tridiagonal form, then divide and conquer. It replaced a
    LAPACKE ?syevd call and is 1.06x to 4.59x faster across the shapes and
    spectra in tests/performance/eigsym_lapack_removal.c. */
-static inline void mat_eig_sym(Mat a, Vec *eigvals_out, Mat *eigvecs_out) {
+/* The same decomposition as mat_eig_sym, reporting failure instead of
+   asserting on it. Returns 0 and fills both out-params on success; on failure
+   it returns nonzero, allocates nothing and leaves both out-params untouched.
+   -1 is a non-finite entry in a, and a positive value is _syevd's info, an
+   eigenvalue that did not converge within the iteration cap.
+
+   A NaN or Inf entry can never satisfy _steqr's deflation test (every
+   comparison against one is false), so the QL iteration cannot deflate and
+   always runs to max_iter before info != 0 comes back - the same return value
+   a genuinely slow-converging but finite matrix produces. The two are told
+   apart here because they mean different things: a non-finite input is a
+   contract violation by the caller, not a numerical limit of the eigensolver
+   reached on legitimate data. Checked with mat_absmax_bits/MINFBITS, not
+   isnan()/isinf(), for the reason given at their definition in mat.h - this
+   file builds with -ffast-math like the rest of the project.
+
+   Callers that reach a bad matrix through data rather than through a mistake
+   of their own need this entry point: the Hessian of a log-likelihood
+   differenced at parameters an optimizer probed is such a matrix, and at
+   float32 it is reached on ordinary fits. Everything else calls mat_eig_sym
+   and lets the assert stand. */
+static inline int mat_eig_sym_status(Mat a, Vec *eigvals_out, Mat *eigvecs_out) {
     assert(a.r == a.c);
     int n = a.r;
     Mat v = mat_copy(a);
     Vec w = mat_new(n, 1);
 
-    /* A NaN or Inf entry can never satisfy _steqr's deflation test (every
-       comparison against one is false), so the QL iteration cannot deflate
-       and always runs to max_iter before info != 0 comes back - the same
-       return value a genuinely slow-converging but finite matrix produces.
-       Told apart here, since they mean different things: a non-finite input
-       is a contract violation by the caller (the matrix was already garbage
-       before this function saw it), not a numerical limit of the eigensolver
-       reached on legitimate data. Checked with mat_absmax_bits/MINFBITS,
-       not isnan()/isinf(), for the reason given at their definition in
-       mat.h - this file builds with -ffast-math like the rest of the
-       project. */
     MUINT worst = mat_absmax_bits(v.d, n * n);
-    assert(worst < MINFBITS &&
-           "mat_eig_sym: input has a NaN/Inf entry - fix what produced the "
-           "matrix, this is not a slow-converging eigenproblem");
+    if (worst >= MINFBITS) {
+        mat_free(v);
+        mat_free(w);
+        return -1;
+    }
 
     int info = _syevd(v.d, n, v.stride, w.d);
-    assert(info == 0); /* a finite eigenvalue failed to converge within max_iter */
+    if (info != 0) {
+        mat_free(v);
+        mat_free(w);
+        return info;
+    }
 
     *eigvals_out = w;
     *eigvecs_out = v;
+    return 0;
+}
+
+static inline void mat_eig_sym(Mat a, Vec *eigvals_out, Mat *eigvecs_out) {
+    int status = mat_eig_sym_status(a, eigvals_out, eigvecs_out);
+    assert(status >= 0 &&
+           "mat_eig_sym: input has a NaN/Inf entry - fix what produced the "
+           "matrix, this is not a slow-converging eigenproblem");
+    assert(status == 0); /* a finite eigenvalue failed to converge within max_iter */
 }
 
 /* Reduced (economy) SVD of a (m x n): a == u * diag(s) * vt. k = min(m,n);

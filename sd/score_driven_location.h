@@ -9,14 +9,13 @@
 
 /*
 A multivariate score-driven mean/location model under a Student-t shock, K
-variables, no cointegration structure and no lag search: y_t = m_t + v_t,
-v_t ~ t_K(0, Sigma, nu) i.i.d., Sigma = Omega_inv Omega_inv',
+variables: y_t = m_t + v_t,
+v_t <- iid t_K(0, Sigma, nu) i.i.d., Sigma = Omega_inv Omega_inv',
 
     m_t = m0 (1_K - b) + b (.) m_{t-1} + a (.) s_{t-1},
 
 (.) elementwise, b and a the diagonals of the two matrices the model calls B
-and A, m0 the unconditional mean, and s_t the scaled score. m_1 = m0, the
-convention qvarma.h follows too: the filter is initialized at its
+and A, m0 the unconditional mean, and s_t the scaled score. m_1 = m0: the filter is initialized at its
 unconditional mean, and that first observation still contributes to the
 likelihood rather than being dropped as a warm-up period the way a longer lag
 structure needs.

@@ -378,6 +378,33 @@ static void test_eig_sym(void) {
         mat_free(a); mat_free(w); mat_free(v);
     }
 
+    /* the status entry point: the same answer where mat_eig_sym succeeds, and a
+       return value rather than an abort where it does not. A caller that
+       reaches a bad matrix through its data, such as the Hessian of a
+       log-likelihood at parameters an optimizer probed, needs the second. */
+    {
+        Mat a = mat_lit(2, 2, 2,0, 0,3);
+        Vec w;
+        Mat v;
+        int status = mat_eig_sym_status(a, &w, &v);
+        assert(status == 0);
+        CHECK(AT(w,0,0), 2.0f);
+        CHECK(AT(w,1,0), 3.0f);
+        mat_free(w); mat_free(v);
+
+        Mat bad = mat_lit(2, 2, 2,0, 0,3);
+        AT(bad,0,0) = (mreal)INFINITY;
+        Vec no_w;
+        Mat no_v;
+        no_w.d = NULL;
+        no_v.d = NULL;
+        status = mat_eig_sym_status(bad, &no_w, &no_v);
+        assert(status == -1);
+        assert(no_w.d == NULL && no_v.d == NULL); /* nothing to free on failure */
+
+        mat_free(a); mat_free(bad);
+    }
+
     if (getenv("STRESS")) {
         puts("  eig_sym stress");
         srand(42);

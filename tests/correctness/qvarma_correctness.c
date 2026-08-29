@@ -1713,6 +1713,54 @@ static void test_standard_error_coverage(void) {
     if (!failures) printf("  ok\n");
 }
 
+/*
+A Hessian that cannot be differenced is a limit of the precision the script was
+built at, not a programmer error, so the call reports it instead of aborting.
+
+Reached here by putting every coordinate of theta far enough out that the
+recursion overflows, which is a different coordinate in each build: at float32
+the products in the filter leave the exponent range around theta of 8, and at
+float64 not until 400. Past both there is no failure to test, because the
+likelihood stops being evaluable at all, qvarma_negative_log_likelihood returns
+its infinite sentinel with a zero gradient, and a Hessian of zeros decomposes
+perfectly well.
+
+A float32 build also reaches this at ordinary fitted parameters, which is the
+case the reporting exists for and which a float64 build of the same script does
+not have.
+*/
+static void test_standard_errors_when_the_hessian_will_not_decompose(void) {
+    printf("standard errors where the Hessian will not decompose\n");
+    QvarmaParams truth = baseline();
+    Rng rng = rng_new(1313, 0);
+    fill_plausible(&truth, &rng);
+    Mat y = qvarma_simulate(&rng, &truth, 200);
+
+    QvarmaParams at = baseline();
+    Vec theta = mat_new(qvarma_n_theta(&truth), 1);
+    _qvarma_unlink(&truth, theta);
+    mreal extreme = sizeof(mreal) == sizeof(double) ? (mreal)400 : (mreal)8;
+    for (int i = 0; i < theta.r; i++) theta.d[i] = extreme;
+    qvarma_params_from_theta(theta, &at);
+
+    QvarmaStandardErrors errors = qvarma_standard_errors(&at, y);
+    printf("  theta at %g: returned, hessian_is_usable %d, is_maximum %d\n",
+           (double)extreme, errors.hessian_is_usable, errors.is_maximum);
+    CHECK(errors.hessian_is_usable == 0, "the Hessian here must be reported as unusable");
+    CHECK(errors.is_maximum == 0, "a Hessian that was never decomposed cannot be a maximum");
+    int numeric = 0;
+    for (int i = 0; i < errors.constrained.r; i++)
+        if (!MISNAN(errors.constrained.d[i]) || !MISNAN(errors.unconstrained.d[i])) numeric++;
+    CHECK(numeric == 0, "%d of %d errors came back as numbers", numeric, errors.constrained.r);
+
+    qvarma_standard_errors_free(&errors);
+    mat_free(theta);
+    mat_free(y);
+    qvarma_params_free(&at);
+    qvarma_params_free(&truth);
+    if (!failures) printf("  ok\n");
+}
+
 static void test_fit_from_extreme_start(void) {
     printf("fit from a starting guess where the likelihood is not a number\n");
     QvarmaParams truth = baseline();
@@ -1789,6 +1837,7 @@ int main(void) {
     test_fit_reports_why_it_stopped();
     test_link_is_elementwise();
     test_standard_errors_against_sample_size();
+    test_standard_errors_when_the_hessian_will_not_decompose();
     test_fit_from_extreme_start();
 
     const char *stress = getenv("STRESS");

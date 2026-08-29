@@ -1705,6 +1705,18 @@ back not-a-number and n_flat counts the directions. Shapes with a co-integrated
 block reach here through c, whose curvature is two orders of magnitude below
 the rest.
 
+An H that will not decompose is the third failure and the one a float32 build
+meets first. H differences the gradient at theta plus and minus a step; a step
+that leaves the region where the likelihood is representable comes back
+non-finite, and a step that stays inside it can still leave a matrix whose
+eigenvalues the solver cannot reach at this precision. Both are limits of the
+precision the script was built at rather than programmer errors, since the same
+parameters and the same data decompose at float64, so both set
+hessian_is_usable to zero and report every error as not-a-number instead of
+aborting. mat_eig_sym_status tells them apart for a caller that wants to know
+which. A script that needs the errors is built at float64; one that only needs
+the estimates is not.
+
 This covers the parameters the optimizer estimates. Anything derived from
 several of them at once, Sigma and Psi_dag among them, is a function of the
 whole vector and needs the off-diagonal covariance rather than these diagonal
@@ -1714,10 +1726,11 @@ typedef struct {
     Vec estimate; /* n x 1, the constrained parameter each error belongs to */
     Vec constrained; /* n x 1, se on the paper's scale */
     Vec unconstrained; /* n x 1, se on the optimizer's scale */
-    mreal smallest_curvature;
-    mreal condition;
+    mreal smallest_curvature; /* not-a-number when the Hessian was not usable */
+    mreal condition; /* likewise */
     int is_maximum; /* zero when a direction of negative curvature was found */
     int n_flat; /* directions whose curvature is indistinguishable from zero */
+    int hessian_is_usable; /* zero when the Hessian would not decompose here */
 } QvarmaStandardErrors;
 
 static inline void qvarma_standard_errors_free(QvarmaStandardErrors *e) {
@@ -1731,16 +1744,38 @@ static inline QvarmaStandardErrors qvarma_standard_errors(const QvarmaParams *m,
     int n = qvarma_n_theta(m);
     Vec theta = mat_new(n, 1);
     _qvarma_unlink(m, theta);
-    Mat H = _qvarma_hessian(theta, m, y);
-
-    Vec eigenvalues;
-    Mat eigenvectors;
-    mat_eig_sym(H, &eigenvalues, &eigenvectors);
 
     QvarmaStandardErrors e;
     e.estimate = mat_new(n, 1);
     e.constrained = mat_new(n, 1);
     e.unconstrained = mat_new(n, 1);
+
+    QvarmaLink *kinds = (QvarmaLink*)malloc((size_t)n * sizeof(QvarmaLink));
+    mreal *scales = (mreal*)malloc((size_t)n * sizeof(mreal));
+    _qvarma_link_kinds(m, kinds);
+    _qvarma_link_scales(m, scales);
+    for (int i = 0; i < n; i++)
+        e.estimate.d[i] = qvarma_link_forward(kinds[i], theta.d[i], scales[i]);
+
+    Mat H = _qvarma_hessian(theta, m, y);
+
+    Vec eigenvalues;
+    Mat eigenvectors;
+    e.hessian_is_usable = mat_eig_sym_status(H, &eigenvalues, &eigenvectors) == 0;
+    if (!e.hessian_is_usable) {
+        for (int i = 0; i < n; i++) {
+            e.constrained.d[i] = (mreal)NAN;
+            e.unconstrained.d[i] = (mreal)NAN;
+        }
+        e.smallest_curvature = (mreal)NAN;
+        e.condition = (mreal)NAN;
+        e.is_maximum = 0;
+        e.n_flat = 0;
+        free(kinds); free(scales);
+        mat_free(H); mat_free(theta);
+        return e;
+    }
+
     e.smallest_curvature = eigenvalues.d[0];
     mreal smallest_size = MABS(eigenvalues.d[0]), largest_size = smallest_size;
     for (int k = 0; k < n; k++) {
@@ -1761,13 +1796,8 @@ static inline QvarmaStandardErrors qvarma_standard_errors(const QvarmaParams *m,
         else if (eigenvalues.d[k] <= floor_value) e.n_flat++;
     }
 
-    QvarmaLink *kinds = (QvarmaLink*)malloc((size_t)n * sizeof(QvarmaLink));
-    mreal *scales = (mreal*)malloc((size_t)n * sizeof(mreal));
-    _qvarma_link_kinds(m, kinds);
-    _qvarma_link_scales(m, scales);
     for (int i = 0; i < n; i++) {
-        mreal value = qvarma_link_forward(kinds[i], theta.d[i], scales[i]);
-        e.estimate.d[i] = value;
+        mreal value = e.estimate.d[i];
         mreal variance = 0;
         int usable = e.is_maximum;
         for (int k = 0; k < n && usable; k++) {
@@ -1821,15 +1851,20 @@ static inline void qvarma_write_report(const QvarmaFitResult *result, Mat y, con
 
     QvarmaStandardErrors errors = qvarma_standard_errors(m, y);
     fprintf(out, "\nstandard errors\n");
-    fprintf(out, "curvature: smallest %.6g, condition %.6g\n",
-            (double)errors.smallest_curvature, (double)errors.condition);
-    if (!errors.is_maximum)
-        fprintf(out, "a direction of negative curvature was found, so this is not a maximum\n"
-                     "and no standard error is reported\n");
-    else if (errors.n_flat)
-        fprintf(out, "%d of %d directions are flat, so the parameters that lie along them\n"
-                     "are not identified and their errors are reported n/a\n",
-                errors.n_flat, qvarma_n_theta(m));
+    if (!errors.hessian_is_usable) {
+        fprintf(out, "the Hessian would not decompose at this precision, so its curvature\n"
+                     "could not be taken and every error is reported n/a\n");
+    } else {
+        fprintf(out, "curvature: smallest %.6g, condition %.6g\n",
+                (double)errors.smallest_curvature, (double)errors.condition);
+        if (!errors.is_maximum)
+            fprintf(out, "a direction of negative curvature was found, so this is not a maximum\n"
+                         "and no standard error is reported\n");
+        else if (errors.n_flat)
+            fprintf(out, "%d of %d directions are flat, so the parameters that lie along them\n"
+                         "are not identified and their errors are reported n/a\n",
+                    errors.n_flat, qvarma_n_theta(m));
+    }
     fprintf(out, "\n%-20s %14s %14s %14s\n", "parameter", "estimate", "se", "se_theta");
     for (int i = 0; i < qvarma_n_theta(m); i++) {
         char name[64];

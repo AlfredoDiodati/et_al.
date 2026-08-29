@@ -13,17 +13,27 @@ LDLIBS  = -lm $(BLAS_LIBS)
 # "Dependencies" section.
 LAPACKE_LIBS = -llapacke
 
-# Every statistical test and model binary below is built at float64 whatever
-# MAT_DOUBLE says, through STAT_CFLAGS rather than CFLAGS. It is not a
-# preference. The regressions underneath a unit root or co-integration
-# statistic are ill-conditioned by construction - a levels regressor against
-# its own difference - and in float32 the published critical values they are
-# checked against are not reproduced to the digits the papers print; every
-# one of those suites fails there. sd/'s models are worse: qvarma_correctness
-# aborts under float32 inside mat_eig_sym, on the Hessian of a fitted
-# log-likelihood (see docs/DECOMP_DOCUMENTATION.md's known limitations, and
-# docs/QVARMA_DOCUMENTATION.md's Building section).
+# Every statistical test binary below is built at float64 whatever MAT_DOUBLE
+# says, through STAT_CFLAGS rather than CFLAGS. It is not a preference. The
+# regressions underneath a unit root or co-integration statistic are
+# ill-conditioned by construction - a levels regressor against its own
+# difference - and in float32 the published critical values they are checked
+# against are not reproduced to the digits the papers print; every one of those
+# suites fails there.
 STAT_CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math $(BLAS_CFLAGS) -DMAT_DOUBLE
+
+# sd/qvarma.h is the exception to the paragraph above, and picks its precision
+# one script at a time. A fit runs at either precision and the model reports
+# what it could and could not compute there, so a script that only estimates,
+# forecasts or times the model is built with MODEL_CFLAGS and pays float32
+# prices; a script whose result depends on the curvature of the likelihood is
+# built with STAT_CFLAGS. Which is which is stated at each target below.
+#
+# What float32 costs, measured on this machine at K=3 and T=600 (see
+# docs/QVARMA_DOCUMENTATION.md's Building section): nothing in speed until the
+# cross-section grows, 1.87x at K=40, and fits that stop earlier and further
+# from the optimum.
+MODEL_CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math $(BLAS_CFLAGS)
 
 UNIT_ROOT_DEPS := unit_root.h stats.h random.h linalg/solver.h linalg/decomp.h linalg/mat.h tests/check.h
 COINTEGRATION_DEPS := cointegration.h $(UNIT_ROOT_DEPS)
@@ -88,7 +98,8 @@ examples/rdata_example: examples/rdata_example.c frame/rdata.h gzip.h frame/csv.
 examples/join_example: examples/join_example.c frame/join.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/join_example.c $(LDLIBS) -o examples/join_example
 
-# float64 for the same reason every sd/ binary is - see STAT_CFLAGS above.
+# float64: the tour ends by printing each estimate against the parameter it was
+# simulated from, and at float32 the fit stops before it gets there.
 examples/qvarma_example: examples/qvarma_example.c $(QVARMA_DEPS)
 	$(CC) $(STAT_CFLAGS) -I. examples/qvarma_example.c $(LDLIBS) -o examples/qvarma_example
 
@@ -356,11 +367,14 @@ tests/correctness/lbfgs_correctness: tests/correctness/lbfgs_correctness.c solve
 tests/correctness/score_driven_location_correctness: tests/correctness/score_driven_location_correctness.c $(SDLOC_DEPS) tests/check.h
 	$(CC) $(STAT_CFLAGS) tests/correctness/score_driven_location_correctness.c $(LDLIBS) -o tests/correctness/score_driven_location_correctness
 
+# float64: it checks standard errors against the sample size, which needs fits
+# that converge. At float32 one of its four fits does not.
 tests/correctness/qvarma_correctness: tests/correctness/qvarma_correctness.c $(QVARMA_DEPS)
 	$(CC) $(STAT_CFLAGS) tests/correctness/qvarma_correctness.c $(LDLIBS) -o tests/correctness/qvarma_correctness
 
+# float32: it compares conditioning between model shapes, and passes here.
 tests/correctness/qvarma_identification: tests/correctness/qvarma_identification.c $(QVARMA_DEPS)
-	$(CC) $(STAT_CFLAGS) tests/correctness/qvarma_identification.c $(LDLIBS) -o tests/correctness/qvarma_identification
+	$(CC) $(MODEL_CFLAGS) tests/correctness/qvarma_identification.c $(LDLIBS) -o tests/correctness/qvarma_identification
 
 # --- integration tests (tests/integration/) ---
 # See README.md's "Testing and benchmarking" for what belongs here rather than
@@ -436,6 +450,7 @@ test-integration-asan:
 # draws per cell (default 12), MAX_ITERATIONS the solver budget. -fopenmp
 # because its replications are independent and run in parallel; without the
 # flag the pragmas are discarded and it computes the same answers serially.
+# float64: every cell of the study reads a standard error.
 tests/correctness/qvarma_recovery_study: tests/correctness/qvarma_recovery_study.c $(QVARMA_DEPS)
 	$(CC) $(STAT_CFLAGS) -fopenmp tests/correctness/qvarma_recovery_study.c $(LDLIBS) -o tests/correctness/qvarma_recovery_study
 
@@ -447,8 +462,28 @@ study-qvarma_recovery: tests/correctness/qvarma_recovery_study
 # against the one it would replace, on its own, rather than against an
 # external package - see README's "Benchmarking policy across installation
 # tiers" for why the model tier is not benchmarked against NumPy or JAX.
+# float32: it times the recursion and the tape, and reports which build it ran
+# at. Build it with STAT_CFLAGS to time the other one.
 tests/performance/qvarma_performance: tests/performance/qvarma_performance.c $(QVARMA_DEPS)
-	$(CC) $(STAT_CFLAGS) tests/performance/qvarma_performance.c $(LDLIBS) -o tests/performance/qvarma_performance
+	$(CC) $(MODEL_CFLAGS) tests/performance/qvarma_performance.c $(LDLIBS) -o tests/performance/qvarma_performance
+
+# The two arms of the precision choice the Makefile makes above, at four
+# cross-section sizes. Built both ways, since comparing them is the point.
+tests/performance/qvarma_precision: tests/performance/qvarma_precision.c $(QVARMA_DEPS)
+	$(CC) $(MODEL_CFLAGS) tests/performance/qvarma_precision.c $(LDLIBS) -o tests/performance/qvarma_precision
+
+tests/performance/qvarma_precision_float64: tests/performance/qvarma_precision.c $(QVARMA_DEPS)
+	$(CC) $(STAT_CFLAGS) tests/performance/qvarma_precision.c $(LDLIBS) -o tests/performance/qvarma_precision_float64
+
+bench-qvarma_precision: tests/performance/qvarma_precision tests/performance/qvarma_precision_float64
+	./tests/performance/qvarma_precision
+	./tests/performance/qvarma_precision_float64
+
+# mat_eig_sym reporting a failure rather than asserting on it, timed against
+# the version that asserted - see the file's own comment for how the second
+# arm is built once the old version is only reachable through git.
+tests/performance/eig_sym_status: tests/performance/eig_sym_status.c $(QVARMA_DEPS)
+	$(CC) $(STAT_CFLAGS) tests/performance/eig_sym_status.c $(LDLIBS) -o tests/performance/eig_sym_status
 
 tests/performance/lbfgs_candidates: tests/performance/lbfgs_candidates.c solver/lbfgs.h linalg/mat.h
 	$(CC) $(STAT_CFLAGS) tests/performance/lbfgs_candidates.c $(LDLIBS) -o tests/performance/lbfgs_candidates

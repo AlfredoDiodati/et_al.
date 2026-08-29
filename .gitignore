@@ -35,6 +35,9 @@ tests/correctness/*_correctness
 tests/correctness/qvarma_identification
 tests/correctness/qvarma_recovery_study
 tests/performance/qvarma_performance
+tests/performance/qvarma_precision
+tests/performance/eig_sym_status
+tests/performance/qvarma_precision_float64
 tests/performance/lbfgs_candidates
 tests/performance/lbfgs_performance
 tests/performance/lbfgs_direction_threshold

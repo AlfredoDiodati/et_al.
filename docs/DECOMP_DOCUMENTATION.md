@@ -49,6 +49,22 @@ Internally this calls `?geqrf` (Householder QR into a packed reflector represent
 
 Eigendecomposition of symmetric `a` via `linalg/factor.h`'s `_syevd` (Householder tridiagonalisation plus divide and conquer, CBLAS only, 1.06x-4.59x faster than the `LAPACKE_?syevd` it replaced — see `docs/FACTOR_DOCUMENTATION.md`): `a == V * diag(w) * V^T`. Only the lower triangle of `a` is read. `*eigvals_out` receives a new `n`x`1` `Vec` in ascending order (LAPACK's convention); `*eigvecs_out` receives a new `n`x`n` `Mat` whose columns are the corresponding orthonormal eigenvectors. Caller must `mat_free()` both. This is the one factorization in this header guaranteed to have fully real eigenvalues and eigenvectors, which is why it has a simpler two-out-param signature than the general case (`mat_eig` below).
 
+### `mat_eig_sym_status`
+
+The same decomposition, reporting failure instead of asserting on it. Returns `0` and fills both out-params on success. On failure it returns nonzero, allocates nothing, and leaves both out-params untouched: `-1` for a non-finite entry in `a`, and a positive `_syevd` `info` for an eigenvalue that did not converge within the iteration cap. `mat_eig_sym` is a wrapper that asserts on the status, so every existing caller is unchanged.
+
+Reporting the status costs nothing on the path where the decomposition succeeds, which is the path every existing caller is on. Timed against the version that asserted, on an Intel i5-7400 with gcc `-O3 -march=native -ffast-math` against OpenBLAS, best of 9 interleaved rounds, minimum over 6 alternating runs of each arm (`tests/performance/eig_sym_status.c`):
+
+| | n=8 | n=32 | n=128 | n=256 | `qvarma_standard_errors`, K=3, T=600 |
+|---|---|---|---|---|---|
+| float64, new/old | 1.000 | 1.003 | 0.997 | 0.999 | 1.003 |
+| float32, new/old | 1.000 | 0.999 | 1.002 | 0.998 | 0.998 |
+
+Every ratio is inside the spread of repeated runs of either arm on its own, and no phase moves in the same direction in both builds.
+
+Which entry point to call is a question about where the bad matrix came from. A matrix that is garbage because the code that built it has a bug is a programmer error and `mat_eig_sym`'s assert is the right response. A matrix that is bad because of the data and the precision the script was built at is not: the Hessian of a log-likelihood differenced at parameters an optimizer probed is such a matrix, and at `float32` it is reached on ordinary fits. `sd/qvarma.h`'s `qvarma_standard_errors` calls this one and reports `hessian_is_usable` zero rather than ending the process.
+
+
 ### `mat_svd`
 
 Reduced (economy) SVD of `a` (`m`x`n`): `a == U * diag(s) * Vt`, with `k = min(m,n)`. `*u_out` is `m`x`k` with orthonormal columns, `*s_out` is `k`x`1` (descending, always non-negative), `*vt_out` is `k`x`n` with orthonormal rows. Caller must `mat_free()` all three. `mat_cond` and `mat_rank` are both built directly on this.
@@ -116,5 +132,5 @@ Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_q
 - `mat_qr` requires `m >= n`; there is no underdetermined (`m < n`) QR path
 - `mat_eig` computes eigenvalues only, never eigenvectors - a real non-symmetric matrix's eigenvectors are generally complex, and this library has no complex type. Adding one (and a complex-capable eigenvector routine) is a substantial undertaking deliberately out of scope here; if it's ever needed, it belongs in a new header, not bolted onto `Mat`
 - No generalized eigenvalue problem (`?sygv`) - not currently needed by anything planned
-- `mat_eig_sym` can abort under a `float32` build on a matrix it decomposes cleanly under `float64`. `_syevd`'s divide-and-conquer recursion falls back to `_steqr`, an implicit QL iteration capped at 50 iterations per eigenvalue; on an ill-conditioned matrix that cap is reached in single precision, `_syevd` returns a nonzero `info`, and `mat_eig_sym` asserts against it. Found on the Hessian of a fitted `sd/qvarma.h` log-likelihood (`tests/correctness/qvarma_correctness.c`, `test_standard_errors_against_sample_size`, seed 1709), which is why that test and its siblings are built with `-DMAT_DOUBLE` unconditionally. Not diagnosed further than the `info` value: whether the fix is a higher iteration cap, a different fallback, or a documented precision floor for `mat_eig_sym` is open
+- `mat_eig_sym` fails under a `float32` build on matrices it decomposes cleanly under `float64`, and a caller that can reach one has to use `mat_eig_sym_status` instead of the asserting entry point. `_syevd`'s divide-and-conquer recursion falls back to `_steqr`, an implicit QL iteration capped at 50 iterations per eigenvalue; on an ill-conditioned matrix that cap is reached in single precision and `_syevd` returns a nonzero `info`. Found on the Hessian of a fitted `sd/qvarma.h` log-likelihood (`tests/correctness/qvarma_correctness.c`, `test_standard_errors_against_sample_size`, seed 1709). The status entry point is a way to survive it, not a fix: whether a higher iteration cap, a different fallback, or a documented precision floor for `mat_eig_sym` is the answer is still open
 - No rank-revealing (column-pivoted) QR (`?geqp3`) - `mat_qr` assumes `a` is well-conditioned and does not pivot. `linalg/solver.h`'s `mat_lstsq_rd` covers the rank-deficient least-squares case via SVD instead; a pivoted QR would be a cheaper alternative if that ever becomes a bottleneck
