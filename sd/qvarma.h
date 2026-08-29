@@ -1401,8 +1401,11 @@ static inline mreal qvarma_log_likelihood_at(Vec theta, const QvarmaParams *shap
 
 /*
 The objective the solver minimises: the negative log-likelihood as a function
-of the unconstrained vector. The gradient is filled only when asked for, so a
-line search, which needs the value alone, skips the backward pass entirely.
+of the unconstrained vector. The gradient is filled only when asked for, and
+the backward pass is skipped when it is not. No fit takes that path:
+solver/lbfgs.h's strong Wolfe search tests the directional derivative at every
+trial point, so it asks for the gradient every time. The value-only path is
+for a caller evaluating the likelihood for its own sake.
 
 workspace is the analytic filter's, reused across every evaluation of one fit.
 Leaving it NULL is allowed and makes each call build and release its own,

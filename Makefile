@@ -523,6 +523,46 @@ bench-qvarma_analytic_filter: tests/performance/qvarma_analytic_filter tests/per
 	./tests/performance/qvarma_analytic_filter
 	./tests/performance/qvarma_analytic_filter_float64
 
+# A batch of fits with both levels of parallelism at once: an OpenMP loop over
+# the fits inside one machine, cluster/cluster.h handing ranges of fits between
+# machines. float32 (MODEL_CFLAGS): it times fits and reads no curvature, which
+# is what that variable is for. Run directly:
+#   make bench-qvarma_cluster_fits
+tests/performance/qvarma_cluster_fits: tests/performance/qvarma_cluster_fits.c $(QVARMA_DEPS) cluster/cluster.h
+	$(CC) $(MODEL_CFLAGS) -fopenmp tests/performance/qvarma_cluster_fits.c $(LDLIBS) -o tests/performance/qvarma_cluster_fits
+
+tests/performance/qvarma_cluster_fits_float64: tests/performance/qvarma_cluster_fits.c $(QVARMA_DEPS) cluster/cluster.h
+	$(CC) $(STAT_CFLAGS) -fopenmp tests/performance/qvarma_cluster_fits.c $(LDLIBS) -o tests/performance/qvarma_cluster_fits_float64
+
+# The binary to deploy to a machine that is not this one. -march=native targets
+# whatever this machine is, and the deploy daemon runs the coordinator's own
+# executable on the other machine, so a native build is only safe where both
+# machines are the same part. x86-64-v3 is AVX2, FMA and BMI2, which every
+# machine this has run on has, and it measured the same speed as native on the
+# analytic filter. Use this one for a run spanning two different machines.
+tests/performance/qvarma_cluster_fits_portable: tests/performance/qvarma_cluster_fits.c $(QVARMA_DEPS) cluster/cluster.h
+	$(CC) -Wall -Wextra -O3 -march=x86-64-v3 -ffast-math $(BLAS_CFLAGS) -fopenmp tests/performance/qvarma_cluster_fits.c $(LDLIBS) -o tests/performance/qvarma_cluster_fits_portable
+
+bench-qvarma_cluster_fits: tests/performance/qvarma_cluster_fits tests/performance/qvarma_cluster_fits_float64
+	./tests/performance/qvarma_cluster_fits
+	./tests/performance/qvarma_cluster_fits_float64
+
+# Would evaluating several series in one loop beat one at a time, on a machine
+# already using every thread. A prototype of the recursion and its adjoint,
+# scalar and batched, timed against each other at several thread counts; it
+# does not call sd/qvarma.h, so the ratio is what transfers and not the
+# microseconds. -fopenmp because the full-width row is the point. Run directly:
+#   make bench-qvarma_batched_filter
+tests/performance/qvarma_batched_filter: tests/performance/qvarma_batched_filter.c linalg/mat.h
+	$(CC) $(MODEL_CFLAGS) -fopenmp tests/performance/qvarma_batched_filter.c $(LDLIBS) -o tests/performance/qvarma_batched_filter
+
+tests/performance/qvarma_batched_filter_float64: tests/performance/qvarma_batched_filter.c linalg/mat.h
+	$(CC) $(STAT_CFLAGS) -fopenmp tests/performance/qvarma_batched_filter.c $(LDLIBS) -o tests/performance/qvarma_batched_filter_float64
+
+bench-qvarma_batched_filter: tests/performance/qvarma_batched_filter tests/performance/qvarma_batched_filter_float64
+	./tests/performance/qvarma_batched_filter
+	./tests/performance/qvarma_batched_filter_float64
+
 # mat_eig_sym reporting a failure rather than asserting on it, timed against
 # the version that asserted - see the file's own comment for how the second
 # arm is built once the old version is only reachable through git.

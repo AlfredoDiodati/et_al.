@@ -923,6 +923,184 @@ the constants themselves.
 `out/` is not under version control, and holds whichever machine and width ran
 last at each of the six file names.
 
+### `tests/performance/qvarma_cluster_fits.c`
+
+A batch of fits with both levels of parallelism at once: an OpenMP loop over
+the fits inside one machine, `cluster/cluster.h` handing ranges of fits between
+machines. One task is one fit; replication `j` simulates its own sample from
+`rng_new(seed, j)` against a fixed truth, perturbs that truth for a starting
+guess, and fits. `make bench-qvarma_cluster_fits` runs it at both precisions
+and writes `out/qvarma_cluster_fits_float32.txt` and the float64 name.
+
+The two levels do not know about each other, which is the point. The engine
+creates no threads and hands out ranges; the `#pragma omp parallel for` inside
+the task function spreads a range's fits over this machine's hardware threads
+and needs nothing from the engine. The scaling that makes the inner level worth
+having is `tests/performance/qvarma_analytic_filter.c`'s.
+
+It runs two arms and compares them. `serial` is an ordinary OpenMP loop in this
+process with no sockets; `distributed` is the same tasks through `cluster_map`.
+Their log-likelihoods must be bit-identical, and each result column carries the
+pid that produced it, so a run where every range quietly stayed on this machine
+is distinguishable from one that really used another.
+
+Setup for the numbers below. AMD Ryzen 7 4800H, 8 physical cores, 16 hardware
+threads; EndeavourOS, gcc 15.2.1, `-O3 -march=native -ffast-math -fopenmp`.
+1024 fits at `K = 5`, `K_star = 3`, `p = q = 1`, `r = 2`, `R = 1`, `T = 400`,
+seed 2026829, iterations capped at 400 so every fit is the same size of problem
+rather than an average over easy and hard ones. Only `cluster_map` is timed,
+not discovery or connection setup. One machine, no worker running:
+
+| build | serial | through `cluster_map` | ratio | fits converged within the cap |
+|---|---|---|---|---|
+| float32 | 1.800 s, 569 fits/s | 1.895 s, 540 fits/s | 0.95 | 141 of 1024 |
+| float64 | 5.543 s, 185 fits/s | 5.890 s, 174 fits/s | 0.94 | 499 of 1024 |
+
+So the engine costs 5 to 6 percent when there is no second machine to pay for
+it, which is what a batch loses by being written to be distributable. The
+worst relative difference between the two arms' log-likelihoods was exactly
+zero in both builds.
+
+Two processes on this one machine, 512 fits, the coordinator paired to a worker
+through `CLUSTER_ADDRS=127.0.0.1`: the split was 192 and 320 fits across two
+pids, and the two arms again agreed exactly. The 1.06x that run reported is not
+a speedup and should not be quoted as one - both processes were competing for
+the same 8 cores. What it establishes is that the distributed path runs real
+fits and returns the local answer.
+
+**Not yet run on two machines.** Every number here is this one. See
+`docs/CLUSTER_DOCUMENTATION.md`'s "Known limitations" for what a real two-PC
+run additionally has to survive; the short version is that the handshake hashes
+the executable, so two separately compiled binaries will not pair and the
+deploy daemon has to ship one binary to both, which is what
+`make tests/performance/qvarma_cluster_fits_portable` exists for.
+
+Two things this file ran into that a caller distributing anything will:
+
+- **Everything the job configures travels as an `mreal`.** In the default build
+  that is float32, which holds an integer exactly only below $2^{24}$. A seed
+  of 20260829 arrives as 20260828, every machine then draws a different sample
+  from the one the serial arm drew, and the fits disagree in a way that looks
+  like a distribution bug. The encoding is asserted rather than trusted, and
+  the bit-identical check is what caught it.
+- **The coordinator takes a whole range for itself, not one task.** That is
+  what makes the inner OpenMP loop have anything to parallelize across; a
+  coordinator handed one task at a time would run this workload on one core.
+
+## Where a fit's time goes, and what is left to optimize
+
+Measured 2026-08-29 on the AMD Ryzen 7 4800H described under
+`tests/performance/qvarma_analytic_filter.c`, gcc 15.2.1,
+`-O3 -march=native -ffast-math`, `openblas_set_num_threads(1)`, allocator
+thresholds raised through `mallopt`. Unless a line says otherwise: the ABM
+pipeline's shape, `K = 5`, `K_star = 3`, `p = q = 1`, `r = 2`, `R = 1`,
+`T = 400`, 52 parameters, float64, 24 fits from `rng_new(2026829, rep)`
+starting at the truth plus `0.25 * N(0,1)` per coordinate, iterations capped
+at 400. The instrumentation counts objective calls and times them from inside
+a wrapper, so the evaluation counts are counted rather than inferred from wall
+time. The three diagnostic programs are scratch, not repo tests: each drives
+`lbfgs` directly, which a repo test is not allowed to do.
+
+**Almost all of a fit is the filter.** Of 0.877 s over 24 fits, 0.870 s was
+inside the objective and 0.007 s was everything else - the two-loop recursion
+that builds the search direction, the vector arithmetic, the history updates.
+
+| | seconds | share |
+|---|---|---|
+| inside `qvarma_analytic_log_likelihood` | 0.870 | 99.2% |
+| `solver/lbfgs.h`, everything else | 0.007 | 0.8% |
+
+So there is nothing to win in the solver's own arithmetic, and the question is
+entirely how many times the filter runs and how fast one run is.
+
+**How many times it runs.** 323 iterations per fit and 1.52 gradient
+evaluations per iteration at this shape; 62 iterations and 2.71 evaluations at
+`K = 3`, `T = 600`, float32. Every call asks for the gradient, because the
+strong Wolfe search tests the directional derivative at each trial point. One
+evaluation costs 0.0316 ms for the value and 0.0744 ms with the gradient, a
+ratio of 2.35, so a line search that used values at its trial points and the
+gradient only at the accepted one would cost 0.0907 ms per iteration against
+0.1128 ms, a ceiling of 1.24x here and 1.54x at the other shape. That ceiling
+assumes the weaker search takes the same number of trials, which it would not,
+and it belongs to `solver/lbfgs.h` rather than to this file.
+
+**Rescaling theta by the Hessian diagonal does not help. Measured, and
+negative.** The reasoning was that one scalar `s'y/y'y` cannot serve a
+likelihood whose curvature spans orders of magnitude, and that fitting in
+coordinates where the Hessian's diagonal is one would stop the search hunting.
+Sixteen replications, each fit twice from the same start with the same
+tolerances and a 4000-iteration cap, the second in `phi` with
+`theta = D phi`, `D = diag(1/sqrt(H_ii))` and `H_ii` a central difference of
+the gradient at the starting point:
+
+| | as is | rescaled |
+|---|---|---|
+| total iterations | 23860 | 27081 |
+| total objective calls | 37088 | 42298 |
+| total seconds | 2.838 | 3.254 |
+| fits that converged | 14 of 16 | 11 of 16 |
+
+It reached a better optimum in 2 fits and a worse one in 10, and two of its
+apparent wins stopped after 2 and 3 iterations, which is the function
+tolerance firing on a step that went nowhere rather than convergence. The
+curvature spread it was correcting is real - the ratio of largest to smallest
+`|H_ii|` ran from 4.8e1 to 1.4e6 across the sixteen - but the diagonal at the
+starting point is not the curvature along the path, and using it as a
+preconditioner costs more than it saves. Anyone reaching for this again should
+know it was tried.
+
+**Batching independent series was measured end to end and is not worth doing.**
+The recursion's inner dimensions are `K = 5`, too short to fill an AVX2
+register, so a first probe stepped `B` series in one loop with the series index
+innermost and reported 4.06x at `B = 8`, dropping to 1.16x under
+`-fno-tree-vectorize`. That probe was wrong about the size of the prize in two
+ways, both of which flattered it, and
+`tests/performance/qvarma_batched_filter.c` is the version that carries the
+whole evaluation.
+
+It gave every lane the same parameters, so its innermost loop read one
+broadcast scalar. A batch of fits is `B` fits at `B` different points, and a
+real batched filter carries `B` parameter sets. And it timed the forward pass
+alone, leaving out the adjoint, which is more than half of a
+value-and-gradient evaluation and the half that batches worst.
+
+With both corrected - `B` parameter sets stored with the lane index innermost,
+the adjoint included, and both arms folding their gradient into a sink so
+neither one's backward pass can be deleted as dead code - the same shape,
+`K = 5`, `K_star = 3`, `p = q = 1`, `r = 2`, `T = 400`, 1024 series, best of 5
+rounds, 8 lanes per group:
+
+| build | 1 thread | 4 threads | 16 threads |
+|---|---|---|---|
+| float32 | 1.56x | 1.52x | 1.27x |
+| float64 | 1.15x | 1.14x | 0.50 to 0.57x |
+
+The float64 column turns negative at full width and does so repeatably across
+three runs. Eight lanes of float64 path is 650 KB per thread against this
+machine's 512 KB of L2 and 8 MiB of L3, so sixteen threads ask for 10.4 MB of
+working set and get L3 misses where the one-series arm's 83 KB per thread sits
+in L2. Narrower lanes do not rescue it: 4 lanes at float64 measured 1.05 to
+1.06x at one thread, and 2 lanes 1.18 to 1.22x. The 8- and 16-thread columns
+are noisy on this machine for the reason the cluster benchmark documents -
+with every thread taken, background load steals a worker outright - so the
+one-thread column is the one to read, and it says 1.15x to 1.56x rather than
+four.
+
+Against that: a batched filter is a second implementation of the recursion and
+its adjoint to keep in step with the first, an extension of
+`qvarma_analytic_agreement.c` to cover it, and a fit loop restructured around
+`B` L-BFGS instances stepping together with finished lanes refilled from a
+queue. That is a large change for 1.2x to 1.5x on the one precision where it
+is positive at all. It is not worth doing, and the reason it is written down
+here is so the 4x is not rediscovered from the forward pass alone.
+
+**So there is no remaining optimization on this model worth its cost.** The
+three candidates were the line search (ceiling 1.24x to 1.54x, and a
+`solver/lbfgs.h` change that would weaken convergence), diagonal
+preconditioning (measured negative), and batching (1.2x to 1.5x for a second
+filter). What is left is the model's statistical behaviour rather than its
+speed - see "Where the model is unreliable".
+
 ## Where the model is unreliable
 
 **Extracted to its own file: [`docs/QVARMA_RELIABILITY_DOCUMENTATION.md`](QVARMA_RELIABILITY_DOCUMENTATION.md).**
@@ -957,18 +1135,19 @@ the setup stated per number.
   above, and `docs/MATRIX_DOCUMENTATION.md`'s "The four dispatch thresholds are
   measured on one machine"; on new hardware run `make bench-small_blas_threshold`
   and `make bench-qvarma_analytic_filter` before quoting any number in this file.
-- **The line search costs about three gradient evaluations per iteration.**
-  At `K = 3`, `T = 600`, float32, a fit ran 65 iterations in 0.018 s, 0.269 ms
-  per iteration, against 0.084 ms for one value-and-gradient evaluation - so
-  roughly 3.2 evaluations per iteration where a well-scaled problem would take
-  one or two. `solver/lbfgs.h`'s strong Wolfe search needs the directional
-  derivative and therefore the full gradient at every trial point, so the
-  value-only path is never used inside a fit at all. This is now the largest
-  remaining factor in the wall time of a fit, larger than anything left in the
-  filter, and it is a solver and scaling question rather than a filter one:
-  the curvature of this likelihood spans five to six orders of magnitude (see
-  `qvarma_identification.c`), which is exactly what makes a line search hunt.
-  Not investigated further.
+- **The line search costs one and a half to three gradient evaluations per
+  iteration, depending on the shape.** Counted, not inferred: 1.52 per
+  iteration at the ABM shape in float64 over 24 fits, 2.71 at `K = 3`,
+  `T = 600` in float32. An earlier estimate of 3.2 came from dividing a fit's
+  wall time by its iteration count and is right only for the second of those.
+  `solver/lbfgs.h`'s strong Wolfe search tests the directional derivative at
+  every trial point, so it asks for the gradient every time and the value-only
+  path is never used inside a fit. What a value-only line search could save is
+  bounded by the ratio of the two evaluations, 2.3, and by how many of the
+  calls are trials rather than the accepted point: 1.24x at the ABM shape and
+  1.54x at `K = 3`, and those are ceilings that assume the same number of
+  trials, which a weaker line search would not deliver. See "Where a fit's
+  time goes" below for the rest of the accounting.
 - **18 of 156 fits in the study still fail**, 14 at the 4000-iteration budget
   and 4 in the line search. Whether the 14 would converge at 20000 or sit on a
   permanently flat ridge is untested.

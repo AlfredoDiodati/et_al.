@@ -27,7 +27,7 @@ difference of the value catches that, and it is checked against the analytic val
 and the taped value separately for the same reason.
 
 The sweep is over shapes, not over one shape. Every dimension the model has is
-a runtime field, so a analytic pass that happens to be right at p = q = 1, K = 5,
+a runtime field, so an analytic pass that happens to be right at p = q = 1, K = 5,
 r = 2 says nothing about r = 3, about a model with no co-integrated block, about
 the restricted Psi_star, or about the longer warm-up convention. The shapes
 below cover each of those, including the corners where a lag length runs into
