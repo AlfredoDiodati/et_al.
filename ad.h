@@ -84,9 +84,9 @@ typedef struct Node {
    (bench_tape_pool.c); pooling the value too was worth a further
    4.88x-11x on the synthetic benchmark and 1.36x-1.72x on the realistic
    one, the gap between the two explained by BLAS-backed ops
-   (ad_matmul, ad_solve, ad_chol_solve, ad_inv) taking a growing share of
-   real wall time as node count grows - those stay unpooled below, since
-   their value comes from mat_mul/vec_solve/etc. and pooling them would mean
+   (ad_solve, ad_chol_solve, ad_inv) taking a growing share of real wall
+   time as node count grows - those stay unpooled below, since their value
+   comes from vec_solve/vec_chol_solve/mat_inv and pooling them would mean
    changing mat_new's allocation contract, which this does not do. 64 KiB
    blocks were the best of a sweep from 4 KiB to 1 MiB.
 
@@ -94,9 +94,10 @@ typedef struct Node {
    (1x1) reduction writes directly into a tape-allocated buffer instead of
    calling mat_add/mat_sub/mat_scale/mat_emul/mat_ediv/mat_exp/mat_tanh/
    mat_log/mat_pow/mat_copy - val_pooled marks these so tape_free knows not
-   to mat_free them. ad_matmul/ad_solve/ad_chol_solve/ad_inv still call the
-   ordinary mat_mul/vec_solve/vec_chol_solve/mat_inv and own their value
-   individually, exactly as before this change. */
+   to mat_free them. ad_matmul joins them, because linalg/mat.h's mat_gemm
+   writes into a buffer handed to it where mat_mul allocates one.
+   ad_solve/ad_chol_solve/ad_inv still call the ordinary
+   vec_solve/vec_chol_solve/mat_inv and own their value individually. */
 #define TAPE_BLOCK_BYTES ((size_t)1 << 16)
 
 /* next is the block allocated right after this one (chronological order),
@@ -213,9 +214,8 @@ static inline void ad_tape_push(Tape *t, Node *n) {
     t->nodes[t->n++] = n;
 }
 
-/* Value comes from an ordinary mat_* or vec_* call (BLAS-backed ops:
-   ad_matmul, ad_solve, ad_chol_solve, ad_triangular_solve, ad_inv, plus
-   ad_leaf) and is
+/* Value comes from an ordinary mat_* or vec_* call (the solve-backed ops:
+   ad_solve, ad_chol_solve, ad_triangular_solve, ad_inv, plus ad_leaf) and is
    individually owned - freed by tape_free, not by the block release. */
 static inline Node *ad_node_new(Tape *t, Mat val, void (*backward)(Node*)) {
     Node *n = (Node*)tape_alloc(t, sizeof(Node));
@@ -233,10 +233,12 @@ static inline Node *ad_node_new(Tape *t, Mat val, void (*backward)(Node*)) {
     return n;
 }
 
-/* Value is a plain elementwise result or a small reduction - the caller
-   fills n->val.d itself, right after this returns, before the tape can be
-   read by anything else. r x c comes from the tape block, same as the
-   gradient; tape_free must not mat_free it. */
+/* Value is a plain elementwise result, a small reduction, or a matrix
+   product written in place by mat_gemm - the caller fills n->val.d itself,
+   right after this returns, before the tape can be read by anything else.
+   r x c comes from the tape block, same as the gradient; tape_free must not
+   mat_free it. The buffer is not zeroed, so a caller that accumulates rather
+   than overwrites must clear it first. */
 static inline Node *ad_node_new_pooled(Tape *t, int r, int c, void (*backward)(Node*)) {
     Node *n = (Node*)tape_alloc(t, sizeof(Node));
     mreal *vald = (mreal*)tape_alloc(t, (size_t)r * c * sizeof(mreal));
@@ -728,28 +730,41 @@ static inline Node *ad_logcosh_error(Tape *t, Node *pred, Node *target) {
 /* --- matmul --- */
 
 /* C=AB. Abar += Cbar*B^T, Bbar += A^T*Cbar (table 3 "matrix product").
-   cblas_?gemm takes the transpose as a flag and accumulates into an
-   existing buffer via beta=1, so both terms land directly in a->grad/
-   b->grad with no transpose copy and no scratch buffer for the product -
-   mat_T followed by mat_mul followed by ad_accum was three passes over
-   memory (two of them full matrix copies) for what gemm does in one. */
+   mat_gemm takes the transpose as a flag and accumulates into an existing
+   buffer via beta=1, so both terms land directly in a->grad/b->grad with no
+   transpose copy and no scratch buffer for the product - mat_T followed by
+   mat_mul followed by ad_accum was three passes over memory (two of them
+   full matrix copies) for what one gemm does in one.
+
+   Going through mat_gemm rather than cblas_?gemm directly is what keeps the
+   three products a score-driven filter issues per period - the forward one
+   and these two - out of OpenBLAS at the dimensions those models work at,
+   where the call costs more than the arithmetic and four concurrent threads
+   contend inside it. See linalg/mat.h's MAT_GEMM_SMALL. */
 static void ad_matmul_backward(Node *self) {
     Node *a = self->parents[0], *b = self->parents[1];
 
     /* Abar += Cbar * B^T */
-    MBLAS(gemm)(CblasRowMajor, CblasNoTrans, CblasTrans,
-                a->grad.r, a->grad.c, self->grad.c, (mreal)1,
-                self->grad.d, self->grad.stride, b->val.d, b->val.stride,
-                (mreal)1, a->grad.d, a->grad.stride);
+    mat_gemm(0, 1, a->grad.r, a->grad.c, self->grad.c, (mreal)1,
+             self->grad.d, self->grad.stride, b->val.d, b->val.stride,
+             (mreal)1, a->grad.d, a->grad.stride);
 
     /* Bbar += A^T * Cbar */
-    MBLAS(gemm)(CblasRowMajor, CblasTrans, CblasNoTrans,
-                b->grad.r, b->grad.c, a->val.r, (mreal)1,
-                a->val.d, a->val.stride, self->grad.d, self->grad.stride,
-                (mreal)1, b->grad.d, b->grad.stride);
+    mat_gemm(1, 0, b->grad.r, b->grad.c, a->val.r, (mreal)1,
+             a->val.d, a->val.stride, self->grad.d, self->grad.stride,
+             (mreal)1, b->grad.d, b->grad.stride);
 }
+/* The product goes into a tape-allocated buffer, not a mat_new one: mat_gemm
+   writes into a buffer the caller supplies, so the value can be pooled like
+   every elementwise op's without changing mat_new's allocation contract. At
+   the sizes above, an aligned_alloc and a free per node cost about as much as
+   the product itself. */
 static inline Node *ad_matmul(Tape *t, Node *a, Node *b) {
-    Node *n = ad_node_new(t, mat_mul(a->val, b->val), ad_matmul_backward);
+    assert(a->val.c == b->val.r);
+    Node *n = ad_node_new_pooled(t, a->val.r, b->val.c, ad_matmul_backward);
+    mat_gemm(0, 0, a->val.r, b->val.c, a->val.c, (mreal)1,
+             a->val.d, a->val.stride, b->val.d, b->val.stride,
+             (mreal)0, n->val.d, n->val.stride);
     n->parents[0] = a; n->parents[1] = b; n->n_parents = 2;
     return n;
 }
@@ -889,45 +904,56 @@ static inline Node *ad_triangular_solve(Tape *t, Node *L, Node *b, char trans) {
    tests/performance/bench_chol_quadform.c. x is recomputed in the backward
    pass rather than carried over from the forward one, since a Node has nowhere
    to keep it. */
+/* Vector scratch for a solve inside an op, off the stack while it fits, the
+   same trick and the same reason as linalg/factor.h's POTRI_STACK_N: at the
+   dimensions a multivariate density is evaluated at, a malloc and free per
+   call cost more than the arithmetic between them, and a filter makes one
+   call per period. */
+#define AD_STACK_N 64
+
 /* Lbar += tril(-2*seed * x * y^T), y = L^T x. The n x n outer product and
    the O(n^3) matmul against L both existed only to compute this rank-1
    update: product = outer * L = (-2*seed * x*x^T) * L = -2*seed * x *
-   (x^T L), and x^T L is exactly y^T. L is lower triangular, so y_j =
-   sum_{i>=j} L[i][j]*x[i] - the terms with i<j are the zero entries of L,
-   already excluded rather than summed and discarded - matching every
-   other use of L here as a Cholesky factor whose upper triangle carries
-   no information. O(n^2) throughout, one n-length buffer, instead of an
-   n x n allocation and an n x n x n matmul. */
+   (x^T L), and x^T L is exactly y^T. O(n^2) throughout, instead of an
+   n x n allocation and an n x n x n matmul.
+
+   The Cholesky solve is written as its own two halves rather than one
+   vec_chol_solve because y is the intermediate of the first half: solving
+   L y = b and then L^T x = y leaves both vectors this rule needs in hand, so
+   nothing is recomputed and nothing is allocated. */
 static void ad_chol_quadform_backward(Node *self) {
     Node *L = self->parents[0], *b = self->parents[1];
     int n = L->val.r;
     mreal seed = self->grad.d[0];
 
-    Vec x = vec_chol_solve(L->val, b->val);
-    for (int i = 0; i < n; i++) b->grad.d[i] += 2 * seed * x.d[i];
+    mreal stack_scratch[2 * AD_STACK_N];
+    mreal *scratch = n <= AD_STACK_N ? stack_scratch
+                   : (mreal*)malloc((size_t)2 * n * sizeof(mreal));
+    mreal *x = scratch, *y = scratch + n;
 
-    mreal *y = (mreal*)malloc((size_t)n * sizeof(mreal));
-    for (int j = 0; j < n; j++) {
-        mreal s = 0;
-        for (int i = j; i < n; i++) s += AT(L->val, i, j) * x.d[i];
-        y[j] = s;
-    }
+    for (int i = 0; i < n; i++) y[i] = AT(b->val, i, 0);
+    _trtrs('L', 'N', 'N', n, 1, L->val.d, L->val.stride, y, 1);
+    for (int i = 0; i < n; i++) x[i] = y[i];
+    _trtrs('L', 'T', 'N', n, 1, L->val.d, L->val.stride, x, 1);
+
+    for (int i = 0; i < n; i++) AT(b->grad, i, 0) += 2 * seed * x[i];
     mreal factor = -2 * seed;
     for (int i = 0; i < n; i++)
         for (int j = 0; j <= i; j++)
-            AT(L->grad, i, j) += factor * x.d[i] * y[j];
-    free(y);
+            AT(L->grad, i, j) += factor * x[i] * y[j];
 
-    mat_free(x);
+    if (scratch != stack_scratch) free(scratch);
 }
 static inline Node *ad_chol_quadform(Tape *t, Node *L, Node *b) {
     assert(L->val.r == L->val.c && b->val.r == L->val.r && b->val.c == 1);
     int n = L->val.r;
-    Vec w = mat_copy(b->val);
-    _trtrs('L', 'N', 'N', n, 1, L->val.d, L->val.stride, w.d, w.stride);
+    mreal stack_w[AD_STACK_N];
+    mreal *w = n <= AD_STACK_N ? stack_w : (mreal*)malloc((size_t)n * sizeof(mreal));
+    for (int i = 0; i < n; i++) w[i] = AT(b->val, i, 0);
+    _trtrs('L', 'N', 'N', n, 1, L->val.d, L->val.stride, w, 1);
     mreal q = 0;
-    for (int i = 0; i < n; i++) q += w.d[i] * w.d[i];
-    mat_free(w);
+    for (int i = 0; i < n; i++) q += w[i] * w[i];
+    if (w != stack_w) free(w);
 
     Node *node = ad_node_new_pooled(t, 1, 1, ad_chol_quadform_backward);
     node->val.d[0] = q;

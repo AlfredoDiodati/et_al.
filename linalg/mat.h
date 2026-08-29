@@ -226,15 +226,97 @@ static inline Mat mat_sub(Mat a, Mat b) {
     return o;
 }
 
+/* Largest dimensions for which the loop below beats a cblas_?gemm call. A
+   5x5 by 5x1 product is 50 floating point operations and costs 153 ns
+   through OpenBLAS, which is 0.33 GFLOP/s: at that size the dispatch is the
+   whole cost, and four threads calling it at once pay 1375 ns each because
+   OpenBLAS's buffer table is one structure per process. Both values are
+   crossovers measured in tests/performance/small_blas_threshold.c, which also
+   records what the loop and the call each cost at one and four threads.
+
+   Two constants because a single output column crosses over far later than a
+   square product: the arithmetic is m*k rather than m*n*k, so the call
+   overhead still dominates at dimensions where a square product has long
+   since become worth handing to OpenBLAS. MAT_GEMM_VECTOR is where the
+   measurement stops rather than where the loop starts losing - it still wins
+   3.7x at 64 - so raising it needs the benchmark extended first. */
+#define MAT_GEMM_SMALL 8
+#define MAT_GEMM_VECTOR 64
+
+/* C := alpha*op(A)*op(B) + beta*C by three nested loops, no BLAS. The i,l,j
+   order keeps the innermost loop a unit-stride walk along a row of B and a
+   row of C, which is what the compiler vectorizes; a transposed B breaks
+   that stride and is handled by the same loop with a strided read.
+
+   A single output column is the one shape that order gets wrong, since the
+   innermost loop is then one element long and nothing vectorizes. It is also
+   the shape a score-driven filter multiplies at, every period, so it gets its
+   own loop: one dot product per output row, running along the contraction
+   index instead. */
+static inline void _mat_gemm_small(int transa, int transb, int m, int n, int k,
+                                   mreal alpha, const mreal *a, int lda,
+                                   const mreal *b, int ldb,
+                                   mreal beta, mreal *c, int ldc) {
+    if (n == 1) {
+        int a_step = transa ? lda : 1;
+        int b_step = transb ? 1 : ldb;
+        for (int i = 0; i < m; i++) {
+            const mreal *restrict arow = transa ? a + i : a + (size_t)i * lda;
+            mreal acc = 0;
+            for (int l = 0; l < k; l++) acc += arow[(size_t)l * a_step] * b[(size_t)l * b_step];
+            mreal *out = c + (size_t)i * ldc;
+            *out = beta == 0 ? alpha * acc : beta * *out + alpha * acc;
+        }
+        return;
+    }
+    for (int i = 0; i < m; i++) {
+        mreal *restrict crow = c + (size_t)i * ldc;
+        if (beta == 0) { for (int j = 0; j < n; j++) crow[j] = 0; }
+        else if (beta != 1) { for (int j = 0; j < n; j++) crow[j] *= beta; }
+        for (int l = 0; l < k; l++) {
+            mreal scale = alpha * (transa ? a[(size_t)l * lda + i] : a[(size_t)i * lda + l]);
+            if (transb) {
+                for (int j = 0; j < n; j++) crow[j] += scale * b[(size_t)j * ldb + l];
+            } else {
+                const mreal *restrict brow = b + (size_t)l * ldb;
+                for (int j = 0; j < n; j++) crow[j] += scale * brow[j];
+            }
+        }
+    }
+}
+
+/* C := alpha*op(A)*op(B) + beta*C, the cblas_?gemm interface with the layout
+   argument dropped, since every matrix in this library is row-major. transa
+   and transb are 0 for op(X) = X and 1 for op(X) = X^T. op(A) is m x k,
+   op(B) is k x n, C is m x n.
+
+   This is the one entry point for a matrix product in this library: it picks
+   between OpenBLAS's kernel and the small-size loop above, so no caller has
+   to know where the crossover is. C must not alias A or B, the same
+   restriction cblas_?gemm carries. */
+static inline void mat_gemm(int transa, int transb, int m, int n, int k,
+                            mreal alpha, const mreal *a, int lda,
+                            const mreal *b, int ldb,
+                            mreal beta, mreal *c, int ldc) {
+    int small = n == 1 ? (m <= MAT_GEMM_VECTOR && k <= MAT_GEMM_VECTOR)
+                       : (m <= MAT_GEMM_SMALL && n <= MAT_GEMM_SMALL && k <= MAT_GEMM_SMALL);
+    if (small) {
+        _mat_gemm_small(transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
+        return;
+    }
+    MBLAS(gemm)(CblasRowMajor, transa ? CblasTrans : CblasNoTrans,
+                transb ? CblasTrans : CblasNoTrans, m, n, k, alpha,
+                a, lda, b, ldb, beta, c, ldc);
+}
+
 /* Return the matrix product of a and b. a.c must equal b.r.
-   Thin wrapper over cblas_?gemm - all blocking/vectorization is OpenBLAS's
-   responsibility. lda/ldb/ldc are taken from stride, so strided views pass
-   through with no copy. */
+   Thin wrapper over mat_gemm - all blocking/vectorization above the small
+   size is OpenBLAS's responsibility. lda/ldb/ldc are taken from stride, so
+   strided views pass through with no copy. */
 static inline Mat mat_mul(Mat a, Mat b) {
     Mat o = mat_new(a.r, b.c);
-    MBLAS(gemm)(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                a.r, b.c, a.c, (mreal)1, a.d, a.stride, b.d, b.stride,
-                (mreal)0, o.d, o.stride);
+    mat_gemm(0, 0, a.r, b.c, a.c, (mreal)1, a.d, a.stride, b.d, b.stride,
+             (mreal)0, o.d, o.stride);
     return o;
 }
 /* Return a scaled by scalar s (element-wise). */

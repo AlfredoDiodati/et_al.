@@ -137,9 +137,12 @@ done:
 
 static void test_potrs(void) {
     puts("potrs");
-    const int sizes[] = { 1, 2, 3, 5, 8, 17, 33, 64, 100 };
+    /* 11, 12 and 13 straddle TRSM_SMALL_N: at or below it the solve is
+       substitution written here, above it a ?trsm call, and a mistake in
+       either shows only at the size that reaches it. */
+    const int sizes[] = { 1, 2, 3, 5, 8, 11, 12, 13, 17, 33, 64, 100 };
     char label[64];
-    for (int s = 0; s < 9; s++) {
+    for (int s = 0; s < (int)(sizeof sizes / sizeof sizes[0]); s++) {
         int n = sizes[s];
         for (int nrhs = 1; nrhs <= 3; nrhs++) {
             snprintf(label, sizeof label, "potrs n=%d nrhs=%d", n, nrhs);
@@ -153,6 +156,12 @@ static void test_potrs(void) {
         snprintf(label, sizeof label, "potrs n=%d padded ldb", n);
         check_potrs(label, n, 3, 3 + 5);
     }
+    /* The other threshold is on the right-hand side count, not the triangle:
+       TRSM_SMALL_NRHS columns go to substitution and one more goes to ?trsm,
+       at a size where both paths are otherwise reachable. */
+    check_potrs("potrs nrhs at the threshold", 4, TRSM_SMALL_NRHS, TRSM_SMALL_NRHS);
+    check_potrs("potrs nrhs past the threshold", 4, TRSM_SMALL_NRHS + 1,
+                TRSM_SMALL_NRHS + 1);
 }
 
 /* --- _trtrs --------------------------------------------------------- */
@@ -214,10 +223,12 @@ static void test_trtrs(void) {
     const char uplos[] = { 'L', 'U' };
     const char transes[] = { 'N', 'T' };
     const char diags[] = { 'N', 'U' };
-    const int sizes[] = { 1, 2, 5, 16, 33, 64 };
+    /* 11, 12 and 13 straddle TRSM_SMALL_N, below which this is substitution
+       written here rather than a ?trsm call. */
+    const int sizes[] = { 1, 2, 5, 11, 12, 13, 16, 33, 64 };
     char label[64];
 
-    for (int s = 0; s < 6; s++)
+    for (int s = 0; s < (int)(sizeof sizes / sizeof sizes[0]); s++)
         for (int u = 0; u < 2; u++)
             for (int t = 0; t < 2; t++)
                 for (int d = 0; d < 2; d++)

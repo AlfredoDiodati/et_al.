@@ -126,7 +126,10 @@ Mat mat_reshape(Mat m, int new_r, int new_c)           // reinterpret shape
 ```c
 Mat mat_add(Mat a, Mat b)       // a + b element-wise
 Mat mat_sub(Mat a, Mat b)       // a - b element-wise
-Mat mat_mul(Mat a, Mat b)       // matrix product (a.c must equal b.r) - cblas_?gemm
+Mat mat_mul(Mat a, Mat b)       // matrix product (a.c must equal b.r) - see mat_gemm
+void mat_gemm(int transa, int transb, int m, int n, int k,   // C := alpha*op(A)*op(B) + beta*C
+              mreal alpha, const mreal *a, int lda,
+              const mreal *b, int ldb, mreal beta, mreal *c, int ldc)
 Mat mat_scale(Mat a, mreal s)   // multiply every element by s
 Mat mat_emul(Mat a, Mat b)      // Hadamard (element-wise) product
 Mat mat_ediv(Mat a, Mat b)      // element-wise division
@@ -246,9 +249,22 @@ flushing). Passes under both `float` and `-DMAT_DOUBLE`.
 Every element-wise function checks `stride == c` first. If the matrix is contiguous in memory, a single flat loop over all elements is used with `restrict`-qualified pointers (telling the compiler the inputs and output do not overlap). This lets the compiler turn the loop into wide CPU instructions automatically, regardless of whether `mreal` is `float` or `double`. The strided fallback uses nested loops and works correctly on slices. These operations have no BLAS equivalent, so they stay hand-written.
 
 ### Matrix multiply
-`mat_mul` is a thin wrapper around `cblas_?gemm` (`sgemm` or `dgemm`, selected by `MAT_DOUBLE`). It validates shapes, allocates the output with `mat_new`, and calls into OpenBLAS with `CblasRowMajor` and `lda`/`ldb`/`ldc` taken from each operand's `stride`, so strided views pass through without a copy. All cache blocking, register tiling, and SIMD micro-kernel selection is OpenBLAS's responsibility - this project does not attempt to match it with hand-written C.
+`mat_gemm` is the one entry point for a matrix product in this library, and the only place that decides how one is computed. It is `cblas_?gemm`'s interface with the layout argument dropped, since every matrix here is row-major, and `transa`/`transb` as plain 0/1 flags. `mat_mul` allocates the output with `mat_new` and calls it; `ad.h`'s `ad_matmul` calls it three times, once forward and twice for the adjoint, accumulating into the gradient buffers with `beta = 1`. `C` must not alias `A` or `B`, the same restriction `cblas_?gemm` carries.
 
-See the corresponding pitfall in `README.md` ("Do not hand-write a kernel for something OpenBLAS already provides") for why this project does not maintain its own tiled/vectorized matmul kernel alongside this wrapper.
+Above the thresholds below the call goes to OpenBLAS with `CblasRowMajor` and `lda`/`ldb`/`ldc` as given, so strided views pass through without a copy, and all cache blocking, register tiling and SIMD micro-kernel selection is OpenBLAS's - this project does not attempt to match it with hand-written C. See the corresponding pitfall in `README.md` ("Do not hand-write a kernel for something OpenBLAS already provides") for why.
+
+Below them the product is three nested loops in this file, and that is not a contradiction of the pitfall but the size at which it stops applying. A 5x5 by 5x1 product is 50 floating point operations and cost 153 ns through OpenBLAS, which is 0.33 GFLOP/s: the dispatch, not the arithmetic, was the whole cost. It gets worse under concurrency, because OpenBLAS keeps one buffer table per process: four threads issuing that same call each paid 1375 ns, which is what made an OpenMP loop over independent model fits slower than a serial one. The loop shares nothing and scales with the cores.
+
+Two thresholds, because a single output column crosses over far later than a square product - its arithmetic is `m*k` rather than `m*n*k`, so the call overhead still dominates where a square product has long since become worth handing over:
+
+```c
+#define MAT_GEMM_SMALL  8    // every dimension at or below this, for a general product
+#define MAT_GEMM_VECTOR 64   // m and k at or below this, when n == 1
+```
+
+Both are crossovers measured in `tests/performance/small_blas_threshold.c`, which times the loop against the call across dimensions at one and four threads and writes `out/small_blas_threshold_float32.txt` and the float64 name. At `MAT_GEMM_SMALL` a square product is 1.04x (float64) to 1.49x (float32) faster as a loop at one thread and 8.1x to 11.2x at four; at 10 it loses at one thread in both builds (0.93x and 0.80x), which is where the threshold sits. `MAT_GEMM_VECTOR` is where the measurement stops rather than where the loop starts losing - a 64x64 by 64x1 product still runs 3.2x faster as a loop in float64 and 3.8x in float32 - so raising it needs the benchmark extended first. The `n == 1` case gets its own loop inside the kernel, running along the contraction index, because the general `i,l,j` order leaves a one-element innermost loop there and nothing vectorizes.
+
+`tests/correctness/test_mat.c`'s `test_gemm` checks `mat_gemm` directly against a reference written on raw pointers, at 1, 2, 7, 8, 9, 13, 63, 64 and 65 - either side of both thresholds and at each of them - crossed with both transpose flags on each operand, `n == 1` against `n == m`, two values of `alpha` and `beta` at 0, 1 and 2. A test at one size would exercise one of the two implementations and report on both. Leading dimensions wider than the operands are checked separately, since a kernel walking rows by the column count instead of the stride still returns a plausible matrix; so are a zero contraction length, which must leave `C` scaled by `beta` alone, and `beta == 0` over an uninitialized `C`, which must overwrite rather than read what is there. The transposed forms and the accumulating `beta` are otherwise reached only from `ad.h`'s `ad_matmul_backward`.
 
 ### Compiler flags
 `-ffast-math` lets the compiler reorder floating-point operations, which is required to generate wide CPU instructions for many loops. `-march=native` tells the compiler to use the full instruction set of the machine it is running on rather than a conservative baseline. These flags apply only to this project's own kernels (element-wise ops, reductions); OpenBLAS is prebuilt and separately optimized, and unaffected by them.

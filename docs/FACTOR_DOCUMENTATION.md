@@ -294,9 +294,10 @@ int _potri(mreal *a, int n, int lda);
 ```
 
 The family that hangs off a Cholesky factor. All three are BLAS-3 calls
-with a check around them, so the arithmetic is not where the risk is —
-a transpose flag, a side, or an `ldb` read as an `n` is the kind of
-mistake that still produces a plausible-looking matrix.
+with a check around them at any size that justifies the call, so the
+arithmetic is not where the risk is — a transpose flag, a side, or an `ldb`
+read as an `n` is the kind of mistake that still produces a
+plausible-looking matrix.
 
 - **`_trtrs`** solves `op(A) * X = B` for triangular `A`: one `?trsm`. The
   only thing `?trtrs` adds over BLAS is the singularity check, which BLAS
@@ -317,6 +318,45 @@ mistake that still produces a plausible-looking matrix.
   and its callers use it at the dimension of a covariance matrix, not a
   sample size. The upper triangle is left untouched, as `?potri` leaves it.
 
+### Small triangles skip the call
+
+`_trtrs` and `_potrs` do the substitution themselves when the triangle is
+small, in `_trtrs_small`:
+
+```c
+#define TRSM_SMALL_N    12     // triangles at or below this
+#define TRSM_SMALL_NRHS 4096   // and right-hand sides at or below this
+```
+
+Same reason as `linalg/mat.h`'s `MAT_GEMM_SMALL`. At the dimension a
+multivariate density is evaluated at, the `?trsm` call costs more than the
+arithmetic inside it, and it costs far more again under concurrency, because
+OpenBLAS keeps one buffer table per process: a one-right-hand-side solve at
+`n = 5` took 156 ns alone and 1387 ns when four threads issued it, against
+29 ns and 31 ns for the substitution. That is what made an OpenMP loop over
+independent score-driven model fits slower than a serial one.
+
+One loop covers all four `uplo`/`trans` combinations. `op(A)` is upper when
+exactly one of "A is upper" and "op transposes" holds, and an upper triangle
+is solved from the last row backwards where a lower one is solved from the
+first row forwards; that is the only thing the four combinations change.
+
+Both bounds are crossovers measured in
+`tests/performance/small_blas_threshold.c`, which writes
+`out/small_blas_threshold_float32.txt` and the float64 name. At `n = 12` the
+substitution wins 1.4x in float64 at one right-hand side and 3.0x at 256, and
+9.6x and 2.7x respectively at four threads; in float32 the same cell is a tie
+at one right-hand side (0.99x) and wins at wider ones. At `n = 16` it loses at
+one right-hand side in both builds, 0.92x and 0.66x, which is where
+`TRSM_SMALL_N` sits. `TRSM_SMALL_NRHS` is
+different in kind: substitution walks the whole of `B` once per entry of the
+triangle where `?trsm` blocks and reuses what it loaded, so past the point
+where `B` stops fitting in cache the loop loses. 4096 is where the
+measurement stops rather than where that happens — at `n = 12` and 4096
+columns the loop still wins 2.4x in float64 and 1.4x in float32 — so raising
+it needs the benchmark extended first. `dist/mv`'s densities are the callers
+that reach the bound, since they solve for a whole sample at once.
+
 ### The scratch identity comes off the stack
 
 `_potri`'s `n x n` identity is a stack array while it fits
@@ -332,6 +372,10 @@ agreement with the LAPACKE routine, and an independent property that does
 not depend on LAPACKE being called correctly — `A*X == B` for the solves
 (computed from the original matrix, not the factor), `A*inv(A) == I` for
 the inverse (after mirroring).
+
+Both are run at `n` = 11, 12 and 13, either side of `TRSM_SMALL_N` and at it,
+so neither the substitution nor the `?trsm` call is left untested; `_potrs`
+also gets `TRSM_SMALL_NRHS` and one column more, the other threshold.
 
 `_trtrs` is checked across **every combination** of `uplo`, `trans` and
 `diag`, since each is a separate argument that can be wired wrong

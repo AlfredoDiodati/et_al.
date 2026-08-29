@@ -436,6 +436,109 @@ static void test_matmul(void) {
     }
 }
 
+/* mat_gemm's own reference: C := alpha*op(A)*op(B) + beta*C, on raw pointers
+   with explicit leading dimensions, so it can check a padded ldc and a
+   transposed operand the way ref_matmul above cannot. */
+static void ref_gemm(int transa, int transb, int m, int n, int k,
+                     mreal alpha, const mreal *a, int lda,
+                     const mreal *b, int ldb, mreal beta, mreal *c, int ldc) {
+    for (int i = 0; i < m; i++)
+        for (int j = 0; j < n; j++) {
+            mreal acc = 0;
+            for (int l = 0; l < k; l++) {
+                mreal av = transa ? a[l * lda + i] : a[i * lda + l];
+                mreal bv = transb ? b[j * ldb + l] : b[l * ldb + j];
+                acc += av * bv;
+            }
+            c[i * ldc + j] = beta * c[i * ldc + j] + alpha * acc;
+        }
+}
+
+/* mat_gemm picks between OpenBLAS and a hand-written loop on the dimensions,
+   so every case below is run at sizes on both sides of MAT_GEMM_SMALL and
+   MAT_GEMM_VECTOR and at the thresholds themselves. A test that only used one
+   size would exercise one of the two implementations and report on both.
+
+   The transposed forms and the beta != 0 accumulation are only reached from
+   ad.h's ad_matmul_backward, which finite-differences them; this checks them
+   directly against a reference that shares no code with either. */
+static void test_gemm(void) {
+    puts("mat_gemm");
+    srand(7);
+
+    /* sizes straddling MAT_GEMM_SMALL (8) and MAT_GEMM_VECTOR (64) */
+    int dims[] = { 1, 2, 7, 8, 9, 13, 63, 64, 65 };
+    int n_dims = (int)(sizeof dims / sizeof dims[0]);
+    mreal alphas[] = { (mreal)1, (mreal)-0.5 };
+    mreal betas[] = { (mreal)0, (mreal)1, (mreal)2 };
+
+    for (int d = 0; d < n_dims; d++) {
+        int m = dims[d], k = dims[d];
+        /* n == 1 has its own loop inside the kernel; n == m exercises the
+           general one at the same dimension. */
+        int widths[] = { 1, dims[d] };
+        for (int w = 0; w < 2; w++) {
+            int n = widths[w];
+            for (int ta = 0; ta < 2; ta++)
+                for (int tb = 0; tb < 2; tb++)
+                    for (int ai = 0; ai < 2; ai++)
+                        for (int bi = 0; bi < 3; bi++) {
+                            Mat a = rand_mat(ta ? k : m, ta ? m : k);
+                            Mat b = rand_mat(tb ? n : k, tb ? k : n);
+                            Mat got = rand_mat(m, n);
+                            Mat exp = mat_copy(got);
+                            mat_gemm(ta, tb, m, n, k, alphas[ai], a.d, a.c, b.d, b.c,
+                                     betas[bi], got.d, got.c);
+                            ref_gemm(ta, tb, m, n, k, alphas[ai], a.d, a.c, b.d, b.c,
+                                     betas[bi], exp.d, exp.c);
+                            check_eq(got, exp, TOL_MUL);
+                            mat_free(a); mat_free(b); mat_free(got); mat_free(exp);
+                        }
+        }
+    }
+
+    /* Leading dimensions larger than the widths, which is what a strided view
+       hands in. A kernel that walked rows by the column count instead of the
+       stride reads the wrong elements and still returns a plausible matrix. */
+    {
+        int m = 5, n = 4, k = 6, lda = k + 3, ldb = n + 2, ldc = n + 7;
+        Mat a = rand_mat(m, lda), b = rand_mat(k, ldb), got = rand_mat(m, ldc);
+        Mat exp = mat_copy(got);
+        mat_gemm(0, 0, m, n, k, (mreal)1, a.d, lda, b.d, ldb, (mreal)1, got.d, ldc);
+        ref_gemm(0, 0, m, n, k, (mreal)1, a.d, lda, b.d, ldb, (mreal)1, exp.d, ldc);
+        check_eq(got, exp, TOL_MUL);
+        mat_free(a); mat_free(b); mat_free(got); mat_free(exp);
+    }
+
+    /* Adversarial: a zero contraction length leaves C scaled by beta and
+       nothing else, and beta == 0 with an uninitialized C must overwrite
+       rather than read what is there. */
+    {
+        Mat c = mat_fill(3, 3, (mreal)4);
+        mat_gemm(0, 0, 3, 3, 0, (mreal)1, NULL, 1, NULL, 1, (mreal)0.5, c.d, 3);
+        for (int i = 0; i < 9; i++) assert(MABS(c.d[i] - (mreal)2) < TOL);
+        mat_free(c);
+    }
+    {
+        Mat a = mat_fill(2, 2, (mreal)3), b = mat_eye(2), c = mat_new(2, 2);
+        for (int i = 0; i < 4; i++) c.d[i] = (mreal)NAN;
+        mat_gemm(0, 0, 2, 2, 2, (mreal)1, a.d, 2, b.d, 2, (mreal)0, c.d, 2);
+        for (int i = 0; i < 4; i++) assert(MABS(c.d[i] - (mreal)3) < TOL);
+        mat_free(a); mat_free(b); mat_free(c);
+    }
+
+    /* mat_mul is mat_gemm with alpha 1, beta 0 and no transpose, so a
+       disagreement between the two would mean the wrapper lost an argument. */
+    {
+        Mat a = rand_mat(9, 4), b = rand_mat(4, 6);
+        Mat wrapped = mat_mul(a, b);
+        Mat direct = mat_new(9, 6);
+        mat_gemm(0, 0, 9, 6, 4, (mreal)1, a.d, 4, b.d, 6, (mreal)0, direct.d, 6);
+        check_eq(wrapped, direct, TOL_MUL);
+        mat_free(a); mat_free(b); mat_free(wrapped); mat_free(direct);
+    }
+}
+
 static void test_reductions(void) {
     puts("reductions");
 
@@ -746,6 +849,7 @@ int main(void) {
     test_arithmetic_contiguous();
     test_arithmetic_strided();
     test_matmul();
+    test_gemm();
     test_reductions();
     test_nan_propagation_under_fast_math();
     test_all_finite();

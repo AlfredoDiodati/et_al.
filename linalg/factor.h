@@ -180,20 +180,70 @@ static inline int _potrf(mreal *a, int n, int lda) {
     return 0;
 }
 
+/* Largest triangle, and largest number of right-hand sides, for which plain
+   substitution beats a ?trsm call. Same reason as linalg/mat.h's
+   MAT_GEMM_SMALL: at the dimensions a multivariate density is evaluated at,
+   the call costs more than the arithmetic, and the cost rises further when
+   several threads call it at once. Both are measured in
+   tests/performance/small_blas_threshold.c.
+
+   The right-hand-side count carries a bound of its own because substitution
+   walks the whole of B once per entry of the triangle, where ?trsm blocks and
+   reuses what it loaded: past the point where B stops fitting in cache the
+   loop streams it n(n+1)/2 times and loses. dist/mv's densities solve for a
+   whole sample at once, so that point is reachable. TRSM_SMALL_NRHS is where
+   the measurement stops rather than where the loop starts losing - at n = 12
+   and 4096 columns it still wins 2.2x in float64 and 1.4x in float32 - so
+   raising it needs the benchmark extended first. */
+#define TRSM_SMALL_N 12
+#define TRSM_SMALL_NRHS 4096
+
+/* Substitution for op(A) * X = B, the arithmetic ?trsm performs, written out
+   for the sizes where the call to it is the expensive part.
+
+   op(A) is upper when exactly one of "A is upper" and "op transposes" holds,
+   and an upper triangle is solved from the last row backwards where a lower
+   one is solved from the first row forwards. That is the only thing the four
+   uplo/trans combinations change, so they share one loop. */
+static inline void _trtrs_small(char uplo, char trans, char diag, int n, int nrhs,
+                                const mreal *a, int lda, mreal *b, int ldb) {
+    int transposed = (trans == 'T');
+    int op_is_upper = (uplo == 'U') != transposed;
+    for (int step = 0; step < n; step++) {
+        int i = op_is_upper ? n - 1 - step : step;
+        int first = op_is_upper ? i + 1 : 0;
+        int last = op_is_upper ? n : i;
+        mreal *restrict row = b + (size_t)i * ldb;
+        for (int j = first; j < last; j++) {
+            mreal aij = transposed ? a[(size_t)j * lda + i] : a[(size_t)i * lda + j];
+            const mreal *restrict solved = b + (size_t)j * ldb;
+            for (int col = 0; col < nrhs; col++) row[col] -= aij * solved[col];
+        }
+        if (diag != 'U') {
+            mreal pivot = a[(size_t)i * lda + i];
+            for (int col = 0; col < nrhs; col++) row[col] /= pivot;
+        }
+    }
+}
+
 /* Solve op(A) * X = B for triangular A, in place on B, where A is n x n
    and B is n x nrhs. uplo is 'L' or 'U', trans 'N' or 'T', diag 'N' for a
    stored diagonal or 'U' for an implicit unit one. Returns 0, or the
    1-based index of the first zero diagonal entry, following ?trtrs.
 
-   This is one ?trsm. The only thing ?trtrs adds on top is the singularity
-   check, which BLAS does not do: ?trsm on a singular triangle divides by
-   zero and returns infinities rather than reporting anything. */
+   Above TRSM_SMALL_N this is one ?trsm. The only thing ?trtrs adds on top is
+   the singularity check, which BLAS does not do: ?trsm on a singular triangle
+   divides by zero and returns infinities rather than reporting anything. */
 static inline int _trtrs(char uplo, char trans, char diag, int n, int nrhs,
                          const mreal *a, int lda, mreal *b, int ldb) {
     if (diag == 'N')
         for (int i = 0; i < n; i++)
             if (a[(size_t)i * lda + i] == 0) return i + 1;
 
+    if (n <= TRSM_SMALL_N && nrhs <= TRSM_SMALL_NRHS) {
+        _trtrs_small(uplo, trans, diag, n, nrhs, a, lda, b, ldb);
+        return 0;
+    }
     MBLAS(trsm)(CblasRowMajor, CblasLeft,
                 uplo == 'L' ? CblasLower : CblasUpper,
                 trans == 'T' ? CblasTrans : CblasNoTrans,
@@ -209,6 +259,11 @@ static inline int _trtrs(char uplo, char trans, char diag, int n, int nrhs,
    then L^T * X = Y. Never forms A^-1, and never refactorizes. */
 static inline int _potrs(int n, int nrhs, const mreal *l, int ldl,
                          mreal *b, int ldb) {
+    if (n <= TRSM_SMALL_N && nrhs <= TRSM_SMALL_NRHS) {
+        _trtrs_small('L', 'N', 'N', n, nrhs, l, ldl, b, ldb);
+        _trtrs_small('L', 'T', 'N', n, nrhs, l, ldl, b, ldb);
+        return 0;
+    }
     MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasLower, CblasNoTrans,
                 CblasNonUnit, n, nrhs, 1, l, ldl, b, ldb);
     MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasLower, CblasTrans,

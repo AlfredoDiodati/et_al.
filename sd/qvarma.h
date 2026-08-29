@@ -235,6 +235,76 @@ static inline Node *qvarma_constant_node(Tape *tape, Mat value) {
 }
 
 /*
+The link coordinate by coordinate, as a kind rather than as code.
+
+Every parameter the optimizer steps has a scalar transform, so the map from
+theta to the parameters the paper names is elementwise and its Jacobian is
+diagonal. That is what makes a standard error on the paper's scale a
+multiplication by one derivative rather than a matrix product.
+
+_qvarma_link applies these on the tape, _qvarma_unlink states their inverses,
+_qvarma_fused_link and _qvarma_fused_link_adjoint read the table directly, and
+qvarma_standard_errors uses the derivative to put a standard error on the
+paper's scale. tests/correctness/qvarma_correctness.c evaluates this table
+against what _qvarma_link produces, coordinate by coordinate, so they cannot
+drift apart without a test failing.
+*/
+typedef enum {
+    QVARMA_LINK_IDENTITY,
+    QVARMA_LINK_TANH, /* Phi_star, into (-scale, scale) */
+    QVARMA_LINK_EXP, /* the diagonal of Omega_inv, into (0,inf) */
+    QVARMA_LINK_EXP_PLUS_TWO /* nu, into (2,inf) so the covariance in (11) exists */
+} QvarmaLink;
+
+static inline mreal qvarma_link_forward(QvarmaLink kind, mreal theta, mreal scale) {
+    switch (kind) {
+        case QVARMA_LINK_TANH: return scale * (mreal)tanh((double)theta);
+        case QVARMA_LINK_EXP: return (mreal)exp((double)theta);
+        case QVARMA_LINK_EXP_PLUS_TWO: return (mreal)(exp((double)theta) + 2.0);
+        default: return theta;
+    }
+}
+
+/* d(constrained)/d(theta), written in terms of the constrained value so it
+   needs no second exponential and stays exact where the forward map is. Only
+   QVARMA_LINK_TANH reads scale; for the others it is the 1 that _qvarma_link_scales fills in
+   and the transform has no scale to take. */
+static inline mreal qvarma_link_derivative(QvarmaLink kind, mreal constrained, mreal scale) {
+    switch (kind) {
+        case QVARMA_LINK_TANH: return scale - constrained * constrained / scale;
+        case QVARMA_LINK_EXP: return constrained;
+        case QVARMA_LINK_EXP_PLUS_TWO: return constrained - 2;
+        default: return 1;
+    }
+}
+
+/* The scale each coordinate's transform carries: phi_star_bound on Phi_star,
+   one everywhere else. Filled beside _qvarma_link_kinds so a coordinate's kind and its
+   scale cannot come from two different readings of the layout. */
+static inline void _qvarma_link_scales(const QvarmaParams *m, mreal *out) {
+    int n = qvarma_n_theta(m);
+    for (int i = 0; i < n; i++) out[i] = 1;
+    for (int i = 0; i < m->p; i++) out[m->K + i] = m->phi_star_bound;
+}
+
+static inline void _qvarma_link_kinds(const QvarmaParams *m, QvarmaLink *out) {
+    int K = m->K, at = 0;
+    for (int i = 0; i < K; i++) out[at++] = QVARMA_LINK_IDENTITY;
+    for (int i = 0; i < m->p; i++) out[at++] = QVARMA_LINK_TANH;
+    for (int i = 0; i < m->q * qvarma_psi_star_rows(m) * K; i++) out[at++] = QVARMA_LINK_IDENTITY;
+    for (int i = 0; i < K; i++) out[at++] = QVARMA_LINK_EXP;
+    for (int i = 0; i < K * (K - 1) / 2; i++) out[at++] = QVARMA_LINK_IDENTITY;
+    out[at++] = QVARMA_LINK_EXP_PLUS_TWO;
+    if (K > m->K_star) {
+        int K_dag = K - m->K_star;
+        for (int i = 0; i < m->r * K_dag * m->R; i++) out[at++] = QVARMA_LINK_IDENTITY;
+        for (int i = 0; i < qvarma_n_beta_matrices(m) * m->R * (K_dag - m->R); i++)
+            out[at++] = QVARMA_LINK_IDENTITY;
+    }
+    assert(at == qvarma_n_theta(m));
+}
+
+/*
 Unconstrained vector to constrained model, on the tape.
 
 Three transforms, applied where the constraint requires them: tanh on
@@ -585,6 +655,633 @@ static inline Node *_qvarma_filter(Tape *tape, const QvarmaLinked *linked, const
 }
 
 /*
+Whether the filter can be run at this point at all.
+
+The scale enters as a Cholesky factor whose diagonal is exp(theta), so a large
+enough theta overflows it to infinity and a small enough one underflows it to
+exactly zero. A zero diagonal is a singular factor, and the triangular solve
+inside the filter does not return an error for that: linalg/solver.h asserts,
+which ends the process. An optimizer probes wherever its line search takes it,
+so an infeasible point has to come back as a sentinel value rather than an
+abort.
+
+Checked on the constrained values rather than on theta, so it does not depend
+on knowing where in the vector each block sits. Omega_inv is K x K and
+contiguous in both the traced and the fused representation, so both reach this
+through the same reading of its diagonal.
+*/
+static inline int _qvarma_scale_is_usable(const mreal *Omega_inv, int K, mreal nu) {
+    for (int k = 0; k < K; k++) {
+        mreal diagonal = Omega_inv[(size_t)k * K + k];
+        if (!(diagonal > 0) || MISINF(diagonal) || MISNAN(diagonal)) return 0;
+    }
+    return nu > 2 && !MISINF(nu) && !MISNAN(nu);
+}
+
+/*
+The same recursion _qvarma_filter runs, and its adjoint, written out as one
+loop over the sample with no tape, no BLAS call and no allocation inside it.
+The traced variant above stays: it is what this one is checked against, in
+tests/correctness/qvarma_fused_agreement.c, value and gradient componentwise
+over random shapes and random theta, and both against a central difference.
+
+Why it exists. A taped evaluation of this model spends its time on tape
+bookkeeping and on BLAS calls that are too small to pay for themselves: at
+K = 5 a gemm is fifty floating point operations and costs more in dispatch
+than in arithmetic, and OpenBLAS's buffer table is one structure per process,
+so four threads fitting four independent series contend inside it and the
+parallel loop runs slower than the serial one. Writing the recursion and its
+adjoint by hand removes both: no node is created, no buffer is allocated
+between the first period and the last, and nothing is shared between threads.
+
+What is stored. The adjoint of period t needs the forward quantities of
+period t, and the recursion means it also reads the ones at t-1 down to
+t-max(p,q,r), so the whole forward path is kept rather than recomputed:
+v_t, z_t, u_t, mu_star_t, mu_dag_t and s_t, 5K+1 numbers per period. That is
+one allocation for the whole fit, made by qvarma_fused_new and reused by every
+evaluation, about 83 KB at K = 5 and T = 400. The parameter blocks, their
+adjoints and the backward pass's own ring buffers come out of the same
+allocation.
+
+Every dimension is read from the QvarmaParams handed to qvarma_fused_new. No
+shape is assumed anywhere below.
+
+The adjoints, in the order the backward pass applies them. With
+h = (nu+K)/2 and s_t = nu + q_t, the objective is
+
+    L = T*(lgamma(h) - lgamma(nu/2) - (K/2) log(pi nu) - half_log_det_Sigma
+          + h log(nu)) - h sum_t log(s_t)
+
+so dL/dh = T*(digamma(h) + log(nu)) - sum_t log(s_t), dL/d(log s_t) = -h, and
+dL/d(half_log_det_Sigma) = -T. Per period, u_t = v_t nu/s_t gives
+v_t_bar += (nu/s_t) u_t_bar and a scalar adjoint on nu/s_t of u_t_bar . v_t.
+
+The quadratic form is the one place a hand derivation goes wrong, so it is
+written out. The forward solves Omega_inv z_t = v_t by forward substitution
+and takes q_t = z_t . z_t. Differentiating Omega_inv z = v gives
+dz = Omega_inv^-1 (dv - dOmega_inv z), so with w_t = Omega_inv^-T z_t, which
+is a *back* substitution against the transpose,
+
+    dq_t = 2 w_t . dv - 2 w_t' dOmega_inv z_t
+
+hence v_t_bar += 2 q_t_bar w_t and Omega_inv_bar += -2 q_t_bar w_t z_t', a
+rank-one update masked to the lower triangle, since the upper triangle is
+structurally zero rather than a parameter. This is the same pair
+ad_chol_quadform's backward computes, reached without the node.
+
+The map from the constrained parameters back to theta reads the same
+name/transform/derivative table _qvarma_link and _qvarma_unlink read, through
+_qvarma_link_kinds, _qvarma_link_scales and qvarma_link_derivative, so the
+three cannot drift apart. half_log_det_Sigma is the exception, and is added
+after that elementwise chain rule rather than through it: it is the sum of the
+raw diagonal coordinates of theta, not a function of Omega_inv's diagonal.
+*/
+typedef struct {
+    int K, T, p, q, r, R;
+    int K_star, K_dag, lags, betas, psi_rows, shared_beta;
+    int w_star, w_dag, n_theta;
+    int path_stride, u_ring, star_ring;
+    mreal phi_star_bound;
+
+    mreal *storage; /* the one allocation; every mreal pointer below is a slice of it */
+    mreal *path;
+
+    mreal *c, *Phi, *Psi_star, *Psi_dag, *Omega_inv, *alpha, *beta;
+    mreal nu, half_log_det_Sigma, log_sum;
+
+    mreal *c_bar, *Phi_bar, *Psi_star_bar, *Psi_dag_bar, *Omega_inv_bar;
+    mreal *alpha_bar, *beta_bar;
+
+    mreal *u_bar, *mu_star_bar, *mu_dag_bar, *v_bar, *w, *dag_block_bar;
+    mreal *constrained, *link_scales;
+    QvarmaLink *link_kinds;
+} QvarmaFused;
+
+/* Where in a period's slot each stored path lives. */
+#define QVARMA_FUSED_V 0
+#define QVARMA_FUSED_Z 1
+#define QVARMA_FUSED_U 2
+#define QVARMA_FUSED_MU_STAR 3
+#define QVARMA_FUSED_MU_DAG 4
+
+static inline mreal *_qvarma_fused_slot(const QvarmaFused *f, int t, int which) {
+    return f->path + (size_t)t * f->path_stride + (size_t)which * f->K;
+}
+
+/* The workspace is laid out by running this twice: once with a null base, to
+   total the sizes, and once against the allocation, to hand out the slices.
+   Writing the total separately from the layout is how the two come to
+   disagree by one block after a field is added. */
+typedef struct { mreal *base; size_t used; } QvarmaFusedLayout;
+
+static inline mreal *_qvarma_fused_take(QvarmaFusedLayout *layout, size_t count) {
+    mreal *out = layout->base ? layout->base + layout->used : NULL;
+    layout->used += count;
+    return out;
+}
+
+static inline void _qvarma_fused_layout(QvarmaFused *f, QvarmaFusedLayout *layout) {
+    int K = f->K;
+    size_t square = (size_t)K * K;
+    f->path = _qvarma_fused_take(layout, (size_t)f->T * f->path_stride);
+
+    f->c = _qvarma_fused_take(layout, (size_t)K);
+    f->Phi = _qvarma_fused_take(layout, (size_t)f->p);
+    f->Psi_star = _qvarma_fused_take(layout, (size_t)f->q * square);
+    f->Psi_dag = _qvarma_fused_take(layout, (size_t)f->lags * square);
+    f->Omega_inv = _qvarma_fused_take(layout, square);
+    f->alpha = _qvarma_fused_take(layout, (size_t)f->lags * f->K_dag * f->R);
+    f->beta = _qvarma_fused_take(layout, (size_t)f->betas * f->R * f->K_dag);
+
+    f->c_bar = _qvarma_fused_take(layout, (size_t)K);
+    f->Phi_bar = _qvarma_fused_take(layout, (size_t)f->p);
+    f->Psi_star_bar = _qvarma_fused_take(layout, (size_t)f->q * square);
+    f->Psi_dag_bar = _qvarma_fused_take(layout, (size_t)f->lags * square);
+    f->Omega_inv_bar = _qvarma_fused_take(layout, square);
+    f->alpha_bar = _qvarma_fused_take(layout, (size_t)f->lags * f->K_dag * f->R);
+    f->beta_bar = _qvarma_fused_take(layout, (size_t)f->betas * f->R * f->K_dag);
+
+    f->u_bar = _qvarma_fused_take(layout, (size_t)f->u_ring * K);
+    f->mu_star_bar = _qvarma_fused_take(layout, (size_t)f->star_ring * K);
+    f->mu_dag_bar = _qvarma_fused_take(layout, (size_t)K);
+    f->v_bar = _qvarma_fused_take(layout, (size_t)K);
+    f->w = _qvarma_fused_take(layout, (size_t)K);
+    f->dag_block_bar = _qvarma_fused_take(layout, (size_t)f->K_dag * f->K_dag);
+
+    f->constrained = _qvarma_fused_take(layout, (size_t)f->n_theta);
+    f->link_scales = _qvarma_fused_take(layout, (size_t)f->n_theta);
+}
+
+/* Build the workspace for one shape at one sample length. Free with
+   qvarma_fused_free. The shape is read here and never again, so a caller that
+   changes p, q, r, K or T needs a new workspace. */
+static inline QvarmaFused *qvarma_fused_new(const QvarmaParams *shape, int T) {
+    qvarma_check_params(shape);
+    assert(T > 0);
+    QvarmaFused *f = (QvarmaFused*)malloc(sizeof(QvarmaFused));
+    f->K = shape->K;
+    f->T = T;
+    f->p = shape->p;
+    f->q = shape->q;
+    f->r = shape->r;
+    f->R = shape->R;
+    f->K_star = shape->K_star;
+    f->K_dag = shape->K - shape->K_star;
+    f->lags = qvarma_n_dag_lags(shape);
+    f->betas = qvarma_n_beta_matrices(shape);
+    f->psi_rows = qvarma_psi_star_rows(shape);
+    f->shared_beta = shape->shared_beta;
+    f->w_star = qvarma_warmup_star(shape);
+    f->w_dag = qvarma_warmup_dag(shape);
+    f->n_theta = qvarma_n_theta(shape);
+    f->phi_star_bound = shape->phi_star_bound;
+    f->path_stride = 5 * f->K + 1;
+    assert(T > f->w_star && T > f->w_dag);
+
+    /* u_t is read by mu_star up to q periods later and by mu_dag up to r, and
+       mu_star_t by mu_star up to p later, so the backward pass keeps that many
+       adjoints alive plus the one it is consuming. */
+    int longest_u = f->q > (f->lags ? f->r : 0) ? f->q : (f->lags ? f->r : 0);
+    f->u_ring = longest_u + 1;
+    f->star_ring = f->p + 1;
+
+    QvarmaFusedLayout layout = { NULL, 0 };
+    _qvarma_fused_layout(f, &layout);
+    size_t total = layout.used;
+    f->storage = (mreal*)malloc(total * sizeof(mreal));
+    layout.base = f->storage;
+    layout.used = 0;
+    _qvarma_fused_layout(f, &layout);
+
+    f->link_kinds = (QvarmaLink*)malloc((size_t)f->n_theta * sizeof(QvarmaLink));
+    _qvarma_link_kinds(shape, f->link_kinds);
+    _qvarma_link_scales(shape, f->link_scales);
+    return f;
+}
+
+static inline void qvarma_fused_free(QvarmaFused *f) {
+    if (!f) return;
+    free(f->storage);
+    free(f->link_kinds);
+    free(f);
+}
+
+/* Unconstrained vector to constrained parameters, the same map _qvarma_link
+   builds on the tape, into plain arrays. */
+static inline void _qvarma_fused_link(QvarmaFused *f, Vec theta) {
+    int K = f->K, K_dag = f->K_dag, R = f->R, at = 0;
+    size_t square = (size_t)K * K;
+    assert(theta.r == f->n_theta && theta.c == 1);
+
+    for (int k = 0; k < K; k++) f->c[k] = theta.d[at++];
+    for (int i = 0; i < f->p; i++)
+        f->Phi[i] = qvarma_link_forward(QVARMA_LINK_TANH, theta.d[at++], f->phi_star_bound);
+
+    for (int j = 0; j < f->q; j++) {
+        mreal *block = f->Psi_star + (size_t)j * square;
+        for (size_t i = 0; i < square; i++) block[i] = 0;
+        for (int a = 0; a < f->psi_rows; a++)
+            for (int b = 0; b < K; b++) block[(size_t)a * K + b] = theta.d[at++];
+    }
+
+    for (size_t i = 0; i < square; i++) f->Omega_inv[i] = 0;
+    f->half_log_det_Sigma = 0;
+    for (int k = 0; k < K; k++) {
+        f->Omega_inv[(size_t)k * K + k] = qvarma_link_forward(QVARMA_LINK_EXP, theta.d[at], 1);
+        f->half_log_det_Sigma += theta.d[at];
+        at++;
+    }
+    for (int a = 1; a < K; a++)
+        for (int b = 0; b < a; b++) f->Omega_inv[(size_t)a * K + b] = theta.d[at++];
+
+    f->nu = qvarma_link_forward(QVARMA_LINK_EXP_PLUS_TWO, theta.d[at++], 1);
+
+    for (int l = 0; l < f->lags; l++)
+        for (int i = 0; i < K_dag * R; i++)
+            f->alpha[(size_t)l * K_dag * R + i] = theta.d[at++];
+
+    /* The leading R columns of beta are the Johansen normalization's fixed
+       identity; only the rest are stepped. */
+    for (int b = 0; b < f->betas; b++) {
+        mreal *block = f->beta + (size_t)b * R * K_dag;
+        for (int i = 0; i < R; i++)
+            for (int j = 0; j < K_dag; j++) block[(size_t)i * K_dag + j] = (i == j) ? 1 : 0;
+        for (int i = 0; i < R; i++)
+            for (int j = R; j < K_dag; j++) block[(size_t)i * K_dag + j] = theta.d[at++];
+    }
+
+    for (int l = 0; l < f->lags; l++) {
+        mreal *psi = f->Psi_dag + (size_t)l * square;
+        for (size_t i = 0; i < square; i++) psi[i] = 0;
+        const mreal *alpha_l = f->alpha + (size_t)l * K_dag * R;
+        const mreal *beta_l = f->beta + (size_t)(f->shared_beta ? 0 : l) * R * K_dag;
+        for (int i = 0; i < K_dag; i++)
+            for (int m = 0; m < R; m++) {
+                mreal a_im = alpha_l[(size_t)i * R + m];
+                mreal *row = psi + (size_t)(f->K_star + i) * K + f->K_star;
+                const mreal *beta_row = beta_l + (size_t)m * K_dag;
+                for (int j = 0; j < K_dag; j++) row[j] += a_im * beta_row[j];
+            }
+    }
+    assert(at == f->n_theta);
+}
+
+/* The recursion of (1) to (4), filling the stored path and returning the total
+   log-likelihood. Nothing here is negated; the fit negates.
+
+   The two structural zeros of the model are skipped rather than multiplied
+   out. Psi_dag is zero outside its lower right K_dag block by construction,
+   so only that block is accumulated. Psi_star is zero below row psi_rows when
+   mu_star_stationary_only is set, and mu_star is then identically zero on
+   those rows too - it starts at zero over the warm-up and has nothing driving
+   it - so the score term is accumulated on the free rows alone. */
+static inline mreal _qvarma_fused_forward(QvarmaFused *f, Mat y) {
+    int K = f->K, T = f->T, stride = f->path_stride;
+    mreal nu = f->nu;
+    mreal log_sum = 0;
+
+    for (int t = 0; t < T; t++) {
+        mreal *slot = f->path + (size_t)t * stride;
+        mreal *v = slot + (size_t)QVARMA_FUSED_V * K;
+        mreal *z = slot + (size_t)QVARMA_FUSED_Z * K;
+        mreal *u = slot + (size_t)QVARMA_FUSED_U * K;
+        mreal *mu_star = slot + (size_t)QVARMA_FUSED_MU_STAR * K;
+        mreal *mu_dag = slot + (size_t)QVARMA_FUSED_MU_DAG * K;
+
+        for (int i = 0; i < K; i++) mu_star[i] = 0;
+        if (t >= f->w_star) {
+            for (int i = 1; i <= f->p; i++) {
+                const mreal *lag = _qvarma_fused_slot(f, t - i, QVARMA_FUSED_MU_STAR);
+                mreal phi = f->Phi[i - 1];
+                for (int k = 0; k < K; k++) mu_star[k] += phi * lag[k];
+            }
+            for (int j = 1; j <= f->q; j++) {
+                const mreal *lag = _qvarma_fused_slot(f, t - j, QVARMA_FUSED_U);
+                const mreal *psi = f->Psi_star + (size_t)(j - 1) * K * K;
+                for (int a = 0; a < f->psi_rows; a++) {
+                    const mreal *row = psi + (size_t)a * K;
+                    mreal acc = 0;
+                    for (int b = 0; b < K; b++) acc += row[b] * lag[b];
+                    mu_star[a] += acc;
+                }
+            }
+        }
+
+        for (int i = 0; i < K; i++) mu_dag[i] = 0;
+        if (f->lags && t >= f->w_dag) {
+            const mreal *previous = _qvarma_fused_slot(f, t - 1, QVARMA_FUSED_MU_DAG);
+            for (int i = 0; i < K; i++) mu_dag[i] = previous[i];
+            for (int l = 1; l <= f->r; l++) {
+                const mreal *lag = _qvarma_fused_slot(f, t - l, QVARMA_FUSED_U);
+                const mreal *psi = f->Psi_dag + (size_t)(l - 1) * K * K;
+                for (int a = f->K_star; a < K; a++) {
+                    const mreal *row = psi + (size_t)a * K;
+                    mreal acc = 0;
+                    for (int b = f->K_star; b < K; b++) acc += row[b] * lag[b];
+                    mu_dag[a] += acc;
+                }
+            }
+        }
+
+        for (int i = 0; i < K; i++) v[i] = AT(y, i, t) - f->c[i] - mu_star[i] - mu_dag[i];
+
+        mreal quadratic = 0;
+        for (int i = 0; i < K; i++) {
+            const mreal *row = f->Omega_inv + (size_t)i * K;
+            mreal acc = v[i];
+            for (int j = 0; j < i; j++) acc -= row[j] * z[j];
+            z[i] = acc / row[i];
+            quadratic += z[i] * z[i];
+        }
+
+        mreal s = nu + quadratic;
+        slot[5 * (size_t)K] = s;
+        mreal scale = nu / s;
+        for (int i = 0; i < K; i++) u[i] = v[i] * scale;
+        log_sum += MLOG(s);
+    }
+
+    f->log_sum = log_sum;
+    mreal half_nu_K = (mreal)0.5 * (nu + (mreal)K);
+    mreal constant_part = (mreal)lgamma((double)half_nu_K)
+                        - (mreal)lgamma(0.5 * (double)nu)
+                        - (mreal)K * (mreal)0.5 * MLOG((mreal)QVARMA_PI * nu)
+                        - f->half_log_det_Sigma
+                        + half_nu_K * MLOG(nu);
+    return (mreal)T * constant_part - half_nu_K * log_sum;
+}
+
+/* Psi_dag_bar is an adjoint of a product, so it has to be pushed through the
+   rank-R factorization to reach the coordinates theta actually carries:
+   with B_l the K_dag block of Psi_dag_l = alpha_l beta, alpha_l_bar +=
+   B_l_bar beta' and beta_bar += alpha_l' B_l_bar, the second summed over
+   every lag sharing that beta. */
+static inline void _qvarma_fused_factor_adjoint(QvarmaFused *f) {
+    int K = f->K, K_dag = f->K_dag, R = f->R;
+    for (int l = 0; l < f->lags; l++) {
+        const mreal *psi_bar = f->Psi_dag_bar + (size_t)l * K * K;
+        mreal *block = f->dag_block_bar;
+        for (int i = 0; i < K_dag; i++)
+            for (int j = 0; j < K_dag; j++)
+                block[(size_t)i * K_dag + j] =
+                    psi_bar[(size_t)(f->K_star + i) * K + f->K_star + j];
+
+        int which = f->shared_beta ? 0 : l;
+        const mreal *alpha_l = f->alpha + (size_t)l * K_dag * R;
+        mreal *alpha_bar_l = f->alpha_bar + (size_t)l * K_dag * R;
+        const mreal *beta_l = f->beta + (size_t)which * R * K_dag;
+        mreal *beta_bar_l = f->beta_bar + (size_t)which * R * K_dag;
+
+        for (int i = 0; i < K_dag; i++)
+            for (int m = 0; m < R; m++) {
+                mreal acc = 0;
+                for (int j = 0; j < K_dag; j++)
+                    acc += block[(size_t)i * K_dag + j] * beta_l[(size_t)m * K_dag + j];
+                alpha_bar_l[(size_t)i * R + m] += acc;
+            }
+        for (int m = 0; m < R; m++)
+            for (int j = 0; j < K_dag; j++) {
+                mreal acc = 0;
+                for (int i = 0; i < K_dag; i++)
+                    acc += alpha_l[(size_t)i * R + m] * block[(size_t)i * K_dag + j];
+                beta_bar_l[(size_t)m * K_dag + j] += acc;
+            }
+    }
+}
+
+/* Constrained adjoints to theta's, coordinate by coordinate, through the same
+   table _qvarma_link and _qvarma_unlink read. The constrained value goes into
+   f->constrained in the same pass, because qvarma_link_derivative is written
+   in terms of it. */
+static inline void _qvarma_fused_link_adjoint(QvarmaFused *f, Vec gradient,
+                                              mreal nu_bar, mreal half_log_det_bar) {
+    int K = f->K, K_dag = f->K_dag, R = f->R, at = 0;
+    mreal *g = gradient.d, *value = f->constrained;
+
+    for (int k = 0; k < K; k++) { value[at] = f->c[k]; g[at] = f->c_bar[k]; at++; }
+    for (int i = 0; i < f->p; i++) { value[at] = f->Phi[i]; g[at] = f->Phi_bar[i]; at++; }
+    for (int j = 0; j < f->q; j++) {
+        const mreal *block = f->Psi_star + (size_t)j * K * K;
+        const mreal *block_bar = f->Psi_star_bar + (size_t)j * K * K;
+        for (int a = 0; a < f->psi_rows; a++)
+            for (int b = 0; b < K; b++) {
+                value[at] = block[(size_t)a * K + b];
+                g[at] = block_bar[(size_t)a * K + b];
+                at++;
+            }
+    }
+
+    int diagonal_at = at;
+    for (int k = 0; k < K; k++) {
+        value[at] = f->Omega_inv[(size_t)k * K + k];
+        g[at] = f->Omega_inv_bar[(size_t)k * K + k];
+        at++;
+    }
+    for (int a = 1; a < K; a++)
+        for (int b = 0; b < a; b++) {
+            value[at] = f->Omega_inv[(size_t)a * K + b];
+            g[at] = f->Omega_inv_bar[(size_t)a * K + b];
+            at++;
+        }
+
+    value[at] = f->nu; g[at] = nu_bar; at++;
+
+    for (int l = 0; l < f->lags; l++)
+        for (int i = 0; i < K_dag * R; i++) {
+            value[at] = f->alpha[(size_t)l * K_dag * R + i];
+            g[at] = f->alpha_bar[(size_t)l * K_dag * R + i];
+            at++;
+        }
+    for (int b = 0; b < f->betas; b++)
+        for (int i = 0; i < R; i++)
+            for (int j = R; j < K_dag; j++) {
+                size_t e = (size_t)b * R * K_dag + (size_t)i * K_dag + j;
+                value[at] = f->beta[e];
+                g[at] = f->beta_bar[e];
+                at++;
+            }
+    assert(at == f->n_theta);
+
+    for (int i = 0; i < f->n_theta; i++)
+        g[i] *= qvarma_link_derivative(f->link_kinds[i], value[i], f->link_scales[i]);
+
+    /* half_log_det_Sigma is the sum of the raw diagonal coordinates rather
+       than a function of Omega_inv's diagonal, so its adjoint reaches theta
+       directly and not through the exp above. */
+    for (int k = 0; k < K; k++) g[diagonal_at + k] += half_log_det_bar;
+}
+
+/* The adjoint of the loop above, walked backwards over the stored path.
+   Fills gradient with the derivative of the log-likelihood - not its
+   negation - with respect to theta. */
+static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
+    int K = f->K, T = f->T, stride = f->path_stride;
+    size_t square = (size_t)K * K;
+    mreal nu = f->nu;
+    mreal half_nu_K = (mreal)0.5 * (nu + (mreal)K);
+    assert(gradient.r == f->n_theta && gradient.c == 1);
+
+    for (int i = 0; i < K; i++) { f->c_bar[i] = 0; f->mu_dag_bar[i] = 0; }
+    for (int i = 0; i < f->p; i++) f->Phi_bar[i] = 0;
+    for (size_t i = 0; i < (size_t)f->q * square; i++) f->Psi_star_bar[i] = 0;
+    for (size_t i = 0; i < (size_t)f->lags * square; i++) f->Psi_dag_bar[i] = 0;
+    for (size_t i = 0; i < square; i++) f->Omega_inv_bar[i] = 0;
+    for (size_t i = 0; i < (size_t)f->lags * f->K_dag * f->R; i++) f->alpha_bar[i] = 0;
+    for (size_t i = 0; i < (size_t)f->betas * f->R * f->K_dag; i++) f->beta_bar[i] = 0;
+    for (size_t i = 0; i < (size_t)f->u_ring * K; i++) f->u_bar[i] = 0;
+    for (size_t i = 0; i < (size_t)f->star_ring * K; i++) f->mu_star_bar[i] = 0;
+
+    mreal half_nu_K_bar = (mreal)T * ((mreal)special_digamma((double)half_nu_K) + MLOG(nu))
+                        - f->log_sum;
+    mreal log_sum_bar = -half_nu_K;
+    mreal half_log_det_bar = -(mreal)T;
+    mreal nu_bar = (mreal)0.5 * half_nu_K_bar
+                 + (mreal)T * (-(mreal)0.5 * (mreal)special_digamma(0.5 * (double)nu)
+                               - (mreal)K * (mreal)0.5 / nu + half_nu_K / nu);
+
+    for (int t = T - 1; t >= 0; t--) {
+        const mreal *slot = f->path + (size_t)t * stride;
+        const mreal *v = slot + (size_t)QVARMA_FUSED_V * K;
+        const mreal *z = slot + (size_t)QVARMA_FUSED_Z * K;
+        mreal s = slot[5 * (size_t)K];
+        mreal *u_bar = f->u_bar + (size_t)(t % f->u_ring) * K;
+        mreal *v_bar = f->v_bar;
+        mreal *w = f->w;
+
+        /* u_t = v_t * (nu/s_t) */
+        mreal scale = nu / s, scale_bar = 0;
+        for (int i = 0; i < K; i++) {
+            v_bar[i] = scale * u_bar[i];
+            scale_bar += u_bar[i] * v[i];
+            u_bar[i] = 0; /* the slot is next used for period t - u_ring */
+        }
+        nu_bar += scale_bar / s;
+        mreal s_bar = -scale_bar * nu / (s * s) + log_sum_bar / s;
+        nu_bar += s_bar;
+        mreal q_bar = s_bar;
+
+        /* w = Omega_inv^-T z by back substitution, then the masked rank-one
+           update - see this section's header for the derivation. */
+        for (int i = K - 1; i >= 0; i--) {
+            mreal acc = z[i];
+            for (int j = i + 1; j < K; j++) acc -= f->Omega_inv[(size_t)j * K + i] * w[j];
+            w[i] = acc / f->Omega_inv[(size_t)i * K + i];
+        }
+        mreal factor = -2 * q_bar;
+        for (int i = 0; i < K; i++) {
+            v_bar[i] += 2 * q_bar * w[i];
+            mreal scaled = factor * w[i];
+            mreal *row = f->Omega_inv_bar + (size_t)i * K;
+            for (int j = 0; j <= i; j++) row[j] += scaled * z[j];
+        }
+
+        /* v_t = y_t - c - mu_star_t - mu_dag_t, with either location component
+           taken out where the warm-up holds it at a constant zero. */
+        mreal *star_bar = f->mu_star_bar + (size_t)(t % f->star_ring) * K;
+        int star_is_free = t >= f->w_star;
+        int dag_is_free = f->lags && t >= f->w_dag;
+        for (int i = 0; i < K; i++) f->c_bar[i] -= v_bar[i];
+        if (star_is_free) for (int i = 0; i < K; i++) star_bar[i] -= v_bar[i];
+        if (dag_is_free) for (int i = 0; i < K; i++) f->mu_dag_bar[i] -= v_bar[i];
+
+        if (dag_is_free) {
+            const mreal *d = f->mu_dag_bar;
+            for (int l = 1; l <= f->r; l++) {
+                const mreal *lag = _qvarma_fused_slot(f, t - l, QVARMA_FUSED_U);
+                mreal *lag_bar = f->u_bar + (size_t)((t - l) % f->u_ring) * K;
+                const mreal *psi = f->Psi_dag + (size_t)(l - 1) * K * K;
+                mreal *psi_bar = f->Psi_dag_bar + (size_t)(l - 1) * K * K;
+                for (int a = f->K_star; a < K; a++) {
+                    mreal d_a = d[a];
+                    const mreal *row = psi + (size_t)a * K;
+                    mreal *row_bar = psi_bar + (size_t)a * K;
+                    for (int b = f->K_star; b < K; b++) {
+                        row_bar[b] += d_a * lag[b];
+                        lag_bar[b] += row[b] * d_a;
+                    }
+                }
+            }
+            /* mu_dag_t = mu_dag_{t-1} + ..., so what is left carries straight
+               back to the previous period. */
+        } else {
+            for (int i = 0; i < K; i++) f->mu_dag_bar[i] = 0;
+        }
+
+        if (star_is_free) {
+            for (int i = 1; i <= f->p; i++) {
+                const mreal *lag = _qvarma_fused_slot(f, t - i, QVARMA_FUSED_MU_STAR);
+                mreal *lag_bar = f->mu_star_bar + (size_t)((t - i) % f->star_ring) * K;
+                mreal phi = f->Phi[i - 1], dot = 0;
+                for (int k = 0; k < K; k++) {
+                    dot += star_bar[k] * lag[k];
+                    lag_bar[k] += phi * star_bar[k];
+                }
+                f->Phi_bar[i - 1] += dot;
+            }
+            for (int j = 1; j <= f->q; j++) {
+                const mreal *lag = _qvarma_fused_slot(f, t - j, QVARMA_FUSED_U);
+                mreal *lag_bar = f->u_bar + (size_t)((t - j) % f->u_ring) * K;
+                const mreal *psi = f->Psi_star + (size_t)(j - 1) * K * K;
+                mreal *psi_bar = f->Psi_star_bar + (size_t)(j - 1) * K * K;
+                for (int a = 0; a < f->psi_rows; a++) {
+                    mreal m_a = star_bar[a];
+                    const mreal *row = psi + (size_t)a * K;
+                    mreal *row_bar = psi_bar + (size_t)a * K;
+                    for (int b = 0; b < K; b++) {
+                        row_bar[b] += m_a * lag[b];
+                        lag_bar[b] += row[b] * m_a;
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < K; i++) star_bar[i] = 0;
+    }
+
+    _qvarma_fused_factor_adjoint(f);
+    _qvarma_fused_link_adjoint(f, gradient, nu_bar, half_log_det_bar);
+}
+
+/*
+Total log-likelihood at theta, and its gradient when gradient.d is not NULL,
+without building a tape. y must be the K by T matrix the workspace was made
+for. An infeasible scale returns minus infinity and a zeroed gradient, the
+same sentinel the taped path returns, because an optimizer's line search
+probes points the model cannot be evaluated at.
+
+The forward path left behind is readable through qvarma_fused_v and its
+siblings until the next call.
+*/
+static inline mreal qvarma_fused_log_likelihood(QvarmaFused *f, Vec theta, Mat y,
+                                                Vec gradient) {
+    assert(y.r == f->K && y.c == f->T);
+    _qvarma_fused_link(f, theta);
+    if (!_qvarma_scale_is_usable(f->Omega_inv, f->K, f->nu)) {
+        if (gradient.d) for (int i = 0; i < f->n_theta; i++) gradient.d[i] = 0;
+        return -(mreal)INFINITY;
+    }
+    mreal value = _qvarma_fused_forward(f, y);
+    if (gradient.d) _qvarma_fused_backward(f, gradient);
+    return value;
+}
+
+/* The paths of the last evaluation, K numbers per period, valid until the
+   next call on the same workspace. This is what the traced filter returns
+   through its mu_star_out/mu_dag_out/v_out arguments; u_t is the scaled score
+   of (6), which the traced one does not hand back at all. */
+static inline const mreal *qvarma_fused_v(const QvarmaFused *f, int t) {
+    return _qvarma_fused_slot(f, t, QVARMA_FUSED_V);
+}
+static inline const mreal *qvarma_fused_u(const QvarmaFused *f, int t) {
+    return _qvarma_fused_slot(f, t, QVARMA_FUSED_U);
+}
+static inline const mreal *qvarma_fused_mu_star(const QvarmaFused *f, int t) {
+    return _qvarma_fused_slot(f, t, QVARMA_FUSED_MU_STAR);
+}
+static inline const mreal *qvarma_fused_mu_dag(const QvarmaFused *f, int t) {
+    return _qvarma_fused_slot(f, t, QVARMA_FUSED_MU_DAG);
+}
+
+/*
 How the fit runs, never what the model is. The optimizer is built inside fit,
 so nothing here exposes it.
 
@@ -654,44 +1351,22 @@ static inline void qvarma_fit_result_free(QvarmaFitResult *result) {
     qvarma_params_free(&result->params);
 }
 
-/*
-Whether the filter can be run at this point at all.
-
-The scale enters as a Cholesky factor whose diagonal is exp(theta), so a large
-enough theta overflows it to infinity and a small enough one underflows it to
-exactly zero. A zero diagonal is a singular factor, and the triangular solve
-inside the filter does not return an error for that: linalg/solver.h asserts,
-which ends the process. An optimizer probes wherever its line search takes it,
-so an infeasible point has to come back as a sentinel value rather than an
-abort.
-
-Checked on the linked values rather than on theta, so it does not depend on
-knowing where in the vector each block sits.
-*/
+/* The same question asked of a traced model, for a caller driving
+   _qvarma_filter by hand. */
 static inline int qvarma_scale_is_usable(const QvarmaLinked *linked, const QvarmaParams *shape) {
-    for (int k = 0; k < shape->K; k++) {
-        mreal diagonal = AT(linked->Omega_inv->val, k, k);
-        if (!(diagonal > 0) || MISINF(diagonal) || MISNAN(diagonal)) return 0;
-    }
-    mreal nu = linked->nu->val.d[0];
-    return nu > 2 && !MISINF(nu) && !MISNAN(nu);
+    return _qvarma_scale_is_usable(linked->Omega_inv->val.d, shape->K,
+                                   linked->nu->val.d[0]);
 }
 
-/* Total log-likelihood at theta, discarding the tape afterwards. */
+/* Total log-likelihood at theta, through the fused filter, which computes the
+   same number as the traced one at a fraction of the cost. The workspace is
+   built and released here, so a caller evaluating in a loop should hold one of
+   its own and call qvarma_fused_log_likelihood instead. */
 static inline mreal qvarma_log_likelihood_at(Vec theta, const QvarmaParams *shape, Mat y) {
-    Tape *tape = tape_new();
-    Node *theta_node = ad_leaf(tape, theta);
-    QvarmaLinked linked = _qvarma_link(tape, theta_node, shape);
-    /* Same guard as the fit objective, with the sign this function returns:
-       an unusable scale is minus infinity in likelihood terms. */
-    if (!qvarma_scale_is_usable(&linked, shape)) {
-        qvarma_linked_free(&linked);
-        tape_free(tape);
-        return -(mreal)INFINITY;
-    }
-    mreal value = _qvarma_filter(tape, &linked, shape, y, NULL, NULL, NULL)->val.d[0];
-    qvarma_linked_free(&linked);
-    tape_free(tape);
+    QvarmaFused *fused = qvarma_fused_new(shape, y.c);
+    Vec no_gradient = { 0, 0, 0, NULL };
+    mreal value = qvarma_fused_log_likelihood(fused, theta, y, no_gradient);
+    qvarma_fused_free(fused);
     return value;
 }
 
@@ -699,33 +1374,30 @@ static inline mreal qvarma_log_likelihood_at(Vec theta, const QvarmaParams *shap
 The objective the solver minimises: the negative log-likelihood as a function
 of the unconstrained vector. The gradient is filled only when asked for, so a
 line search, which needs the value alone, skips the backward pass entirely.
+
+workspace is the fused filter's, reused across every evaluation of one fit.
+Leaving it NULL is allowed and makes each call build and release its own,
+which costs one allocation per evaluation and is what a caller assembling this
+struct by hand gets; qvarma_fit fills it in.
 */
 typedef struct {
     Mat observations;
     const QvarmaParams *shape;
+    QvarmaFused *workspace;
 } QvarmaFitContext;
 
 static inline mreal qvarma_negative_log_likelihood(Vec theta, Vec gradient, void *context) {
     QvarmaFitContext *fit_context = (QvarmaFitContext*)context;
-    Tape *tape = tape_new();
-    Node *theta_node = ad_leaf(tape, theta);
-    QvarmaLinked linked = _qvarma_link(tape, theta_node, fit_context->shape);
-    if (!qvarma_scale_is_usable(&linked, fit_context->shape)) {
-        if (gradient.d) for (int i = 0; i < theta.r; i++) gradient.d[i] = 0;
-        qvarma_linked_free(&linked);
-        tape_free(tape);
-        return (mreal)INFINITY;
-    }
-    Node *objective = _qvarma_filter(tape, &linked, fit_context->shape,
-                              fit_context->observations, NULL, NULL, NULL);
-    mreal value = -objective->val.d[0];
-    if (gradient.d) {
-        tape_backward(tape, ad_scale(tape, objective, (mreal)-1));
-        for (int i = 0; i < theta.r; i++) gradient.d[i] = theta_node->grad.d[i];
-    }
-    qvarma_linked_free(&linked);
-    tape_free(tape);
-    return value;
+    QvarmaFused *fused = fit_context->workspace;
+    QvarmaFused *owned = fused ? NULL
+                       : qvarma_fused_new(fit_context->shape, fit_context->observations.c);
+    if (owned) fused = owned;
+
+    mreal value = qvarma_fused_log_likelihood(fused, theta, fit_context->observations,
+                                              gradient);
+    if (gradient.d) for (int i = 0; i < theta.r; i++) gradient.d[i] = -gradient.d[i];
+    if (owned) qvarma_fused_free(owned);
+    return -value;
 }
 
 /*
@@ -757,6 +1429,7 @@ static inline QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_gues
     QvarmaFitContext context;
     context.observations = y;
     context.shape = &shape;
+    context.workspace = qvarma_fused_new(&shape, T);
 
     LbfgsOptions solver = lbfgs_default_options();
     solver.max_iterations = options.max_iterations;
@@ -784,6 +1457,7 @@ static inline QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_gues
     result.bic = k * (mreal)log((double)periods) / periods - 2 * mean;
     result.hannan_quinn = 2 * k * (mreal)log(log((double)periods)) / periods - 2 * mean;
 
+    qvarma_fused_free(context.workspace);
     mat_free(start);
     mat_free(solved.theta);
     return result;
@@ -1510,74 +2184,6 @@ static inline QvarmaFitResult qvarma_fit_cached(Mat y, const QvarmaParams *initi
     return result;
 }
 
-/*
-The link coordinate by coordinate, as a kind rather than as code.
-
-Every parameter the optimizer steps has a scalar transform, so the map from
-theta to the parameters the paper names is elementwise and its Jacobian is
-diagonal. That is what makes a standard error on the paper's scale a
-multiplication by one derivative rather than a matrix product.
-
-_qvarma_link applies these on the tape and _qvarma_unlink states their inverses, so the same
-fact ends up written in three places. tests/qvarma_correctness.c evaluates this
-table against what _qvarma_link produces, coordinate by coordinate, so the three
-cannot drift apart without a test failing.
-*/
-typedef enum {
-    QVARMA_LINK_IDENTITY,
-    QVARMA_LINK_TANH, /* Phi_star, into (-scale, scale) */
-    QVARMA_LINK_EXP, /* the diagonal of Omega_inv, into (0,inf) */
-    QVARMA_LINK_EXP_PLUS_TWO /* nu, into (2,inf) so the covariance in (11) exists */
-} QvarmaLink;
-
-static inline mreal qvarma_link_forward(QvarmaLink kind, mreal theta, mreal scale) {
-    switch (kind) {
-        case QVARMA_LINK_TANH: return scale * (mreal)tanh((double)theta);
-        case QVARMA_LINK_EXP: return (mreal)exp((double)theta);
-        case QVARMA_LINK_EXP_PLUS_TWO: return (mreal)(exp((double)theta) + 2.0);
-        default: return theta;
-    }
-}
-
-/* d(constrained)/d(theta), written in terms of the constrained value so it
-   needs no second exponential and stays exact where the forward map is. Only
-   QVARMA_LINK_TANH reads scale; for the others it is the 1 that _qvarma_link_scales fills in
-   and the transform has no scale to take. */
-static inline mreal qvarma_link_derivative(QvarmaLink kind, mreal constrained, mreal scale) {
-    switch (kind) {
-        case QVARMA_LINK_TANH: return scale - constrained * constrained / scale;
-        case QVARMA_LINK_EXP: return constrained;
-        case QVARMA_LINK_EXP_PLUS_TWO: return constrained - 2;
-        default: return 1;
-    }
-}
-
-/* The scale each coordinate's transform carries: phi_star_bound on Phi_star,
-   one everywhere else. Filled beside _qvarma_link_kinds so a coordinate's kind and its
-   scale cannot come from two different readings of the layout. */
-static inline void _qvarma_link_scales(const QvarmaParams *m, mreal *out) {
-    int n = qvarma_n_theta(m);
-    for (int i = 0; i < n; i++) out[i] = 1;
-    for (int i = 0; i < m->p; i++) out[m->K + i] = m->phi_star_bound;
-}
-
-static inline void _qvarma_link_kinds(const QvarmaParams *m, QvarmaLink *out) {
-    int K = m->K, at = 0;
-    for (int i = 0; i < K; i++) out[at++] = QVARMA_LINK_IDENTITY;
-    for (int i = 0; i < m->p; i++) out[at++] = QVARMA_LINK_TANH;
-    for (int i = 0; i < m->q * qvarma_psi_star_rows(m) * K; i++) out[at++] = QVARMA_LINK_IDENTITY;
-    for (int i = 0; i < K; i++) out[at++] = QVARMA_LINK_EXP;
-    for (int i = 0; i < K * (K - 1) / 2; i++) out[at++] = QVARMA_LINK_IDENTITY;
-    out[at++] = QVARMA_LINK_EXP_PLUS_TWO;
-    if (K > m->K_star) {
-        int K_dag = K - m->K_star;
-        for (int i = 0; i < m->r * K_dag * m->R; i++) out[at++] = QVARMA_LINK_IDENTITY;
-        for (int i = 0; i < qvarma_n_beta_matrices(m) * m->R * (K_dag - m->R); i++)
-            out[at++] = QVARMA_LINK_IDENTITY;
-    }
-    assert(at == qvarma_n_theta(m));
-}
-
 /* The paper's name for one coordinate of theta, for a report to label a row
    with. beta carries only its free entries, the ones the Johansen
    normalization leaves. */
@@ -1645,7 +2251,7 @@ here".
 */
 static inline Mat _qvarma_hessian(Vec theta, const QvarmaParams *shape, Mat y) {
     int n = theta.r;
-    QvarmaFitContext context = { y, shape };
+    QvarmaFitContext context = { y, shape, qvarma_fused_new(shape, y.c) };
     Mat H = mat_new(n, n);
     Vec forward = mat_new(n, 1), backward = mat_new(n, 1), probe = mat_new(n, 1);
     mreal step = sizeof(mreal) == sizeof(double) ? (mreal)1e-4 : (mreal)1e-3;
@@ -1665,6 +2271,7 @@ static inline Mat _qvarma_hessian(Vec theta, const QvarmaParams *shape, Mat y) {
             mreal mean = (mreal)0.5 * (AT(H, i, j) + AT(H, j, i));
             AT(H, i, j) = AT(H, j, i) = mean;
         }
+    qvarma_fused_free(context.workspace);
     mat_free(forward); mat_free(backward); mat_free(probe);
     return H;
 }

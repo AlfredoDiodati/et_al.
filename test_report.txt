@@ -1,607 +1,62 @@
-test run: Wed Aug 26 12:55:36 PM CEST 2026
+test run: Sat Aug 29 01:46:55 PM CEST 2026
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
 cc -Wall -Wextra -O1 -g -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_mat_special.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_mat_special
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_decomp.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_decomp
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_solver.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_solver
-In file included from tests/correctness/../../linalg/decomp.h:3,
-                 from tests/correctness/../../linalg/solver.h:2,
-                 from tests/correctness/test_solver.c:1:
-In function ‘_gels’,
-    inlined from ‘mat_lstsq.isra’ at tests/correctness/../../linalg/solver.h:130:16:
-tests/correctness/../../linalg/factor.h:1115:9: warning: ‘buf’ may be used uninitialized [-Wmaybe-uninitialized]
- 1115 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tests/correctness/../../linalg/factor.h: In function ‘mat_lstsq.isra’:
-tests/correctness/../../linalg/factor.h:1033:20: note: by argument 5 of type ‘const mreal *’ {aka ‘const float *’} to ‘_ormqr_cm’ declared here
- 1033 | static inline void _ormqr_cm(char trans, int m, int n, int k,
-      |                    ^~~~~~~~~
-In function ‘_gels’,
-    inlined from ‘mat_lstsq.isra’ at tests/correctness/../../linalg/solver.h:130:16:
-tests/correctness/../../linalg/factor.h:1115:9: warning: ‘tau’ may be used uninitialized [-Wmaybe-uninitialized]
- 1115 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tests/correctness/../../linalg/factor.h: In function ‘mat_lstsq.isra’:
-tests/correctness/../../linalg/factor.h:1033:20: note: by argument 7 of type ‘const mreal *’ {aka ‘const float *’} to ‘_ormqr_cm’ declared here
- 1033 | static inline void _ormqr_cm(char trans, int m, int n, int k,
-      |                    ^~~~~~~~~
+make: 'tests/correctness/test_decomp' is up to date.
+make: 'tests/correctness/test_solver' is up to date.
 make: 'tests/correctness/test_special' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_stats.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_stats
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_random.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_random
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_mcs.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_mcs
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_mcs_variance.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_mcs_variance
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_broadcast.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_broadcast
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_gauss.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_gauss
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_student.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_student
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_mvgauss.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_mvgauss
-tests/correctness/test_mvgauss.c: In function ‘expect_abort’:
-tests/correctness/test_mvgauss.c:365:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  365 |         freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_mvstudent.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_mvstudent
-tests/correctness/test_mvstudent.c: In function ‘expect_abort’:
-tests/correctness/test_mvstudent.c:358:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  358 |         freopen("/dev/null", "w", stderr);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_matgauss.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_matgauss
-tests/correctness/test_matgauss.c: In function ‘expect_abort’:
-tests/correctness/test_matgauss.c:610:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  610 |         freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_matgauss_recovery.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_matgauss_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_ad.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_ad
-tests/correctness/test_ad.c: In function ‘expect_abort’:
-tests/correctness/test_ad.c:1105:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
- 1105 |         freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_tape_reset.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_tape_reset
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_adam.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_adam
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_optimizer.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_optimizer
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_cluster.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_cluster
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_mlp.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_mlp
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_frame.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_frame
-tests/correctness/test_frame.c: In function ‘expect_abort’:
-tests/correctness/test_frame.c:181:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  181 |         freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_csv.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_csv
-tests/correctness/test_csv.c: In function ‘expect_abort’:
-tests/correctness/test_csv.c:239:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  239 |         freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_txt.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_txt
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_npy.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_npy
-tests/correctness/test_npy.c: In function ‘expect_abort’:
-tests/correctness/test_npy.c:186:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  186 |         freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+make: 'tests/correctness/test_stats' is up to date.
+make: 'tests/correctness/test_random' is up to date.
+make: 'tests/correctness/test_mcs' is up to date.
+make: 'tests/correctness/test_mcs_variance' is up to date.
+make: 'tests/correctness/test_broadcast' is up to date.
+make: 'tests/correctness/test_gauss' is up to date.
+make: 'tests/correctness/test_student' is up to date.
+make: 'tests/correctness/test_mvgauss' is up to date.
+make: 'tests/correctness/test_mvstudent' is up to date.
+make: 'tests/correctness/test_matgauss' is up to date.
+make: 'tests/correctness/test_matgauss_recovery' is up to date.
+make: 'tests/correctness/test_ad' is up to date.
+make: 'tests/correctness/test_tape_reset' is up to date.
+make: 'tests/correctness/test_adam' is up to date.
+make: 'tests/correctness/test_optimizer' is up to date.
+make: 'tests/correctness/test_cluster' is up to date.
+make: 'tests/correctness/test_mlp' is up to date.
+make: 'tests/correctness/test_frame' is up to date.
+make: 'tests/correctness/test_csv' is up to date.
+make: 'tests/correctness/test_txt' is up to date.
+make: 'tests/correctness/test_npy' is up to date.
 make: 'tests/correctness/test_json' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_sql.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_sql
-In file included from tests/correctness/test_sql.c:2:
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_eq’:
-tests/correctness/../../frame/sql.h:1101: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1101 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_eq, _CMP_EQ_OQ)
-      | 
-tests/correctness/../../frame/sql.h:1101: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_ne’:
-tests/correctness/../../frame/sql.h:1102: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1102 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_ne, _CMP_NEQ_UQ)
-      | 
-tests/correctness/../../frame/sql.h:1102: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_lt’:
-tests/correctness/../../frame/sql.h:1103: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1103 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_lt, _CMP_LT_OQ)
-      | 
-tests/correctness/../../frame/sql.h:1103: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_le’:
-tests/correctness/../../frame/sql.h:1104: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1104 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_le, _CMP_LE_OQ)
-      | 
-tests/correctness/../../frame/sql.h:1104: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_gt’:
-tests/correctness/../../frame/sql.h:1105: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1105 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_gt, _CMP_GT_OQ)
-      | 
-tests/correctness/../../frame/sql.h:1105: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_ge’:
-tests/correctness/../../frame/sql.h:1106: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1106 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_ge, _CMP_GE_OQ)
-      | 
-tests/correctness/../../frame/sql.h:1106: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_eq’:
-tests/correctness/../../frame/sql.h:1156: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1156 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_eq, _CMP_EQ_OQ)
-      | 
-tests/correctness/../../frame/sql.h:1156: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_ne’:
-tests/correctness/../../frame/sql.h:1157: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1157 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_ne, _CMP_NEQ_UQ)
-      | 
-tests/correctness/../../frame/sql.h:1157: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_lt’:
-tests/correctness/../../frame/sql.h:1158: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1158 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_lt, _CMP_LT_OQ)
-      | 
-tests/correctness/../../frame/sql.h:1158: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_le’:
-tests/correctness/../../frame/sql.h:1159: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1159 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_le, _CMP_LE_OQ)
-      | 
-tests/correctness/../../frame/sql.h:1159: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_gt’:
-tests/correctness/../../frame/sql.h:1160: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1160 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_gt, _CMP_GT_OQ)
-      | 
-tests/correctness/../../frame/sql.h:1160: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_ge’:
-tests/correctness/../../frame/sql.h:1161: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1161 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_ge, _CMP_GE_OQ)
-      | 
-tests/correctness/../../frame/sql.h:1161: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/correctness/../../frame/sql.h: In function ‘sql_where_select_rows_mt’:
-tests/correctness/../../frame/sql.h:1423: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1423 |     #pragma omp parallel for
-      | 
-tests/correctness/../../frame/sql.h:1453: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1453 |     #pragma omp parallel for
-      | 
-tests/correctness/../../frame/sql.h: In function ‘sql_build_groups_1col_mt’:
-tests/correctness/../../frame/sql.h:1819: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1819 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/correctness/../../frame/sql.h: In function ‘sql_apply_group_select’:
-tests/correctness/../../frame/sql.h:2082: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 2082 |             #pragma omp parallel num_threads(n_threads)
-      | 
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_join.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_join
-In file included from tests/correctness/test_join.c:1:
-tests/correctness/../../frame/join.h: In function ‘join_build_partitions_mt’:
-tests/correctness/../../frame/join.h:378: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  378 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/correctness/../../frame/join.h: In function ‘join_probe_mt’:
-tests/correctness/../../frame/join.h:441: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  441 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/correctness/test_join.c: In function ‘expect_abort’:
-tests/correctness/test_join.c:252:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  252 |         freopen("/dev/null", "w", stderr);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+make: 'tests/correctness/test_sql' is up to date.
+make: 'tests/correctness/test_join' is up to date.
 make: 'tests/correctness/gzip_inflate' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/rdata_array_read.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/rdata_array_read
-tests/correctness/rdata_array_read.c: In function ‘expect_abort’:
-tests/correctness/rdata_array_read.c:189:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  189 |         freopen("/dev/null", "w", stderr);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tests/correctness/rdata_array_read.c: In function ‘rdata_expect_no_memory_unsafety’:
-tests/correctness/rdata_array_read.c:794:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  794 |         freopen("/dev/null", "w", stderr);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/adf_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/adf_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/kpss_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/kpss_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/dfgls_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/dfgls_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/otto_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/otto_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hlt_union_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hlt_union_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hlt_break_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hlt_break_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hhlt_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hhlt_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/zivot_andrews_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/zivot_andrews_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/johansen_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/johansen_correctness
-In file included from tests/correctness/../../linalg/decomp.h:3,
-                 from tests/correctness/../../linalg/solver.h:2,
-                 from tests/correctness/../../unit_root.h:2,
-                 from tests/correctness/../../cointegration.h:2,
-                 from tests/correctness/johansen_correctness.c:15:
-In function ‘_gels’,
-    inlined from ‘mat_lstsq’ at tests/correctness/../../linalg/solver.h:130:16,
-    inlined from ‘_residualize.isra’ at tests/correctness/../../cointegration.h:65:24:
-tests/correctness/../../linalg/factor.h:1115:9: warning: ‘buf’ may be used uninitialized [-Wmaybe-uninitialized]
- 1115 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tests/correctness/../../linalg/factor.h: In function ‘_residualize.isra’:
-tests/correctness/../../linalg/factor.h:1033:20: note: by argument 5 of type ‘const mreal *’ {aka ‘const double *’} to ‘_ormqr_cm’ declared here
- 1033 | static inline void _ormqr_cm(char trans, int m, int n, int k,
-      |                    ^~~~~~~~~
-In function ‘_gels’,
-    inlined from ‘mat_lstsq’ at tests/correctness/../../linalg/solver.h:130:16,
-    inlined from ‘_residualize.isra’ at tests/correctness/../../cointegration.h:65:24:
-tests/correctness/../../linalg/factor.h:1115:9: warning: ‘tau’ may be used uninitialized [-Wmaybe-uninitialized]
- 1115 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tests/correctness/../../linalg/factor.h: In function ‘_residualize.isra’:
-tests/correctness/../../linalg/factor.h:1033:20: note: by argument 7 of type ‘const mreal *’ {aka ‘const double *’} to ‘_ormqr_cm’ declared here
- 1033 | static inline void _ormqr_cm(char trans, int m, int n, int k,
-      |                    ^~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/engle_granger_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/engle_granger_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/maki_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/maki_correctness
-In file included from tests/correctness/../../linalg/decomp.h:3,
-                 from tests/correctness/../../linalg/solver.h:2,
-                 from tests/correctness/../../unit_root.h:2,
-                 from tests/correctness/../../cointegration.h:2,
-                 from tests/correctness/maki_correctness.c:17:
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../linalg/factor.h:1389:13,
-    inlined from ‘_sysv’ at tests/correctness/../../linalg/factor.h:1411:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1323:47: warning: array subscript -1 is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1323 |             for (int i = 0; i < m; i++) s += x[i] * col[i];
-      |                                              ~^~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1404:25: note: at offset -8 into object of size 32 allocated by ‘malloc’
- 1404 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../linalg/factor.h:1389:13,
-    inlined from ‘_sysv’ at tests/correctness/../../linalg/factor.h:1411:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1324:14: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1324 |             b[row + (size_t)q * ldb] -= s;
-      |             ~^~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1405:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1405 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../linalg/factor.h:1389:13,
-    inlined from ‘_sysv’ at tests/correctness/../../linalg/factor.h:1411:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1324:38: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1324 |             b[row + (size_t)q * ldb] -= s;
-      |             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1405:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1405 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_outer’,
-    inlined from ‘_sytrs’ at tests/correctness/../../linalg/factor.h:1349:13,
-    inlined from ‘_sysv’ at tests/correctness/../../linalg/factor.h:1411:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1305:19: warning: array subscript [-2147483645, -1] is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1305 |             mreal f = b[row + (size_t)q * ldb];
-      |                   ^
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1405:25: note: at offset [-17179869160, -8] into object of size 16 allocated by ‘malloc’
- 1405 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../linalg/factor.h:1410:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1244:42: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1244 |                 mreal wk = d21 * (d11 * a[(size_t)k * lda + j]
-      |                                         ~^~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1404:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1404 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../linalg/factor.h:1410:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1251:40: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1251 |                 a[(size_t)k * lda + j] = wk;
-      |                 ~~~~~~~~~~~~~~~~~~~~~~~^~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1404:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1404 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../linalg/factor.h:1410:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1249:48: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1249 |                     a[(size_t)j * lda + i] -= a[(size_t)k * lda + i] * wk
-      |                                               ~^~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../unit_root.h:186:29:
-tests/correctness/../../linalg/factor.h:1404:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1404 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/qlr_test_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qlr_test_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/lbfgs_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/lbfgs_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/score_driven_location_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/score_driven_location_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/qvarma_identification.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_identification
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/frame_to_model
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/join_missing_values.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/join_missing_values
-In file included from tests/integration/join_missing_values.c:52:
-tests/integration/../../frame/join.h: In function ‘join_build_partitions_mt’:
-tests/integration/../../frame/join.h:378: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  378 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/join.h: In function ‘join_probe_mt’:
-tests/integration/../../frame/join.h:441: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  441 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/join_missing_values.c: In function ‘expect_abort’:
-tests/integration/join_missing_values.c:80:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-   80 |         freopen("/dev/null", "w", stderr);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/distributed_simulation.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/distributed_simulation
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. tests/integration/optimizer_swap.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/optimizer_swap
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/pipeline_ownership
-In file included from tests/integration/pipeline_ownership.c:39:
-tests/integration/../../frame/sql.h: In function ‘sql_where_select_rows_mt’:
-tests/integration/../../frame/sql.h:1423: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1423 |     #pragma omp parallel for
-      | 
-tests/integration/../../frame/sql.h:1453: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1453 |     #pragma omp parallel for
-      | 
-tests/integration/../../frame/sql.h: In function ‘sql_build_groups_1col_mt’:
-tests/integration/../../frame/sql.h:1819: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1819 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/sql.h: In function ‘sql_apply_group_select’:
-tests/integration/../../frame/sql.h:2082: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 2082 |             #pragma omp parallel num_threads(n_threads)
-      | 
-In file included from tests/integration/pipeline_ownership.c:40:
-tests/integration/../../frame/join.h: In function ‘join_build_partitions_mt’:
-tests/integration/../../frame/join.h:378: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  378 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/join.h: In function ‘join_probe_mt’:
-tests/integration/../../frame/join.h:441: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  441 |     #pragma omp parallel num_threads(n_threads)
-      | 
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/header_composition
-In file included from tests/integration/header_composition.c:67:
-tests/integration/../../frame/sql.h: In function ‘sql_where_select_rows_mt’:
-tests/integration/../../frame/sql.h:1423: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1423 |     #pragma omp parallel for
-      | 
-tests/integration/../../frame/sql.h:1453: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1453 |     #pragma omp parallel for
-      | 
-tests/integration/../../frame/sql.h: In function ‘sql_build_groups_1col_mt’:
-tests/integration/../../frame/sql.h:1819: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1819 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/sql.h: In function ‘sql_apply_group_select’:
-tests/integration/../../frame/sql.h:2082: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 2082 |             #pragma omp parallel num_threads(n_threads)
-      | 
-In file included from tests/integration/header_composition.c:68:
-tests/integration/../../frame/join.h: In function ‘join_build_partitions_mt’:
-tests/integration/../../frame/join.h:378: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  378 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/join.h: In function ‘join_probe_mt’:
-tests/integration/../../frame/join.h:441: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  441 |     #pragma omp parallel num_threads(n_threads)
-      | 
-In file included from tests/integration/header_composition_reverse.c:17:
-tests/integration/../../frame/join.h: In function ‘join_build_partitions_mt’:
-tests/integration/../../frame/join.h:378: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  378 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/join.h: In function ‘join_probe_mt’:
-tests/integration/../../frame/join.h:441: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  441 |     #pragma omp parallel num_threads(n_threads)
-      | 
-In file included from tests/integration/header_composition_reverse.c:18:
-tests/integration/../../frame/sql.h: In function ‘sql_where_select_rows_mt’:
-tests/integration/../../frame/sql.h:1423: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1423 |     #pragma omp parallel for
-      | 
-tests/integration/../../frame/sql.h:1453: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1453 |     #pragma omp parallel for
-      | 
-tests/integration/../../frame/sql.h: In function ‘sql_build_groups_1col_mt’:
-tests/integration/../../frame/sql.h:1819: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1819 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/sql.h: In function ‘sql_apply_group_select’:
-tests/integration/../../frame/sql.h:2082: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 2082 |             #pragma omp parallel num_threads(n_threads)
-      | 
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/header_composition_f32
-In file included from tests/integration/header_composition.c:67:
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_eq’:
-tests/integration/../../frame/sql.h:1101: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1101 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_eq, _CMP_EQ_OQ)
-      | 
-tests/integration/../../frame/sql.h:1101: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_ne’:
-tests/integration/../../frame/sql.h:1102: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1102 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_ne, _CMP_NEQ_UQ)
-      | 
-tests/integration/../../frame/sql.h:1102: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_lt’:
-tests/integration/../../frame/sql.h:1103: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1103 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_lt, _CMP_LT_OQ)
-      | 
-tests/integration/../../frame/sql.h:1103: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_le’:
-tests/integration/../../frame/sql.h:1104: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1104 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_le, _CMP_LE_OQ)
-      | 
-tests/integration/../../frame/sql.h:1104: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_gt’:
-tests/integration/../../frame/sql.h:1105: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1105 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_gt, _CMP_GT_OQ)
-      | 
-tests/integration/../../frame/sql.h:1105: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_ge’:
-tests/integration/../../frame/sql.h:1106: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1106 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_ge, _CMP_GE_OQ)
-      | 
-tests/integration/../../frame/sql.h:1106: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_eq’:
-tests/integration/../../frame/sql.h:1156: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1156 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_eq, _CMP_EQ_OQ)
-      | 
-tests/integration/../../frame/sql.h:1156: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_ne’:
-tests/integration/../../frame/sql.h:1157: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1157 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_ne, _CMP_NEQ_UQ)
-      | 
-tests/integration/../../frame/sql.h:1157: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_lt’:
-tests/integration/../../frame/sql.h:1158: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1158 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_lt, _CMP_LT_OQ)
-      | 
-tests/integration/../../frame/sql.h:1158: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_le’:
-tests/integration/../../frame/sql.h:1159: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1159 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_le, _CMP_LE_OQ)
-      | 
-tests/integration/../../frame/sql.h:1159: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_gt’:
-tests/integration/../../frame/sql.h:1160: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1160 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_gt, _CMP_GT_OQ)
-      | 
-tests/integration/../../frame/sql.h:1160: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_ge’:
-tests/integration/../../frame/sql.h:1161: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1161 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_ge, _CMP_GE_OQ)
-      | 
-tests/integration/../../frame/sql.h:1161: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_where_select_rows_mt’:
-tests/integration/../../frame/sql.h:1423: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1423 |     #pragma omp parallel for
-      | 
-tests/integration/../../frame/sql.h:1453: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1453 |     #pragma omp parallel for
-      | 
-tests/integration/../../frame/sql.h: In function ‘sql_build_groups_1col_mt’:
-tests/integration/../../frame/sql.h:1819: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1819 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/sql.h: In function ‘sql_apply_group_select’:
-tests/integration/../../frame/sql.h:2082: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 2082 |             #pragma omp parallel num_threads(n_threads)
-      | 
-In file included from tests/integration/header_composition.c:68:
-tests/integration/../../frame/join.h: In function ‘join_build_partitions_mt’:
-tests/integration/../../frame/join.h:378: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  378 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/join.h: In function ‘join_probe_mt’:
-tests/integration/../../frame/join.h:441: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  441 |     #pragma omp parallel num_threads(n_threads)
-      | 
-In file included from tests/integration/header_composition_reverse.c:17:
-tests/integration/../../frame/join.h: In function ‘join_build_partitions_mt’:
-tests/integration/../../frame/join.h:378: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  378 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/join.h: In function ‘join_probe_mt’:
-tests/integration/../../frame/join.h:441: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  441 |     #pragma omp parallel num_threads(n_threads)
-      | 
-In file included from tests/integration/header_composition_reverse.c:18:
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_eq’:
-tests/integration/../../frame/sql.h:1101: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1101 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_eq, _CMP_EQ_OQ)
-      | 
-tests/integration/../../frame/sql.h:1101: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_ne’:
-tests/integration/../../frame/sql.h:1102: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1102 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_ne, _CMP_NEQ_UQ)
-      | 
-tests/integration/../../frame/sql.h:1102: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_lt’:
-tests/integration/../../frame/sql.h:1103: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1103 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_lt, _CMP_LT_OQ)
-      | 
-tests/integration/../../frame/sql.h:1103: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_le’:
-tests/integration/../../frame/sql.h:1104: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1104 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_le, _CMP_LE_OQ)
-      | 
-tests/integration/../../frame/sql.h:1104: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_gt’:
-tests/integration/../../frame/sql.h:1105: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1105 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_gt, _CMP_GT_OQ)
-      | 
-tests/integration/../../frame/sql.h:1105: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_ge’:
-tests/integration/../../frame/sql.h:1106: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1106 | SQL_CMP_BITMASK_DEFINE(sql_cmp_bitmask_ge, _CMP_GE_OQ)
-      | 
-tests/integration/../../frame/sql.h:1106: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_eq’:
-tests/integration/../../frame/sql.h:1156: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1156 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_eq, _CMP_EQ_OQ)
-      | 
-tests/integration/../../frame/sql.h:1156: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_ne’:
-tests/integration/../../frame/sql.h:1157: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1157 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_ne, _CMP_NEQ_UQ)
-      | 
-tests/integration/../../frame/sql.h:1157: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_lt’:
-tests/integration/../../frame/sql.h:1158: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1158 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_lt, _CMP_LT_OQ)
-      | 
-tests/integration/../../frame/sql.h:1158: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_le’:
-tests/integration/../../frame/sql.h:1159: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1159 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_le, _CMP_LE_OQ)
-      | 
-tests/integration/../../frame/sql.h:1159: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_gt’:
-tests/integration/../../frame/sql.h:1160: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1160 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_gt, _CMP_GT_OQ)
-      | 
-tests/integration/../../frame/sql.h:1160: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_cmp_bitmask_cc_ge’:
-tests/integration/../../frame/sql.h:1161: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1161 | SQL_CMP_BITMASK_CC_DEFINE(sql_cmp_bitmask_cc_ge, _CMP_GE_OQ)
-      | 
-tests/integration/../../frame/sql.h:1161: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-tests/integration/../../frame/sql.h: In function ‘sql_where_select_rows_mt’:
-tests/integration/../../frame/sql.h:1423: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1423 |     #pragma omp parallel for
-      | 
-tests/integration/../../frame/sql.h:1453: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1453 |     #pragma omp parallel for
-      | 
-tests/integration/../../frame/sql.h: In function ‘sql_build_groups_1col_mt’:
-tests/integration/../../frame/sql.h:1819: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 1819 |     #pragma omp parallel num_threads(n_threads)
-      | 
-tests/integration/../../frame/sql.h: In function ‘sql_apply_group_select’:
-tests/integration/../../frame/sql.h:2082: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
- 2082 |             #pragma omp parallel num_threads(n_threads)
-      | 
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/cluster_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/cluster_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/encoder.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/encoder
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/join_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/join_example
-In file included from examples/join_example.c:2:
-./frame/join.h: In function ‘join_build_partitions_mt’:
-./frame/join.h:378: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  378 |     #pragma omp parallel num_threads(n_threads)
-      | 
-./frame/join.h: In function ‘join_probe_mt’:
-./frame/join.h:441: warning: ignoring ‘#pragma omp parallel’ [-Wunknown-pragmas]
-  441 |     #pragma omp parallel num_threads(n_threads)
-      | 
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/mat_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/mat_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/mcs_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/mcs_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/mlp_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/mlp_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/qvarma_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/rdata_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/rdata_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/unit_root_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/unit_root_example
+make: 'tests/correctness/rdata_array_read' is up to date.
+make: 'tests/correctness/adf_correctness' is up to date.
+make: 'tests/correctness/kpss_correctness' is up to date.
+make: 'tests/correctness/dfgls_correctness' is up to date.
+make: 'tests/correctness/otto_correctness' is up to date.
+make: 'tests/correctness/hlt_union_correctness' is up to date.
+make: 'tests/correctness/hlt_break_correctness' is up to date.
+make: 'tests/correctness/hhlt_correctness' is up to date.
+make: 'tests/correctness/zivot_andrews_correctness' is up to date.
+make: 'tests/correctness/johansen_correctness' is up to date.
+make: 'tests/correctness/engle_granger_correctness' is up to date.
+make: 'tests/correctness/maki_correctness' is up to date.
+make: 'tests/correctness/qlr_test_correctness' is up to date.
+make: 'tests/correctness/lbfgs_correctness' is up to date.
+make: 'tests/correctness/score_driven_location_correctness' is up to date.
+make: 'tests/correctness/qvarma_correctness' is up to date.
+make: 'tests/correctness/qvarma_fused_agreement' is up to date.
+make: 'tests/correctness/qvarma_identification' is up to date.
+make: 'tests/integration/frame_to_model' is up to date.
+make: 'tests/integration/join_missing_values' is up to date.
+make: 'tests/integration/distributed_simulation' is up to date.
+make: 'tests/integration/optimizer_swap' is up to date.
+make: 'tests/integration/pipeline_ownership' is up to date.
+make: 'tests/integration/header_composition' is up to date.
+make: 'tests/integration/header_composition_f32' is up to date.
+make: Nothing to be done for 'examples'.
 
 === test_mat: PASS ===
 construction
@@ -609,6 +64,7 @@ views
 arithmetic contiguous
 arithmetic strided
 mat_mul
+mat_gemm
 reductions
 mat_max/mat_min propagate NaN correctly even under -ffast-math
 mat_all_finite: NaN, both infinities, the finite boundary, and the strided path, under -ffast-math
@@ -1452,16 +908,19 @@ fit reuses a cache, reports what it recorded, and refits on demand
 reported likelihood and gradient against the returned parameters
   ok
 convergence flag against the gradient it claims to have reached
-  converged 1 after 282 iterations, gradient norm 1214
+  converged 1 after 220 iterations, gradient norm 100.8
   ok
 the reason a fit stopped, against the verdict it reports
-  function decrease below tolerance after 227 iterations, converged 1
+  function decrease below tolerance after 237 iterations, converged 1
   ok
 the link moves one parameter per coordinate, by the stated derivative
   55 coordinates, at most 1 parameter moved by any one of them
   ok
 standard errors against the sample size
   Psi_star and Omega_inv shrink by 2.166 between T=500 and T=2000 over 2 draws, expected 2
+  ok
+standard errors where the Hessian will not decompose
+  theta at 400: returned, hessian_is_usable 0, is_maximum 0
   ok
 fit from a starting guess where the likelihood is not a number
   overflow: 0 iterations, converged 0, log-likelihood -inf
@@ -1471,22 +930,53 @@ slow checks skipped, run make test-correctness-stress
 
 PASSED, 0 failures
 
+=== qvarma_fused_agreement: PASS ===
+fused against traced t-QVARMA filter, float64 build
+
+fused filter against the traced one, over shapes and draws
+  the ABM pipeline's shape                   n =  42, T = 120: value 2.21e-16, paths 8.86e-16, gradient 4.70e-14
+  no co-integrated block                     n =  20, T =  90: value 0.00e+00, paths 8.88e-16, gradient 1.27e-14
+  no co-integrated block, p = 3              n =  17, T =  80: value 5.79e-16, paths 1.25e-15, gradient 2.81e-14
+  rank two co-integration                    n =  59, T = 100: value 1.33e-16, paths 2.55e-15, gradient 3.85e-14
+  one beta per lag                           n =  47, T =  70: value 4.30e-16, paths 3.05e-14, gradient 2.77e-13
+  longer warm-up convention                  n =  40, T =  60: value 1.33e-16, paths 1.77e-15, gradient 3.38e-14
+  q longer than p                            n =  41, T =  50: value 1.76e-16, paths 5.22e-15, gradient 3.82e-14
+  restricted Psi_star                        n =  51, T =  65: value 1.73e-16, paths 1.46e-15, gradient 4.79e-14
+  sample barely past the warm-up             n =  75, T =   6: value 3.23e-16, paths 7.77e-16, gradient 1.17e-15
+  single I(0) series with a large I(1) block n =  71, T =  55: value 1.64e-16, paths 3.32e-15, gradient 2.84e-14
+
+both gradients against a central difference of the likelihood
+  the ABM pipeline's shape                   fused 5.02e-08, taped 5.02e-08
+  no co-integrated block                     fused 9.40e-09, taped 9.40e-09
+  one beta per lag                           fused 3.35e-08, taped 3.35e-08
+  restricted Psi_star                        fused 1.73e-08, taped 1.73e-08
+
+a reused workspace gives the same answer as a fresh one
+  value difference 0, worst gradient difference 0
+
+an unusable scale returns the sentinel, not an answer
+  overflow: value -inf, gradient zeroed
+  underflow: value -inf, gradient zeroed
+
+
+PASSED, 0 failures
+
 === qvarma_identification: PASS ===
-qvarma identification, float64 build
+qvarma identification, float32 build
 
 the intercept is learned far more slowly once the model has an I(1) block
-  with an I(1) block       9.87 at T=250 to     25.1 at T=1000, growth 2.54
-  without one             683.5 at T=250 to     2869 at T=1000, growth 4.20
-  and 114 times less curvature at T=1000
+  with an I(1) block      9.771 at T=250 to    25.72 at T=1000, growth 2.63
+  without one             683.1 at T=250 to     2869 at T=1000, growth 4.20
+  and 112 times less curvature at T=1000
   ok
 Phi_star loses its curvature when the score loading is near zero
-  Psi_star ~ 0.12:    16.82     Psi_star ~ 0.02:    -2.54
+  Psi_star ~ 0.12:    16.52     Psi_star ~ 0.02:   -2.551
   ok
 beta loses its curvature when the co-integration loading is near zero
-  alpha ~ 0.20:    27.46     alpha ~ 0.02:    2.574
+  alpha ~ 0.20:    28.19     alpha ~ 0.02:    2.584
   ok
 a co-integrated block costs orders of magnitude of conditioning
-  without an I(1) block      102.6     with one       3504
+  without an I(1) block      106.7     with one       3536
   ok
 
 PASSED, 0 failures
@@ -1569,4 +1059,4 @@ PASSED, 0 failures
 
 
 === summary ===
-54 passed, 0 failed
+55 passed, 0 failed
