@@ -358,6 +358,47 @@ It re-derives all four crossovers at one and four threads in both precisions
 and prints the constants currently compiled in, so the answer is one command
 rather than an argument. Changing a constant needs nothing but the `#define`.
 
+What a second machine said, 2026-08-29. AMD Ryzen 7 4800H, 8 physical cores
+with SMT, 2.9 GHz maximum, 8 MiB L3; EndeavourOS, kernel 6.19.14-arch1-1, gcc
+15.2.1, `-O3 -march=native -ffast-math -fopenmp`, OpenBLAS 0.3.33
+`DYNAMIC_ARCH` OpenMP build, float64, best of 5 rounds, launched with
+`OMP_NUM_THREADS=1` for the reason in the next paragraph. Three of the four
+constants are still where they belong and one is one step high:
+
+- `TRSM_SMALL_N` 12 is exact. The one-right-hand-side loop wins 1.26 to 1 at
+  `n = 12` and loses 0.85 to 1 at `n = 16`.
+- `MAT_GEMM_VECTOR` 64 is safe. The matrix-by-column loop still wins 3.30 to 1
+  at `n = 64`, the largest size timed, so the crossover is above the constant
+  rather than below it.
+- `MAT_GEMM_SMALL` 8 is one row too high here. The square-product loop wins
+  1.02 to 1 at `n = 6` and loses 0.81 to 1 at `n = 8`, so a square product at
+  exactly 8 pays 1.2x on this machine. That is the bounded loss this section
+  already describes, and it was left alone: the constant is right on the
+  machine the library is developed on, and none of the four shapes in
+  `tests/performance/qvarma_analytic_filter.c` has a dimension of 8 at all.
+- The concurrency collapse reproduced, and the prediction two paragraphs up
+  that more cores make it worse held. `blas_par` is 0.70 to 1.3 for the
+  small-`n` rows, meaning four threads issuing the same small BLAS call get
+  no more work done than one, while the loop's `loop_par` is 3.9 to 4.0. Where
+  it shows most is the caller: `sd/qvarma.h`'s taped filter, which still
+  reaches BLAS at shapes the dispatch does not divert, loses throughput as
+  threads are added on this machine - 23000 evaluations per second at four
+  threads, 15400 at eight, 6000 at all sixteen - while the analytic-gradient
+  filter, which
+  issues no BLAS call, rises at every step. See
+  `docs/QVARMA_DOCUMENTATION.md`'s "The same benchmark on a second machine".
+
+One environment note, since it makes a run unreadable rather than merely
+different. `openblas_set_num_threads(1)` is ignored by an OpenMP build of
+OpenBLAS; `OMP_NUM_THREADS` is what governs. Measured: a 1200x1200
+`cblas_dgemm` after the call runs at 85.6 GFLOPS, and at 34.3 GFLOPS when the
+same binary is launched with `OMP_NUM_THREADS=1`. Without the variable the
+wide-right-hand-side Cholesky rows of this benchmark report about 3.2 ms per
+BLAS call at every `n` from 4 up, a fixed cost that is OpenBLAS starting
+sixteen threads for a job of a few microseconds; with it those same cells fall
+to 3.4 to 111 microseconds and the table is monotone again. Launch this
+benchmark with `OMP_NUM_THREADS=1` on any OpenMP build of OpenBLAS.
+
 ### Other limitations
 
 - No in-place operation variants (would avoid intermediate allocations in chained expressions)

@@ -108,7 +108,7 @@ i5-7400 with `openblas_set_num_threads(1)`: one taped value-and-gradient
 evaluation went from 1.380 ms to 0.379 ms at one thread, and from 9.755 ms to
 0.476 ms at four - a four-thread throughput scaling of 0.57 before and 3.18
 after, on a workload that is embarrassingly parallel and was running slower
-with four threads than with one. `tests/performance/qvarma_fused_filter.c` is
+with four threads than with one. `tests/performance/qvarma_analytic_filter.c` is
 the benchmark; `linalg/mat.h`'s `MAT_GEMM_SMALL` is where the threshold comes
 from.
 

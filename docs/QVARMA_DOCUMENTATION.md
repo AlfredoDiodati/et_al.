@@ -170,14 +170,25 @@ intercepts wrong and the I(0) one right.
 
 ### Two filters, one recursion
 
-The recursion of (1) to (4) is written twice. `_qvarma_filter` builds it on
-`ad.h`'s tape and lets reverse mode produce the gradient;
-`qvarma_fused_log_likelihood` runs the recursion and a hand-written adjoint as
-one loop with no tape, no BLAS call and no allocation between the first period
-and the last. The fit runs on the second. The first stays as the reference the
-second is checked against, which is what the model policy in `README.md`
-requires: a traced and an untraced variant that agree, with a test that checks
-it - `tests/correctness/qvarma_fused_agreement.c`.
+The recursion of (1) to (4) is written twice, and the only difference between
+the two is where the gradient comes from.
+
+`_qvarma_filter` builds the recursion on `ad.h`'s tape, which records every
+arithmetic step as a node, and lets reverse mode walk that recording backwards
+to produce the gradient. Nobody differentiates anything by hand; the price is
+a node per operation and a BLAS call per matrix product.
+
+`qvarma_analytic_log_likelihood` uses the gradient derived analytically - in
+closed form, by hand, from the recursion itself, written out block by block in
+the header - and evaluates it in the same loop as the value. There is
+therefore no tape, no BLAS call and no allocation between the first period and
+the last. Both compute the same log-likelihood and the same gradient of it.
+
+The fit runs on the analytic one. The traced one stays as the reference it is
+checked against, because a hand derivation can be wrong in a way reverse mode
+cannot, and because the model policy in `README.md` requires a traced and an
+untraced variant that agree with a test that checks it -
+`tests/correctness/qvarma_analytic_agreement.c`.
 
 Why the tape is the wrong tool here and not merely a slower one. At `K = 5` a
 `Psi_star u` product is fifty floating point operations; through OpenBLAS it
@@ -188,20 +199,21 @@ each. A batch of fits is embarrassingly parallel and the OpenMP loop over it
 ran *slower* than the serial one: eight fits took 47.4 s at one thread and
 54.2 s at four. Two changes fixed it, and they are separate. `linalg/mat.h`'s
 `mat_gemm` and `linalg/factor.h`'s `_trtrs` now dispatch small shapes to a
-plain loop, which is a core-tier fix every score-driven model gets. The fused
-filter is the model-tier one, and it removes the tape as well as the call.
+plain loop, which is a core-tier fix every score-driven model gets. The
+analytic gradient is the model-tier one, and it removes the tape as well as
+the call.
 
 What is stored, and why that much. The adjoint of period `t` needs that
 period's forward quantities, and through the recursion it also reads the ones
 at `t-1` down to `t-max(p,q,r)`, so the forward path is kept rather than
 recomputed: `v_t`, `z_t`, `u_t`, `mu_star_t`, `mu_dag_t` and `s_t`, which is
 `5K+1` numbers per period, about 83 KB at `K = 5` and `T = 400`. That is one
-allocation, made by `qvarma_fused_new` and reused by every evaluation of the
+allocation, made by `qvarma_analytic_new` and reused by every evaluation of the
 fit, and it also carries the parameter blocks, their adjoints and the backward
 pass's ring buffers. Nothing is allocated inside the loop.
 
 Every dimension is a runtime field read from the `QvarmaParams` handed to
-`qvarma_fused_new`. Two structural zeros are skipped rather than multiplied
+`qvarma_analytic_new`. Two structural zeros are skipped rather than multiplied
 out: `Psi_dag` is zero outside its lower-right `K_dag` block by construction,
 and under `mu_star_stationary_only` both `Psi_star` and `mu_star` are zero
 below row `K_star`, since `mu_star` starts at zero over the warm-up and has
@@ -261,17 +273,18 @@ QvarmaFitResult qvarma_fit_cached(Mat y, const QvarmaParams *initial_guess, Qvar
 void      qvarma_fit_result_free(QvarmaFitResult *result);
 ```
 
-The fused evaluator, which is what the two above run on:
+The analytic-gradient evaluator, whose gradient is the hand-derived one rather
+than the tape's, and which is what the two above run on:
 
 ```c
-QvarmaFused *qvarma_fused_new(const QvarmaParams *shape, int T);
-void         qvarma_fused_free(QvarmaFused *f);
-mreal        qvarma_fused_log_likelihood(QvarmaFused *f, Vec theta, Mat y, Vec gradient);
+QvarmaAnalytic *qvarma_analytic_new(const QvarmaParams *shape, int T);
+void         qvarma_analytic_free(QvarmaAnalytic *f);
+mreal        qvarma_analytic_log_likelihood(QvarmaAnalytic *f, Vec theta, Mat y, Vec gradient);
 
-const mreal *qvarma_fused_v(const QvarmaFused *f, int t);         /* K numbers per period */
-const mreal *qvarma_fused_u(const QvarmaFused *f, int t);
-const mreal *qvarma_fused_mu_star(const QvarmaFused *f, int t);
-const mreal *qvarma_fused_mu_dag(const QvarmaFused *f, int t);
+const mreal *qvarma_analytic_v(const QvarmaAnalytic *f, int t);         /* K numbers per period */
+const mreal *qvarma_analytic_u(const QvarmaAnalytic *f, int t);
+const mreal *qvarma_analytic_mu_star(const QvarmaAnalytic *f, int t);
+const mreal *qvarma_analytic_mu_dag(const QvarmaAnalytic *f, int t);
 ```
 
 `gradient` may be `{0}`, in which case only the value is computed and the
@@ -440,9 +453,9 @@ asserts on that, which ends the process. An optimizer probes wherever its line
 search takes it, so `_qvarma_scale_is_usable` checks the constrained values
 first and the objective returns a sentinel: `INFINITY` from
 `qvarma_negative_log_likelihood`, `-INFINITY` from `qvarma_log_likelihood_at`
-and `qvarma_fused_log_likelihood`, with the gradient zeroed. Asserts are for
+and `qvarma_analytic_log_likelihood`, with the gradient zeroed. Asserts are for
 programmer error only. It reads `Omega_inv`'s diagonal and `nu` out of a plain
-`K x K` buffer, which is the layout both the traced and the fused
+`K x K` buffer, which is the layout both the traced and the analytic
 representation use, so one function serves both; `qvarma_scale_is_usable` is
 the thin wrapper that takes a `QvarmaLinked`.
 
@@ -618,9 +631,9 @@ and a converged fit takes far more than a few hundred iterations. See
 across builds" for why a single-seed convergence assertion was the wrong
 check.
 
-### `tests/correctness/qvarma_fused_agreement.c`
+### `tests/correctness/qvarma_analytic_agreement.c`
 
-Whether the fused filter and the traced one compute the same thing. Four
+Whether the analytic-gradient filter and the traced one compute the same thing. Four
 questions: the value against `_qvarma_filter`'s, `mu_star`, `mu_dag` and `v`
 period by period rather than only in the scalar they sum to, the gradient
 against `tape_backward`'s coordinate by coordinate, and both gradients against
@@ -721,12 +734,17 @@ Benchmarks, never part of `make test`. Measured with interleaved best-of-N
 rather than one timing of each version: a straight A-then-B comparison on this
 model once reported 3.42 ms against 5.62 ms for two builds of identical code.
 
-### `tests/performance/qvarma_fused_filter.c`
+### `tests/performance/qvarma_analytic_filter.c`
 
-What the fused evaluator costs against the taped one, value only and value
-with gradient, at one and at four threads. `make bench-qvarma_fused_filter`
-runs it at both precisions and writes `out/qvarma_fused_filter_float32.txt`
-and the float64 name.
+What the analytic-gradient evaluator costs against the taped one, value only and value
+with gradient, at one thread and at every hardware thread the machine has.
+The wide count is read from `omp_get_num_procs` at startup rather than
+hardcoded, and an explicit count can be passed as the first argument, which is
+how a run is made comparable with a table from a machine of a different width.
+`make bench-qvarma_analytic_filter` runs it at both precisions and writes
+`out/qvarma_analytic_filter_float32_<N>t.txt` and the float64 name, the width in
+the file name because two widths on one machine are two different
+measurements.
 
 Setup for every number below. Intel i5-7400, 4 physical cores, no
 hyperthreading, 3.0 GHz base / 3.5 GHz turbo, 6 MiB L3; Ubuntu, gcc 13.3,
@@ -734,15 +752,17 @@ hyperthreading, 3.0 GHz base / 3.5 GHz turbo, 6 MiB L3; Ubuntu, gcc 13.3,
 `openblas_set_num_threads(1)`, `M_MMAP_THRESHOLD` and `M_TRIM_THRESHOLD` raised
 through `mallopt` so the tape's block churn is not measured as page faults.
 The series is simulated by `qvarma_simulate` from a fixed seed at the shape in
-the row. One thread runs `repeats` evaluations; four threads run `repeats`
-each, so a per-evaluation number is comparable across the two. Best of 5
-rounds. `gain` is taped time over fused time; `par` is an arm's own
-four-thread throughput speedup, 4.00 being perfect.
+the row. One thread runs `repeats` evaluations; N threads run `repeats` each,
+so a per-evaluation number is comparable across the two. Best of 5 rounds.
+`gain` is taped time over analytic time; `par` is an arm's own N-thread throughput
+speedup, N being perfect. Four threads was this machine's full width, which is
+why the columns below say four; on anything wider read the section after this
+one before carrying these ratios over.
 
 At the ABM pipeline's shape, `K = 5`, `K_star = 3`, `p = q = 1`, `r = 2`,
 `R = 1`, `T = 400`, 42 parameters, float64:
 
-| what | taped 1t | fused 1t | gain | taped 4t | fused 4t | gain | taped par | fused par |
+| what | taped 1t | analytic 1t | gain | taped 4t | analytic 4t | gain | taped par | analytic par |
 |---|---|---|---|---|---|---|---|---|
 | value only, before the `ad.h` work | 0.680 ms | 0.047 ms | 14.4 | 3.558 ms | 0.049 ms | 72.0 | 0.76 | 3.82 |
 | value+gradient, before | 1.380 ms | 0.112 ms | 12.4 | 9.755 ms | 0.117 ms | 83.6 | 0.57 | 3.83 |
@@ -754,7 +774,7 @@ At the ABM pipeline's shape, `K = 5`, `K_star = 3`, `p = q = 1`, `r = 2`,
 two rows separate what each change bought. The small-kernel dispatch alone
 took the taped value-and-gradient from 1.380 ms to 0.379 ms, 3.6x, and its
 four-thread scaling from 0.57 to 3.18 - that is the contention fix, and every
-score-driven model in the library gets it. The fused filter is a further 3.8x
+score-driven model in the library gets it. The analytic-gradient filter is a further 3.8x
 on top, and would have been 14x against the tape as it was.
 
 Against the pipeline as it actually ran before any of this, one
@@ -762,7 +782,7 @@ value-and-gradient evaluation on four threads went from 9.755 ms to 0.105 ms,
 93x. The float32 build is a little faster on both arms, 0.037 ms and 0.094 ms
 at one thread.
 
-Two things in the fused loop were worth removing, together 12 percent of an
+Two things in the analytic loop were worth removing, together 12 percent of an
 evaluation. `Omega_inv`'s diagonal is divided by twice per period, once in the
 forward substitution and once in the backward one, and the reciprocal cannot
 be hoisted by the compiler because the parameters and the path it writes are
@@ -781,6 +801,128 @@ cost. `K = 5` is the shape this model is tuned for, so it was reverted.
 
 The full table for both builds and all four shapes is in `out/`.
 
+### The same benchmark on a second machine
+
+Run on 2026-08-29 to separate what in the table above is the code from what is
+the i5-7400, and to answer what a batch of fits gets out of a machine with more
+than four cores. The i5 has exactly four, so its parallel column was that
+machine flat out; the benchmark now reads the core count at startup instead of
+hardcoding four, and the answer changes with it.
+
+Setup. AMD Ryzen 7 4800H, 8 physical cores with SMT, 16 hardware threads,
+1.4 GHz minimum / 2.9 GHz maximum, 512 KiB L2 per core, 8 MiB L3 in two 4 MiB
+slices, 7296 MiB RAM; EndeavourOS, kernel 6.19.14-arch1-1, `schedutil`
+governor, gcc 15.2.1, the same `-O3 -march=native -ffast-math -fopenmp`,
+OpenBLAS 0.3.33 `DYNAMIC_ARCH` OpenMP build. An interactive desktop, not a
+quiet server: one-minute load average 0.45 to 1.3 across the runs, a browser
+running throughout. Everything else - the four shapes, the seed, the `mallopt`
+thresholds, best of 5 rounds - is what the section above describes. Each
+invocation runs the whole benchmark twice, once to stdout and once to the file,
+so it yields two independent passes.
+
+Two properties of this environment had to be established before the tables mean
+anything.
+
+`openblas_set_num_threads(1)`, which the benchmark calls, does nothing on this
+build. A 1200x1200 `cblas_dgemm` issued after the call runs at 85.6 GFLOPS, and
+the same binary launched with `OMP_NUM_THREADS=1` runs it at 34.3 GFLOPS, so
+the environment variable governs the thread count here and the API call is
+ignored. It does not change the conclusion: rerunning the float64 benchmark
+under `OMP_NUM_THREADS=1` moved no gain by more than 0.5, because at these
+shapes the taped arm never reaches a BLAS call at all.
+
+The chip holds its clock, so a shortfall in a `par` column is not the power
+budget. A dependency-chained FMA loop that shares nothing scales 4.00 out of 4,
+8.01 out of 8, and 15.67 out of 16 on this part, measured with the same
+`num_threads` construction the benchmark uses. Whatever the filter fails to
+scale by is the filter or the library, not the silicon.
+
+Absolute times are not repeatable and the ratios are. Over six passes at four
+threads, `taped_1t` on the ABM value-and-gradient row spanned 0.309 to 0.507
+ms, a factor of 1.6, while `gain_1t` on that row stayed between 3.9 and 4.2.
+Quote a gain from this machine, never a millisecond.
+
+ABM pipeline's shape, `K = 5`, `K_star = 3`, `p = q = 1`, `r = 2`, `R = 1`,
+`T = 400`, 42 parameters, float64, one representative pass at each width:
+
+| threads | what | taped 1t | analytic 1t | gain | taped Nt | analytic Nt | gain | taped par | analytic par |
+|---|---|---|---|---|---|---|---|---|---|
+| 4 | value only | 0.170 ms | 0.032 ms | 5.4 | 0.174 ms | 0.032 ms | 5.5 | 3.90 | 3.95 |
+| 4 | value+gradient | 0.308 ms | 0.073 ms | 4.2 | 0.326 ms | 0.076 ms | 4.3 | 3.78 | 3.81 |
+| 8 | value only | 0.209 ms | 0.038 ms | 5.5 | 0.539 ms | 0.040 ms | 13.6 | 3.11 | 7.75 |
+| 8 | value+gradient | 0.385 ms | 0.089 ms | 4.3 | 0.781 ms | 0.109 ms | 7.2 | 3.94 | 6.56 |
+| 16 | value only | 0.210 ms | 0.041 ms | 5.1 | 3.089 ms | 0.100 ms | 30.8 | 1.09 | 6.54 |
+| 16 | value+gradient | 0.405 ms | 0.103 ms | 3.9 | 4.394 ms | 0.189 ms | 23.3 | 1.48 | 8.75 |
+
+`par` is out of the thread count in the row, so 4.00, 8.00 and 16.00 are
+perfect. The same three widths in throughput, which is the quantity a batch of
+fits actually cares about - evaluations per second, `threads` divided by the
+per-evaluation time, one representative pass, float64:
+
+| case | what | analytic 4t | analytic 8t | analytic 16t | taped 4t | taped 8t | taped 16t |
+|---|---|---|---|---|---|---|---|
+| `K=5 r=2` | value only | 125000 | 164000 | 198000 | 23000 | 15400 | 6000 |
+| `K=5 r=2` | value+gradient | 52000 | 86000 | 87000 | 12300 | 9100 | 4300 |
+| `K=5 r=4` | value only | 114000 | 197000 | 207000 | 14900 | 6900 | 3500 |
+| `K=5 r=4` | value+gradient | 43000 | 71000 | 73000 | 7800 | 3900 | 2600 |
+| `K=3 r=1` | value only | 108000 | 169000 | 191000 | 14500 | 7700 | 3500 |
+| `K=3 r=1` | value+gradient | 47000 | 59000 | 75000 | 8600 | 3800 | 2700 |
+| `K=12 r=2` | value only | 63000 | 98000 | 110000 | 14500 | 3900 | 3400 |
+| `K=12 r=2` | value+gradient | 21000 | 35000 | 36000 | 3600 | 3100 | 2300 |
+
+What this says:
+
+- **The one-thread gain reproduced.** 5.1 to 5.5 for the value against the
+  i5's 5.2, and 3.9 to 4.3 for the value and gradient against its 3.8. That is
+  the portable half of the claim - fewer allocations, no tape nodes, no
+  indirection - and a second micro-architecture now stands behind it.
+- **Four threads is too narrow to show the contention on an eight-core
+  machine, and that is why the earlier reading was misleading.** At four
+  threads both arms scale almost perfectly, `taped_par` 3.78 to 3.90 out of
+  4.00, and `gain_4t` sits barely above `gain_1t`. Nothing appeared to be
+  wrong with the taped arm at all.
+- **At eight threads the taped arm stops scaling and at sixteen it goes
+  backwards.** Its throughput on the ABM value-only row is 23000 evaluations
+  per second at four threads, 15400 at eight and 6000 at sixteen: adding cores
+  makes a batch of taped fits slower in absolute terms, `taped_par` falling to
+  1.09 out of 16.00. That is OpenBLAS's per-process buffer table, the effect
+  `docs/MATRIX_DOCUMENTATION.md` predicts should worsen with core count, and it
+  does. The dispatch thresholds keep the small shapes away from BLAS but the
+  taped path still issues calls the analytic one does not.
+- **The analytic arm keeps scaling and going wider is always worth it.** Its
+  throughput rises at every step on every row. Over four passes at each width
+  the eight-to-sixteen step is worth 9 to 15 percent on the value-only rows and
+  0 to 5 percent on the value-and-gradient rows, so the SMT siblings pay
+  something on the cheaper path and nothing measurable on the one that
+  saturates the arithmetic units. Never negative, which is what settles the
+  default.
+- **So the gain grows with the width of the machine.** ABM shape, value and
+  gradient: 4.3 at four threads, 7.2 at eight, 23.3 at sixteen. Value only
+  reaches 30.8, and `K=5 r=4` value only reaches 59.9. These are much larger
+  than the i5's 4.5 and are not a better implementation - they are the taped
+  arm collapsing on a machine wide enough to make it collapse.
+- **`analytic_par` is noisier at full width and the desktop is why.** At four
+  threads it sits at 3.8 to 4.0 out of 4.00 in every pass; at sixteen it ranges
+  2.2 to 8.8 out of 16.00. With every hardware thread taken, a browser waking
+  up steals a worker outright, where at four threads twelve idle threads
+  absorbed it. Full-width numbers from an interactive machine carry that
+  spread; the throughput direction survives it, individual `par` cells do not.
+- **float32 behaves the same.** ABM shape at sixteen threads, 33.3 for the
+  value and 18.2 for the value and gradient, `analytic_par` 8.55 and 8.27. The
+  largest single gain in either build is `K=3 r=1` value only, 54.7 at float32
+  and 55.2 at float64.
+
+`make bench-small_blas_threshold` was run on this machine too, as this file's
+"Known gaps" requires. The four compiled-in constants are still in the right
+place for the shapes this model uses: at `n = 5` and one thread the
+hand-written product beats `cblas_dgemm` 10.7 to 1 on the matrix-by-column
+shape, and the one-right-hand-side triangular solve beats `cblas_dtrsm` 4.2 to
+1. See `docs/MATRIX_DOCUMENTATION.md`, which records what that run said about
+the constants themselves.
+
+`out/` is not under version control, and holds whichever machine and width ran
+last at each of the six file names.
+
 ## Where the model is unreliable
 
 **Extracted to its own file: [`docs/QVARMA_RELIABILITY_DOCUMENTATION.md`](QVARMA_RELIABILITY_DOCUMENTATION.md).**
@@ -793,9 +935,9 @@ the setup stated per number.
 
 ## Known gaps
 
-- **The fused filter's speedup splits into a portable half and a
+- **The analytic-gradient filter's speedup splits into a portable half and a
   machine-specific one, and only the split is worth quoting elsewhere.**
-  Against the taped path at one thread the fused evaluator is 3.8x once
+  Against the taped path at one thread the analytic-gradient evaluator is 3.8x once
   `linalg/mat.h` and `linalg/factor.h` dispatch small shapes away from BLAS,
   and 14x against the taped path as it was before that. The first factor is
   fewer allocations, no tape nodes and no indirection - arithmetic and memory,
@@ -804,10 +946,17 @@ the setup stated per number.
   against one build of OpenBLAS 0.3.26. The four-thread figures depend on it
   more heavily still, since what they mostly measure is OpenBLAS's
   per-process buffer table, whose severity scales with core count and which a
-  different BLAS may not have at all. See
-  `docs/MATRIX_DOCUMENTATION.md`'s "The four dispatch thresholds are measured
-  on one machine"; on new hardware run `make bench-small_blas_threshold` and
-  `make bench-qvarma_fused_filter` before quoting any number in this file.
+  different BLAS may not have at all. Both halves have now been checked on one
+  other machine, an AMD Ryzen 7 4800H with 8 cores and 16 hardware threads
+  against OpenBLAS 0.3.33. The one-thread gain reproduced at 3.9 to 4.3x. The
+  parallel one did not stay put: it is 4.3x at four threads, 7.2x at eight and
+  23.3x at all sixteen, because the taped arm's throughput falls as threads are
+  added while the analytic arm's keeps rising. The i5 had four cores, so its
+  parallel column was that machine at full width and understates what the
+  contention costs on a wider one. See "The same benchmark on a second machine"
+  above, and `docs/MATRIX_DOCUMENTATION.md`'s "The four dispatch thresholds are
+  measured on one machine"; on new hardware run `make bench-small_blas_threshold`
+  and `make bench-qvarma_analytic_filter` before quoting any number in this file.
 - **The line search costs about three gradient evaluations per iteration.**
   At `K = 3`, `T = 600`, float32, a fit ran 65 iterations in 0.018 s, 0.269 ms
   per iteration, against 0.084 ms for one value-and-gradient evaluation - so

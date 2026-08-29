@@ -1,9 +1,9 @@
 /*
-Do the fused filter and the traced one compute the same thing.
+Do the analytic filter and the traced one compute the same thing.
 
 sd/qvarma.h carries two implementations of the same recursion. _qvarma_filter
 builds it on ad.h's tape and differentiates it by reverse mode;
-qvarma_fused_log_likelihood runs it and its hand-written adjoint as one loop
+qvarma_analytic_log_likelihood runs it and its hand-written adjoint as one loop
 with no tape. The fit uses the second, so the first is now only a reference -
 which is exactly why it needs a test holding the two together. The model policy
 in README.md requires it: a traced and an untraced variant that agree, with a
@@ -11,23 +11,23 @@ test that checks it.
 
 Four questions, in this order:
 
-  value      does the fused forward pass return _qvarma_filter's number
+  value      does the analytic forward pass return _qvarma_filter's number
   paths      do mu_star, mu_dag and v agree period by period, not only in the
              scalar they sum to
-  gradient   does the fused adjoint return tape_backward's vector, coordinate
+  gradient   does the analytic adjoint return tape_backward's vector, coordinate
              by coordinate
   truth      are both of them the derivative of the likelihood at all, by a
              central difference
 
-The last one is not redundant. The fused pass and the taped pass are two
+The last one is not redundant. The analytic pass and the taped pass are two
 implementations of one derivation, and a mistake in the derivation - a missing
 term in the score, a warm-up convention applied in one place and not the other -
 moves both of them together and passes the gradient comparison. Only a
-difference of the value catches that, and it is checked against the fused value
+difference of the value catches that, and it is checked against the analytic value
 and the taped value separately for the same reason.
 
 The sweep is over shapes, not over one shape. Every dimension the model has is
-a runtime field, so a fused pass that happens to be right at p = q = 1, K = 5,
+a runtime field, so a analytic pass that happens to be right at p = q = 1, K = 5,
 r = 2 says nothing about r = 3, about a model with no co-integrated block, about
 the restricted Psi_star, or about the longer warm-up convention. The shapes
 below cover each of those, including the corners where a lag length runs into
@@ -43,7 +43,7 @@ Built at float64 (STAT_CFLAGS): the gradient comparison is a difference of two
 sums over the whole sample, and at float32 the agreement it can demonstrate is
 weaker than the bug it is meant to catch.
 
-Run with make test, or ./tests/correctness/qvarma_fused_agreement.
+Run with make test, or ./tests/correctness/qvarma_analytic_agreement.
 */
 
 #include "../../sd/qvarma.h"
@@ -105,9 +105,9 @@ static Mat draw_observations(Rng *rng, int K, int T) {
     return y;
 }
 
-/* The traced value and gradient at theta, for the fused ones to be compared
+/* The traced value and gradient at theta, for the analytic ones to be compared
    against. mu_star, mu_dag and v come back too when the caller asks, since the
-   fused filter keeps its own copies of all three and they should match. */
+   analytic filter keeps its own copies of all three and they should match. */
 static mreal taped_value_and_gradient(Vec theta, const QvarmaParams *shape, Mat y,
                                       Vec gradient, Mat mu_star_out, Mat mu_dag_out,
                                       Mat v_out) {
@@ -144,10 +144,10 @@ static void check_one_shape(const Shape *shape, Rng *rng, int draws) {
     QvarmaParams model = build_shape(shape);
     int n = qvarma_n_theta(&model), K = shape->K, T = shape->T;
     Mat y = draw_observations(rng, K, T);
-    QvarmaFused *fused = qvarma_fused_new(&model, T);
+    QvarmaAnalytic *analytic = qvarma_analytic_new(&model, T);
 
     Vec theta = mat_new(n, 1);
-    Vec taped_gradient = mat_new(n, 1), fused_gradient = mat_new(n, 1);
+    Vec taped_gradient = mat_new(n, 1), analytic_gradient = mat_new(n, 1);
     Mat mu_star = mat_new(K, T), mu_dag = mat_new(K, T), v = mat_new(K, T);
     mreal worst_value = 0, worst_path = 0, worst_gradient = 0;
 
@@ -155,7 +155,7 @@ static void check_one_shape(const Shape *shape, Rng *rng, int draws) {
         draw_theta(rng, theta);
         mreal taped = taped_value_and_gradient(theta, &model, y, taped_gradient,
                                                mu_star, mu_dag, v);
-        mreal value = qvarma_fused_log_likelihood(fused, theta, y, fused_gradient);
+        mreal value = qvarma_analytic_log_likelihood(analytic, theta, y, analytic_gradient);
 
         CHECK_CLOSE(value, taped, AGREEMENT_TOL, shape->name);
         mreal scale = MABS(taped) > 1 ? MABS(taped) : 1;
@@ -163,32 +163,32 @@ static void check_one_shape(const Shape *shape, Rng *rng, int draws) {
         if (difference > worst_value) worst_value = difference;
 
         for (int t = 0; t < T; t++) {
-            const mreal *fused_star = qvarma_fused_mu_star(fused, t);
-            const mreal *fused_dag = qvarma_fused_mu_dag(fused, t);
-            const mreal *fused_v = qvarma_fused_v(fused, t);
+            const mreal *analytic_star = qvarma_analytic_mu_star(analytic, t);
+            const mreal *analytic_dag = qvarma_analytic_mu_dag(analytic, t);
+            const mreal *analytic_v = qvarma_analytic_v(analytic, t);
             for (int k = 0; k < K; k++) {
-                CHECK_CLOSE(fused_star[k], AT(mu_star, k, t), AGREEMENT_TOL, shape->name);
-                CHECK_CLOSE(fused_dag[k], AT(mu_dag, k, t), AGREEMENT_TOL, shape->name);
-                CHECK_CLOSE(fused_v[k], AT(v, k, t), AGREEMENT_TOL, shape->name);
+                CHECK_CLOSE(analytic_star[k], AT(mu_star, k, t), AGREEMENT_TOL, shape->name);
+                CHECK_CLOSE(analytic_dag[k], AT(mu_dag, k, t), AGREEMENT_TOL, shape->name);
+                CHECK_CLOSE(analytic_v[k], AT(v, k, t), AGREEMENT_TOL, shape->name);
                 mreal path_scale = MABS(AT(v, k, t));
                 if (MABS(AT(mu_star, k, t)) > path_scale) path_scale = MABS(AT(mu_star, k, t));
                 if (MABS(AT(mu_dag, k, t)) > path_scale) path_scale = MABS(AT(mu_dag, k, t));
                 if (path_scale < 1) path_scale = 1;
-                mreal worst_here = MABS(fused_star[k] - AT(mu_star, k, t));
-                if (MABS(fused_dag[k] - AT(mu_dag, k, t)) > worst_here)
-                    worst_here = MABS(fused_dag[k] - AT(mu_dag, k, t));
-                if (MABS(fused_v[k] - AT(v, k, t)) > worst_here)
-                    worst_here = MABS(fused_v[k] - AT(v, k, t));
+                mreal worst_here = MABS(analytic_star[k] - AT(mu_star, k, t));
+                if (MABS(analytic_dag[k] - AT(mu_dag, k, t)) > worst_here)
+                    worst_here = MABS(analytic_dag[k] - AT(mu_dag, k, t));
+                if (MABS(analytic_v[k] - AT(v, k, t)) > worst_here)
+                    worst_here = MABS(analytic_v[k] - AT(v, k, t));
                 if (worst_here / path_scale > worst_path) worst_path = worst_here / path_scale;
             }
         }
 
         for (int i = 0; i < n; i++) {
-            CHECK_CLOSE(fused_gradient.d[i], taped_gradient.d[i], AGREEMENT_TOL,
+            CHECK_CLOSE(analytic_gradient.d[i], taped_gradient.d[i], AGREEMENT_TOL,
                         shape->name);
             mreal coordinate_scale = MABS(taped_gradient.d[i]) > 1
                                    ? MABS(taped_gradient.d[i]) : 1;
-            mreal coordinate = MABS(fused_gradient.d[i] - taped_gradient.d[i])
+            mreal coordinate = MABS(analytic_gradient.d[i] - taped_gradient.d[i])
                              / coordinate_scale;
             if (coordinate > worst_gradient) worst_gradient = coordinate;
         }
@@ -198,15 +198,15 @@ static void check_one_shape(const Shape *shape, Rng *rng, int draws) {
            shape->name, n, T, (double)worst_value, (double)worst_path,
            (double)worst_gradient);
 
-    mat_free(theta); mat_free(taped_gradient); mat_free(fused_gradient);
+    mat_free(theta); mat_free(taped_gradient); mat_free(analytic_gradient);
     mat_free(mu_star); mat_free(mu_dag); mat_free(v);
-    qvarma_fused_free(fused);
+    qvarma_analytic_free(analytic);
     mat_free(y);
     qvarma_params_free(&model);
 }
 
 static void test_value_paths_and_gradient(void) {
-    printf("fused filter against the traced one, over shapes and draws\n");
+    printf("analytic filter against the traced one, over shapes and draws\n");
     Rng rng = rng_new(20260829, 0);
     for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
         check_one_shape(&shapes[i], &rng, 3);
@@ -227,41 +227,41 @@ static void test_against_finite_differences(void) {
         QvarmaParams model = build_shape(shape);
         int n = qvarma_n_theta(&model), T = shape->T;
         Mat y = draw_observations(&rng, shape->K, T);
-        QvarmaFused *fused = qvarma_fused_new(&model, T);
+        QvarmaAnalytic *analytic = qvarma_analytic_new(&model, T);
 
         Vec theta = mat_new(n, 1), probe = mat_new(n, 1);
-        Vec fused_gradient = mat_new(n, 1), taped_gradient = mat_new(n, 1);
+        Vec analytic_gradient = mat_new(n, 1), taped_gradient = mat_new(n, 1);
         Vec no_gradient = { 0, 0, 0, NULL };
         Mat no_path = { 0, 0, 0, NULL };
         draw_theta(&rng, theta);
 
-        qvarma_fused_log_likelihood(fused, theta, y, fused_gradient);
+        qvarma_analytic_log_likelihood(analytic, theta, y, analytic_gradient);
         taped_value_and_gradient(theta, &model, y, taped_gradient, no_path, no_path,
                                  no_path);
 
-        mreal step = (mreal)1e-5, worst_fused = 0, worst_taped = 0;
+        mreal step = (mreal)1e-5, worst_analytic = 0, worst_taped = 0;
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) probe.d[j] = theta.d[j];
             probe.d[i] = theta.d[i] + step;
-            mreal up = qvarma_fused_log_likelihood(fused, probe, y, no_gradient);
+            mreal up = qvarma_analytic_log_likelihood(analytic, probe, y, no_gradient);
             probe.d[i] = theta.d[i] - step;
-            mreal down = qvarma_fused_log_likelihood(fused, probe, y, no_gradient);
+            mreal down = qvarma_analytic_log_likelihood(analytic, probe, y, no_gradient);
             mreal numeric = (up - down) / (2 * step);
 
             mreal scale = MABS(numeric) > 1 ? MABS(numeric) : 1;
-            CHECK_CLOSE(fused_gradient.d[i], numeric, 1e-5, shape->name);
+            CHECK_CLOSE(analytic_gradient.d[i], numeric, 1e-5, shape->name);
             CHECK_CLOSE(taped_gradient.d[i], numeric, 1e-5, shape->name);
-            if (MABS(fused_gradient.d[i] - numeric) / scale > worst_fused)
-                worst_fused = MABS(fused_gradient.d[i] - numeric) / scale;
+            if (MABS(analytic_gradient.d[i] - numeric) / scale > worst_analytic)
+                worst_analytic = MABS(analytic_gradient.d[i] - numeric) / scale;
             if (MABS(taped_gradient.d[i] - numeric) / scale > worst_taped)
                 worst_taped = MABS(taped_gradient.d[i] - numeric) / scale;
         }
-        printf("  %-42s fused %.2e, taped %.2e\n", shape->name,
-               (double)worst_fused, (double)worst_taped);
+        printf("  %-42s analytic %.2e, taped %.2e\n", shape->name,
+               (double)worst_analytic, (double)worst_taped);
 
         mat_free(theta); mat_free(probe);
-        mat_free(fused_gradient); mat_free(taped_gradient);
-        qvarma_fused_free(fused);
+        mat_free(analytic_gradient); mat_free(taped_gradient);
+        qvarma_analytic_free(analytic);
         mat_free(y);
         qvarma_params_free(&model);
     }
@@ -285,17 +285,17 @@ static void test_workspace_reuse(void) {
     draw_theta(&rng, first);
     draw_theta(&rng, other);
 
-    QvarmaFused *shared = qvarma_fused_new(&model, T);
+    QvarmaAnalytic *shared = qvarma_analytic_new(&model, T);
     /* Two unrelated evaluations in between, so anything carried over from a
        different theta shows up in the third. */
-    qvarma_fused_log_likelihood(shared, first, y, reused_gradient);
-    qvarma_fused_log_likelihood(shared, other, y, reused_gradient);
-    mreal reused = qvarma_fused_log_likelihood(shared, first, y, reused_gradient);
-    qvarma_fused_free(shared);
+    qvarma_analytic_log_likelihood(shared, first, y, reused_gradient);
+    qvarma_analytic_log_likelihood(shared, other, y, reused_gradient);
+    mreal reused = qvarma_analytic_log_likelihood(shared, first, y, reused_gradient);
+    qvarma_analytic_free(shared);
 
-    QvarmaFused *fresh = qvarma_fused_new(&model, T);
-    mreal clean = qvarma_fused_log_likelihood(fresh, first, y, fresh_gradient);
-    qvarma_fused_free(fresh);
+    QvarmaAnalytic *fresh = qvarma_analytic_new(&model, T);
+    mreal clean = qvarma_analytic_log_likelihood(fresh, first, y, fresh_gradient);
+    qvarma_analytic_free(fresh);
 
     CHECK_NEAR(reused, clean, 0, "value after reuse");
     mreal worst = 0;
@@ -328,7 +328,7 @@ static void test_infeasible_scale(void) {
     QvarmaParams model = build_shape(shape);
     int n = qvarma_n_theta(&model), T = shape->T;
     Mat y = draw_observations(&rng, shape->K, T);
-    QvarmaFused *fused = qvarma_fused_new(&model, T);
+    QvarmaAnalytic *analytic = qvarma_analytic_new(&model, T);
 
     Vec theta = mat_new(n, 1), gradient = mat_new(n, 1);
     int diagonal_at = shape->K + shape->p
@@ -340,7 +340,7 @@ static void test_infeasible_scale(void) {
         draw_theta(&rng, theta);
         for (int k = 0; k < shape->K; k++) theta.d[diagonal_at + k] = extremes[e];
         for (int i = 0; i < n; i++) gradient.d[i] = (mreal)7;
-        mreal value = qvarma_fused_log_likelihood(fused, theta, y, gradient);
+        mreal value = qvarma_analytic_log_likelihood(analytic, theta, y, gradient);
         CHECK(MISINF(value) && value < 0, "%s: got %g, want -inf", label[e], (double)value);
         for (int i = 0; i < n; i++)
             CHECK(gradient.d[i] == 0, "%s: gradient[%d] is %g, want 0",
@@ -350,13 +350,13 @@ static void test_infeasible_scale(void) {
     printf("\n");
 
     mat_free(theta); mat_free(gradient);
-    qvarma_fused_free(fused);
+    qvarma_analytic_free(analytic);
     mat_free(y);
     qvarma_params_free(&model);
 }
 
 int main(void) {
-    check_banner("fused against traced t-QVARMA filter");
+    check_banner("analytic against traced t-QVARMA filter");
     test_value_paths_and_gradient();
     test_against_finite_differences();
     test_workspace_reuse();

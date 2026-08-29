@@ -1,28 +1,44 @@
 /*
-What the fused filter costs against the taped one, and how each of them
-behaves when four threads evaluate four independent models at once.
+What the analytic-gradient filter costs against the taped one, and how each of
+them behaves when every hardware thread evaluates an independent model at once.
 
-sd/qvarma.h computes the same log-likelihood two ways. _qvarma_filter builds
-the recursion on ad.h's tape and differentiates it by reverse mode;
-qvarma_fused_log_likelihood runs the recursion and a hand-written adjoint as
-one allocation-free loop. This file times both, at one and at four threads, for
-the value alone and for the value with the gradient. Correctness is
-tests/correctness/qvarma_fused_agreement.c's job; nothing here checks a number.
+sd/qvarma.h computes the same log-likelihood two ways, and the difference is
+where the gradient comes from. _qvarma_filter builds the recursion on ad.h's
+tape, recording every arithmetic step as a node, and differentiates it by
+reverse mode over that recording. qvarma_analytic_log_likelihood uses the
+gradient derived by hand from the recursion in closed form, evaluated in the
+same loop as the value, so there is no tape, no BLAS call and no allocation
+between the first period and the last. This file times both, at one thread and
+at one thread per hardware thread, for the value alone and for the value with
+the gradient. Correctness is tests/correctness/qvarma_analytic_agreement.c's
+job; nothing here checks a number.
 
-The four-thread column is why the fused filter exists at all, not a secondary
+The parallel column is why the analytic gradient exists at all, not a secondary
 detail. A batch of fits is embarrassingly parallel and an OpenMP loop over it
 was measurably slower than running the fits one after another: at K = 5 every
 BLAS call the tape issues is too small to pay for its own dispatch, and
 OpenBLAS keeps one buffer table per process, so concurrent callers serialize
-inside it. The fused loop issues no BLAS call and allocates nothing between
-the first period and the last, so it has nothing to contend on.
+inside it. The analytic loop calls no BLAS routine and allocates nothing
+between the first period and the last, so it has nothing to contend on.
 
 Method. One shape and one sample are built per row, the same theta is used by
 both arms, and each arm is timed as `repeats` evaluations per worker with every
-worker doing the same count - so a four-thread cell does four times the work of
-a one-thread cell and its per-evaluation number is directly comparable. Best of
+worker doing the same count - so an N-thread cell does N times the work of a
+one-thread cell and its per-evaluation number is directly comparable. Best of
 several rounds. openblas_set_num_threads(1) throughout, matching how a fitting
 pipeline runs. Both arms are given a warm-up pass before the clock starts.
+
+The parallel column runs one thread per hardware thread, counted at startup:
+every logical processor the machine offers, SMT siblings included, since the
+question it answers is what a batch of fits gets out of the machine flat out.
+Whether the siblings help is a property of the code and has to be measured
+rather than assumed - two threads on one core share its arithmetic units, but
+a loop that stalls on memory or on a dependency chain leaves those units idle
+often enough that the second thread runs nearly free. The physical core count
+is printed alongside so the par column can be read against both. Pass a count
+as the first argument to override it, which is how the sibling effect gets
+isolated, and how a run is made comparable with a table produced on a machine
+with a different core count.
 
 The allocator thresholds are raised through mallopt before anything is timed.
 The tape frees its blocks on every evaluation, and glibc returns them to the
@@ -40,13 +56,15 @@ fewer allocations, no tape nodes and no indirection carries anywhere. The part
 that is small shapes not reaching BLAS does not: it rests on a crossover
 measured on this machine against this OpenBLAS build, and the four-thread
 columns rest on OpenBLAS's per-process buffer table, whose severity scales
-with core count and which another BLAS may not have. Run
+with core count and which another BLAS may not have, and the core count is
+this machine's rather than the one the table it is compared against was made
+on. Run
 tests/performance/small_blas_threshold.c first on a new machine, then this;
 docs/MATRIX_DOCUMENTATION.md's "The four dispatch thresholds are measured on
 one machine" is the full statement.
 
 Standalone, no Python driver. Build and run:
-  make tests/performance/qvarma_fused_filter && ./tests/performance/qvarma_fused_filter
+  make tests/performance/qvarma_analytic_filter && ./tests/performance/qvarma_analytic_filter
 */
 
 #include "../../sd/qvarma.h"
@@ -65,6 +83,31 @@ static double now(void) {
 static void keep_the_arena_resident(void) {
     mallopt(M_MMAP_THRESHOLD, 1 << 30);
     mallopt(M_TRIM_THRESHOLD, 1 << 30);
+}
+
+/* Physical cores, from the distinct (physical id, core id) pairs in
+   /proc/cpuinfo. Reported next to omp_get_num_procs's hardware-thread count so
+   a par column can be read against both; the run itself uses all hardware
+   threads. Falls back to the hardware-thread count where the file is absent or
+   carries neither field, as on some ARM kernels. */
+static int physical_cores(void) {
+    FILE *info = fopen("/proc/cpuinfo", "r");
+    if (!info) return omp_get_num_procs();
+    enum { max_cores = 1024 };
+    int package[max_cores], core[max_cores], found = 0, current_package = 0;
+    char line[256];
+    while (fgets(line, sizeof line, info)) {
+        int value;
+        if (sscanf(line, "physical id : %d", &value) == 1) current_package = value;
+        else if (sscanf(line, "core id : %d", &value) == 1 && found < max_cores) {
+            int seen = 0;
+            for (int i = 0; i < found; i++)
+                if (package[i] == current_package && core[i] == value) seen = 1;
+            if (!seen) { package[found] = current_package; core[found] = value; found++; }
+        }
+    }
+    fclose(info);
+    return found > 0 ? found : omp_get_num_procs();
 }
 
 typedef struct {
@@ -130,26 +173,26 @@ static mreal taped_worker(const QvarmaParams *model, Mat y, Vec theta, int want_
     return sink;
 }
 
-/* One worker's share of the fused arm, including building and releasing the
+/* One worker's share of the analytic arm, including building and releasing the
    workspace once, the way a fit does. */
-static mreal fused_worker(const QvarmaParams *model, Mat y, Vec theta, int want_gradient,
+static mreal analytic_worker(const QvarmaParams *model, Mat y, Vec theta, int want_gradient,
                           Vec gradient, int repeats) {
-    QvarmaFused *fused = qvarma_fused_new(model, y.c);
+    QvarmaAnalytic *analytic = qvarma_analytic_new(model, y.c);
     Vec no_gradient = { 0, 0, 0, NULL };
     mreal sink = 0;
     for (int i = 0; i < repeats; i++) {
-        sink += qvarma_fused_log_likelihood(fused, theta, y, want_gradient ? gradient
+        sink += qvarma_analytic_log_likelihood(analytic, theta, y, want_gradient ? gradient
                                                                           : no_gradient);
         if (want_gradient) sink += gradient.d[0];
     }
-    qvarma_fused_free(fused);
+    qvarma_analytic_free(analytic);
     return sink;
 }
 
 /* Per-evaluation wall time for `threads` workers each doing `repeats`
    evaluations, best of `rounds`. Each worker gets its own gradient buffer;
    the model and the data are read-only and shared. */
-static double time_arm(const QvarmaParams *model, Mat y, Vec theta, int fused,
+static double time_arm(const QvarmaParams *model, Mat y, Vec theta, int analytic,
                        int want_gradient, int threads, int repeats, int rounds) {
     int n = theta.r;
     double best = 0;
@@ -159,7 +202,7 @@ static double time_arm(const QvarmaParams *model, Mat y, Vec theta, int fused,
         #pragma omp parallel num_threads(threads) reduction(+:sink)
         {
             Vec gradient = mat_new(n, 1);
-            sink += fused ? fused_worker(model, y, theta, want_gradient, gradient, repeats)
+            sink += analytic ? analytic_worker(model, y, theta, want_gradient, gradient, repeats)
                           : taped_worker(model, y, theta, want_gradient, gradient, repeats);
             mat_free(gradient);
         }
@@ -170,7 +213,7 @@ static double time_arm(const QvarmaParams *model, Mat y, Vec theta, int fused,
     return best / repeats;
 }
 
-static void run_case(const Case *item, FILE *out, int rounds) {
+static void run_case(const Case *item, FILE *out, int rounds, int threads) {
     Rng rng = rng_new(20260829, 0);
     Mat y;
     QvarmaParams model = build_model(item, &rng, &y);
@@ -179,24 +222,24 @@ static void run_case(const Case *item, FILE *out, int rounds) {
     _qvarma_unlink(&model, theta);
 
     /* Enough repeats that a cell runs for a fraction of a second even in the
-       fused arm, which is where a single evaluation is shortest. */
-    int taped_repeats = 40, fused_repeats = 600;
+       analytic arm, which is where a single evaluation is shortest. */
+    int taped_repeats = 40, analytic_repeats = 600;
     Vec warm = mat_new(n, 1);
     taped_worker(&model, y, theta, 1, warm, 2);
-    fused_worker(&model, y, theta, 1, warm, 2);
+    analytic_worker(&model, y, theta, 1, warm, 2);
     mat_free(warm);
 
     for (int wants_gradient = 0; wants_gradient < 2; wants_gradient++) {
         double taped_one = time_arm(&model, y, theta, 0, wants_gradient, 1, taped_repeats, rounds);
-        double fused_one = time_arm(&model, y, theta, 1, wants_gradient, 1, fused_repeats, rounds);
-        double taped_four = time_arm(&model, y, theta, 0, wants_gradient, 4, taped_repeats, rounds);
-        double fused_four = time_arm(&model, y, theta, 1, wants_gradient, 4, fused_repeats, rounds);
+        double analytic_one = time_arm(&model, y, theta, 1, wants_gradient, 1, analytic_repeats, rounds);
+        double taped_many = time_arm(&model, y, theta, 0, wants_gradient, threads, taped_repeats, rounds);
+        double analytic_many = time_arm(&model, y, theta, 1, wants_gradient, threads, analytic_repeats, rounds);
 
-        fprintf(out, "%-36s %-16s %10.4f %10.4f %8.1f %10.4f %10.4f %8.1f %9.2f %9.2f\n",
+        fprintf(out, "%-36s %-16s %12.4f %12.4f %8.1f %12.4f %12.4f %8.1f %12.2f %12.2f\n",
                 item->name, wants_gradient ? "value+gradient" : "value only",
-                1e3 * taped_one, 1e3 * fused_one, taped_one / fused_one,
-                1e3 * taped_four, 1e3 * fused_four, taped_four / fused_four,
-                4 * taped_one / taped_four, 4 * fused_one / fused_four);
+                1e3 * taped_one, 1e3 * analytic_one, taped_one / analytic_one,
+                1e3 * taped_many, 1e3 * analytic_many, taped_many / analytic_many,
+                threads * taped_one / taped_many, threads * analytic_one / analytic_many);
         fflush(out);
     }
 
@@ -205,31 +248,48 @@ static void run_case(const Case *item, FILE *out, int rounds) {
     qvarma_params_free(&model);
 }
 
-static void report(FILE *out) {
+static void report(FILE *out, int threads) {
     int rounds = 5;
-    fprintf(out, "fused t-QVARMA filter against the taped one, %s build\n",
+    char taped_many[24], analytic_many[24], gain_many[24];
+    snprintf(taped_many, sizeof taped_many, "taped_%dt", threads);
+    snprintf(analytic_many, sizeof analytic_many, "analytic_%dt", threads);
+    snprintf(gain_many, sizeof gain_many, "gain_%dt", threads);
+
+    fprintf(out, "analytic t-QVARMA filter against the taped one, %s build\n",
             sizeof(mreal) == sizeof(double) ? "float64" : "float32");
-    fprintf(out, "best of %d rounds, openblas_set_num_threads(1), 4 physical cores,\n", rounds);
+    fprintf(out, "best of %d rounds, openblas_set_num_threads(1), %d worker thread%s\n",
+            rounds, threads, threads == 1 ? "" : "s");
+    fprintf(out, "on %d physical cores and %d hardware threads,\n",
+            physical_cores(), omp_get_num_procs());
     fprintf(out, "milliseconds per evaluation, every worker doing the same count\n\n");
-    fprintf(out, "%-36s %-16s %10s %10s %8s %10s %10s %8s %9s %9s\n",
-            "case", "what", "taped_1t", "fused_1t", "gain_1t",
-            "taped_4t", "fused_4t", "gain_4t", "taped_par", "fused_par");
+    fprintf(out, "%-36s %-16s %12s %12s %8s %12s %12s %8s %12s %12s\n",
+            "case", "what", "taped_1t", "analytic_1t", "gain_1t",
+            taped_many, analytic_many, gain_many, "taped_par", "analytic_par");
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++)
-        run_case(&cases[i], out, rounds);
-    fprintf(out, "\ngain is taped time over fused time. taped_par and fused_par are each arm's\n");
-    fprintf(out, "own four-thread throughput speedup, 4.00 being perfect scaling.\n");
+        run_case(&cases[i], out, rounds, threads);
+    fprintf(out, "\ngain is taped time over analytic time. taped_par and analytic_par\n");
+    fprintf(out, "are each arm's own %d-thread throughput speedup, %d.00 being perfect.\n",
+            threads, threads);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     keep_the_arena_resident();
     openblas_set_num_threads(1);
-    const char *path = sizeof(mreal) == sizeof(double)
-                     ? "out/qvarma_fused_filter_float64.txt"
-                     : "out/qvarma_fused_filter_float32.txt";
-    report(stdout);
+    int threads = argc > 1 ? atoi(argv[1]) : omp_get_num_procs();
+    if (threads < 1) {
+        fprintf(stderr, "thread count must be at least 1\n");
+        return 1;
+    }
+    /* The thread count is in the name because two counts on one machine are
+       two different measurements, and the parallel columns of the smaller one
+       are what compares against a table made on a machine with fewer cores. */
+    char path[64];
+    snprintf(path, sizeof path, "out/qvarma_analytic_filter_%s_%dt.txt",
+             sizeof(mreal) == sizeof(double) ? "float64" : "float32", threads);
+    report(stdout, threads);
     FILE *file = fopen(path, "w");
     if (file) {
-        report(file);
+        report(file, threads);
         fclose(file);
         printf("\nwritten to %s\n", path);
     }

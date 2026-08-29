@@ -243,7 +243,7 @@ diagonal. That is what makes a standard error on the paper's scale a
 multiplication by one derivative rather than a matrix product.
 
 _qvarma_link applies these on the tape, _qvarma_unlink states their inverses,
-_qvarma_fused_link and _qvarma_fused_link_adjoint read the table directly, and
+_qvarma_analytic_link and _qvarma_analytic_link_adjoint read the table directly, and
 qvarma_standard_errors uses the derivative to put a standard error on the
 paper's scale. tests/correctness/qvarma_correctness.c evaluates this table
 against what _qvarma_link produces, coordinate by coordinate, so they cannot
@@ -667,7 +667,7 @@ abort.
 
 Checked on the constrained values rather than on theta, so it does not depend
 on knowing where in the vector each block sits. Omega_inv is K x K and
-contiguous in both the traced and the fused representation, so both reach this
+contiguous in both the traced and the analytic representation, so both reach this
 through the same reading of its diagonal.
 */
 static inline int _qvarma_scale_is_usable(const mreal *Omega_inv, int K, mreal nu) {
@@ -679,31 +679,38 @@ static inline int _qvarma_scale_is_usable(const mreal *Omega_inv, int K, mreal n
 }
 
 /*
-The same recursion _qvarma_filter runs, and its adjoint, written out as one
-loop over the sample with no tape, no BLAS call and no allocation inside it.
-The traced variant above stays: it is what this one is checked against, in
-tests/correctness/qvarma_fused_agreement.c, value and gradient componentwise
+The same recursion _qvarma_filter runs, differentiated analytically rather
+than by the tape. The gradient below is derived in closed form from the
+recursion - the adjoints are written out further down, block by block - and
+evaluated in the same loop over the sample as the value, so there is no tape,
+no BLAS call and no allocation inside it. That derivation by hand is the only
+difference between the two; both compute the same log-likelihood and the same
+gradient of it.
+
+The traced variant above stays, because a hand derivation can be wrong in a
+way reverse mode cannot: it is what this one is checked against, in
+tests/correctness/qvarma_analytic_agreement.c, value and gradient componentwise
 over random shapes and random theta, and both against a central difference.
 
-Why it exists. A taped evaluation of this model spends its time on tape
-bookkeeping and on BLAS calls that are too small to pay for themselves: at
-K = 5 a gemm is fifty floating point operations and costs more in dispatch
-than in arithmetic, and OpenBLAS's buffer table is one structure per process,
-so four threads fitting four independent series contend inside it and the
-parallel loop runs slower than the serial one. Writing the recursion and its
-adjoint by hand removes both: no node is created, no buffer is allocated
-between the first period and the last, and nothing is shared between threads.
+Why the analytic gradient exists. A taped evaluation of this model spends its
+time on tape bookkeeping and on BLAS calls that are too small to pay for
+themselves: at K = 5 a gemm is fifty floating point operations and costs more
+in dispatch than in arithmetic, and OpenBLAS's buffer table is one structure
+per process, so four threads fitting four independent series contend inside it
+and the parallel loop runs slower than the serial one. Differentiating by hand
+removes both: no node is created, no buffer is allocated between the first
+period and the last, and nothing is shared between threads.
 
 What is stored. The adjoint of period t needs the forward quantities of
 period t, and the recursion means it also reads the ones at t-1 down to
 t-max(p,q,r), so the whole forward path is kept rather than recomputed:
 v_t, z_t, u_t, mu_star_t, mu_dag_t and s_t, 5K+1 numbers per period. That is
-one allocation for the whole fit, made by qvarma_fused_new and reused by every
+one allocation for the whole fit, made by qvarma_analytic_new and reused by every
 evaluation, about 83 KB at K = 5 and T = 400. The parameter blocks, their
 adjoints and the backward pass's own ring buffers come out of the same
 allocation.
 
-Every dimension is read from the QvarmaParams handed to qvarma_fused_new. No
+Every dimension is read from the QvarmaParams handed to qvarma_analytic_new. No
 shape is assumed anywhere below.
 
 The adjoints, in the order the backward pass applies them. With
@@ -756,16 +763,16 @@ typedef struct {
     mreal *u_bar, *mu_star_bar, *mu_dag_bar, *v_bar, *w, *dag_block_bar;
     mreal *constrained, *link_scales;
     QvarmaLink *link_kinds;
-} QvarmaFused;
+} QvarmaAnalytic;
 
 /* Where in a period's slot each stored path lives. */
-#define QVARMA_FUSED_V 0
-#define QVARMA_FUSED_Z 1
-#define QVARMA_FUSED_U 2
-#define QVARMA_FUSED_MU_STAR 3
-#define QVARMA_FUSED_MU_DAG 4
+#define QVARMA_ANALYTIC_V 0
+#define QVARMA_ANALYTIC_Z 1
+#define QVARMA_ANALYTIC_U 2
+#define QVARMA_ANALYTIC_MU_STAR 3
+#define QVARMA_ANALYTIC_MU_DAG 4
 
-static inline mreal *_qvarma_fused_slot(const QvarmaFused *f, int t, int which) {
+static inline mreal *_qvarma_analytic_slot(const QvarmaAnalytic *f, int t, int which) {
     return f->path + (size_t)t * f->path_stride + (size_t)which * f->K;
 }
 
@@ -773,54 +780,54 @@ static inline mreal *_qvarma_fused_slot(const QvarmaFused *f, int t, int which) 
    total the sizes, and once against the allocation, to hand out the slices.
    Writing the total separately from the layout is how the two come to
    disagree by one block after a field is added. */
-typedef struct { mreal *base; size_t used; } QvarmaFusedLayout;
+typedef struct { mreal *base; size_t used; } QvarmaAnalyticLayout;
 
-static inline mreal *_qvarma_fused_take(QvarmaFusedLayout *layout, size_t count) {
+static inline mreal *_qvarma_analytic_take(QvarmaAnalyticLayout *layout, size_t count) {
     mreal *out = layout->base ? layout->base + layout->used : NULL;
     layout->used += count;
     return out;
 }
 
-static inline void _qvarma_fused_layout(QvarmaFused *f, QvarmaFusedLayout *layout) {
+static inline void _qvarma_analytic_layout(QvarmaAnalytic *f, QvarmaAnalyticLayout *layout) {
     int K = f->K;
     size_t square = (size_t)K * K;
-    f->path = _qvarma_fused_take(layout, (size_t)f->T * f->path_stride);
+    f->path = _qvarma_analytic_take(layout, (size_t)f->T * f->path_stride);
 
-    f->c = _qvarma_fused_take(layout, (size_t)K);
-    f->Phi = _qvarma_fused_take(layout, (size_t)f->p);
-    f->Psi_star = _qvarma_fused_take(layout, (size_t)f->q * square);
-    f->Psi_dag = _qvarma_fused_take(layout, (size_t)f->lags * square);
-    f->Omega_inv = _qvarma_fused_take(layout, square);
-    f->Omega_inv_reciprocal = _qvarma_fused_take(layout, (size_t)K);
-    f->alpha = _qvarma_fused_take(layout, (size_t)f->lags * f->K_dag * f->R);
-    f->beta = _qvarma_fused_take(layout, (size_t)f->betas * f->R * f->K_dag);
+    f->c = _qvarma_analytic_take(layout, (size_t)K);
+    f->Phi = _qvarma_analytic_take(layout, (size_t)f->p);
+    f->Psi_star = _qvarma_analytic_take(layout, (size_t)f->q * square);
+    f->Psi_dag = _qvarma_analytic_take(layout, (size_t)f->lags * square);
+    f->Omega_inv = _qvarma_analytic_take(layout, square);
+    f->Omega_inv_reciprocal = _qvarma_analytic_take(layout, (size_t)K);
+    f->alpha = _qvarma_analytic_take(layout, (size_t)f->lags * f->K_dag * f->R);
+    f->beta = _qvarma_analytic_take(layout, (size_t)f->betas * f->R * f->K_dag);
 
-    f->c_bar = _qvarma_fused_take(layout, (size_t)K);
-    f->Phi_bar = _qvarma_fused_take(layout, (size_t)f->p);
-    f->Psi_star_bar = _qvarma_fused_take(layout, (size_t)f->q * square);
-    f->Psi_dag_bar = _qvarma_fused_take(layout, (size_t)f->lags * square);
-    f->Omega_inv_bar = _qvarma_fused_take(layout, square);
-    f->alpha_bar = _qvarma_fused_take(layout, (size_t)f->lags * f->K_dag * f->R);
-    f->beta_bar = _qvarma_fused_take(layout, (size_t)f->betas * f->R * f->K_dag);
+    f->c_bar = _qvarma_analytic_take(layout, (size_t)K);
+    f->Phi_bar = _qvarma_analytic_take(layout, (size_t)f->p);
+    f->Psi_star_bar = _qvarma_analytic_take(layout, (size_t)f->q * square);
+    f->Psi_dag_bar = _qvarma_analytic_take(layout, (size_t)f->lags * square);
+    f->Omega_inv_bar = _qvarma_analytic_take(layout, square);
+    f->alpha_bar = _qvarma_analytic_take(layout, (size_t)f->lags * f->K_dag * f->R);
+    f->beta_bar = _qvarma_analytic_take(layout, (size_t)f->betas * f->R * f->K_dag);
 
-    f->u_bar = _qvarma_fused_take(layout, (size_t)f->u_ring * K);
-    f->mu_star_bar = _qvarma_fused_take(layout, (size_t)f->star_ring * K);
-    f->mu_dag_bar = _qvarma_fused_take(layout, (size_t)K);
-    f->v_bar = _qvarma_fused_take(layout, (size_t)K);
-    f->w = _qvarma_fused_take(layout, (size_t)K);
-    f->dag_block_bar = _qvarma_fused_take(layout, (size_t)f->K_dag * f->K_dag);
+    f->u_bar = _qvarma_analytic_take(layout, (size_t)f->u_ring * K);
+    f->mu_star_bar = _qvarma_analytic_take(layout, (size_t)f->star_ring * K);
+    f->mu_dag_bar = _qvarma_analytic_take(layout, (size_t)K);
+    f->v_bar = _qvarma_analytic_take(layout, (size_t)K);
+    f->w = _qvarma_analytic_take(layout, (size_t)K);
+    f->dag_block_bar = _qvarma_analytic_take(layout, (size_t)f->K_dag * f->K_dag);
 
-    f->constrained = _qvarma_fused_take(layout, (size_t)f->n_theta);
-    f->link_scales = _qvarma_fused_take(layout, (size_t)f->n_theta);
+    f->constrained = _qvarma_analytic_take(layout, (size_t)f->n_theta);
+    f->link_scales = _qvarma_analytic_take(layout, (size_t)f->n_theta);
 }
 
 /* Build the workspace for one shape at one sample length. Free with
-   qvarma_fused_free. The shape is read here and never again, so a caller that
+   qvarma_analytic_free. The shape is read here and never again, so a caller that
    changes p, q, r, K or T needs a new workspace. */
-static inline QvarmaFused *qvarma_fused_new(const QvarmaParams *shape, int T) {
+static inline QvarmaAnalytic *qvarma_analytic_new(const QvarmaParams *shape, int T) {
     qvarma_check_params(shape);
     assert(T > 0);
-    QvarmaFused *f = (QvarmaFused*)malloc(sizeof(QvarmaFused));
+    QvarmaAnalytic *f = (QvarmaAnalytic*)malloc(sizeof(QvarmaAnalytic));
     f->K = shape->K;
     f->T = T;
     f->p = shape->p;
@@ -847,13 +854,13 @@ static inline QvarmaFused *qvarma_fused_new(const QvarmaParams *shape, int T) {
     f->u_ring = longest_u + 1;
     f->star_ring = f->p + 1;
 
-    QvarmaFusedLayout layout = { NULL, 0 };
-    _qvarma_fused_layout(f, &layout);
+    QvarmaAnalyticLayout layout = { NULL, 0 };
+    _qvarma_analytic_layout(f, &layout);
     size_t total = layout.used;
     f->storage = (mreal*)malloc(total * sizeof(mreal));
     layout.base = f->storage;
     layout.used = 0;
-    _qvarma_fused_layout(f, &layout);
+    _qvarma_analytic_layout(f, &layout);
 
     f->link_kinds = (QvarmaLink*)malloc((size_t)f->n_theta * sizeof(QvarmaLink));
     _qvarma_link_kinds(shape, f->link_kinds);
@@ -861,7 +868,7 @@ static inline QvarmaFused *qvarma_fused_new(const QvarmaParams *shape, int T) {
     return f;
 }
 
-static inline void qvarma_fused_free(QvarmaFused *f) {
+static inline void qvarma_analytic_free(QvarmaAnalytic *f) {
     if (!f) return;
     free(f->storage);
     free(f->link_kinds);
@@ -870,7 +877,7 @@ static inline void qvarma_fused_free(QvarmaFused *f) {
 
 /* Unconstrained vector to constrained parameters, the same map _qvarma_link
    builds on the tape, into plain arrays. */
-static inline void _qvarma_fused_link(QvarmaFused *f, Vec theta) {
+static inline void _qvarma_analytic_link(QvarmaAnalytic *f, Vec theta) {
     int K = f->K, K_dag = f->K_dag, R = f->R, at = 0;
     size_t square = (size_t)K * K;
     assert(theta.r == f->n_theta && theta.c == 1);
@@ -937,7 +944,7 @@ static inline void _qvarma_fused_link(QvarmaFused *f, Vec theta) {
    mu_star_stationary_only is set, and mu_star is then identically zero on
    those rows too - it starts at zero over the warm-up and has nothing driving
    it - so the score term is accumulated on the free rows alone. */
-static inline mreal _qvarma_fused_forward(QvarmaFused *f, Mat y) {
+static inline mreal _qvarma_analytic_forward(QvarmaAnalytic *f, Mat y) {
     int K = f->K, T = f->T, stride = f->path_stride;
     mreal nu = f->nu;
     mreal log_sum = 0;
@@ -953,21 +960,21 @@ static inline mreal _qvarma_fused_forward(QvarmaFused *f, Mat y) {
 
     for (int t = 0; t < T; t++) {
         mreal *slot = f->path + (size_t)t * stride;
-        mreal *restrict v = slot + (size_t)QVARMA_FUSED_V * K;
-        mreal *restrict z = slot + (size_t)QVARMA_FUSED_Z * K;
-        mreal *restrict u = slot + (size_t)QVARMA_FUSED_U * K;
-        mreal *restrict mu_star = slot + (size_t)QVARMA_FUSED_MU_STAR * K;
-        mreal *restrict mu_dag = slot + (size_t)QVARMA_FUSED_MU_DAG * K;
+        mreal *restrict v = slot + (size_t)QVARMA_ANALYTIC_V * K;
+        mreal *restrict z = slot + (size_t)QVARMA_ANALYTIC_Z * K;
+        mreal *restrict u = slot + (size_t)QVARMA_ANALYTIC_U * K;
+        mreal *restrict mu_star = slot + (size_t)QVARMA_ANALYTIC_MU_STAR * K;
+        mreal *restrict mu_dag = slot + (size_t)QVARMA_ANALYTIC_MU_DAG * K;
 
         for (int i = 0; i < K; i++) mu_star[i] = 0;
         if (t >= f->w_star) {
             for (int i = 1; i <= f->p; i++) {
-                const mreal *restrict lag = _qvarma_fused_slot(f, t - i, QVARMA_FUSED_MU_STAR);
+                const mreal *restrict lag = _qvarma_analytic_slot(f, t - i, QVARMA_ANALYTIC_MU_STAR);
                 mreal phi = f->Phi[i - 1];
                 for (int k = 0; k < K; k++) mu_star[k] += phi * lag[k];
             }
             for (int j = 1; j <= f->q; j++) {
-                const mreal *restrict lag = _qvarma_fused_slot(f, t - j, QVARMA_FUSED_U);
+                const mreal *restrict lag = _qvarma_analytic_slot(f, t - j, QVARMA_ANALYTIC_U);
                 const mreal *psi = f->Psi_star + (size_t)(j - 1) * K * K;
                 for (int a = 0; a < f->psi_rows; a++) {
                     const mreal *restrict row = psi + (size_t)a * K;
@@ -980,10 +987,10 @@ static inline mreal _qvarma_fused_forward(QvarmaFused *f, Mat y) {
 
         for (int i = 0; i < K; i++) mu_dag[i] = 0;
         if (f->lags && t >= f->w_dag) {
-            const mreal *restrict previous = _qvarma_fused_slot(f, t - 1, QVARMA_FUSED_MU_DAG);
+            const mreal *restrict previous = _qvarma_analytic_slot(f, t - 1, QVARMA_ANALYTIC_MU_DAG);
             for (int i = 0; i < K; i++) mu_dag[i] = previous[i];
             for (int l = 1; l <= f->r; l++) {
-                const mreal *restrict lag = _qvarma_fused_slot(f, t - l, QVARMA_FUSED_U);
+                const mreal *restrict lag = _qvarma_analytic_slot(f, t - l, QVARMA_ANALYTIC_U);
                 const mreal *psi = f->Psi_dag + (size_t)(l - 1) * K * K;
                 for (int a = f->K_star; a < K; a++) {
                     const mreal *restrict row = psi + (size_t)a * K;
@@ -1027,7 +1034,7 @@ static inline mreal _qvarma_fused_forward(QvarmaFused *f, Mat y) {
    with B_l the K_dag block of Psi_dag_l = alpha_l beta, alpha_l_bar +=
    B_l_bar beta' and beta_bar += alpha_l' B_l_bar, the second summed over
    every lag sharing that beta. */
-static inline void _qvarma_fused_factor_adjoint(QvarmaFused *f) {
+static inline void _qvarma_analytic_factor_adjoint(QvarmaAnalytic *f) {
     int K = f->K, K_dag = f->K_dag, R = f->R;
     for (int l = 0; l < f->lags; l++) {
         const mreal *psi_bar = f->Psi_dag_bar + (size_t)l * K * K;
@@ -1064,7 +1071,7 @@ static inline void _qvarma_fused_factor_adjoint(QvarmaFused *f) {
    table _qvarma_link and _qvarma_unlink read. The constrained value goes into
    f->constrained in the same pass, because qvarma_link_derivative is written
    in terms of it. */
-static inline void _qvarma_fused_link_adjoint(QvarmaFused *f, Vec gradient,
+static inline void _qvarma_analytic_link_adjoint(QvarmaAnalytic *f, Vec gradient,
                                               mreal nu_bar, mreal half_log_det_bar) {
     int K = f->K, K_dag = f->K_dag, R = f->R, at = 0;
     mreal *g = gradient.d, *value = f->constrained;
@@ -1125,7 +1132,7 @@ static inline void _qvarma_fused_link_adjoint(QvarmaFused *f, Vec gradient,
 /* The adjoint of the loop above, walked backwards over the stored path.
    Fills gradient with the derivative of the log-likelihood - not its
    negation - with respect to theta. */
-static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
+static inline void _qvarma_analytic_backward(QvarmaAnalytic *f, Vec gradient) {
     int K = f->K, T = f->T, stride = f->path_stride;
     size_t square = (size_t)K * K;
     mreal nu = f->nu;
@@ -1157,8 +1164,8 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
 
     for (int t = T - 1; t >= 0; t--) {
         const mreal *slot = f->path + (size_t)t * stride;
-        const mreal *restrict v = slot + (size_t)QVARMA_FUSED_V * K;
-        const mreal *restrict z = slot + (size_t)QVARMA_FUSED_Z * K;
+        const mreal *restrict v = slot + (size_t)QVARMA_ANALYTIC_V * K;
+        const mreal *restrict z = slot + (size_t)QVARMA_ANALYTIC_Z * K;
         mreal s = slot[5 * (size_t)K];
         mreal *restrict u_bar = f->u_bar + (size_t)u_at * K;
         mreal *restrict v_bar = f->v_bar;
@@ -1203,7 +1210,7 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
         if (dag_is_free) {
             const mreal *d = f->mu_dag_bar;
             for (int l = 1; l <= f->r; l++) {
-                const mreal *lag = _qvarma_fused_slot(f, t - l, QVARMA_FUSED_U);
+                const mreal *lag = _qvarma_analytic_slot(f, t - l, QVARMA_ANALYTIC_U);
                 int lag_at = u_at - l < 0 ? u_at - l + f->u_ring : u_at - l;
                 mreal *restrict lag_bar = f->u_bar + (size_t)lag_at * K;
                 const mreal *psi = f->Psi_dag + (size_t)(l - 1) * K * K;
@@ -1226,7 +1233,7 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
 
         if (star_is_free) {
             for (int i = 1; i <= f->p; i++) {
-                const mreal *lag = _qvarma_fused_slot(f, t - i, QVARMA_FUSED_MU_STAR);
+                const mreal *lag = _qvarma_analytic_slot(f, t - i, QVARMA_ANALYTIC_MU_STAR);
                 int lag_at = star_at - i < 0 ? star_at - i + f->star_ring : star_at - i;
                 mreal *restrict lag_bar = f->mu_star_bar + (size_t)lag_at * K;
                 mreal phi = f->Phi[i - 1], dot = 0;
@@ -1237,7 +1244,7 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
                 f->Phi_bar[i - 1] += dot;
             }
             for (int j = 1; j <= f->q; j++) {
-                const mreal *lag = _qvarma_fused_slot(f, t - j, QVARMA_FUSED_U);
+                const mreal *lag = _qvarma_analytic_slot(f, t - j, QVARMA_ANALYTIC_U);
                 int lag_at = u_at - j < 0 ? u_at - j + f->u_ring : u_at - j;
                 mreal *restrict lag_bar = f->u_bar + (size_t)lag_at * K;
                 const mreal *psi = f->Psi_star + (size_t)(j - 1) * K * K;
@@ -1258,8 +1265,8 @@ static inline void _qvarma_fused_backward(QvarmaFused *f, Vec gradient) {
         if (--star_at < 0) star_at = f->star_ring - 1;
     }
 
-    _qvarma_fused_factor_adjoint(f);
-    _qvarma_fused_link_adjoint(f, gradient, nu_bar, half_log_det_bar);
+    _qvarma_analytic_factor_adjoint(f);
+    _qvarma_analytic_link_adjoint(f, gradient, nu_bar, half_log_det_bar);
 }
 
 /*
@@ -1269,19 +1276,19 @@ for. An infeasible scale returns minus infinity and a zeroed gradient, the
 same sentinel the taped path returns, because an optimizer's line search
 probes points the model cannot be evaluated at.
 
-The forward path left behind is readable through qvarma_fused_v and its
+The forward path left behind is readable through qvarma_analytic_v and its
 siblings until the next call.
 */
-static inline mreal qvarma_fused_log_likelihood(QvarmaFused *f, Vec theta, Mat y,
+static inline mreal qvarma_analytic_log_likelihood(QvarmaAnalytic *f, Vec theta, Mat y,
                                                 Vec gradient) {
     assert(y.r == f->K && y.c == f->T);
-    _qvarma_fused_link(f, theta);
+    _qvarma_analytic_link(f, theta);
     if (!_qvarma_scale_is_usable(f->Omega_inv, f->K, f->nu)) {
         if (gradient.d) for (int i = 0; i < f->n_theta; i++) gradient.d[i] = 0;
         return -(mreal)INFINITY;
     }
-    mreal value = _qvarma_fused_forward(f, y);
-    if (gradient.d) _qvarma_fused_backward(f, gradient);
+    mreal value = _qvarma_analytic_forward(f, y);
+    if (gradient.d) _qvarma_analytic_backward(f, gradient);
     return value;
 }
 
@@ -1289,17 +1296,17 @@ static inline mreal qvarma_fused_log_likelihood(QvarmaFused *f, Vec theta, Mat y
    next call on the same workspace. This is what the traced filter returns
    through its mu_star_out/mu_dag_out/v_out arguments; u_t is the scaled score
    of (6), which the traced one does not hand back at all. */
-static inline const mreal *qvarma_fused_v(const QvarmaFused *f, int t) {
-    return _qvarma_fused_slot(f, t, QVARMA_FUSED_V);
+static inline const mreal *qvarma_analytic_v(const QvarmaAnalytic *f, int t) {
+    return _qvarma_analytic_slot(f, t, QVARMA_ANALYTIC_V);
 }
-static inline const mreal *qvarma_fused_u(const QvarmaFused *f, int t) {
-    return _qvarma_fused_slot(f, t, QVARMA_FUSED_U);
+static inline const mreal *qvarma_analytic_u(const QvarmaAnalytic *f, int t) {
+    return _qvarma_analytic_slot(f, t, QVARMA_ANALYTIC_U);
 }
-static inline const mreal *qvarma_fused_mu_star(const QvarmaFused *f, int t) {
-    return _qvarma_fused_slot(f, t, QVARMA_FUSED_MU_STAR);
+static inline const mreal *qvarma_analytic_mu_star(const QvarmaAnalytic *f, int t) {
+    return _qvarma_analytic_slot(f, t, QVARMA_ANALYTIC_MU_STAR);
 }
-static inline const mreal *qvarma_fused_mu_dag(const QvarmaFused *f, int t) {
-    return _qvarma_fused_slot(f, t, QVARMA_FUSED_MU_DAG);
+static inline const mreal *qvarma_analytic_mu_dag(const QvarmaAnalytic *f, int t) {
+    return _qvarma_analytic_slot(f, t, QVARMA_ANALYTIC_MU_DAG);
 }
 
 /*
@@ -1379,15 +1386,16 @@ static inline int qvarma_scale_is_usable(const QvarmaLinked *linked, const Qvarm
                                    linked->nu->val.d[0]);
 }
 
-/* Total log-likelihood at theta, through the fused filter, which computes the
-   same number as the traced one at a fraction of the cost. The workspace is
-   built and released here, so a caller evaluating in a loop should hold one of
-   its own and call qvarma_fused_log_likelihood instead. */
+/* Total log-likelihood at theta, through the analytic-gradient filter, which
+   computes the same number as the traced one at a fraction of the cost. The
+   workspace is built and released here, so a caller evaluating in a loop
+   should hold one of its own and call qvarma_analytic_log_likelihood
+   instead. */
 static inline mreal qvarma_log_likelihood_at(Vec theta, const QvarmaParams *shape, Mat y) {
-    QvarmaFused *fused = qvarma_fused_new(shape, y.c);
+    QvarmaAnalytic *analytic = qvarma_analytic_new(shape, y.c);
     Vec no_gradient = { 0, 0, 0, NULL };
-    mreal value = qvarma_fused_log_likelihood(fused, theta, y, no_gradient);
-    qvarma_fused_free(fused);
+    mreal value = qvarma_analytic_log_likelihood(analytic, theta, y, no_gradient);
+    qvarma_analytic_free(analytic);
     return value;
 }
 
@@ -1396,7 +1404,7 @@ The objective the solver minimises: the negative log-likelihood as a function
 of the unconstrained vector. The gradient is filled only when asked for, so a
 line search, which needs the value alone, skips the backward pass entirely.
 
-workspace is the fused filter's, reused across every evaluation of one fit.
+workspace is the analytic filter's, reused across every evaluation of one fit.
 Leaving it NULL is allowed and makes each call build and release its own,
 which costs one allocation per evaluation and is what a caller assembling this
 struct by hand gets; qvarma_fit fills it in.
@@ -1404,20 +1412,20 @@ struct by hand gets; qvarma_fit fills it in.
 typedef struct {
     Mat observations;
     const QvarmaParams *shape;
-    QvarmaFused *workspace;
+    QvarmaAnalytic *workspace;
 } QvarmaFitContext;
 
 static inline mreal qvarma_negative_log_likelihood(Vec theta, Vec gradient, void *context) {
     QvarmaFitContext *fit_context = (QvarmaFitContext*)context;
-    QvarmaFused *fused = fit_context->workspace;
-    QvarmaFused *owned = fused ? NULL
-                       : qvarma_fused_new(fit_context->shape, fit_context->observations.c);
-    if (owned) fused = owned;
+    QvarmaAnalytic *analytic = fit_context->workspace;
+    QvarmaAnalytic *owned = analytic ? NULL
+                       : qvarma_analytic_new(fit_context->shape, fit_context->observations.c);
+    if (owned) analytic = owned;
 
-    mreal value = qvarma_fused_log_likelihood(fused, theta, fit_context->observations,
+    mreal value = qvarma_analytic_log_likelihood(analytic, theta, fit_context->observations,
                                               gradient);
     if (gradient.d) for (int i = 0; i < theta.r; i++) gradient.d[i] = -gradient.d[i];
-    if (owned) qvarma_fused_free(owned);
+    if (owned) qvarma_analytic_free(owned);
     return -value;
 }
 
@@ -1450,7 +1458,7 @@ static inline QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_gues
     QvarmaFitContext context;
     context.observations = y;
     context.shape = &shape;
-    context.workspace = qvarma_fused_new(&shape, T);
+    context.workspace = qvarma_analytic_new(&shape, T);
 
     LbfgsOptions solver = lbfgs_default_options();
     solver.max_iterations = options.max_iterations;
@@ -1478,7 +1486,7 @@ static inline QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_gues
     result.bic = k * (mreal)log((double)periods) / periods - 2 * mean;
     result.hannan_quinn = 2 * k * (mreal)log(log((double)periods)) / periods - 2 * mean;
 
-    qvarma_fused_free(context.workspace);
+    qvarma_analytic_free(context.workspace);
     mat_free(start);
     mat_free(solved.theta);
     return result;
@@ -2272,7 +2280,7 @@ here".
 */
 static inline Mat _qvarma_hessian(Vec theta, const QvarmaParams *shape, Mat y) {
     int n = theta.r;
-    QvarmaFitContext context = { y, shape, qvarma_fused_new(shape, y.c) };
+    QvarmaFitContext context = { y, shape, qvarma_analytic_new(shape, y.c) };
     Mat H = mat_new(n, n);
     Vec forward = mat_new(n, 1), backward = mat_new(n, 1), probe = mat_new(n, 1);
     mreal step = sizeof(mreal) == sizeof(double) ? (mreal)1e-4 : (mreal)1e-3;
@@ -2292,7 +2300,7 @@ static inline Mat _qvarma_hessian(Vec theta, const QvarmaParams *shape, Mat y) {
             mreal mean = (mreal)0.5 * (AT(H, i, j) + AT(H, j, i));
             AT(H, i, j) = AT(H, j, i) = mean;
         }
-    qvarma_fused_free(context.workspace);
+    qvarma_analytic_free(context.workspace);
     mat_free(forward); mat_free(backward); mat_free(probe);
     return H;
 }

@@ -160,7 +160,7 @@ static void report(FILE *out) {
 
     fprintf(out, "hand-written kernels against the BLAS calls they replace, %s build\n",
             sizeof(mreal) == sizeof(double) ? "float64" : "float32");
-    fprintf(out, "best of %d rounds, openblas_set_num_threads(1), 4 physical cores\n\n", rounds);
+    fprintf(out, "best of %d rounds, openblas_set_num_threads(1), four worker threads\n\n", rounds);
 
     for (int j = 0; j < n_jobs; j++) {
         Job job = jobs[j];
