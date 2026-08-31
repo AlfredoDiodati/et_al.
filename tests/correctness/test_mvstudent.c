@@ -565,12 +565,83 @@ static void test_sampling(void) {
     mat_free(loc); mat_free(cov);
 }
 
+/*
+A large but finite nu, which the test above does not reach: it checks the
+nu = INFINITY delegation, and that branch is taken on a bit pattern rather
+than on the arithmetic, so it says nothing about whether the density is still
+computable at a nu of 1e12. It was not. The normalization was evaluated as
+lgamma((nu+d)/2) - lgamma(nu/2), two quantities of size (nu/2) log(nu/2) whose
+difference is of size (d/2) log(nu), and by nu = 1e14 the subtraction returned
+an integer.
+
+The reference here is exact rather than approximate and involves no Gamma
+function: at an even d the Gamma difference is a sum of logs, and at d = 2 the
+whole normalization collapses to a constant,
+
+    lognorm(nu, 2) = log(nu/2) - log(nu pi) = -log(2 pi)
+
+for every nu at all. At d = 4 it is log(nu/2) + log(nu/2 + 1) - 2 log(nu pi).
+*/
+static void test_light_tail_normalization(void) {
+    puts("a large finite nu: the normalization against its closed form");
+    const double pi = 3.14159265358979323846;
+    for (double nu = 3; nu <= 1e15; nu *= 100) {
+        mreal got_two = mvstudent_lognorm((mreal)nu, 2);
+        double want_two = -log(2 * pi);
+        assert(MABS(got_two - (mreal)want_two) < (mreal)1e-5);
+
+        mreal got_four = mvstudent_lognorm((mreal)nu, 4);
+        double want_four = log(nu / 2) + log(nu / 2 + 1) - 2 * log(nu * pi);
+        assert(MABS(got_four - (mreal)want_four) < (mreal)1e-4);
+    }
+
+    /* The score with respect to nu has to vanish with the tail, since the
+       limit does not depend on nu. */
+    mreal previous = mvstudent_dlognorm_dnu((mreal)1e4, 3);
+    for (double nu = 1e6; nu <= 1e14; nu *= 100) {
+        mreal here = MABS(mvstudent_dlognorm_dnu((mreal)nu, 3));
+        assert(here <= MABS(previous));
+        previous = here;
+    }
+    assert(MABS(previous) < (mreal)1e-10);
+    printf("  d = 2 constant and d = 4 closed form hold to nu = 1e15\n");
+}
+
+/* And the density itself converges on the Gaussian rather than merely being
+   equal to it at the infinite bit pattern. */
+static void test_light_tail_density_converges(void) {
+    puts("a large finite nu: the density against the Gaussian it tends to");
+    Mat x = mat_lit(3, 2, 1.0f, 0.5f, -0.4f, 1.2f, 0.0f, -1.0f);
+    Mat loc = mat_lit(1, 2, 0.5f, -0.3f);
+    Mat cov = mat_lit(2, 2, 2.0f, 0.6f, 0.6f, 1.0f);
+    Mat gaussian = mvgauss_logpdf(x, loc, cov);
+
+    mreal worst_previous = (mreal)1e9;
+    for (double nu = 1e2; nu <= 1e14; nu *= 100) {
+        Mat lp = mvstudent_logpdf(x, loc, cov, (mreal)nu);
+        mreal worst = 0;
+        for (int i = 0; i < 3; i++) {
+            mreal gap = MABS(AT(lp, i, 0) - AT(gaussian, i, 0));
+            if (gap > worst) worst = gap;
+        }
+        /* Monotone in nu, to a floor set by the build's own precision. */
+        assert(worst <= worst_previous + (mreal)1e-6);
+        worst_previous = worst;
+        mat_free(lp);
+    }
+    assert(worst_previous < TOL);
+    printf("  worst gap to the Gaussian at nu = 1e14: %.3g\n", (double)worst_previous);
+    mat_free(x); mat_free(loc); mat_free(cov); mat_free(gaussian);
+}
+
 int main(void) {
     test_univariate_consistency();
     test_known_values();
     test_correlated_vs_ref();
     test_fd_derivatives();
     test_gaussian_limit();
+    test_light_tail_normalization();
+    test_light_tail_density_converges();
     test_per_obs_loc_and_views();
     test_degenerate_covariance();
     test_degenerate_nu();

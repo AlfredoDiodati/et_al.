@@ -47,7 +47,7 @@ static inline void student_bcast_shape(Mat x, Mat loc, Mat scale, Mat nu, int *r
    lgamma unconditionally is correct under both. */
 static inline mreal student_lognorm(mreal nu) {
     double n = (double)nu;
-    return (mreal)(lgamma((n + 1) / 2) - lgamma(n / 2) - (log(n) + (double)STUDENT_LOG_PI) / 2);
+    return (mreal)(special_lgamma_diff(n / 2, 0.5) - (log(n) + (double)STUDENT_LOG_PI) / 2);
 }
 
 /* Return the Student t log-pdf of x at (loc, scale, nu):
@@ -175,7 +175,7 @@ static inline Mat student_dlogpdf_loc(Mat x, Mat loc, Mat scale, Mat nu) {
    cancellation story as student_lognorm, just one derivative up. */
 static inline mreal student_dlognorm_dnu(mreal nu) {
     double n = (double)nu;
-    return (mreal)((special_digamma((n + 1) / 2) - special_digamma(n / 2)) / 2 - 1 / (2 * n));
+    return (mreal)(special_digamma_diff(n / 2, 0.5) / 2 - 1 / (2 * n));
 }
 
 /* Return d(log-pdf)/d(nu) =

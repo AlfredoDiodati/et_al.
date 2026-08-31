@@ -23,6 +23,46 @@ measured at the true parameters, and a real application knows less than that.
 The practical rule: check that the estimated `alpha` and `Psi_star` are not near
 zero before interpreting `beta` or `Phi_star`, and never interpret `c`.
 
+## A large `nu` is a flat direction, not a fitted value
+
+`nu` enters as `exp(theta) + 2`, and the Student-t is numerically the Gaussian
+long before `nu` is large in any absolute sense: past about `nu = 1e6` the
+log-likelihood no longer distinguishes one `nu` from another to anything a
+sample of a few hundred periods can resolve. The likelihood is genuinely flat
+there, so L-BFGS keeps stepping along that coordinate for as long as it is given
+iterations, and an unconverged fit reporting `nu = 4.5e47` is reporting how many
+iterations it ran, not a tail index.
+
+Two consequences, and only the first has been fixed.
+
+**The arithmetic is now correct there.** It was not. Until 2026-08-31 the
+per-period density term was evaluated as `log(nu + q_t)` with the `log(nu)` half
+folded into the constant — algebraically identical to `log1p(q_t/nu)` and one
+tape node cheaper, but a difference of two quantities of size
+`T (nu+K)/2 log(nu)` resolving an answer of order `T`. At `nu = 1e13, T = 400`
+those operands are about `6e16` and the answer about `1e3`, below the last bit of
+either. The normalization `lgamma((nu+d)/2) - lgamma(nu/2)` cancelled the same
+way one level down. Measured on a five-variable 400-period sample: the
+log-likelihood read `393.788` from `nu = 6.6e7` through `8.0e8` — correct, and
+visibly the Gaussian limit — then `616` at `nu = 1.1e13`, then `1216`, then
+`1664`. In a 500,000-fit battery at a 4000-iteration cap, 11 fits reached
+`nu > 1e10` and one reported a log-likelihood of `8.6e37`.
+
+Both paths now go through `log1p` and `special.h`'s `special_lgamma_diff` /
+`special_digamma_diff`, and `tests/correctness/qvarma_gaussian_limit.c` holds
+them to a closed-form reference at every `nu` from 3 to `1e14`. The
+`d(log-likelihood)/d(theta_nu)` it reports now decays by a factor of ten per
+decade of `nu`, from `13.1` at `nu = 3` to `1.9e-13` at `nu = 1e14`.
+
+**The flatness itself remains.** A correct likelihood on a flat direction is
+still a flat direction: nothing stops a fit from wandering up it, and `nu` is
+not identified once the tail is light. Treat a fitted `nu` above roughly `1e6`
+as "the data do not distinguish this from Gaussian" and not as an estimate, and
+do not compare two such values across fits. Reparameterizing in `1/nu`, which
+would make the Gaussian case a reachable boundary point rather than a limit at
+infinity, is listed under future work in `docs/QVARMA_DOCUMENTATION.md` and has
+not been done.
+
 ## Shapes and regimes that are hard to fit
 
 Convergence out of 12, at T = 500, from a start perturbed by 0.25 per

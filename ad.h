@@ -482,6 +482,34 @@ static inline Node *ad_log(Tape *t, Node *a) {
     return n;
 }
 
+/* Elementwise log(1 + a), a > -1 elementwise, with
+   d(log1p(a))/da = 1/(1 + a).
+
+   Not a convenience spelling of ad_log(ad_add(one, a)). Where a is small
+   the sum keeps only the digits of a that survive alongside the leading
+   one of 1, and the log of that rounded sum is the log of a different
+   number; log1p is defined to compute the same quantity without forming
+   the sum. The case that needs it is a Student-t log-density at a large
+   nu, whose per-observation term is log(1 + q/nu) with q/nu near zero -
+   dist/student.h and dist/mv/student.h compute it this way already, and
+   sd/qvarma.h and sd/score_driven_location.h reach the same term through
+   the tape. Evaluated through special.h's special_log1p, so the taped and
+   analytic filters agree to the last bit rather than to log1p's own accuracy
+   against it. */
+static void ad_log1p_backward(Node *self) {
+    Node *a = self->parents[0];
+    int n = a->grad.r * a->grad.c;
+    for (int i = 0; i < n; i++) a->grad.d[i] += self->grad.d[i] / ((mreal)1 + a->val.d[i]);
+}
+static inline Node *ad_log1p(Tape *t, Node *a) {
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_log1p_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++) n->val.d[i] = (mreal)special_log1p((double)a->val.d[i]);
+    n->parents[0] = a; n->n_parents = 1;
+    return n;
+}
+
 /* Elementwise log-Gamma: c = lgamma(a), a > 0 elementwise.
    d(lgamma(a))/da = psi(a), the digamma function (special.h) - the op
    that makes gamma-family log-likelihood normalizations (Student t,
@@ -504,6 +532,36 @@ static inline Node *ad_lgamma(Tape *t, Node *a) {
     for (int i = 0; i < m; i++)
         n->val.d[i] = (mreal)lgamma((double)a->val.d[i]);
     n->parents[0] = a; n->n_parents = 1;
+    return n;
+}
+
+/* Elementwise log Gamma(a + shift) - log Gamma(a), a > 0 elementwise and
+   shift >= 0, with derivative psi(a + shift) - psi(a).
+
+   Not ad_sub(ad_lgamma(t, shifted), ad_lgamma(t, a)): log Gamma grows like
+   a log a, so for a large the two nodes agree to every digit they carry and
+   their difference on the tape is noise - special.h's own special_lgamma_diff
+   header records where that starts and what it costs. Both the value and the
+   adjoint go through the stable pair there. The shift is a plain scalar in
+   aux rather than a second node because a difference of two Gamma arguments
+   is the only shape that admits the stable evaluation; taking it as a node
+   would invite a caller to rebuild the unstable one. The t log-normalization
+   in sd/qvarma.h and sd/score_driven_location.h is this op with shift = K/2. */
+static void ad_lgamma_diff_backward(Node *self) {
+    Node *a = self->parents[0];
+    mreal shift = self->aux;
+    int n = a->grad.r * a->grad.c;
+    for (int i = 0; i < n; i++)
+        a->grad.d[i] += self->grad.d[i]
+                      * (mreal)special_digamma_diff((double)a->val.d[i], (double)shift);
+}
+static inline Node *ad_lgamma_diff(Tape *t, Node *a, mreal shift) {
+    int r = a->val.r, c = a->val.c;
+    Node *n = ad_node_new_pooled(t, r, c, ad_lgamma_diff_backward);
+    int cnt = r * c;
+    for (int i = 0; i < cnt; i++)
+        n->val.d[i] = (mreal)special_lgamma_diff((double)a->val.d[i], (double)shift);
+    n->parents[0] = a; n->n_parents = 1; n->aux = shift;
     return n;
 }
 

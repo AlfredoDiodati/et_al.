@@ -184,6 +184,21 @@ the header - and evaluates it in the same loop as the value. There is
 therefore no tape, no BLAS call and no allocation between the first period and
 the last. Both compute the same log-likelihood and the same gradient of it.
 
+Both also evaluate the Student-t density the same way, and it is written the
+way it is for accuracy rather than for node count. The per-period term is
+`log1p(q_t/nu)`, not the one-node-cheaper `log(nu + q_t)` with the `log(nu)`
+half folded into the constant; the normalization is `special.h`'s
+`special_lgamma_diff(nu/2, K/2)`, reached through `ad_lgamma_diff` on the taped
+path, not two `lgamma` terms subtracted. Both cheaper spellings are exact
+identities and both lose the answer entirely at a `nu` that fits actually
+reach - see "A large `nu` is a flat direction, not a fitted value" in
+`docs/QVARMA_RELIABILITY_DOCUMENTATION.md` for the measurement and what it cost.
+The analytic adjoint carries a matching constraint: the density's `nu`
+derivative is accumulated per period as `(nu+K) q_t / (2 nu s_t)` rather than
+routed through `s_t = nu + q_t` the way the score's is, because that route
+leaves `T (nu+K)/(2 nu)` to be added back at the seed and the two are equal to
+fifteen digits where their difference is the answer.
+
 The fit runs on the analytic one. The traced one stays as the reference it is
 checked against, because a hand derivation can be wrong in a way reverse mode
 cannot, and because the model policy in `README.md` requires a traced and an
@@ -666,6 +681,37 @@ difference is worse still at float32 - both gradients land 6 to 37 in relative
 terms from it, since differencing a likelihood of order 1e3 at a step of 1e-5
 leaves nothing. The float64 build buys about nine orders of discrimination on
 the gradient comparison and makes the difference check usable at all.
+
+### `tests/correctness/qvarma_gaussian_limit.c`
+
+Does the likelihood stay computable as `nu` grows. Four checks, run at every
+`nu` on a grid from 3 to `1e14`.
+
+A **known-output** shape, `K = K_star = 2` with `Phi_star` and `Psi_star` pinned
+at zero, so `mu_star` is identically zero, `mu_dag` is absent, and
+`v_t = y_t - c` with no recursion left to reimplement. `K = 2` rather than 1
+because at `d = 2` the whole normalization collapses to `-log(2 pi)` for every
+`nu`, so the reference in the test contains no `lgamma`, no `digamma` and
+nothing from `special.h` - which is where the code under test now computes that
+difference, and a reference sharing it would move with it. The value is also
+checked against the bivariate Gaussian log-likelihood at `nu = 1e14`.
+
+**Convergence** on the five-variable pipeline shape, where no closed form
+exists: each decade of `nu` must move the likelihood less than the decade
+before, and the last must move it by under `1e-6`.
+
+**The `nu` gradient** must decay monotonically and reach below `1e-4`, since the
+limit does not depend on `nu`. It now decays by a factor of ten per decade, from
+13.1 at `nu = 3` to `1.9e-13` at `nu = 1e14`.
+
+**Both paths** must still agree out there, so that a fix applied to the analytic
+filter alone would not leave the taped one wrong and this file passing.
+
+Every one of the four fails on the pre-2026-08-31 code, which is what the file
+exists to record; `docs/QVARMA_RELIABILITY_DOCUMENTATION.md` has the numbers it
+was failing by. Built at float64 (`STAT_CFLAGS`): the quantity under test is a
+difference of two large numbers and float32 cannot demonstrate the accuracy it
+asks for.
 
 ### `tests/correctness/qvarma_identification.c`
 
@@ -1210,3 +1256,13 @@ file that needs it.
 The empirical quantile the confidence bands take was in this category and is not
 any more: it is `stats.h`'s `stats_quantile_inplace`, the same selection
 `stats_median` performs with `p` free.
+
+The Student-t log-normalization was in it too, and worse: this file computed
+`lgamma((nu+K)/2) - lgamma(nu/2)` by hand when `dist/mv/student.h` already had
+`mvstudent_lognorm`, and the hand-rolled copy inherited none of that one's care.
+It is now the shared function. The per-period `log1p` term still has no shared
+form to call: `dist/mv/student.h` inlines it inside `mvstudent_logpdf`, which
+takes an `n x d` batch and runs its own Cholesky, and a filter that already has
+`q_t` and a factored inverse scale cannot reach it. The primitive that would
+close that gap is the t log-density given an already-computed quadratic form -
+one scalar function, plus its `nu` derivative - and it is not written yet.

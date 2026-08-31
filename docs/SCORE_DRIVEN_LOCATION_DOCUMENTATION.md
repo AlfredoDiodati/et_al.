@@ -164,6 +164,30 @@ The failure this file is built against is a filter that returns a plausible log-
 - **Standard errors** at a fit: none negative, the condition number at least one, the flat-direction count in range, and the point estimates beside them being the fitted ones.
 - **`STRESS=1` adds recovery**: 4 draws at `T = 4000` from a start perturbed by 0.2 per coordinate on the unconstrained scale. 4 of 4 converge with a worst unconstrained coordinate error of 0.193.
 
+## A large `nu`
+
+The model carries the same Student-t density `sd/qvarma.h` does, and until
+2026-08-31 it carried the same defect: the per-period term was written as
+`log(nu + q_t)` with the `log(nu)` half folded into the constant, and the
+normalization as two `lgamma` terms subtracted. Both are exact identities and
+both are catastrophic cancellations at a light tail - the sum becomes a
+difference of two quantities of size `T (nu+K)/2 log(nu)` resolving an answer of
+order `T`. Measured on a 30-period, two-variable sample: the log-likelihood read
+`-84.1723` correctly through `nu = 1e10`, then `-84.25` at `nu = 1e12`, then
+exactly `-64` at `nu = 1e14`, against a true `-84.1723`.
+
+The filter now uses `ad_log1p` and `ad_lgamma_diff`, and
+`test_light_tail_stays_computable` in
+`tests/correctness/score_driven_location_correctness.c` pins it against an
+elementary closed form - `a = 0` makes `m_t = m_0` for every period, so the
+sample is iid t about a fixed location, and `K = 2` makes the normalization the
+constant `-log(2 pi)` with no Gamma function in the reference at all.
+
+What is fixed is the arithmetic, not the identification: `nu` is still nearly
+unidentified once the tail is light, the likelihood is genuinely flat in it, and
+a fitted `nu` above roughly `1e6` should be read as "not distinguishable from
+Gaussian" rather than as an estimate.
+
 ## Known limitations and future work
 
 - **No forecast function.** `sdloc_simulate` draws from the model and `_sdloc_filter` reports residuals, but there is no `sdloc_forecast` producing conditional means at horizon `h`.

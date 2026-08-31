@@ -500,10 +500,90 @@ static void test_recovery(void) {
     printf("  ok\n");
 }
 
+/*
+Does the likelihood stay computable as nu grows.
+
+The score-driven location model carries the same Student-t log-density
+sd/qvarma.h does, and carried the same rearrangement of it: the per-period
+term written as log(nu + q_t) with the log(nu) half folded into the constant,
+so that the sum became a difference of two quantities of size T (nu+K)/2
+log(nu) resolving an answer of order T. It stops being the likelihood well
+before the Gaussian limit the t is heading for.
+
+Pinned against an elementary reference rather than against mvstudent, whose
+own normalization this now shares. With a = 0 the score never feeds back and
+m_t = m_0 for every period, so the sample is iid t about a fixed location and
+the likelihood is a plain sum of log-densities. K = 2 makes the normalization
+a constant with no Gamma function in it,
+
+    lgamma(nu/2 + 1) - lgamma(nu/2) - log(nu pi) = log(nu/2) - log(nu pi)
+                                                 = -log(2 pi),
+
+exactly, at every nu.
+*/
+static void test_light_tail_stays_computable(void) {
+    printf("the likelihood as nu approaches the Gaussian limit\n");
+    const int K = 2, T = 30;
+    const double pi = 3.14159265358979323846, omega = 1.2;
+    const double m0[2] = { 0.3, -0.15 };
+
+    Rng rng = rng_new(20260831u, 11u);
+    Mat y = mat_new(K, T);
+    for (int k = 0; k < K; k++)
+        for (int t = 0; t < T; t++) AT(y, k, t) = (mreal)(m0[k] + rng_normal(&rng));
+
+    int n = sdloc_n_theta(K);
+    Vec theta = mat_new(n, 1);
+    for (int i = 0; i < n; i++) theta.d[i] = 0;
+    for (int k = 0; k < K; k++) {
+        theta.d[k] = (mreal)m0[k];                 /* m0 */
+        theta.d[K + k] = 0;                         /* a, through tanh, so a = 0 */
+        theta.d[2 * K + k] = 0;                     /* b, likewise */
+        theta.d[3 * K + k] = (mreal)log(omega);     /* the Omega_inv diagonal */
+    }
+    int nu_at = n - 1;
+
+    const double grid[] = { 3, 3e2, 3e4, 3e6, 3e8, 1e10, 1e12, 1e14 };
+    int count = (int)(sizeof grid / sizeof grid[0]);
+    double previous_step = 0, previous_value = 0;
+    for (int g = 0; g < count; g++) {
+        theta.d[nu_at] = (mreal)log(grid[g] - 2.0);
+        double got = (double)sdloc_log_likelihood_at(theta, y);
+
+        double sum = 0;
+        for (int t = 0; t < T; t++) {
+            double q = 0;
+            for (int k = 0; k < K; k++) {
+                double v = (double)AT(y, k, t) - m0[k];
+                q += v * v / (omega * omega);
+            }
+            sum += log1p(q / grid[g]);
+        }
+        double want = (double)T * (-log(2 * pi) - 2 * log(omega))
+                    - 0.5 * (grid[g] + 2) * sum;
+        char label[64];
+        snprintf(label, sizeof label, "log-likelihood at nu = %.0e", grid[g]);
+        CHECK_CLOSE(got, want, 1e-9, label);
+
+        double step = g ? fabs(got - previous_value) : 0;
+        if (g >= 4) CHECK(step <= previous_step + 1e-9,
+                          "the step into nu = %.0e grew, %g against %g",
+                          grid[g], step, previous_step);
+        previous_value = got;
+        previous_step = step;
+        printf("  nu %9.0e   model %16.8f   density %16.8f\n", grid[g], got, want);
+    }
+
+    mat_free(theta);
+    mat_free(y);
+    printf("\n");
+}
+
 int main(void) {
     test_parameter_count();
     test_link_round_trip();
     test_static_case_against_mvstudent();
+    test_light_tail_stays_computable();
     test_gradient_against_finite_differences();
     test_simulator_matches_the_filter();
     test_infeasible_points_return_a_sentinel();

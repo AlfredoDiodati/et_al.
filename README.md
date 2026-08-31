@@ -52,9 +52,9 @@ This software is developed with strong assistance from Claude Fable and with hum
 ET_AL./
 ├── linalg/                         # dense linear algebra core chain — tucked into its own dir so "solver" is free for solver/ below
 │
-├── ad.h               # reverse-mode autodiff (backprop) — general-purpose; includes linalg/solver.h + special.h (ad_lgamma)
+├── ad.h               # reverse-mode autodiff (backprop) — general-purpose; includes linalg/solver.h + special.h (ad_lgamma, ad_lgamma_diff)
 ├── json.h             # JSON value tree (parse/build/write) — general-purpose, no dependency on linalg/mat.h; see docs/JSON_DOCUMENTATION.md
-├── special.h          # scalar special functions (digamma, normal CDF, incomplete gamma, chi-squared tail) — general-purpose, standalone like json.h; double-native by design; see docs/SPECIAL_DOCUMENTATION.md
+├── special.h          # scalar special functions (digamma, the log-Gamma and digamma differences a light-tailed t needs, log1p, normal CDF, incomplete gamma, chi-squared tail) — general-purpose, standalone like json.h; double-native by design; see docs/SPECIAL_DOCUMENTATION.md
 ├── random.h           # PCG64 RNG engine (uniform/normal/gamma) — explicit-state, reproducible streams; dist/ samplers build on it; see docs/RANDOM_DOCUMENTATION.md
 ├── stats.h            # sample statistics (mean/variance/correlation, autocorrelation, vector mean, lag-k autocovariance, Newey-West long-run variance, Ljung-Box, median/quantile/rank) — above linalg/mat.h; see docs/STATS_DOCUMENTATION.md
 ├── mcs.h              # tests of equal predictive ability: model confidence set + Diebold-Mariano — above stats.h/random.h/special.h/frame/frame.h; see docs/MCS_DOCUMENTATION.md

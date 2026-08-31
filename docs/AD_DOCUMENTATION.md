@@ -60,7 +60,9 @@ Node *ad_emul(Tape *t, Node *a, Node *b)
 Node *ad_ediv(Tape *t, Node *a, Node *b)
 Node *ad_exp(Tape *t, Node *a)
 Node *ad_log(Tape *t, Node *a)
+Node *ad_log1p(Tape *t, Node *a)
 Node *ad_lgamma(Tape *t, Node *a)
+Node *ad_lgamma_diff(Tape *t, Node *a, mreal shift)
 Node *ad_pow(Tape *t, Node *a, mreal p)
 Node *ad_tanh(Tape *t, Node *a)          /* Activation */
 Node *ad_identity(Tape *t, Node *a)      /* Activation - the "linear output" case */
@@ -140,9 +142,21 @@ Unlike `mat_slice` and `mat_reshape`, which return zero-copy views, both of thes
 
 `ad_slice` is the one op that needs an integer alongside `aux`, so `Node` carries an `aux_offset` field holding the block's start as a flat index into the parent's buffer (`r0*a.c + c0`). That is all the backward pass needs, since the parent is contiguous and row `i` of the block therefore sits at that offset plus `i*a.c`. Neither op is from the TOMS paper; both are bookkeeping rather than matrix calculus.
 
+### `ad_log1p`
+
+Elementwise `log(1 + a)`, `a > -1`, with `d/da = 1/(1 + a)`. Not a convenience spelling of `ad_log(t, ad_add(t, one, a))`: where `a` is small the sum keeps only the digits of `a` that survive alongside the leading one of `1`, and the log of that rounded sum is the log of a different number — at `a = 1e-18`, `log(1 + a)` is exactly `0` while `log1p(a)` is `a`. The case that needs it is a Student-t log-density at a large `nu`, whose per-observation term is `log(1 + q/nu)` with `q/nu` near zero. `dist/student.h` and `dist/mv/student.h` already compute it that way off the tape; `sd/qvarma.h` and `sd/score_driven_location.h` reach the same term through the tape and now use this.
+
 ### `ad_lgamma`
 
 Elementwise log-Gamma with `d(lgamma(a))/da = psi(a)`, the digamma function from `special.h` — the op that makes gamma-family log-likelihood normalizations (Student t, gamma, beta, ...) differentiable on the tape; added together with `dist/student.h`'s `dlogpdf_nu`, whose AD cross-check needs the `lgamma((nu+1)/2) - lgamma(nu/2)` term in the graph. Forward and backward evaluate in double per element and cast to `mreal` (see `docs/SPECIAL_DOCUMENTATION.md` for why double), and `special_digamma`'s `x > 0` assert carries the domain contract. This is `ad.h`'s one dependency beyond `linalg/solver.h`. Not from the TOMS paper — a scalar elementwise identity like `ad_tanh`, not a matrix operation.
+
+### `ad_lgamma_diff`
+
+Elementwise `log Gamma(a + shift) - log Gamma(a)`, `a > 0` and `shift >= 0`, with derivative `psi(a + shift) - psi(a)`. Both directions go through `special.h`'s `special_lgamma_diff`/`special_digamma_diff`.
+
+Not `ad_sub(t, ad_lgamma(t, shifted), ad_lgamma(t, a))`. `log Gamma` grows like `a log a`, so for `a` large the two nodes agree to every digit they carry and their difference on the tape is noise — `docs/SPECIAL_DOCUMENTATION.md`'s "Differences, not terms" section has the measurement. The `shift` is a plain `mreal` in the node's `aux` field rather than a second `Node` for a reason beyond the usual untraced-scalar one: a difference of two Gamma arguments is the only shape that admits the stable evaluation, and taking the shift as a node would invite a caller to rebuild the unstable form. If a traced shift is ever needed, the derivative with respect to it is `psi(a + shift)`, which is `special_digamma` and needs no new machinery — but the stability argument would have to be re-made first.
+
+The Student-t log-normalization in `sd/qvarma.h` and `sd/score_driven_location.h` is this op with `shift = K/2`; both used the two-node spelling and both were wrong at a `nu` their own fits reached.
 
 ### `ad_solve` / `ad_chol_solve`
 
@@ -169,6 +183,8 @@ Checked in `tests/correctness/test_ad.c` against central finite differences of a
 `ad_chol_quadform` is checked against the pair it replaces, `ad_dot(b, ad_chol_solve(L, b))`, in value and in both gradients, since that pair is what every existing caller uses; against central finite differences of an independently written reference; on the invariant that the strict upper triangle of `L`'s gradient stays exactly zero, a Cholesky factor having no parameters there; and on a 1x1 factor, where the whole thing reduces to `q = b^2/L^2` with hand-computed derivatives `2b/L^2` and `-2b^2/L^3`. These same checks cover `ad_chol_quadform_backward`'s rank-1-update rewrite, since they check the function's outputs, not its internal algorithm - the same reason this function's earlier wrong derivation (see above) was caught by exactly this suite rather than by inspection.
 
 `test_matmul_nonsquare_fd` finite-differences `ad_matmul` on a non-square (3x2, 2x4) pair, added alongside the existing hand-computed square case for `ad_matmul_backward`'s `gemm`-accumulation rewrite, since a square case cannot distinguish a transposed-dimension mistake in one of the rewrite's two `gemm` calls from a compensating mistake in the other. Its finite-difference step is `5e-2f`, larger than this file's usual `1e-3f`: the reference loss (`sum((AB)^2)`) is exactly quadratic in each operand, so central differences carry no truncation error at any step size, and the only error source is float32 cancellation in the subtraction - which a *larger* step reduces, the reverse of the usual truncation-versus-cancellation tradeoff, and worth remembering before reusing `1e-3f` on a loss whose magnitude reaches into the hundreds.
+
+`ad_log1p` is checked on known forward values (`log1p(0) = 0` exactly, `log(2)`, `log(8.5)`), its `1/(1+a)` backward wiring, a double finite difference of `log1p` itself, and — recording why the op exists rather than only that it works — the assertion that `log(1 + 1e-18)` is exactly zero while `log1p(1e-18)` is not. `ad_lgamma_diff` is checked at `shift = 1`, where the forward is exactly `log(a)` and the adjoint exactly `1/a` for every `a`, with no Gamma function in either reference, at arguments up to `5e13` where the two-node spelling has already collapsed; and at `shift = 2.5`, which has no closed form, against a central difference of `special_lgamma_diff`.
 
 `test_broadcast_mul_fd` finite-differences `ad_broadcast_mul` on both operands: `a`'s gradient directly, and - the part with no precedent elsewhere in this file, since `ad_scale`'s factor and `ad_pow`'s exponent are never traced - `s`'s gradient with `s` built from an `ad_leaf` via `ad_scale` rather than being a leaf itself, so the chain rule through `s` is actually exercised rather than only its direct, one-hop gradient.
 

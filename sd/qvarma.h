@@ -571,19 +571,14 @@ static inline Node *_qvarma_filter(Tape *tape, const QvarmaLinked *linked, const
 
     Node *half_nu_K = ad_scale(tape, ad_add(tape, linked->nu,
                                qvarma_constant_node(tape, mat_fill(1, 1, (mreal)K))), (mreal)0.5);
-    Node *constant_part = ad_sub(tape,
-        ad_lgamma(tape, half_nu_K),
-        ad_lgamma(tape, ad_scale(tape, linked->nu, (mreal)0.5)));
+    /* lgamma((nu+K)/2) - lgamma(nu/2) as one op, not two nodes subtracted: at a
+       light tail the two are equal to every digit a double carries. */
+    Node *constant_part = ad_lgamma_diff(tape, ad_scale(tape, linked->nu, (mreal)0.5),
+                                         (mreal)K * (mreal)0.5);
     constant_part = ad_sub(tape, constant_part,
         ad_scale(tape, ad_log(tape, ad_scale(tape, linked->nu, (mreal)QVARMA_PI)),
                  (mreal)K * (mreal)0.5));
     constant_part = ad_sub(tape, constant_part, linked->half_log_det_Sigma);
-
-    /* log(1 + q_t/nu) = log(nu + q_t) - log(nu), and nu + q_t is already needed
-       for u_t, so the density reuses it and the log(nu) half folds into the
-       constant. Three nodes per period instead of five. */
-    constant_part = ad_add(tape, constant_part,
-        ad_emul(tape, half_nu_K, ad_log(tape, linked->nu)));
 
     /* Phi_star_i is a scalar, so Phi_star_i mu_star_{t-i} through ad_matmul is
        a gemm with one column and one inner dimension, and its adjoint is two
@@ -594,7 +589,7 @@ static inline Node *_qvarma_filter(Tape *tape, const QvarmaLinked *linked, const
     for (int i = 0; i < shape->p; i++)
         phi_column[i] = ad_matmul(tape, ones, linked->Phi_star[i]);
 
-    /* Every period contributes constant_part - half_nu_K log(nu + q_t), and
+    /* Every period contributes constant_part - half_nu_K log1p(q_t/nu), and
        both factors are the same each period, so the loop accumulates only the
        logs and the multiply and the constant come out once at the end. */
     Node *log_sum = NULL;
@@ -638,7 +633,16 @@ static inline Node *_qvarma_filter(Tape *tape, const QvarmaLinked *linked, const
         Node *nu_plus_q = ad_add(tape, linked->nu, quadratic);
         u[t] = ad_matmul(tape, v, ad_ediv(tape, linked->nu, nu_plus_q));
 
-        Node *log_term = ad_log(tape, nu_plus_q);
+        /* log1p(q_t/nu) rather than log(nu + q_t) - log(nu). The two are the
+           same number and the second is one node cheaper, since nu + q_t is
+           already here for u_t and the log(nu) half then folds into the
+           constant. It is also a difference of two quantities of size
+           (nu+K)/2 T log(nu) that has to resolve an answer of order T, so at
+           a large nu the answer is below the last bit of the operands and the
+           likelihood stops being computable long before the Gaussian limit is
+           reached - see tests/correctness/qvarma_gaussian_limit.c for where
+           that starts and what it cost. The node is not worth it. */
+        Node *log_term = ad_log1p(tape, ad_ediv(tape, quadratic, linked->nu));
         log_sum = log_sum ? ad_add(tape, log_sum, log_term) : log_term;
 
         if (mu_star_out) mu_star_out[t] = mu_star[t];
@@ -947,6 +951,7 @@ static inline void _qvarma_analytic_link(QvarmaAnalytic *f, Vec theta) {
 static inline mreal _qvarma_analytic_forward(QvarmaAnalytic *f, Mat y) {
     int K = f->K, T = f->T, stride = f->path_stride;
     mreal nu = f->nu;
+    mreal nu_reciprocal = (mreal)1 / nu;
     mreal log_sum = 0;
 
     /* Both substitutions divide by the same K diagonal entries every period.
@@ -1016,16 +1021,32 @@ static inline mreal _qvarma_analytic_forward(QvarmaAnalytic *f, Mat y) {
         slot[5 * (size_t)K] = s;
         mreal scale = nu / s;
         for (int i = 0; i < K; i++) u[i] = v[i] * scale;
-        log_sum += MLOG(s);
+        /* log(1 + q_t/nu), not log(nu + q_t) with the log(nu) taken out to
+           the constant: see _qvarma_filter's own comment on this line for why
+           the cheaper rearrangement cannot be used. s is still needed for u_t,
+           so it stays; the reciprocal is hoisted so this costs a multiply.
+
+           log(s_t) - log(nu) is the same quantity again and is cheaper still,
+           since s_t is already here - and it is not used. It is a difference of
+           two quantities of size log(nu) resolving one of size q_t/nu, which
+           leaves about sixty times special_log1p's own noise in the objective,
+           and solver/lbfgs.h's curvature condition finds it: with that spelling
+           below a nu of 1e4 the line search stalls on two of the five draws of
+           tests/correctness/qvarma_correctness.c's two-co-integration-lag case,
+           for about two per cent of a filter evaluation.
+
+           special_log1p rather than MLOG1P because libm's log1p measured 17%
+           slower than log in this loop - special.h's own header has the
+           numbers. */
+        log_sum += (mreal)special_log1p((double)(quadratic * nu_reciprocal));
     }
 
     f->log_sum = log_sum;
     mreal half_nu_K = (mreal)0.5 * (nu + (mreal)K);
-    mreal constant_part = (mreal)lgamma((double)half_nu_K)
-                        - (mreal)lgamma(0.5 * (double)nu)
-                        - (mreal)K * (mreal)0.5 * MLOG((mreal)QVARMA_PI * nu)
-                        - f->half_log_det_Sigma
-                        + half_nu_K * MLOG(nu);
+    /* The nu-dependent normalization is dist/mv/student.h's, not a copy of it:
+       that one evaluates its two lgamma terms in double whatever mreal is,
+       because they are large where their difference is small. */
+    mreal constant_part = mvstudent_lognorm(nu, K) - f->half_log_det_Sigma;
     return (mreal)T * constant_part - half_nu_K * log_sum;
 }
 
@@ -1149,13 +1170,21 @@ static inline void _qvarma_analytic_backward(QvarmaAnalytic *f, Vec gradient) {
     for (size_t i = 0; i < (size_t)f->u_ring * K; i++) f->u_bar[i] = 0;
     for (size_t i = 0; i < (size_t)f->star_ring * K; i++) f->mu_star_bar[i] = 0;
 
-    mreal half_nu_K_bar = (mreal)T * ((mreal)special_digamma((double)half_nu_K) + MLOG(nu))
-                        - f->log_sum;
     mreal log_sum_bar = -half_nu_K;
     mreal half_log_det_bar = -(mreal)T;
-    mreal nu_bar = (mreal)0.5 * half_nu_K_bar
-                 + (mreal)T * (-(mreal)0.5 * (mreal)special_digamma(0.5 * (double)nu)
-                               - (mreal)K * (mreal)0.5 / nu + half_nu_K / nu);
+    /*
+    The objective is T [lognorm(nu,K) - half_log_det_Sigma] - (nu+K)/2 sum_t g_t
+    with g_t = log1p(q_t/nu), so d/d nu at fixed q_t is
+
+        T dlognorm_dnu(nu,K) - sum_t g_t / 2 + (nu+K)/2 sum_t q_t/(nu s_t),
+
+    the first two seeded here and the third accumulated in the loop, where q_t
+    is at hand. The last two are each of order T q/(2 nu) and cancel to order
+    T q^2/(4 nu^2), so neither may be reached by a route that inflates it: see
+    the loop's own note on why the density's nu derivative is not passed
+    through s_t = nu + q_t the way the score's is.
+    */
+    mreal nu_bar = (mreal)T * mvstudent_dlognorm_dnu(nu, K) - (mreal)0.5 * f->log_sum;
 
     /* The ring slot walks backwards with the loop rather than being recomputed
        as t % ring: that modulo is an integer division by a runtime value, and
@@ -1178,10 +1207,27 @@ static inline void _qvarma_analytic_backward(QvarmaAnalytic *f, Vec gradient) {
             scale_bar += u_bar[i] * v[i];
             u_bar[i] = 0; /* the slot is next used for period t - u_ring */
         }
-        nu_bar += scale_bar / s;
-        mreal s_bar = -scale_bar * nu / (s * s) + log_sum_bar / s;
-        nu_bar += s_bar;
-        mreal q_bar = s_bar;
+        /* q_t back from the stored z_t rather than as s - nu, which subtracts
+           two numbers that are equal to every digit once nu is large. */
+        mreal quadratic = 0;
+        for (int i = 0; i < K; i++) quadratic += z[i] * z[i];
+
+        /* u_t = v_t nu/s_t reaches nu twice, directly and through s_t, and both
+           routes stay as they are: that path's terms do not cancel. */
+        mreal score_s_bar = -scale_bar * nu / (s * s);
+        nu_bar += scale_bar / s + score_s_bar;
+
+        /* The density term is -(nu+K)/2 log1p(q_t/nu). Its q_t derivative is
+           -(nu+K)/(2 s_t), which is what log(s_t) would have given too, so that
+           much is unchanged. Its nu derivative is +(nu+K) q_t/(2 nu s_t), and
+           it is added here rather than routed through s_t = nu + q_t: that
+           route yields -(nu+K)/(2 s_t) per period and leaves T (nu+K)/(2 nu)
+           to be added back once, two quantities of size T/2 whose difference
+           is of order T q_t/nu^2. At nu = 1e14 that is fifteen digits of
+           cancellation to reach the answer, and the link's own chain rule then
+           multiplies what is left by nu. */
+        nu_bar += half_nu_K * quadratic / (nu * s);
+        mreal q_bar = score_s_bar + log_sum_bar / s;
 
         /* w = Omega_inv^-T z by back substitution, then the masked rank-one
            update - see this section's header for the derivation. */

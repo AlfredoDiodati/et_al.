@@ -591,6 +591,79 @@ static void test_lgamma_op(void) {
     tape_free(t);
 }
 
+/* --- log1p and the Gamma difference: two ops that exist because the
+   spellings they replace, ad_log(ad_add(one, a)) and
+   ad_sub(ad_lgamma(shifted), ad_lgamma(a)), lose the answer where the
+   arguments are large or the increment small --- */
+
+static void test_log1p_op(void) {
+    puts("ad_log1p (forward + 1/(1+a) backward)");
+    Tape *t = tape_new();
+    Mat av = mat_lit(4, 1, 0.0f, 1.0f, 7.5f, (mreal)1e-9);
+    Node *a = ad_leaf(t, av);
+    Node *lp = ad_log1p(t, a);
+    Node *loss = ad_sum(t, lp);
+    tape_backward(t, loss);
+
+    CHECK(lp->val.d[0], 0.0f);                 /* log1p(0) = 0 exactly */
+    CHECK(lp->val.d[1], 0.6931471806f);        /* log(2) */
+    CHECK(lp->val.d[2], 2.1400661635f);        /* log(8.5) */
+    for (int i = 0; i < 4; i++) {
+        CHECK(a->grad.d[i], (mreal)(1.0 / (1.0 + (double)av.d[i])));
+        double h = 1e-5, x = (double)av.d[i];
+        double fd = (log1p(x + h) - log1p(x - h)) / (2 * h);
+        assert(MABS(a->grad.d[i] - (mreal)fd) < TOL_FD);
+    }
+
+    /* The reason the op exists: at a small increment the sum inside the
+       replaced spelling rounds to one and its log to zero, while log1p
+       returns the increment itself. Checked in double so the statement is
+       about the arithmetic and not about the mreal build. */
+    double tiny = 1e-18;
+    assert(log(1.0 + tiny) == 0.0);
+    assert(log1p(tiny) == tiny);
+    mat_free(av);
+    tape_free(t);
+}
+
+static void test_lgamma_diff_op(void) {
+    puts("ad_lgamma_diff (forward + digamma-difference backward)");
+    Tape *t = tape_new();
+    /* The last entry is where the two-node spelling has already collapsed. */
+    Mat av = mat_lit(4, 1, 0.75f, 3.0f, 40.0f, (mreal)5e13);
+    Node *a = ad_leaf(t, av);
+    Node *d = ad_lgamma_diff(t, a, (mreal)1);
+    Node *loss = ad_sum(t, d);
+    tape_backward(t, loss);
+
+    for (int i = 0; i < 4; i++) {
+        /* A shift of one is exactly log(a), for every a, with no Gamma
+           function in the reference at all. */
+        double x = (double)av.d[i];
+        assert(MABS(d->val.d[i] - (mreal)log(x)) <= (mreal)1e-12 * (mreal)fabs(log(x)));
+        /* and the adjoint is psi(a + 1) - psi(a), which at a shift of one is
+           exactly 1/a. */
+        assert(MABS(a->grad.d[i] - (mreal)(1.0 / x)) <= (mreal)1e-9 * (mreal)(1.0 / x));
+    }
+
+    /* The wiring at a shift the closed forms above do not cover, against a
+       finite difference of the op's own forward. */
+    Tape *t2 = tape_new();
+    Mat bv = mat_lit(2, 1, 2.5f, 9.0f);
+    Node *b = ad_leaf(t2, bv);
+    Node *db = ad_lgamma_diff(t2, b, (mreal)2.5);
+    tape_backward(t2, ad_sum(t2, db));
+    for (int i = 0; i < 2; i++) {
+        double h = 1e-5, x = (double)bv.d[i];
+        double fd = (special_lgamma_diff(x + h, 2.5) - special_lgamma_diff(x - h, 2.5)) / (2 * h);
+        assert(MABS(b->grad.d[i] - (mreal)fd) < TOL_FD);
+    }
+    mat_free(bv);
+    tape_free(t2);
+    mat_free(av);
+    tape_free(t);
+}
+
 /* --- Student t: the same synthetic-vs-analytical check as
    test_gauss_equivalence, extended to the third parameter nu - the
    lgamma((nu+1)/2) - lgamma(nu/2) normalization sits on the tape via
@@ -1375,6 +1448,8 @@ int main(void) {
     test_huber_logcosh();
     test_gauss_equivalence();
     test_lgamma_op();
+    test_log1p_op();
+    test_lgamma_diff_op();
     test_student_equivalence();
     test_mv_equivalence();
     test_slice_reshape();

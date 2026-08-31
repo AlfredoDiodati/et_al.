@@ -190,15 +190,16 @@ static inline Node *_sdloc_filter(Tape *tape, const SdlocLinked *linked, Mat y, 
 
     Node *half_nu_K = ad_scale(tape, ad_add(tape, linked->nu,
                                sdloc_constant_node(tape, mat_fill(1, 1, (mreal)K))), (mreal)0.5);
-    Node *constant_part = ad_sub(tape,
-        ad_lgamma(tape, half_nu_K),
-        ad_lgamma(tape, ad_scale(tape, linked->nu, (mreal)0.5)));
+    /* lgamma((nu+K)/2) - lgamma(nu/2) as one op rather than two nodes
+       subtracted: log Gamma grows like its argument's own logarithm times
+       itself, so at a light tail the two are equal to every digit a double
+       carries. ad_lgamma_diff's own comment in ad.h has the measurement. */
+    Node *constant_part = ad_lgamma_diff(tape, ad_scale(tape, linked->nu, (mreal)0.5),
+                                         (mreal)K * (mreal)0.5);
     constant_part = ad_sub(tape, constant_part,
         ad_scale(tape, ad_log(tape, ad_scale(tape, linked->nu, (mreal)3.14159265358979323846)),
                  (mreal)K * (mreal)0.5));
     constant_part = ad_sub(tape, constant_part, linked->half_log_det_Sigma);
-    constant_part = ad_add(tape, constant_part,
-        ad_emul(tape, half_nu_K, ad_log(tape, linked->nu)));
 
     /* sqrt((nu+K)(nu+2)), the scalar the kappa = 1/2 scaled score needs on
        top of qvarma.h's own kappa = 1 u_t; see this file's own header
@@ -216,7 +217,14 @@ static inline Node *_sdloc_filter(Tape *tape, const SdlocLinked *linked, Mat y, 
         Node *v = ad_sub(tape, ad_leaf(tape, mat_slice(y, 0, K, t, t + 1)), m);
         Node *quadratic = ad_chol_quadform(tape, linked->Omega_inv, v);
         Node *nu_plus_q = ad_add(tape, linked->nu, quadratic);
-        Node *log_term = ad_log(tape, nu_plus_q);
+        /* log1p(q_t/nu), not log(nu + q_t) with the log(nu) half taken out to
+           the constant. The two are the same number, and the second costs one
+           node fewer since nu + q_t is here anyway for the score, but it turns
+           the sum into a difference of two quantities of size T (nu+K)/2
+           log(nu) that has to resolve an answer of order T: past a nu of about
+           1e6 the likelihood stops being computable, long before the Gaussian
+           limit the t is heading for. */
+        Node *log_term = ad_log1p(tape, ad_ediv(tape, quadratic, linked->nu));
         log_sum = log_sum ? ad_add(tape, log_sum, log_term) : log_term;
         if (v_out) v_out[t] = v;
 

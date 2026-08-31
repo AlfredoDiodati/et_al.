@@ -40,7 +40,7 @@
    would cancel catastrophically. */
 static inline mreal mvstudent_lognorm(mreal nu, int d) {
     double n = (double)nu;
-    return (mreal)(lgamma((n + d) / 2) - lgamma(n / 2)
+    return (mreal)(special_lgamma_diff(n / 2, d / 2.0)
                    - d * (log(n) + (double)MVSTUDENT_LOG_PI) / 2);
 }
 
@@ -133,7 +133,7 @@ static inline Mat mvstudent_dlogpdf_loc(Mat x, Mat loc, Mat cov, mreal nu) {
    same cancellation reasoning as dist/student.h's student_dlognorm_dnu. */
 static inline mreal mvstudent_dlognorm_dnu(mreal nu, int d) {
     double n = (double)nu;
-    return (mreal)((special_digamma((n + d) / 2) - special_digamma(n / 2)) / 2 - d / (2 * n));
+    return (mreal)(special_digamma_diff(n / 2, d / 2.0) / 2 - d / (2 * n));
 }
 
 /* Return d(log-pdf)/d(nu) for each observation as an n x 1 column:

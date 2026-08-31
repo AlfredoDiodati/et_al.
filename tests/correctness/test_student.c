@@ -491,12 +491,56 @@ static void test_sampling(void) {
     }
 }
 
+/*
+A large but finite nu. test_gaussian_limit above checks the nu = INFINITY
+delegation, which is chosen on a bit pattern and so exercises none of the
+arithmetic; this checks that the arithmetic itself still reaches the Gaussian.
+It did not: student_lognorm's own lgamma((nu+1)/2) - lgamma(nu/2) is a
+difference of two quantities of size (nu/2) log(nu/2), and the answer it has to
+resolve is of size log(nu)/2.
+*/
+static void test_light_tail_converges(void) {
+    puts("a large finite nu converges on the Gaussian");
+    Mat x = mat_lit(3, 1, 0.4f, -1.1f, 2.0f);
+    Mat loc = mat_lit(1, 1, 0.25f);
+    Mat scale = mat_lit(1, 1, 1.3f);
+    Mat gaussian = gauss_logpdf(x, loc, scale);
+
+    mreal worst_previous = (mreal)1e9;
+    for (double n = 1e2; n <= 1e14; n *= 100) {
+        Mat nu = mat_lit(1, 1, (mreal)n);
+        Mat lp = student_logpdf(x, loc, scale, nu);
+        mreal worst = 0;
+        for (int i = 0; i < 3; i++) {
+            mreal gap = MABS(AT(lp, i, 0) - AT(gaussian, i, 0));
+            if (gap > worst) worst = gap;
+        }
+        assert(worst <= worst_previous + (mreal)1e-6);
+        worst_previous = worst;
+        mat_free(nu); mat_free(lp);
+    }
+    assert(worst_previous < TOL);
+    printf("  worst gap to the Gaussian at nu = 1e14: %.3g\n", (double)worst_previous);
+
+    /* The nu score vanishes with the tail, the limit having no nu in it. */
+    mreal previous = MABS(student_dlognorm_dnu((mreal)1e4));
+    for (double n = 1e6; n <= 1e14; n *= 100) {
+        mreal here = MABS(student_dlognorm_dnu((mreal)n));
+        assert(here <= previous);
+        previous = here;
+    }
+    assert(previous < (mreal)1e-10);
+
+    mat_free(x); mat_free(loc); mat_free(scale); mat_free(gaussian);
+}
+
 int main(void) {
     test_known_values();
     test_degenerate_params();
     test_vs_ref();
     test_fd_derivatives();
     test_gaussian_limit();
+    test_light_tail_converges();
     test_sampling();
     test_stress();
     puts("test_student: all passed");

@@ -76,7 +76,7 @@ Standalone, no Python driver. Build and run:
 #include <string.h>
 
 #define DEFAULT_N_TASKS 2048
-#define MAX_ITERATIONS 400
+#define DEFAULT_MAX_ITERATIONS 400
 
 /* Rows of one result column. */
 enum { OUT_LOG_LIKELIHOOD, OUT_CONVERGED, OUT_ITERATIONS, OUT_GRADIENT_NORM, OUT_PID, OUT_ROWS };
@@ -252,11 +252,12 @@ static Cluster open_cluster(void) {
     return cluster_open_addrs(cluster_options_default(), addrs, n);
 }
 
-static void report(FILE *out, unsigned long long seed, int periods, int n_tasks) {
+static void report(FILE *out, unsigned long long seed, int periods, int n_tasks,
+                   int max_iterations) {
     fprintf(out, "t-QVARMA fits across machines, %s build\n",
             sizeof(mreal) == sizeof(double) ? "float64" : "float32");
     fprintf(out, "%d fits of K=5 K_star=3 p=q=1 r=2 R=1 T=%d, capped at %d iterations,\n",
-            n_tasks, periods, MAX_ITERATIONS);
+            n_tasks, periods, max_iterations);
     fprintf(out, "%d hardware threads on this machine, one fit per thread inside a range\n\n",
             omp_get_num_procs());
 
@@ -265,10 +266,10 @@ static void report(FILE *out, unsigned long long seed, int periods, int n_tasks)
     Mat shared = mat_new(SHARED_ROWS, 1);
     AT(shared, SHARED_SEED, 0) = exactly((long long)seed);
     AT(shared, SHARED_PERIODS, 0) = exactly(periods);
-    AT(shared, SHARED_MAX_ITERATIONS, 0) = exactly(MAX_ITERATIONS);
+    AT(shared, SHARED_MAX_ITERATIONS, 0) = exactly(max_iterations);
 
     double serial_start = now();
-    Mat serial = fit_serially(seed, periods, MAX_ITERATIONS, n_tasks);
+    Mat serial = fit_serially(seed, periods, max_iterations, n_tasks);
     double serial_elapsed = now() - serial_start;
 
     Cluster c = open_cluster();
@@ -329,6 +330,15 @@ int main(int argc, char **argv) {
        small part of it, and how many fits that takes depends on the machines.
        Sized here rather than compiled in, since a two-machine run wants a
        bigger batch than a one-machine check. Flags belong to cluster_init. */
+    /* The cap decides how much of a real fit this measures. 400 keeps a sweep
+       short and makes every fit the same size of problem; the fits a study
+       actually runs are not capped there, so a throughput figure meant for
+       planning wants the default 4000. Named as qvarma_recovery_study.c names
+       it, since they mean the same thing. */
+    int max_iterations = DEFAULT_MAX_ITERATIONS;
+    const char *cap = getenv("MAX_ITERATIONS");
+    if (cap) { int parsed = atoi(cap); if (parsed > 0) max_iterations = parsed; }
+
     int n_tasks = DEFAULT_N_TASKS;
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] == '-') continue;
@@ -340,10 +350,10 @@ int main(int argc, char **argv) {
     char path[64];
     snprintf(path, sizeof path, "out/qvarma_cluster_fits_%s.txt",
              sizeof(mreal) == sizeof(double) ? "float64" : "float32");
-    report(stdout, seed, periods, n_tasks);
+    report(stdout, seed, periods, n_tasks, max_iterations);
     FILE *file = fopen(path, "w");
     if (file) {
-        report(file, seed, periods, n_tasks);
+        report(file, seed, periods, n_tasks, max_iterations);
         fclose(file);
         printf("\nwritten to %s\n", path);
     }
