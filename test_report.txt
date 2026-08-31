@@ -1,4 +1,4 @@
-test run: Sat Aug 29 03:46:52 PM CEST 2026
+test run: ma 31 aug 2026 18:25:16 CEST (STRESS=1)
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -47,7 +47,8 @@ make: 'tests/correctness/qlr_test_correctness' is up to date.
 make: 'tests/correctness/lbfgs_correctness' is up to date.
 make: 'tests/correctness/score_driven_location_correctness' is up to date.
 make: 'tests/correctness/qvarma_correctness' is up to date.
-make: 'tests/correctness/qvarma_fused_agreement' is up to date.
+make: 'tests/correctness/qvarma_analytic_agreement' is up to date.
+make: 'tests/correctness/qvarma_gaussian_limit' is up to date.
 make: 'tests/correctness/qvarma_identification' is up to date.
 make: 'tests/integration/frame_to_model' is up to date.
 make: 'tests/integration/join_missing_values' is up to date.
@@ -64,6 +65,13 @@ views
 arithmetic contiguous
 arithmetic strided
 mat_mul
+  mat_mul stress
+    n=127 ok
+    n=128 ok
+    n=129 ok
+    n=255 ok
+    n=256 ok
+    n=257 ok
 mat_gemm
 reductions
 mat_max/mat_min propagate NaN correctly even under -ffast-math
@@ -103,21 +111,45 @@ inf propagation: ok
 === test_decomp: PASS ===
 cholesky
 lu
+  lu stress
+  n=2..24 ok
 qr
+  qr stress
+  n=2..16 (rows=n+2) ok
 eig_sym
+  eig_sym stress
+  n=2..20 ok
 svd
+  svd stress
+  n=2..16 (rows=n+2) ok
 det
+  det stress
+  n=2..6 vs naive Laplace expansion ok
 inv
+  inv stress
+  n=2..20 ok
 cond/rank
 eig
+  eig stress
+  n=2..16 (sum(eigenvalues)==trace) ok
 test_decomp: all passed
 
 === test_solver: PASS ===
 vec_solve
+  vec_solve stress
+  n=2..24 ok
 vec_solve_sym
+  vec_solve_sym stress
+  n=2..24 ok
 vec_lu_solve / vec_chol_solve
+  reuse-solve stress
+  n=2..20, 5 right-hand sides each ok
 mat_lstsq
+  mat_lstsq stress
+  n=2..16 (rows=n+2) ok
 mat_lstsq_rd
+  mat_lstsq_rd stress
+  n=2..16 (rows=n+2), agrees with mat_lstsq on full-rank input ok
 test_solver: all passed
 
 === test_special: PASS ===
@@ -130,6 +162,15 @@ incomplete gamma far upper tail, relative accuracy
 recurrence psi(x+1) = psi(x) + 1/x
 vs central finite differences of lgamma
 large-x asymptotics
+  log1p vs libm over 200000 random magnitudes: worst 2.0 ulp at x = 2.3374e-07
+  log(1 + 1e-20) is 0, special_log1p(1e-20) is 1e-20
+  edges: -1, finite x below -1, the Sterbenz region and x up to 1e300
+  lgamma_diff vs the exact integer-shift identity: worst relative 2.55e-15
+  at x = 5e14 the subtraction gives 34.0000000000, log(x) is 33.8456292144
+  lgamma_diff composition split against whole: worst relative 1.22e-15
+  digamma_diff is the x-derivative of lgamma_diff to 1e-05
+  stress
+  2000 log-spaced x in [1e-2, 1e6] ok
 test_special: all passed
 
 === test_stats: PASS ===
@@ -143,17 +184,25 @@ autocov: gemm path centers the sample exactly once (not once per gemm operand)
 autocov_f32: known values (hand-computed)
 autocov_f32: views (stride != c)
 autocov_f32: randomized vs independent double reference (looser float32 tolerance)
+  stress
+  400 randomized strided runs (n up to ~300, d up to 4) ok
+  autocov gemm path checked at n=50000, d up to 32, ok
+  autocov_f32 checked at n=50000, d up to 32, ok
 prediction-quality metrics: known values (hand-computed)
 prediction-quality metrics: views (stride != c)
 prediction-quality metrics: invariants
 prediction-quality metrics: adversarial (minimal sizes, ties, badly scaled)
 prediction-quality metrics: randomized vs independent reference (fixed seed)
+  prediction-quality metrics stress
+  400 randomized strided runs (n up to ~300) ok
 HAC long-run variance: known values
 HAC long-run variance: rectangular window known values
 HAC long-run variance: invariants
 HAC long-run variance: strided views vs contiguous twins
 HAC long-run variance: adversarial inputs
 HAC long-run variance: randomized vs independent reference (fixed seed)
+  HAC long-run variance stress
+  600 randomized strided runs (n up to ~400) ok
 series length and element access, both orientations
 quantile against hand-computed interpolations
 quantile on views and degenerate samples
@@ -171,6 +220,8 @@ uniform: range + moments
 normal: first four moments
 gamma: mean/variance across shapes (incl. shape < 1 boost)
 independence: serial autocorrelation + cross-stream/seed correlation
+  stress
+  4 normal streams (n=1e6) + gamma shape sweep + autocorr lags 1..10 ok
 test_random: all passed
 
 === test_mcs: PASS ===
@@ -199,6 +250,8 @@ mcs_fwrite_report: contents, alignment, both termination cases
 mcs_effective_hac_lag: derived once, and the run agrees with it
 mcs_pvalue_frame: same numbers as the report, as data
 dm_fwrite_report: one branch per status
+  mcs stress: larger samples, more models, more resamples
+  2 runs at 2000 observations x 10 models, 500 resamples, structure ok
 test_mcs: all passed
 
 === test_mcs_variance: PASS ===
@@ -213,7 +266,11 @@ test_broadcast: all passed
 
 === test_gauss: PASS ===
 pdf/logpdf
+  pdf/logpdf stress
+  n=1..64 (3 cols) vs independent reference ok
 dlogpdf_loc/dlogpdf_scale
+  derivatives stress
+  n=1..64 (3 cols) vs independent reference ok
 degenerate scale (undocumented, unguarded - pinning current behavior)
 broadcast shape resolution
 sampling: moments + broadcast + independence (fixed seed)
@@ -225,7 +282,11 @@ degenerate nu/scale (undocumented, unguarded - pinning current behavior)
 vs independent reference (broadcast + fast path)
 derivatives vs finite differences
 nu = infinity is the Gaussian, exactly
+a large finite nu converges on the Gaussian
+  worst gap to the Gaussian at nu = 1e14: 1.19e-07
 sampling: moments + independence + Gaussian-limit delegation (fixed seed)
+  stress
+  n=1..64 (3 cols, inf-mixed nu) vs independent reference ok
 test_student: all passed
 
 === test_mvgauss: PASS ===
@@ -238,6 +299,11 @@ per-observation loc
 views
 non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)
 sampling: empirical mean/covariance + row independence (fixed seed)
+  stress
+  d=1, n=1..40 vs independent reference ok
+  d=2, n=1..40 vs independent reference ok
+  d=3, n=1..40 vs independent reference ok
+  d=5, n=1..40 vs independent reference ok
 test_mvgauss: all passed
 
 === test_mvstudent: PASS ===
@@ -246,10 +312,19 @@ known values
 correlated cov vs independent reference
 derivatives vs finite differences
 nu = infinity is the Gaussian, exactly
+a large finite nu: the normalization against its closed form
+  d = 2 constant and d = 4 closed form hold to nu = 1e15
+a large finite nu: the density against the Gaussian it tends to
+  worst gap to the Gaussian at nu = 1e14: 0
 per-observation loc + views
 non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)
 degenerate nu (undocumented, unguarded - pinning current behavior)
 sampling: moments + row independence + zero-score at truth (fixed seed)
+  stress
+  d=1, n=1..40 vs independent reference ok
+  d=2, n=1..40 vs independent reference ok
+  d=3, n=1..40 vs independent reference ok
+  d=5, n=1..40 vs independent reference ok
 test_mvstudent: all passed
 
 === test_matgauss: PASS ===
@@ -268,15 +343,32 @@ bad shapes and non-positive-definite covariances abort
 standard draw == stacked standard normal vectors
 sampling: empirical vec covariance vs the Kronecker product (fixed seed)
 mean score at the true parameters is zero
+  stress
+  n=1 p=1, 20 random draws vs independent reference ok
+  n=1 p=2, 20 random draws vs independent reference ok
+  n=1 p=3, 20 random draws vs independent reference ok
+  n=1 p=5, 20 random draws vs independent reference ok
+  n=2 p=1, 20 random draws vs independent reference ok
+  n=2 p=2, 20 random draws vs independent reference ok
+  n=2 p=3, 20 random draws vs independent reference ok
+  n=2 p=5, 20 random draws vs independent reference ok
+  n=3 p=1, 20 random draws vs independent reference ok
+  n=3 p=2, 20 random draws vs independent reference ok
+  n=3 p=3, 20 random draws vs independent reference ok
+  n=3 p=5, 20 random draws vs independent reference ok
+  n=5 p=1, 20 random draws vs independent reference ok
+  n=5 p=2, 20 random draws vs independent reference ok
+  n=5 p=3, 20 random draws vs independent reference ok
+  n=5 p=5, 20 random draws vs independent reference ok
 test_matgauss: all passed
 
 === test_matgauss_recovery: PASS ===
 matgauss: covariance recovery from simulated samples
-  homogeneous diagonal   converged in <= 8 sweeps, score 4.9e-07
-  diagonal               converged in <= 8 sweeps, score 2.4e-06
+  homogeneous diagonal   converged in <= 8 sweeps, score 6.3e-07
+  diagonal               converged in <= 9 sweeps, score 3.0e-06
   sparse                 converged in <= 8 sweeps, score 8.4e-07
-  dense                  converged in <= 8 sweeps, score 2.4e-06
-  30 replications per case per sample size, written to out/matgauss_recovery_report.txt
+  dense                  converged in <= 9 sweeps, score 2.6e-06
+  200 replications per case per sample size, written to out/matgauss_recovery_report.txt
 test_matgauss_recovery: all passed
 
 === test_ad: PASS ===
@@ -290,9 +382,19 @@ ad_broadcast_mul (finite-difference, chain rule through s)
 ad_squared_error / ad_identity
 ad_huber_error / ad_logcosh_error
 ad-computed gradient vs analytical gauss_dlogpdf_loc/scale
+  ad vs analytical stress
+  n=1..64 ok
 ad_lgamma (forward + digamma backward)
+ad_log1p (forward + 1/(1+a) backward)
+ad_lgamma_diff (forward + digamma-difference backward)
 ad-computed gradient vs analytical student_dlogpdf_loc/scale/nu
+  ad vs analytical stress (student)
+  n=1..64 ok
 ad-computed gradient vs analytical mvgauss/mvstudent scores
+  ad vs analytical stress (mv)
+  d=1, n=1..20 ok
+  d=2, n=1..20 ok
+  d=3, n=1..20 ok
 ad_slice / ad_reshape (known output, fan-out, finite-difference)
 ad_solve (finite-difference)
 ad_chol_solve (finite-difference)
@@ -315,6 +417,8 @@ test_tape_reset: all passed
 adam_step: exact per-step arithmetic (not just convergence)
 adam_hyperparams_default: matches the paper's recommended defaults
 quadratic bowl: known minimum
+  quadratic bowl stress
+  30 random quadratic bowls (n=1..8) ok
 ill-conditioned bowl: different curvature per dimension
 adversarial: single-element parameter
 view: strided parameter/gradient
@@ -390,6 +494,198 @@ cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
 cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
 cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
 cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
 queue: every index handed out exactly once, no gaps, no repeats
 queue: a range reclaimed from a lost machine is handed out again, and only that range
 framing: a multi-megabyte message arrives whole and unchanged
@@ -403,12 +699,14 @@ map: a sliced (strided) input, a single task, and a range larger than the job
 map: a range knows the global index of its own first column
 discovery: a worker that was never given an address is found and used
   discovery found 1 machine(s)
-fuzz: 12 randomized (task count, range width) pairs against a direct reference
+fuzz: 60 randomized (task count, range width) pairs against a direct reference
 test_cluster: all passed
 
 === test_mlp: PASS ===
 forward pass: known 2-2-1 network vs independent reference
 gradient (finite-difference) vs independent reference forward pass
+  gradient stress: random architectures
+  15 random architectures (depth 1..3, width 1..5) ok
 adversarial: no hidden layers, and single-neuron layers
 out_act: identity forecasts an unsquashed value tanh would clamp into (-1,1)
 integration: mlp_fit + mlp_forecast train and predict XOR
@@ -442,6 +740,8 @@ ragged row / empty file abort (fork + expect SIGABRT)
 unterminated quote at EOF: silently tolerated, not rejected (pinning current behavior)
 write/read round-trip: mixed numeric+string columns, values needing quoting
 write with write_header=0: no header row, columns get generated names on reread
+  random write/read round-trip fuzzing (fixed seed, fragile-biased)
+  100 random DataFrames (mixed numeric/string columns, fragile-biased) round-tripped ok
 test_csv: all passed
 
 === test_txt: PASS ===
@@ -452,6 +752,8 @@ has_header option: first row becomes column names
 adversarial: single value, no trailing newline
 write/read round-trip: numeric DataFrame survives a save/load cycle exactly
 write with write_header=1: header round-trips through has_header=1 on reread
+  random write/read round-trip fuzzing (fixed seed, fragile-biased magnitudes)
+  100 random all-numeric DataFrames round-tripped ok
 test_txt: all passed
 
 === test_npy: PASS ===
@@ -461,6 +763,8 @@ genuine .npy v2.0 header format (4-byte header-length field, 12-byte preamble) p
 adversarial: single-element array
 malformed .npy aborts (fork + expect SIGABRT)
 write/read round-trip: DataFrame -> .npy -> DataFrame preserves values exactly
+  random write/read round-trip fuzzing (fixed seed, fragile-biased magnitudes)
+  100 random all-numeric DataFrames round-tripped ok
 test_npy: all passed
 
 === test_json: PASS ===
@@ -472,6 +776,8 @@ duplicate object key: last value wins, matching JSON semantics
 adversarial: empty object/array, deep nesting, negative/fractional/exponent numbers
 file round-trip: json_write_file then json_parse_file
 malformed JSON aborts (fork + expect SIGABRT)
+  random round-trip fuzzing (fixed seed, fragile-biased)
+  200 random JSON trees (depth<=4, fragile-biased strings/numbers) round-tripped ok
 test_json: all passed
 
 === test_sql: PASS ===
@@ -500,563 +806,27 @@ WHERE on a multi-column DataFrame should use the AVX2 fast path, not silently fa
 df_sql_try: a valid query returns SQL_OK and the same result df_sql would
 df_sql_try: malformed query text is SQL_ERR_SYNTAX, independent of the DataFrame
 df_sql_try: syntactically valid SQL that doesn't fit the schema is SQL_ERR_DATA
+  random WHERE filtering across every comparison operator vs. a naive reference (fixed seed, fragile-biased magnitudes)
+  300 random WHERE queries (all 6 comparison operators, on both a continuous and a small-integer column) matched the naive reference
+  random WHERE compound boolean expressions (AND/OR/NOT) vs. a naive reference (fixed seed)
+  300 random compound WHERE queries (AND/OR/NOT, with parenthesized grouping) matched the naive reference
+  random string equality/inequality WHERE filter vs. a naive reference (fixed seed)
+  200 random string equality/inequality WHERE queries matched the naive reference
+  random arithmetic SELECT projection (+ - *) vs. a naive elementwise reference (fixed seed)
+  200 random arithmetic projections (+ - *) matched the naive elementwise reference
+  random GROUP BY + a random aggregate kind (SUM/AVG/MIN/MAX/COUNT) vs. a naive reference accumulation (fixed seed)
+  300 random GROUP BY + aggregate queries (every aggregate kind) matched the naive reference
+  random multi-key ORDER BY vs. an independent reference sort (fixed seed)
+  200 random multi-key ORDER BY queries matched an independent reference sort
+  random single-numeric-key ORDER BY at randomized n >= SQL_RADIX_MIN_N vs. an independent reference sort (fixed seed)
+  30 randomized n/column/direction combinations matched the independent reference
+  random WHERE on wide/large DataFrames (bitmask+SIMD+gather path, OpenMP-parallel row-extraction path) vs. a naive reference, with injected NaN
+  155 random wide/parallel WHERE queries (n in {50,500,50000,200000,400001}, ncols in {1,2,4,9}, injected NaN) matched the naive reference
+  random WHERE + GROUP BY + ORDER BY pipeline vs. a full naive reference (fixed seed)
+  150 random WHERE+GROUP BY+ORDER BY pipelines matched a full naive reference
+  random GROUP BY at n >= SQL_GROUP_PARALLEL_MIN_N (parallel construction + aggregation) vs. a naive reference, with injected NaN
+  16509 random GROUP BY output rows (n up to 400,001, cardinality up to 5,000, SUM/AVG/MIN/MAX/COUNT, injected NaN) matched the naive reference
+  random query mutations vs. df_sql_try never crashing or leaking (fixed seed)
+  600 random/mutated queries handled by df_sql_try with no crash
 test_sql: all passed
 
-=== test_join: PASS ===
-INNER join: known-output case with a duplicate key on the left
-LEFT join: every left row survives, unmatched right columns are NaN
-FULL join: every row from both sides, id=5 (right-only) gets name=NA
-RIGHT join is df_join(right, left, on, JOIN_LEFT) - matches a direct LEFT computation
-regression: String-typed join key: FULL join coalesces the key column itself, not just other columns
-a non-key column name shared by both sides gets a _right suffix on the right one
-regression: a NaN join key never matches, not even another NaN, and FULL still drains it
-adversarial: an empty (zero-row) side on either input
-adversarial: mismatched on-column types, or a missing on column, both abort
-ported from Polars py-polars/tests/unit/operations/test_join.py::test_join
-ported from Polars crates/polars/tests/it/core/joins.rs::test_joins_with_duplicates
-ported from Polars crates/polars/tests/it/core/joins.rs::test_join_negative_integers
-ported from Polars py-polars/tests/unit/operations/test_join.py::test_empty_outer_join_22206
-ported from Polars py-polars/tests/unit/operations/test_join.py::test_join_coalesce_22498
-ported from Polars crates/polars/tests/it/core/joins.rs::test_empty_df_join (probe-side-empty variants)
-ported from Polars crates/polars/tests/it/core/joins.rs::test_join_floats (adapted to a single float join column)
-independent reference: row counts match a naive O(n*m) join across INNER/LEFT/FULL
-regression: join_hash_to_partition(join_mix64(...)) splits realistic keys roughly evenly across partitions
-regression (real build): skipped - this binary was not built with -fopenmp, see this function's own comment
-crosses JOIN_PARALLEL_MIN_N: the dispatched (parallel-eligible) path matches join_probe_serial exactly, as a set
-test_join: all passed
-
-=== gzip_inflate: PASS ===
-crc32 matches the standard CRC-32/ISO-HDLC check value for "123456789"
-stored (uncompressed) block round-trips exactly, with correct CRC32/size checks
-two consecutive stored blocks (BFINAL only on the second) concatenate correctly
-a stored block with a zero-length payload decompresses to zero bytes, not a crash
-a real fixed-Huffman-coded block (BTYPE=01) decompresses correctly
-gzip header optional fields (FEXTRA, FNAME, FCOMMENT, FHCRC) are skipped correctly, all four at once
-gzip_is_gzip on empty/1-byte buffers returns false rather than reading out of bounds
-malformed gzip input aborts (fork + expect SIGABRT)
-gzip_inflate: all passed
-
-=== rdata_array_read: PASS ===
-real EstimationSeriesSample1_1.Rdata: dims, dimnames, and known element values match
-real rdata_altrep_and_factor.RData: ALTREP compact sequences and factor columns resolve correctly
-df_read_rdata/df_read_rdata_slice: one call from path to DataFrame, both with and without an explicit object_name
-df_read_rdata/df_read_rdata_slice contract violations abort (fork + expect SIGABRT)
-real rdata_edge_cases.RData: empty vectors, NA in every type, nested lists, and repeated ALTREP objects all parse correctly
-real rdata_uncompressed.RData (save with compress=FALSE) loads without going through gzip at all
-real rdata_empty_workspace.RData (zero saved objects) loads to an empty RData, not a crash
-real rdata_zero_row_dataframe.RData (0 rows, 2 columns) converts to a valid empty DataFrame
-real rdata_xz_compressed.RData (an R compression this loader does not support) aborts cleanly (fork + expect SIGABRT)
-synthetic workspace: data.frame, NA string, dim matrix, and symbol back-reference all parse correctly
-REFSXP long form (explicit 4-byte index, not the packed index-in-flags form) resolves correctly
-API contract violations abort (fork + expect SIGABRT)
-malformed .RData input aborts (fork + expect SIGABRT)
-rdata_array_read: all passed
-
-=== adf_correctness: PASS ===
-augmented Dickey-Fuller, float64 build
-
-MacKinnon critical values against an independent implementation
-  ok
-Schwert's lag rule
-  ok
-the regression against a hand-solved case
-  ok
-the no-intercept variant against closed-form sums
-  ok
-holding the sample fixed matches running on the shortened series
-  ok
-shift and scale invariance
-  ok
-the trend variant rejects where the constant one fails
-  with trend -7.0615 against -3.4329, without -0.5578 against -2.8763
-  ok
-verdicts on white noise and on a random walk
-  rejects the unit root on white noise 40/40, on a random walk 3/40
-  ok
-
-PASSED, 0 failures
-
-=== kpss_correctness: PASS ===
-KPSS, float64 build
-
-the Newey-West bandwidth rule
-  ok
-against a hand-solved case
-  ok
-shift and scale invariance
-  ok
-stationarity around a trend
-  trend-stationary series: level case 5.0987 against 0.463, trend case 0.1015 against 0.146
-  ok
-verdicts on white noise and on a random walk
-  rejects stationarity on white noise 2/40, on a random walk 39/40
-  ok
-
-PASSED, 0 failures
-
-=== dfgls_correctness: PASS ===
-DF-GLS, float64 build
-
-the quasi-differencing constant
-  ok
-the detrending absorbs the terms it claims to
-  ok
-
-PASSED, 0 failures
-
-=== otto_correctness: PASS ===
-Otto pooled block unit root test, float64 build
-
-Table I lookup and interpolation
-  ok
-the pooled estimator against its defining sum
-  ok
-the finite sample correction against Lemma 2(c)
-  n= 100, B= 19: v_T squared 0.64176, heading for 0.6667
-  n= 400, B= 49: v_T squared 0.65804, heading for 0.6667
-  n=2000, B=139: v_T squared 0.66392, heading for 0.6667
-  ok
-which test copes with which trend
-  straight     trend: Otto shifts 1.9560, trend ADF shifts 0.0000
-  oscillating  trend: Otto shifts 4.8075, trend ADF shifts 5.9470
-  ok
-both asymptotics produce a finite statistic and a verdict
-  small-b: B=35, statistic -2.2634 against -1.6449, rejects 1
-  fixed-b: B=60, statistic -1.2518 against -1.3510, rejects 0
-  ok
-
-PASSED, 0 failures
-
-=== hlt_union_correctness: PASS ===
-Harvey, Leybourne and Taylor union of rejections, float64 build
-
-the union is the disjunction of its components
-  ok
-the weighted average against its formula
-  ok
-the trend Wald statistic separates a trend from none
-  without a trend 4.9019, with one 51031.8
-  ok
-
-PASSED, 0 failures
-
-=== hlt_break_correctness: PASS ===
-Harvey, Leybourne and Taylor trend break test, float64 build
-
-Table 1 constants and the bandwidth rule
-  ok
-the two component statistics swap roles with the order of integration
-  I(0) shocks: t0* 1.714, t1* 0.867, weight 0.6020
-  I(1) shocks: t0* 6.704, t1* 1.487, weight 0.0000
-  I(0) at n= 150: S_1 0.02501, weight 0.9103
-  I(0) at n= 400: S_1 0.00847, weight 0.9800
-  I(0) at n=1200: S_1 0.00460, weight 0.9972
-  ok
-the statistic and weight against equations (13) and (10)
-  ok
-the pretest route through the unit root test
-  with a break: weighted allows 1 at 0.507, pretest allows 1 at 0.507
-  ok
-
-PASSED, 0 failures
-
-=== hhlt_correctness: PASS ===
-Harris, Harvey, Leybourne and Taylor unit root with a possible trend break, float64 build
-
-Table 1 lookup and interpolation
-  ok
-the first-difference break estimator finds a slope break
-  estimated fraction 0.5033 against a true 0.5000
-  ok
-the Wald statistic separates a break from none
-  with a break 24184.741, without 0.112
-  ok
-the weight collapses with a break and saturates without one
-  with a break: weight 0.000000, tilde 0.500, tau_bar 0.500, allows break 1
-  without:      weight 0.980590, tilde 0.170, tau_bar 0.003, allows break 0
-  ok
-the no-break branch is exactly DF-GLS with a trend
-  ok
-the weight is exp(-g W / sqrt(n)) and falls as g rises
-  g=1.5: weight 0.933285, Wald 0.7973, tau_bar 0.0491
-  g=3.0: weight 0.871021, Wald 0.7973, tau_bar 0.0950
-  g=6.0: weight 0.758678, Wald 0.7973, tau_bar 0.1778
-  ok
-
-PASSED, 0 failures
-
-=== zivot_andrews_correctness: PASS ===
-Zivot-Andrews, float64 build
-
-the statistic is the minimum over candidate dates
-  112 candidates, chose 90
-  ok
-a planted break is found
-  level  model: break at 120, statistic -10.730
-  slope  model: break at 78, statistic -2.934
-  both   model: break at 120, statistic -11.134
-  ok
-rejects where an ordinary ADF is fooled by the break
-  Zivot-Andrews -10.730 against -4.732, ordinary ADF -1.197 against -2.876
-  ok
-
-PASSED, 0 failures
-
-=== johansen_correctness: PASS ===
-Johansen rank tests, float64 build
-
-eigenvalues are squared canonical correlations
-  ok
-the trace statistic is the sum of the maximum eigenvalue statistics
-  ok
-invariance to a nonsingular linear transformation of the variables
-  ok
-a tightly co-integrated pair is detected
-  trace at rank zero 102.45 against the 99 per cent value 22.59, eigenvalues 0.3279 and 0.0157
-  ok
-simulated critical values have the shape a table has
-  1 common trends: trace 95 per cent 7.848, max 95 per cent 7.848
-  2 common trends: trace 95 per cent 18.286, max 95 per cent 15.249
-  3 common trends: trace 95 per cent 32.300, max 95 per cent 21.444
-  ok
-
-PASSED, 0 failures
-
-=== engle_granger_correctness: PASS ===
-Engle-Granger, float64 build
-
-recovers a known relation and rejects on it
-  relation (1.0000, -1.9922), intercept 3.029, statistic -12.012 against 1 per cent -3.983
-  ok
-the two normalizations are different tests
-  regressing 0 on 1 gives -11.6982, the reverse -11.2314
-  ok
-residual-based critical values are below the ordinary ones and fall with size
-  2 variables: 1/5/10 per cent -3.888 -3.354 -3.062, ordinary 5 per cent -2.876
-  3 variables: 1/5/10 per cent -4.339 -3.731 -3.438, ordinary 5 per cent -2.876
-  4 variables: 1/5/10 per cent -4.700 -4.108 -3.803, ordinary 5 per cent -2.876
-  ok
-
-PASSED, 0 failures
-
-=== maki_correctness: PASS ===
-Maki co-integration with an unknown number of breaks, float64 build
-
-the design carries the columns each model's equation calls for
-  ok
-the design's columns hold what they should
-  ok
-estimated breaks respect the trim
-  breaks at 100, 90, 114 over 495 candidates
-  ok
-the first break found is the planted one
-  first break at 120 against a true 120
-  ok
-allowing more breaks can only lower the statistic
-  max 1 breaks: statistic -11.4887 over 181 candidates
-  max 2 breaks: statistic -11.4887 over 343 candidates
-  max 3 breaks: statistic -11.4887 over 486 candidates
-  ok
-
-PASSED, 0 failures
-
-=== qlr_test_correctness: PASS ===
-QLR statistic against its definition, float64 build
-
-the supremum over the beta grid, maximum at each end and inside
-  ok
-kappa_hat divides the statistic and nothing else
-  ok
-untrustworthy profile points are excluded from the supremum
-  ok
-the general kappa_hat against the definition
-  ok
-every Table B.3 row, both cases, retrieved exactly
-  114 rows, no duplicate pairs
-  ok
-the table's own shape: level ordering, interior above boundary, rising in beta_U
-  114 rows, 84 within-group comparisons
-  ok
-the lookup tolerance admits rounding and rejects an untabulated pair
-  ok
-the verdict at each critical value and either side of it
-  ok
-statistic, scaling, lookup and verdict together
-  QLR_T 40.000, QLR_tilde_T 20.000 against 2.989 / 4.308 / 7.277: reject at 1% - score-driven dynamics are present
-  ok
-
-PASSED, 0 failures
-
-=== lbfgs_correctness: PASS ===
-lbfgs correctness, float64 build
-
-test objectives: gradient against central differences
-  worst relative discrepancy 5.71e-07
-  ok
-quadratic bowl, all weights equal
-  2 iterations, 4 objective calls, f = 0
-  ok
-ill-conditioned quadratic, weights spanning 1 to 10000
-  condition number 1e4: 44 iterations, f = 2.69e-16
-  ok
-badly scaled quadratic, weights spanning 1 to 1e8
-  93 iterations, 125 calls, f = 4.462e-15, function decrease below tolerance
-  ok
-the accepted step flattens the slope, not only lowers the value
-  step 16, slope -0.000252 from -0.0003, minimum along the direction at 100
-Rosenbrock valley
-  39 iterations, 48 objective calls, f = 6.23e-15
-  ok
-objective not finite outside a disc
-  2 iterations, f = 0, converged 1
-  ok
-started at the minimum
-  ok
-memory of one correction pair
-  22 iterations, f = 4.47e-14
-  ok
-parameter count at and above the BLAS1 dispatch threshold
-  n = 16: 353 iterations, f = 8.89e-12
-  n = 40: 725 iterations, f = 1.98e-11
-  ok
-a line search that cannot progress is not convergence
-  value 3 at start, 3 returned, line search could not decrease the objective
-  ok
-objective not a number at the starting point
-  infinity: 0 iterations, objective or gradient stopped being finite
-  not a number: 0 iterations, objective or gradient stopped being finite
-  ok
-gradient not a number while the value is finite
-  0 iterations, objective or gradient stopped being finite, value 16
-  ok
-objective stops being a number partway through
-  infinity after 30 calls: 28 iterations, objective or gradient stopped being finite, value 0.364369
-  not a number after 30 calls: 28 iterations, objective or gradient stopped being finite, value 0.364369
-  ok
-
-PASSED, 0 failures
-
-=== score_driven_location_correctness: PASS ===
-score-driven location model, float64 build
-
-the parameter count against the blocks it is made of
-  ok
-the link and its inverse round trip
-  ok
-with the dynamics switched off, against dist/mv/student.h
-  ok
-the autodiff gradient against central differences
-  K=1, 5 parameters, worst relative error 2.42e-07 at Omega_inv[0,0]
-  K=2, 10 parameters, worst relative error 1.02e-06 at a[0]
-  K=3, 16 parameters, worst relative error 4.28e-07 at Omega_inv[2,2]
-  ok
-the simulator and the filter agree on the recursion
-  largest disagreement between the two residual paths 4.441e-16 over 200 periods
-  ok
-an unusable scale returns infinity rather than aborting
-  ok
-the reported likelihood and gradient belong to the returned parameters
-  converged yes after 26 iterations, gradient norm 0.000513, status: function decrease below tolerance
-  ok
-the JSON cache round trips and refuses a different sample
-  ok
-standard errors at a fit, and the curvature they rest on
-  is_maximum 1, 0 flat directions, condition 66.7, 10 of 10 errors usable
-  ok
-slow checks skipped, run make test-stress
-
-PASSED, 0 failures
-
-=== qvarma_correctness: PASS ===
-qvarma correctness, float64 build
-
-declared parameter count against the entries that can move
-  ok
-warm-up conventions
-  ok
-link and unlink round-trip, and the three transforms
-  ok
-Psi_dag structure and rank
-  ok
-mu_star restricted to the stationary block
-  ok
-maximum eigenvalue modulus
-  ok
-log-likelihood against the multivariate t density, every shape
-  ok, 9 shapes
-analytic gradient against central differences, every shape
-  9 shapes, 304 entries, worst relative discrepancy 1.55e-06
-  ok
-Gaussian limit at large nu
-  student -188.868256, gaussian -188.868377
-  ok
-impulse response closed forms
-  ok
-impulse responses against the recursions, every shape
-  ok, 9 shapes to horizon 6
-impulse response confidence bands
-  601 of 4000 rotations satisfied the sign restrictions
-  ok
-averaged score Jacobian against a naive reference
-  ok
-impulse response file layout
-  ok
-parameter cache round-trip and shape rejection
-  ok
-fit reuses a cache, reports what it recorded, and refits on demand
-  ok
-reported likelihood and gradient against the returned parameters
-  ok
-convergence flag against the gradient it claims to have reached
-  converged 1 after 257 iterations, gradient norm 632.8
-  ok
-the reason a fit stopped, against the verdict it reports
-  function decrease below tolerance after 218 iterations, converged 1
-  ok
-the link moves one parameter per coordinate, by the stated derivative
-  55 coordinates, at most 1 parameter moved by any one of them
-  ok
-standard errors against the sample size
-  Psi_star and Omega_inv shrink by 2.166 between T=500 and T=2000 over 2 draws, expected 2
-  ok
-standard errors where the Hessian will not decompose
-  theta at 400: returned, hessian_is_usable 0, is_maximum 0
-  ok
-fit from a starting guess where the likelihood is not a number
-  overflow: 0 iterations, converged 0, log-likelihood -inf
-  underflow: 0 iterations, converged 0, log-likelihood -inf
-  ok
-slow checks skipped, run make test-correctness-stress
-
-PASSED, 0 failures
-
-=== qvarma_fused_agreement: PASS ===
-fused against traced t-QVARMA filter, float64 build
-
-fused filter against the traced one, over shapes and draws
-  the ABM pipeline's shape                   n =  42, T = 120: value 2.21e-16, paths 1.58e-15, gradient 5.02e-13
-  no co-integrated block                     n =  20, T =  90: value 0.00e+00, paths 8.88e-16, gradient 1.48e-14
-  no co-integrated block, p = 3              n =  17, T =  80: value 5.79e-16, paths 1.25e-15, gradient 2.21e-14
-  rank two co-integration                    n =  59, T = 100: value 1.33e-16, paths 3.22e-15, gradient 1.86e-14
-  one beta per lag                           n =  47, T =  70: value 2.87e-16, paths 1.19e-14, gradient 1.22e-13
-  longer warm-up convention                  n =  40, T =  60: value 1.33e-16, paths 2.22e-15, gradient 4.01e-14
-  q longer than p                            n =  41, T =  50: value 1.76e-16, paths 3.77e-15, gradient 1.59e-14
-  restricted Psi_star                        n =  51, T =  65: value 1.80e-16, paths 1.49e-15, gradient 1.33e-14
-  sample barely past the warm-up             n =  75, T =   6: value 3.23e-16, paths 7.77e-16, gradient 1.09e-15
-  single I(0) series with a large I(1) block n =  71, T =  55: value 0.00e+00, paths 3.44e-15, gradient 4.98e-14
-
-both gradients against a central difference of the likelihood
-  the ABM pipeline's shape                   fused 5.02e-08, taped 5.02e-08
-  no co-integrated block                     fused 1.51e-08, taped 1.51e-08
-  one beta per lag                           fused 3.35e-08, taped 3.35e-08
-  restricted Psi_star                        fused 1.73e-08, taped 1.73e-08
-
-a reused workspace gives the same answer as a fresh one
-  value difference 0, worst gradient difference 0
-
-an unusable scale returns the sentinel, not an answer
-  overflow: value -inf, gradient zeroed
-  underflow: value -inf, gradient zeroed
-
-
-PASSED, 0 failures
-
-=== qvarma_identification: PASS ===
-qvarma identification, float32 build
-
-the intercept is learned far more slowly once the model has an I(1) block
-  with an I(1) block      9.759 at T=250 to    25.59 at T=1000, growth 2.62
-  without one             683.1 at T=250 to     2869 at T=1000, growth 4.20
-  and 112 times less curvature at T=1000
-  ok
-Phi_star loses its curvature when the score loading is near zero
-  Psi_star ~ 0.12:    16.56     Psi_star ~ 0.02:   -2.555
-  ok
-beta loses its curvature when the co-integration loading is near zero
-  alpha ~ 0.20:    28.38     alpha ~ 0.02:     2.58
-  ok
-a co-integrated block costs orders of magnitude of conditioning
-  without an I(1) block      107.3     with one       3554
-  ok
-
-PASSED, 0 failures
-
-=== integration ===
-=== frame_to_model: PASS ===
-frame to model: a loaded column reaching the statistics and the models, float64 build
-
-premise: a column of a loaded frame is a strided view, not a contiguous buffer
-stats.h: mean, variance, median, quantile, autocorrelation and HAC variance are the same through a view
-unit_root.h: a column-oriented series and a row-oriented one give the same statistic
-unit_root.h: ADF, ADF with trend, KPSS and DFGLS are the same through a view
-cointegration.h: Johansen and Engle-Granger agree on a system built from views and from copies
-sd/qvarma.h: the log-likelihood is the same on a windowed (strided) y as on a contiguous one
-nn/mlp.h: training on a window (strided view) of a longer design matrix matches training on a copy
-
-PASSED, 0 failures
-
-=== join_missing_values: PASS ===
-join missing values: what a hole in the data does to a statistic and a fit, float64 build
-
-join: an unmatched row carries a NaN that MISNAN finds, in a column that is still numeric
-stats.h: mean, variance and HAC variance come back NaN, so the hole is at least visible to a caller that looks
-stats.h: median, quantile and rank abort on a hole rather than returning the wrong order statistic (fork + expect SIGABRT)
-stats.h and unit_root.h: autocorrelation, Ljung-Box, ADF, DFGLS and KPSS all abort on a hole (fork + expect SIGABRT)
-unit_root.h: a NaN statistic reads as the non-rejecting verdict at every level, which is why the tests refuse it rather than returning it
-nn/mlp.h: training on a column with a hole returns a NaN loss and NaN weights, with the full epoch count
-mcs.h: a confidence set and a Diebold-Mariano test abort on a hole rather than returning a set that is not the clean-data answer (fork + expect SIGABRT)
-frame/csv.h: an NA marker types the whole column as strings, so asking for it as numeric aborts (fork + expect SIGABRT)
-
-PASSED, 0 failures
-
-=== distributed_simulation: PASS ===
-cluster: 127.0.0.1:9644 dropped before the job started
-distributed simulation: does a Monte Carlo across machines give what it gives here, float64 build
-
-cluster + random: a simulated ADF null distribution comes back identical whether it ran here or across machines
-cluster + random: a task that ignores its global index produces one value repeated, which the comparison above would catch
-cluster + random: a range reclaimed from a machine that dies mid-job is recomputed to the same values
-
-PASSED, 0 failures
-
-=== optimizer_swap: PASS ===
-optimizer swap: does a model fit through the Optimizer interface, not just through Adam, float32 build
-
-mlp_fit: an optimizer that is not Adam trains XOR to the same loss threshold the Adam test uses
-mlp_fit: one optimizer instance per trainable tensor, each built at that tensor's shape and freed exactly once
-mlp_fit: the optimizer's own state carries across epochs - momentum at 0.9 and at 0 do not land in the same place
-mlp_save/mlp_load: a model trained by a non-Adam optimizer round-trips through JSON unchanged
-
-PASSED, 0 failures
-
-=== pipeline_ownership: PASS ===
-pipeline ownership: what stays valid when the thing it came from is freed, float64 build
-
-frame/sql.h: a query's output frame is a full owner, still readable after the frame it was built from is gone
-frame/join.h: a join's output owns its own copy of everything, including the string columns it took from two different frames
-frame/frame.h: a column view writes through to the frame, and a later append moves the block the view pointed at
-nn/mlp.h and sd/qvarma.h: a fit result owns its parameters, still usable after the frame and the design matrix are gone
-sd/qvarma.h and json.h: a fit written to disk reloads into a fresh model after the original is freed
-frame/csv.h and frame/npy.h: a frame written and read back is a new owner each time, with nothing shared between the two
-frame/rdata.h and gzip.h: a frame loaded from a compressed file owns its values, not a slice of the inflate buffer
-sd/qvarma.h: the impulse response bands allocate and release per draw rather than accumulating
-
-PASSED, 0 failures
-
-=== header_composition: PASS ===
-header composition: every header in one translation unit, float64 build
-
-every header included together, in both orders, and every module reachable from one binary
-
-PASSED, 0 failures
-
-=== header_composition_f32: PASS ===
-header composition: every header in one translation unit, float32 build
-
-every header included together, in both orders, and every module reachable from one binary
-
-PASSED, 0 failures
-
-
-=== summary ===
-55 passed, 0 failed

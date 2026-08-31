@@ -34,7 +34,8 @@ Four questions, in this order:
   gradient        does d(log-likelihood)/d(theta_nu) go to zero, since the
                   limit does not depend on nu
   both paths      do the analytic filter and the traced one still agree out
-                  there, so neither is fixed alone
+                  there, on the value and on every gradient coordinate, so
+                  neither is fixed alone
 
 The known-output shape is K = K_star = 2 with Phi_star and Psi_star pinned at
 zero, which makes mu_star identically zero and mu_dag absent, so v_t = y_t - c
@@ -318,7 +319,14 @@ static void test_nu_gradient_vanishes(void) {
 /* Both implementations of the recursion carried the same rearrangement, so a
    fix applied to one of them alone would leave the other wrong and this file
    passing. tests/correctness/qvarma_analytic_agreement.c holds them together
-   at ordinary nu; this holds them together where the arithmetic is hard. */
+   at ordinary nu; this holds them together where the arithmetic is hard.
+
+   Value and gradient both. The analytic adjoint routes the density's nu
+   derivative around s_t = nu + q_t to keep it out of a cancellation the value
+   never sees, so the two paths can agree on the objective and part company on
+   its gradient. A central difference is no use as a third reference out here:
+   at nu = 1e12 it returns -7.4e-8 where the answer is -6.5e-11, and at 1e14 it
+   returns zero. The tape is the reference. */
 static void test_both_paths_agree_at_large_nu(void) {
     printf("analytic against traced, out where the cancellation was\n");
     const int K = 5, T = 120;
@@ -335,28 +343,47 @@ static void test_both_paths_agree_at_large_nu(void) {
     set_stable_theta(&model, theta);
 
     QvarmaAnalytic *analytic = qvarma_analytic_new(&model, T);
-    Vec gradient = mat_new(n, 1);
+    Vec analytic_gradient = mat_new(n, 1), taped_gradient = mat_new(n, 1);
 
     for (int g = 0; g < NU_COUNT; g++) {
         theta.d[nu_at] = (mreal)log(nu_grid[g] - 2.0);
-        mreal from_analytic = qvarma_analytic_log_likelihood(analytic, theta, y, gradient);
+        mreal from_analytic = qvarma_analytic_log_likelihood(analytic, theta, y,
+                                                             analytic_gradient);
 
         Tape *tape = tape_new();
         Node *theta_node = ad_leaf(tape, mat_copy(theta));
         QvarmaLinked linked = _qvarma_link(tape, theta_node, &model);
         Node *objective = _qvarma_filter(tape, &linked, &model, y, NULL, NULL, NULL);
         mreal from_traced = objective->val.d[0];
+        tape_backward(tape, objective);
+        for (int i = 0; i < n; i++) taped_gradient.d[i] = theta_node->grad.d[i];
         qvarma_linked_free(&linked);
         tape_free(tape);
 
-        char label[64];
+        char label[72];
         snprintf(label, sizeof label, "the two paths at nu = %.0e", nu_grid[g]);
         CHECK_CLOSE(from_analytic, from_traced, LIMIT_TOL, label);
-        printf("  nu %9.0e   analytic %18.10f   traced %18.10f\n",
-               nu_grid[g], (double)from_analytic, (double)from_traced);
+
+        /* Every coordinate, not only theta_nu: the rewritten adjoint reaches nu
+           through the score as well as through the density, and the link's own
+           chain rule spreads what it produces over the rest of theta. */
+        mreal worst = 0;
+        int worst_at = 0;
+        for (int i = 0; i < n; i++) {
+            snprintf(label, sizeof label, "gradient coordinate %d at nu = %.0e",
+                     i, nu_grid[g]);
+            CHECK_CLOSE(analytic_gradient.d[i], taped_gradient.d[i], LIMIT_TOL, label);
+            mreal scale = MABS(taped_gradient.d[i]) > 1 ? MABS(taped_gradient.d[i]) : 1;
+            mreal gap = MABS(analytic_gradient.d[i] - taped_gradient.d[i]) / scale;
+            if (gap > worst) { worst = gap; worst_at = i; }
+        }
+        printf("  nu %9.0e   analytic %18.10f   traced %18.10f   gradient %8.2e at %d\n",
+               nu_grid[g], (double)from_analytic, (double)from_traced,
+               (double)worst, worst_at);
     }
 
-    mat_free(gradient);
+    mat_free(analytic_gradient);
+    mat_free(taped_gradient);
     qvarma_analytic_free(analytic);
     mat_free(theta);
     mat_free(y);
