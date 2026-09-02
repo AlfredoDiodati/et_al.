@@ -772,7 +772,7 @@ a `QvarmaFitResult` to still report its likelihood and still compute
 have both been freed, requires a cached fit to reload into a fresh model after
 the original is gone, and runs `qvarma_impulse_bands` under a sanitizer at a
 draw count high enough to turn a per-draw leak into a report. See
-`docs/INTEGRATION_TESTS_DOCUMENTATION.md`.
+`docs/INTEGRATION_DATA_SEAMS_DOCUMENTATION.md`.
 
 ### `tests/performance/qvarma_performance.c`, `tests/performance/lbfgs_candidates.c`
 

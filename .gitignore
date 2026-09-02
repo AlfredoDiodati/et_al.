@@ -25,7 +25,9 @@ tests/performance/*_lapack_removal
 # each test's own file for the naming reasoning) - one line per binary
 # rather than a pattern, since there is no shared prefix to match.
 tests/correctness/gzip_inflate
+tests/correctness/gzip_deflate
 tests/correctness/rdata_array_read
+tests/correctness/npz_python_interop
 
 # the statistical test and model suites, named for the question they answer
 # rather than the file they test - see README's "Adding files and headers".

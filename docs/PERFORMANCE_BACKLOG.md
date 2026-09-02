@@ -1634,10 +1634,28 @@ before committing to a fix.**
 
 ## 9. `gzip_decode_symbol` table cache pressure (`gzip.h`)
 
-Not from `bench_report.txt`/`bench.sh` (`gzip.h` has no `bench_gzip.c`/`.py`
-pair yet - no external package makes sense to compare a from-scratch DEFLATE
-decoder against the way NumPy/pandas do for the rest of this list) but an
-internal before/after measurement recorded the same way: see
+**Now measured against an external reference.** This entry used to open by
+saying no external package made sense to compare a from-scratch DEFLATE
+decoder against. That was wrong: zlib is exactly the right reference, and
+`tests/performance/bench_npz.py` now runs it. The result is consistent with
+the hypothesis below rather than merely compatible with it, because the gap
+tracks the literal alphabet the way a cache-pressure explanation predicts and
+an algorithmic one would not:
+
+| payload, 8 MB | `gzip_inflate_raw` | `zlib.decompress` | ratio |
+|---|---|---|---|
+| float32 bytes (near-uniform over 256 literals) | 70.5 ms | 29.7 ms | 2.37x |
+| this project's own headers (text, skewed alphabet) | 28.0 ms | 21.3 ms | 1.32x |
+
+Same decoder, same machine, same 8 MB; the only thing that changed is how
+much of the `2^15`-entry table the data actually touches. Float bytes spread
+literals over the whole 256-symbol range and produce deep, wide trees; source
+text concentrates them. A decoder limited by its own arithmetic would not
+care. This is evidence, not proof - it is still not a profile - but it moves
+the item from "hypothesis with no measurement" to "hypothesis with a
+measurement that fits".
+
+The internal before/after measurement is recorded the same way: see
 `docs/GZIP_DOCUMENTATION.md`'s Performance section for the fix already
 landed (bit-by-bit Huffman walk -> direct-lookup table, 31.6% faster on
 this project's own shipped fixture).
@@ -1654,11 +1672,97 @@ because the two-level construction and lookup logic is meaningfully more
 intricate to get right, and the single-level table already delivered a
 substantial, thoroughly-verified win on its own.
 
-**Status: hypothesis only, not measured - profiling via `perf` was not
-available in the environment this was developed in; confirm with a real
-profiler before implementing.**
+**Status: hypothesis, now with a supporting external measurement (above) but
+still no profile - `perf` was not available in the environment this was
+developed in. Confirm with a real profiler before implementing; the
+alphabet-dependence above is consistent with cache pressure but does not
+isolate it from, say, zlib's own decode loop simply being better tuned.**
 
-## 10. The model tier has no performance harness at all (`nn/`, `sd/`)
+## 10. `df_read_npz` / `df_write_npz` on stored archives (`frame/npz.h`)
+
+From `tests/performance/bench_npz.py`. Nine columns (eight float32, one
+100-category string), against `numpy.savez` / `numpy.load` with every member
+touched on the numpy side so the comparison is not against opening a zip and
+stopping:
+
+| rows | write vs `np.savez` | read vs `np.load` |
+|---|---|---|
+| 10,000 | 1.73x slower | 1.88x slower |
+| 100,000 | 3.32x slower | 4.59x slower |
+| 1,000,000 | 3.97x slower | 6.76x slower |
+
+Note the shape: the gap *widens with n* on both sides, which says the cost is
+per-element rather than per-call, and the read side widens faster. Two
+diagnoses, both specific:
+
+**Read.** `df_read_npz` builds the frame one column at a time through
+`df_add_numeric_col`, which has no in-place append - it allocates a new
+`r x (c+1)` block and copies the old one across on every call. That is
+`O(n_cols^2 * r)` element copies for a frame that could be built in
+`O(n_cols * r)`. At nine columns and a million rows it is roughly a
+five-fold multiplier on the only expensive thing the reader does. This was
+already written down as a known limitation in
+`docs/NPZ_DOCUMENTATION.md` before it was measured; the measurement is what
+turns it into a ranked item. The fix is not local to this file: it is the
+two-pass construction API `docs/FRAME_DOCUMENTATION.md` lists under its own
+limitations - count the numeric columns first, allocate `numeric` once, write
+each column into its final slot - which `frame/sql.h` and `frame/join.h`
+already do by hand via `frame_append_numeric_meta`. `frame/csv.h` and
+`frame/txt.h` would benefit from the same change, so it belongs in
+`frame/frame.h` rather than being solved a fourth time here.
+
+**Write.** `frame_npz_numeric_image` gathers each column out of the frame's
+shared row-major `numeric` block, so it reads with a stride of `n_numeric`
+and writes contiguously - one cache line touched per element at eight
+columns. numpy's arrays are already separate and contiguous, so its writer is
+a `memcpy`. This one is inherent to the storage layout `frame/frame.h`
+deliberately chose (see its Design section) and is not worth undoing for a
+writer; what would help is transposing a block of columns at a time into a
+scratch buffer rather than one column at a time, so the strided reads are
+amortised across a cache line's worth of output.
+
+Both are worth doing in that order: the read fix is a bigger win, is shared
+with three other loaders, and does not touch the storage model.
+
+## 11. `gzip_deflate_raw` speed against zlib at equal ratio (`gzip.h`)
+
+From `tests/performance/bench_npz.py`. The encoder matches zlib's ratio and
+trails its speed, and by how much depends entirely on how compressible the
+input is:
+
+| payload, 8 MB | level | ours | zlib | time ratio | size ratio |
+|---|---|---|---|---|---|
+| float32 bytes | 1 | 223 ms | 230 ms | 0.97x | 1.000 |
+| float32 bytes | 6 | 263 ms | 263 ms | 1.00x | 1.003 |
+| own headers | 1 | 180 ms | 72 ms | 2.50x | 1.006 |
+| own headers | 6 | 374 ms | 233 ms | 1.60x | 1.008 |
+| own headers | 9 | 949 ms | 594 ms | 1.60x | 1.000 |
+
+On data with no matches to find the two are indistinguishable, which is the
+tell: the gap is entirely in the match finder, not in the Huffman stage or
+the block writer. Three specific things zlib does that this encoder does not,
+in the order they are likely to matter:
+
+1. **No `max_lazy` shortcut.** zlib's `deflate_slow` skips searching
+   altogether when the match it is already holding is long enough. This
+   encoder searches at every position. That knob has no direct equivalent
+   here because the lookahead is immediate rather than deferred by one
+   position (see `docs/GZIP_DOCUMENTATION.md`), so adopting it means
+   restructuring the loop into zlib's deferred form, not adding a condition.
+2. **No unrolled match comparison.** `gzip_find_match` compares byte by byte;
+   zlib compares two bytes at a time and checks the end sentinel first. A
+   word-at-a-time comparison over the 32-bit or 64-bit units the platform has
+   would cut the inner loop several-fold on long matches.
+3. **Every position of a match is inserted into the hash table.** zlib skips
+   the interior of a long match above a length threshold. At level 9 with
+   `nice_length` 258 this is the difference between inserting 258 positions
+   and inserting one, which is consistent with level 9 being where the
+   absolute gap is largest.
+
+Ratio is not the gap and does not need work: it tracks zlib within 0.8%
+across the level range and is exactly equal at level 9.
+
+## 12. The model tier has no performance harness at all (`nn/`, `sd/`)
 
 Per the root `README.md`'s "Benchmarking policy across installation tiers",
 the model tier is deliberately not benchmarked against external packages: a

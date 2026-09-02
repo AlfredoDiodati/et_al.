@@ -17,6 +17,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../frame/join.h"
 #include "../../frame/sql.h"
 #include "../../frame/rdata.h"
+#include "../../frame/npz.h"
 #include "../../frame/npy.h"
 #include "../../frame/txt.h"
 #include "../../frame/csv.h"

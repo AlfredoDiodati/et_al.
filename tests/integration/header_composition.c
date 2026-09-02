@@ -63,6 +63,7 @@ the lot as unused.
 #include "../../frame/csv.h"
 #include "../../frame/txt.h"
 #include "../../frame/npy.h"
+#include "../../frame/npz.h"
 #include "../../frame/rdata.h"
 #include "../../frame/sql.h"
 #include "../../frame/join.h"
@@ -148,6 +149,7 @@ static int touch_every_module(void) {
     DataFrame joined = df_join(&frame, &frame, "value", JOIN_INNER);
     if (joined.r < 1) problems++;
 
+    if (frame_npz_utf8_to_ucs4("ab", NULL) != 2) problems++;
     if (adf_max_lags(100) < 1) problems++;
     if (kpss_bandwidth(100) < 1) problems++;
     if (mcs_options_default().bootstrap < 1) problems++;

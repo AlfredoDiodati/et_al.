@@ -1,4 +1,4 @@
-test run: ma 31 aug 2026 18:25:16 CEST (STRESS=1)
+test run: wo  2 sep 2026 20:52:31 CEST (STRESS=1)
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -27,11 +27,13 @@ make: 'tests/correctness/test_frame' is up to date.
 make: 'tests/correctness/test_csv' is up to date.
 make: 'tests/correctness/test_txt' is up to date.
 make: 'tests/correctness/test_npy' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_npz.c -lm -lopenblas -o tests/correctness/test_npz
 make: 'tests/correctness/test_json' is up to date.
 make: 'tests/correctness/test_sql' is up to date.
 make: 'tests/correctness/test_join' is up to date.
-make: 'tests/correctness/gzip_inflate' is up to date.
-make: 'tests/correctness/rdata_array_read' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/gzip_inflate.c -lm -lopenblas -o tests/correctness/gzip_inflate
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/gzip_deflate.c -lm -lopenblas -o tests/correctness/gzip_deflate
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/rdata_array_read.c -lm -lopenblas -o tests/correctness/rdata_array_read
 make: 'tests/correctness/adf_correctness' is up to date.
 make: 'tests/correctness/kpss_correctness' is up to date.
 make: 'tests/correctness/dfgls_correctness' is up to date.
@@ -54,10 +56,11 @@ make: 'tests/integration/frame_to_model' is up to date.
 make: 'tests/integration/join_missing_values' is up to date.
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
-make: 'tests/integration/pipeline_ownership' is up to date.
-make: 'tests/integration/header_composition' is up to date.
-make: 'tests/integration/header_composition_f32' is up to date.
-make: Nothing to be done for 'examples'.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -I. examples/rdata_example.c -lm -lopenblas -o examples/rdata_example
 
 === test_mat: PASS ===
 construction
@@ -767,6 +770,22 @@ write/read round-trip: DataFrame -> .npy -> DataFrame preserves values exactly
   100 random all-numeric DataFrames round-tripped ok
 test_npy: all passed
 
+=== test_npz: PASS ===
+numeric round-trip: values, column names and order survive write/read
+mixed numeric/string columns keep declaration order through the archive
+row labels survive as the reserved __row_names__ member, not as a column
+UTF-8 string columns round-trip through numpy's UCS-4 dtype (1-, 2-, 3- and 4-byte sequences)
+real numpy archive (np.savez, stored): values, dtypes, 2D expansion and unicode all read back
+real numpy archive (np.savez_compressed, deflated): values, dtypes, 2D expansion and unicode all read back
+adversarial: one row, one column, and an all-empty string column
+df_write_npz_compressed: smaller file, same frame back
+a frame rebuilt from the archive is a valid df_sql and df_join input
+malformed .npz aborts (fork + expect SIGABRT)
+df_write_npz contract violations abort (empty frame, reserved column name)
+  random mixed-column round-trip fuzzing (fixed seed, unicode and fragile magnitudes)
+  200 random mixed DataFrames round-tripped ok (stored and deflated alternating)
+test_npz: all passed
+
 === test_json: PASS ===
 known-output: parse a hand-written JSON document
 string escaping: quotes, backslash, newline round-trip through parse and write
@@ -830,3 +849,763 @@ df_sql_try: syntactically valid SQL that doesn't fit the schema is SQL_ERR_DATA
   600 random/mutated queries handled by df_sql_try with no crash
 test_sql: all passed
 
+=== test_join: PASS ===
+INNER join: known-output case with a duplicate key on the left
+LEFT join: every left row survives, unmatched right columns are NaN
+FULL join: every row from both sides, id=5 (right-only) gets name=NA
+RIGHT join is df_join(right, left, on, JOIN_LEFT) - matches a direct LEFT computation
+regression: String-typed join key: FULL join coalesces the key column itself, not just other columns
+a non-key column name shared by both sides gets a _right suffix on the right one
+regression: a NaN join key never matches, not even another NaN, and FULL still drains it
+adversarial: an empty (zero-row) side on either input
+adversarial: mismatched on-column types, or a missing on column, both abort
+ported from Polars py-polars/tests/unit/operations/test_join.py::test_join
+ported from Polars crates/polars/tests/it/core/joins.rs::test_joins_with_duplicates
+ported from Polars crates/polars/tests/it/core/joins.rs::test_join_negative_integers
+ported from Polars py-polars/tests/unit/operations/test_join.py::test_empty_outer_join_22206
+ported from Polars py-polars/tests/unit/operations/test_join.py::test_join_coalesce_22498
+ported from Polars crates/polars/tests/it/core/joins.rs::test_empty_df_join (probe-side-empty variants)
+ported from Polars crates/polars/tests/it/core/joins.rs::test_join_floats (adapted to a single float join column)
+independent reference: row counts match a naive O(n*m) join across INNER/LEFT/FULL
+  join stress: many unique keys, forcing repeated hash table growth
+regression: join_hash_to_partition(join_mix64(...)) splits realistic keys roughly evenly across partitions
+regression (real build): join_build_partitions_mt itself splits realistic keys roughly evenly across partitions
+crosses JOIN_PARALLEL_MIN_N: the dispatched (parallel-eligible) path matches join_probe_serial exactly, as a set
+test_join: all passed
+
+=== gzip_inflate: PASS ===
+crc32 matches the standard CRC-32/ISO-HDLC check value for "123456789"
+stored (uncompressed) block round-trips exactly, with correct CRC32/size checks
+two consecutive stored blocks (BFINAL only on the second) concatenate correctly
+a stored block with a zero-length payload decompresses to zero bytes, not a crash
+a real fixed-Huffman-coded block (BTYPE=01) decompresses correctly
+gzip header optional fields (FEXTRA, FNAME, FCOMMENT, FHCRC) are skipped correctly, all four at once
+gzip_is_gzip on empty/1-byte buffers returns false rather than reading out of bounds
+malformed gzip input aborts (fork + expect SIGABRT)
+  random/mutated gzip input vs. gzip_inflate never crashing or hanging (fixed seed)
+  100 random/mutated gzip inputs handled with no crash or hang
+gzip_inflate: all passed
+
+=== gzip_deflate: PASS ===
+degenerate inputs: empty, one byte, two bytes, and a single repeated byte
+all three block types are reached: stored, fixed and dynamic
+Huffman code lengths never exceed the cap, and stay a complete prefix code
+package-merge matches a brute-force search over every legal code
+  388 cases compared against brute force
+every length from 0 to 600, so block and match boundaries are all crossed
+matches at the window edge and at the maximum match length
+every level 0-9 round-trips; effort buys ratio across the range
+the same input compresses to the same bytes twice
+  random round-trip fuzzing (fixed seed, four input shapes)
+  300 random buffers round-tripped ok
+gzip_deflate: all passed
+
+=== rdata_array_read: PASS ===
+real EstimationSeriesSample1_1.Rdata: dims, dimnames, and known element values match
+real rdata_altrep_and_factor.RData: ALTREP compact sequences and factor columns resolve correctly
+df_read_rdata/df_read_rdata_slice: one call from path to DataFrame, both with and without an explicit object_name
+df_read_rdata/df_read_rdata_slice contract violations abort (fork + expect SIGABRT)
+real rdata_edge_cases.RData: empty vectors, NA in every type, nested lists, and repeated ALTREP objects all parse correctly
+real rdata_uncompressed.RData (save with compress=FALSE) loads without going through gzip at all
+real rdata_empty_workspace.RData (zero saved objects) loads to an empty RData, not a crash
+real rdata_zero_row_dataframe.RData (0 rows, 2 columns) converts to a valid empty DataFrame
+real rdata_xz_compressed.RData (an R compression this loader does not support) aborts cleanly (fork + expect SIGABRT)
+synthetic workspace: data.frame, NA string, dim matrix, and symbol back-reference all parse correctly
+REFSXP long form (explicit 4-byte index, not the packed index-in-flags form) resolves correctly
+API contract violations abort (fork + expect SIGABRT)
+malformed .RData input aborts (fork + expect SIGABRT)
+  random/mutated .RData input vs. rdata_read never crashing or hanging (fixed seed)
+  60 random/mutated .RData inputs handled with no crash or hang
+rdata_array_read: all passed
+
+=== adf_correctness: PASS ===
+augmented Dickey-Fuller, float64 build
+
+MacKinnon critical values against an independent implementation
+  ok
+Schwert's lag rule
+  ok
+the regression against a hand-solved case
+  ok
+the no-intercept variant against closed-form sums
+  ok
+holding the sample fixed matches running on the shortened series
+  ok
+shift and scale invariance
+  ok
+the trend variant rejects where the constant one fails
+  with trend -7.0615 against -3.4329, without -0.5578 against -2.8763
+  ok
+verdicts on white noise and on a random walk
+  rejects the unit root on white noise 40/40, on a random walk 3/40
+  ok
+the trend response surface against a simulation of the null
+  level 0: table -3.9893, simulated -3.9877
+  level 1: table -3.4252, simulated -3.4104
+  level 2: table -3.1357, simulated -3.1142
+  ok
+
+PASSED, 0 failures
+
+=== kpss_correctness: PASS ===
+KPSS, float64 build
+
+the Newey-West bandwidth rule
+  ok
+against a hand-solved case
+  ok
+shift and scale invariance
+  ok
+stationarity around a trend
+  trend-stationary series: level case 5.0987 against 0.463, trend case 0.1015 against 0.146
+  ok
+verdicts on white noise and on a random walk
+  rejects stationarity on white noise 2/40, on a random walk 39/40
+  ok
+the statistic grows with the sample on a random walk and not on white noise
+  white noise: mean statistic at n=800 over n=100 is 0.954
+  random walk: mean statistic at n=800 over n=100 is 7.922
+  ok
+
+PASSED, 0 failures
+
+=== dfgls_correctness: PASS ===
+DF-GLS, float64 build
+
+the quasi-differencing constant
+  ok
+the detrending absorbs the terms it claims to
+  ok
+simulated critical values have the shape a table has
+  constant 1/5/10 per cent: -2.719 -2.033 -1.721
+  trend    1/5/10 per cent: -3.523 -2.941 -2.659
+  ok
+size on the null and power against a persistent alternative
+  size 24/400, rate 0.060 against a nominal 0.05
+  power at AR 0.85 around a trend: ordinary ADF 363/400, DF-GLS 391/400
+  ok
+
+PASSED, 0 failures
+
+=== otto_correctness: PASS ===
+Otto pooled block unit root test, float64 build
+
+Table I lookup and interpolation
+  ok
+the pooled estimator against its defining sum
+  ok
+the finite sample correction against Lemma 2(c)
+  n= 100, B= 19: v_T squared 0.64176, heading for 0.6667
+  n= 400, B= 49: v_T squared 0.65804, heading for 0.6667
+  n=2000, B=139: v_T squared 0.66392, heading for 0.6667
+  ok
+which test copes with which trend
+  straight     trend: Otto shifts 1.9560, trend ADF shifts 0.0000
+  oscillating  trend: Otto shifts 4.8075, trend ADF shifts 5.9470
+  ok
+both asymptotics produce a finite statistic and a verdict
+  small-b: B=35, statistic -2.2634 against -1.6449, rejects 1
+  fixed-b: B=60, statistic -1.2518 against -1.3510, rejects 0
+  ok
+size under a unit root with a wandering trend
+  small-b, B=40: rejects 6/400, rate 0.015 against a nominal 0.05
+  fixed-b, B=75: rejects 11/400, rate 0.028 against a nominal 0.05
+  ok
+power on a stationary series around a wandering trend
+  Otto small-b 200/200, trend ADF 0/200
+  ok
+
+PASSED, 0 failures
+
+=== hlt_union_correctness: PASS ===
+Harvey, Leybourne and Taylor union of rejections, float64 build
+
+the union is the disjunction of its components
+  ok
+the weighted average against its formula
+  ok
+the trend Wald statistic separates a trend from none
+  without a trend 4.9019, with one 51031.8
+  ok
+the trend union keeps power whether or not a trend is present
+  without a trend: union 200/200, demeaned alone 200/200, detrended alone 199/200
+  with a trend   : union 199/200, demeaned alone 0/200, detrended alone 199/200
+  ok
+the initial condition union tracks whichever component is ahead
+  initial condition 0: union 200/200, QD 200/200, OLS 170/200
+  initial condition 12: union 200/200, QD 0/200, OLS 200/200
+  ok
+the union's size against the paper's section 4.2
+  trend union 0.135; initial condition demeaned 0.098 against the paper's 0.090, detrended 0.096 against 0.069
+  ok
+the size correction brings the union back to nominal
+  scale factor 1.1609
+  uncorrected 0.093, corrected 0.047 against a nominal 0.05
+  ok
+
+PASSED, 0 failures
+
+=== hlt_break_correctness: PASS ===
+Harvey, Leybourne and Taylor trend break test, float64 build
+
+Table 1 constants and the bandwidth rule
+  ok
+the two component statistics swap roles with the order of integration
+  I(0) shocks: t0* 1.714, t1* 0.867, weight 0.6020
+  I(1) shocks: t0* 6.704, t1* 1.487, weight 0.0000
+  I(0) at n= 150: S_1 0.02501, weight 0.9103
+  I(0) at n= 400: S_1 0.00847, weight 0.9800
+  I(0) at n=1200: S_1 0.00460, weight 0.9972
+  ok
+the statistic and weight against equations (13) and (10)
+  ok
+the pretest route through the unit root test
+  with a break: weighted allows 1 at 0.507, pretest allows 1 at 0.507
+  ok
+a break is detected under both I(0) and I(1) shocks
+  I(0) shocks: rejects 40/40
+  I(1) shocks: rejects 40/40
+  ok
+size under both kinds of shock, against the paper's Table 2
+  n=150: I(1) shocks 0.175 against the paper's 0.139; I(0) shocks 0.028 against 0.015
+  n=300: I(1) shocks 0.103 against the paper's 0.098; I(0) shocks 0.048 against 0.022
+  ok
+
+PASSED, 0 failures
+
+=== hhlt_correctness: PASS ===
+Harris, Harvey, Leybourne and Taylor unit root with a possible trend break, float64 build
+
+Table 1 lookup and interpolation
+  ok
+the first-difference break estimator finds a slope break
+  estimated fraction 0.5033 against a true 0.5000
+  ok
+the Wald statistic separates a break from none
+  with a break 24184.741, without 0.112
+  ok
+the weight collapses with a break and saturates without one
+  with a break: weight 0.000000, tilde 0.500, tau_bar 0.500, allows break 1
+  without:      weight 0.980590, tilde 0.170, tau_bar 0.003, allows break 0
+  ok
+the no-break branch is exactly DF-GLS with a trend
+  ok
+the weight is exp(-g W / sqrt(n)) and falls as g rises
+  g=1.5: weight 0.933285, Wald 0.7973, tau_bar 0.0491
+  g=3.0: weight 0.871021, Wald 0.7973, tau_bar 0.0950
+  g=6.0: weight 0.758678, Wald 0.7973, tau_bar 0.1778
+  ok
+rejects in both cases, choosing the branch by itself
+  without a break: rejects 60/60, took the break branch 1/60; DF-GLS rejects 60/60
+  with a break   : rejects 60/60, took the break branch 60/60; DF-GLS rejects 0/60
+  ok
+size under the null against the paper's tabulated values
+  n=150: rejects 64/500, rate 0.128 against a nominal 0.05; break branch 239/500
+  n=300: rejects 39/500, rate 0.078 against a nominal 0.05; break branch 212/500
+  ok
+
+PASSED, 0 failures
+
+=== zivot_andrews_correctness: PASS ===
+Zivot-Andrews, float64 build
+
+the statistic is the minimum over candidate dates
+  112 candidates, chose 90
+  ok
+a planted break is found
+  level  model: break at 120, statistic -10.730
+  slope  model: break at 78, statistic -2.934
+  both   model: break at 120, statistic -11.134
+  ok
+rejects where an ordinary ADF is fooled by the break
+  Zivot-Andrews -10.730 against -4.732, ordinary ADF -1.197 against -2.876
+  ok
+size on random walks with no break
+  rejects 11/200, rate 0.055 against a nominal 0.05
+  ok
+
+PASSED, 0 failures
+
+=== johansen_correctness: PASS ===
+Johansen rank tests, float64 build
+
+eigenvalues are squared canonical correlations
+  ok
+the trace statistic is the sum of the maximum eigenvalue statistics
+  ok
+invariance to a nonsingular linear transformation of the variables
+  ok
+a tightly co-integrated pair is detected
+  trace at rank zero 102.45 against the 99 per cent value 22.59, eigenvalues 0.3279 and 0.0157
+  ok
+simulated critical values have the shape a table has
+  1 common trends: trace 95 per cent 7.848, max 95 per cent 7.848
+  2 common trends: trace 95 per cent 18.286, max 95 per cent 15.249
+  3 common trends: trace 95 per cent 32.300, max 95 per cent 21.444
+  ok
+size of the trace test on independent random walks
+  rejects rank zero 23/400, rate 0.058 against a nominal 0.05
+  ok
+rank recovery on systems of known rank
+  true rank 0: chose 0/1/2/3 as 59/1/0/0 over 60 draws
+  true rank 1: chose 0/1/2/3 as 0/55/5/0 over 60 draws
+  true rank 2: chose 0/1/2/3 as 0/0/55/5 over 60 draws
+  ok
+
+PASSED, 0 failures
+
+=== engle_granger_correctness: PASS ===
+Engle-Granger, float64 build
+
+recovers a known relation and rejects on it
+  relation (1.0000, -1.9922), intercept 3.029, statistic -12.012 against 1 per cent -3.983
+  ok
+the two normalizations are different tests
+  regressing 0 on 1 gives -11.6982, the reverse -11.2314
+  ok
+residual-based critical values are below the ordinary ones and fall with size
+  2 variables: 1/5/10 per cent -3.888 -3.354 -3.062, ordinary 5 per cent -2.876
+  3 variables: 1/5/10 per cent -4.339 -3.731 -3.438, ordinary 5 per cent -2.876
+  4 variables: 1/5/10 per cent -4.700 -4.108 -3.803, ordinary 5 per cent -2.876
+  ok
+size on independent random walks
+  rejects 52/1200, rate 0.043 against a nominal 0.05
+  ok
+
+PASSED, 0 failures
+
+=== maki_correctness: PASS ===
+Maki co-integration with an unknown number of breaks, float64 build
+
+the design carries the columns each model's equation calls for
+  ok
+the design's columns hold what they should
+  ok
+estimated breaks respect the trim
+  breaks at 100, 90, 114 over 495 candidates
+  ok
+the first break found is the planted one
+  first break at 120 against a true 120
+  ok
+allowing more breaks can only lower the statistic
+  max 1 breaks: statistic -11.4887 over 181 candidates
+  max 2 breaks: statistic -11.4887 over 343 candidates
+  max 3 breaks: statistic -11.4887 over 486 candidates
+  ok
+a break costs Engle-Granger its margin and does not cost Maki its
+  Maki -10.273 against a 1 per cent value of -5.142
+  Engle-Granger -3.591 against a 1 per cent value of -3.983
+  ok
+simulated values against the paper's Table 1
+  m=1, T=300: simulated 1/5/10 per cent -5.009 -4.634 -4.389, table 5 per cent -4.602
+  m=2, T=300: simulated 1/5/10 per cent -5.984 -5.373 -5.075, table 5 per cent -4.893
+  m=3, T=300: simulated 1/5/10 per cent -6.195 -5.926 -5.681, table 5 per cent -5.083
+  m=2 at T=300 gives -5.317 and at T=600 gives -5.221, table -4.893: the gap to the
+  table does not close as the sample grows
+  ok
+size on independent random walks
+  rejects 9/200, rate 0.045 against a nominal 0.05
+  ok
+
+PASSED, 0 failures
+
+=== qlr_test_correctness: PASS ===
+QLR statistic against its definition, float64 build
+
+the supremum over the beta grid, maximum at each end and inside
+  ok
+kappa_hat divides the statistic and nothing else
+  ok
+untrustworthy profile points are excluded from the supremum
+  ok
+the general kappa_hat against the definition
+  ok
+every Table B.3 row, both cases, retrieved exactly
+  114 rows, no duplicate pairs
+  ok
+the table's own shape: level ordering, interior above boundary, rising in beta_U
+  114 rows, 84 within-group comparisons
+  ok
+the lookup tolerance admits rounding and rejects an untabulated pair
+  ok
+the verdict at each critical value and either side of it
+  ok
+statistic, scaling, lookup and verdict together
+  QLR_T 40.000, QLR_tilde_T 20.000 against 2.989 / 4.308 / 7.277: reject at 1% - score-driven dynamics are present
+  ok
+
+PASSED, 0 failures
+
+=== lbfgs_correctness: PASS ===
+lbfgs correctness, float64 build
+
+test objectives: gradient against central differences
+  worst relative discrepancy 5.71e-07
+  ok
+quadratic bowl, all weights equal
+  2 iterations, 4 objective calls, f = 0
+  ok
+ill-conditioned quadratic, weights spanning 1 to 10000
+  condition number 1e4: 44 iterations, f = 2.69e-16
+  ok
+badly scaled quadratic, weights spanning 1 to 1e8
+  91 iterations, 128 calls, f = 2.824e-16, function decrease below tolerance
+  ok
+the accepted step flattens the slope, not only lowers the value
+  step 16, slope -0.000252 from -0.0003, minimum along the direction at 100
+Rosenbrock valley
+  39 iterations, 48 objective calls, f = 6.23e-15
+  ok
+objective not finite outside a disc
+  2 iterations, f = 0, converged 1
+  ok
+started at the minimum
+  ok
+memory of one correction pair
+  22 iterations, f = 4.47e-14
+  ok
+parameter count at and above the BLAS1 dispatch threshold
+  n = 16: 403 iterations, f = 3.74e-11
+  n = 40: 717 iterations, f = 3.8e-11
+  ok
+a line search that cannot progress is not convergence
+  value 3 at start, 3 returned, line search could not decrease the objective
+  ok
+objective not a number at the starting point
+  infinity: 0 iterations, objective or gradient stopped being finite
+  not a number: 0 iterations, objective or gradient stopped being finite
+  ok
+gradient not a number while the value is finite
+  0 iterations, objective or gradient stopped being finite, value 16
+  ok
+objective stops being a number partway through
+  infinity after 30 calls: 28 iterations, objective or gradient stopped being finite, value 0.364369
+  not a number after 30 calls: 28 iterations, objective or gradient stopped being finite, value 0.364369
+  ok
+
+PASSED, 0 failures
+
+=== score_driven_location_correctness: PASS ===
+score-driven location model, float64 build
+
+the parameter count against the blocks it is made of
+  ok
+the link and its inverse round trip
+  ok
+with the dynamics switched off, against dist/mv/student.h
+  ok
+the likelihood as nu approaches the Gaussian limit
+  nu     3e+00   model     -89.16525396   density     -89.16525396
+  nu     3e+02   model     -84.22532199   density     -84.22532199
+  nu     3e+04   model     -84.17285748   density     -84.17285748
+  nu     3e+06   model     -84.17233287   density     -84.17233287
+  nu     3e+08   model     -84.17232763   density     -84.17232763
+  nu     1e+10   model     -84.17232758   density     -84.17232758
+  nu     1e+12   model     -84.17232757   density     -84.17232757
+  nu     1e+14   model     -84.17232757   density     -84.17232757
+
+the autodiff gradient against central differences
+  K=1, 5 parameters, worst relative error 2.44e-07 at Omega_inv[0,0]
+  K=2, 10 parameters, worst relative error 1.02e-06 at a[0]
+  K=3, 16 parameters, worst relative error 4.25e-07 at Omega_inv[2,2]
+  ok
+the simulator and the filter agree on the recursion
+  largest disagreement between the two residual paths 2.220e-16 over 200 periods
+  ok
+an unusable scale returns infinity rather than aborting
+  ok
+the reported likelihood and gradient belong to the returned parameters
+  converged yes after 26 iterations, gradient norm 0.000513, status: function decrease below tolerance
+  ok
+the JSON cache round trips and refuses a different sample
+  ok
+standard errors at a fit, and the curvature they rest on
+  is_maximum 1, 0 flat directions, condition 66.7, 10 of 10 errors usable
+  ok
+parameter recovery from a perturbed start
+  4 of 4 fits converged, worst unconstrained error 0.193 at T=4000
+  ok
+
+PASSED, 0 failures
+
+=== qvarma_correctness: PASS ===
+qvarma correctness, float64 build
+
+declared parameter count against the entries that can move
+  ok
+warm-up conventions
+  ok
+link and unlink round-trip, and the three transforms
+  ok
+Psi_dag structure and rank
+  ok
+mu_star restricted to the stationary block
+  ok
+maximum eigenvalue modulus
+  ok
+log-likelihood against the multivariate t density, every shape
+  ok, 9 shapes
+analytic gradient against central differences, every shape
+  9 shapes, 304 entries, worst relative discrepancy 1.55e-06
+  ok
+Gaussian limit at large nu
+  student -188.868255, gaussian -188.868377
+  ok
+impulse response closed forms
+  ok
+impulse responses against the recursions, every shape
+  ok, 9 shapes to horizon 6
+impulse response confidence bands
+  601 of 4000 rotations satisfied the sign restrictions
+  ok
+averaged score Jacobian against a naive reference
+  ok
+impulse response file layout
+  ok
+parameter cache round-trip and shape rejection
+  ok
+fit reuses a cache, reports what it recorded, and refits on demand
+  ok
+reported likelihood and gradient against the returned parameters
+  ok
+convergence flag against the gradient it claims to have reached
+  converged 1 after 329 iterations, gradient norm 1.008e+04
+  ok
+the reason a fit stopped, against the verdict it reports
+  function decrease below tolerance after 217 iterations, converged 1
+  ok
+the link moves one parameter per coordinate, by the stated derivative
+  55 coordinates, at most 1 parameter moved by any one of them
+  ok
+standard errors against the sample size
+  Psi_star and Omega_inv shrink by 2.166 between T=500 and T=2000 over 2 draws, expected 2
+  ok
+standard errors where the Hessian will not decompose
+  theta at 400: returned, hessian_is_usable 0, is_maximum 0
+  ok
+fit from a starting guess where the likelihood is not a number
+  overflow: 0 iterations, converged 0, log-likelihood -inf
+  underflow: 0 iterations, converged 0, log-likelihood -inf
+  ok
+simulated innovation covariance against equation 11
+  worst absolute discrepancy 0.003345 over 60000 periods
+  ok
+parameter recovery
+  truth -1842.457, fit -1832.897, gap 9.560, Wilks expectation 12.0
+  gradient norm 0.101 after 450 iterations, converged yes
+  worst c 0.3672, worst Omega_inv 0.04209
+  ok
+shapes with a co-integrated block, over several draws
+  rank two                 2 of 5 converged, 0 stalled, 3 hit the cap, slowest converged fit 1316 iterations
+  two co-integration lags  3 of 5 converged, 1 stalled, 1 hit the cap, slowest converged fit 1135 iterations
+  ok
+interval coverage from the standard errors
+  256 of 276 inside, coverage 0.928 from 24 converged fits, nominal 0.95
+  ok
+
+PASSED, 0 failures
+
+=== qvarma_analytic_agreement: PASS ===
+analytic against traced t-QVARMA filter, float64 build
+
+analytic filter against the traced one, over shapes and draws
+  the ABM pipeline's shape                   n =  42, T = 120: value 1.50e-16, paths 1.19e-15, gradient 7.29e-13
+  no co-integrated block                     n =  20, T =  90: value 2.18e-16, paths 9.99e-16, gradient 9.13e-15
+  no co-integrated block, p = 3              n =  17, T =  80: value 2.13e-16, paths 8.26e-16, gradient 3.12e-14
+  rank two co-integration                    n =  59, T = 100: value 1.22e-16, paths 2.22e-15, gradient 1.46e-14
+  one beta per lag                           n =  47, T =  70: value 7.16e-16, paths 2.12e-14, gradient 2.45e-13
+  longer warm-up convention                  n =  40, T =  60: value 2.28e-16, paths 1.29e-15, gradient 2.48e-14
+  q longer than p                            n =  41, T =  50: value 1.72e-16, paths 1.89e-15, gradient 3.04e-14
+  restricted Psi_star                        n =  51, T =  65: value 3.47e-16, paths 1.17e-15, gradient 2.36e-14
+  sample barely past the warm-up             n =  75, T =   6: value 1.62e-16, paths 3.33e-16, gradient 1.45e-15
+  single I(0) series with a large I(1) block n =  71, T =  55: value 1.86e-16, paths 8.05e-16, gradient 3.70e-14
+
+both gradients against a central difference of the likelihood
+  the ABM pipeline's shape                   analytic 1.10e-07, taped 1.10e-07
+  no co-integrated block                     analytic 1.92e-09, taped 1.92e-09
+  one beta per lag                           analytic 1.45e-08, taped 1.45e-08
+  restricted Psi_star                        analytic 1.10e-08, taped 1.10e-08
+
+a reused workspace gives the same answer as a fresh one
+  value difference 0, worst gradient difference 0
+
+an unusable scale returns the sentinel, not an answer
+  overflow: value -inf, gradient zeroed
+  underflow: value -inf, gradient zeroed
+
+
+PASSED, 0 failures
+
+=== qvarma_gaussian_limit: PASS ===
+t-QVARMA likelihood as nu approaches the Gaussian limit, float64 build
+
+closed-form shape, likelihood against the density as written
+  nu     3e+00   model    -133.6124547747   density    -133.6124547747
+  nu     3e+01   model    -127.5249401959   density    -127.5249401959
+  nu     3e+02   model    -126.8557228888   density    -126.8557228888
+  nu     3e+04   model    -126.7816017216   density    -126.7816017216
+  nu     3e+06   model    -126.7808600586   density    -126.7808600586
+  nu     3e+08   model    -126.7808526419   density    -126.7808526419
+  nu     1e+10   model    -126.7808525692   density    -126.7808525692
+  nu     1e+11   model    -126.7808525672   density    -126.7808525672
+  nu     1e+12   model    -126.7808525670   density    -126.7808525670
+  nu     1e+13   model    -126.7808525670   density    -126.7808525670
+  nu     1e+14   model    -126.7808525670   density    -126.7808525670
+  nu = 1e14    -126.7808525670   against the Gaussian    -126.7808525670
+
+five-variable shape, does the value settle as nu grows
+  nu     3e+00   value    -888.6450005064   step            0
+  nu     3e+01   value    -858.1753152358   step         30.5
+  nu     3e+02   value    -858.0197633834   step        0.156
+  nu     3e+04   value    -858.2136479892   step        0.194
+  nu     3e+06   value    -858.2158987708   step      0.00225
+  nu     3e+08   value    -858.2159213113   step     2.25e-05
+  nu     1e+10   value    -858.2159215322   step     2.21e-07
+  nu     1e+11   value    -858.2159215383   step     6.15e-09
+  nu     1e+12   value    -858.2159215390   step     6.17e-10
+  nu     1e+13   value    -858.2159215390   step     6.04e-11
+  nu     1e+14   value    -858.2159215390   step     8.07e-12
+
+does d(log-likelihood)/d(theta_nu) go to zero
+  nu     3e+00   |d/d theta_nu|        13.1336
+  nu     3e+01   |d/d theta_nu|        2.74316
+  nu     3e+02   |d/d theta_nu|      0.0826017
+  nu     3e+04   |d/d theta_nu|    0.000444407
+  nu     3e+06   |d/d theta_nu|    4.40326e-06
+  nu     3e+08   |d/d theta_nu|    4.40285e-08
+  nu     1e+10   |d/d theta_nu|    1.32095e-09
+  nu     1e+11   |d/d theta_nu|    1.32305e-10
+  nu     1e+12   |d/d theta_nu|    1.34008e-11
+  nu     1e+13   |d/d theta_nu|    1.28685e-12
+  nu     1e+14   |d/d theta_nu|     1.9193e-13
+
+analytic against traced, out where the cancellation was
+  nu     3e+00   analytic    -898.1608363081   traced    -898.1608363081   gradient 4.00e-15 at 35
+  nu     3e+01   analytic    -867.2101418300   traced    -867.2101418300   gradient 2.05e-13 at 36
+  nu     3e+02   analytic    -866.9547518245   traced    -866.9547518245   gradient 1.90e-14 at 36
+  nu     3e+04   analytic    -867.1381357341   traced    -867.1381357341   gradient 7.20e-13 at 36
+  nu     3e+06   analytic    -867.1402818993   traced    -867.1402818993   gradient 2.21e-13 at 36
+  nu     3e+08   analytic    -867.1403033936   traced    -867.1403033936   gradient 1.04e-13 at 36
+  nu     1e+10   analytic    -867.1403036043   traced    -867.1403036043   gradient 1.84e-13 at 36
+  nu     1e+11   analytic    -867.1403036101   traced    -867.1403036101   gradient 1.74e-13 at 36
+  nu     1e+12   analytic    -867.1403036107   traced    -867.1403036107   gradient 5.67e-14 at 36
+  nu     1e+13   analytic    -867.1403036108   traced    -867.1403036108   gradient 2.60e-13 at 36
+  nu     1e+14   analytic    -867.1403036108   traced    -867.1403036108   gradient 2.08e-13 at 36
+
+
+PASSED, 0 failures
+
+=== qvarma_identification: PASS ===
+qvarma identification, float32 build
+
+the intercept is learned far more slowly once the model has an I(1) block
+  with an I(1) block      9.888 at T=250 to    43.05 at T=2000, growth 4.35
+  without one             683.6 at T=250 to     5723 at T=2000, growth 8.37
+  and 133 times less curvature at T=2000
+  ok
+Phi_star loses its curvature when the score loading is near zero
+  Psi_star ~ 0.12:    16.79     Psi_star ~ 0.02:   -2.573
+  ok
+beta loses its curvature when the co-integration loading is near zero
+  alpha ~ 0.20:     27.2     alpha ~ 0.02:    2.549
+  ok
+a co-integrated block costs orders of magnitude of conditioning
+  without an I(1) block      125.8     with one       3547
+  ok
+
+PASSED, 0 failures
+
+=== integration ===
+=== frame_to_model: PASS ===
+frame to model: a loaded column reaching the statistics and the models, float64 build
+
+premise: a column of a loaded frame is a strided view, not a contiguous buffer
+stats.h: mean, variance, median, quantile, autocorrelation and HAC variance are the same through a view
+unit_root.h: a column-oriented series and a row-oriented one give the same statistic
+unit_root.h: ADF, ADF with trend, KPSS and DFGLS are the same through a view
+cointegration.h: Johansen and Engle-Granger agree on a system built from views and from copies
+sd/qvarma.h: the log-likelihood is the same on a windowed (strided) y as on a contiguous one
+nn/mlp.h: training on a window (strided view) of a longer design matrix matches training on a copy
+stress: a full qvarma fit and simulated co-integration critical values through views
+
+PASSED, 0 failures
+
+=== join_missing_values: PASS ===
+join missing values: what a hole in the data does to a statistic and a fit, float64 build
+
+join: an unmatched row carries a NaN that MISNAN finds, in a column that is still numeric
+stats.h: mean, variance and HAC variance come back NaN, so the hole is at least visible to a caller that looks
+stats.h: median, quantile and rank abort on a hole rather than returning the wrong order statistic (fork + expect SIGABRT)
+stats.h and unit_root.h: autocorrelation, Ljung-Box, ADF, DFGLS and KPSS all abort on a hole (fork + expect SIGABRT)
+unit_root.h: a NaN statistic reads as the non-rejecting verdict at every level, which is why the tests refuse it rather than returning it
+nn/mlp.h: training on a column with a hole returns a NaN loss and NaN weights, with the full epoch count
+mcs.h: a confidence set and a Diebold-Mariano test abort on a hole rather than returning a set that is not the clean-data answer (fork + expect SIGABRT)
+frame/csv.h: an NA marker types the whole column as strings, so asking for it as numeric aborts (fork + expect SIGABRT)
+
+PASSED, 0 failures
+
+=== distributed_simulation: PASS ===
+cluster: 127.0.0.1:9644 dropped before the job started
+distributed simulation: does a Monte Carlo across machines give what it gives here, float64 build
+
+cluster + random: a simulated ADF null distribution comes back identical whether it ran here or across machines
+cluster + random: a task that ignores its global index produces one value repeated, which the comparison above would catch
+cluster + random: a range reclaimed from a machine that dies mid-job is recomputed to the same values
+stress: 2000 replications distributed against 2000 run here, and the critical value both produce
+
+PASSED, 0 failures
+
+=== optimizer_swap: PASS ===
+optimizer swap: does a model fit through the Optimizer interface, not just through Adam, float32 build
+
+mlp_fit: an optimizer that is not Adam trains XOR to the same loss threshold the Adam test uses
+mlp_fit: one optimizer instance per trainable tensor, each built at that tensor's shape and freed exactly once
+mlp_fit: the optimizer's own state carries across epochs - momentum at 0.9 and at 0 do not land in the same place
+mlp_save/mlp_load: a model trained by a non-Adam optimizer round-trips through JSON unchanged
+
+PASSED, 0 failures
+
+=== pipeline_ownership: PASS ===
+pipeline ownership: what stays valid when the thing it came from is freed, float64 build
+
+frame/sql.h: a query's output frame is a full owner, still readable after the frame it was built from is gone
+frame/join.h: a join's output owns its own copy of everything, including the string columns it took from two different frames
+frame/frame.h: a column view writes through to the frame, and a later append moves the block the view pointed at
+nn/mlp.h and sd/qvarma.h: a fit result owns its parameters, still usable after the frame and the design matrix are gone
+sd/qvarma.h and json.h: a fit written to disk reloads into a fresh model after the original is freed
+frame/csv.h and frame/npy.h: a frame written and read back is a new owner each time, with nothing shared between the two
+frame/rdata.h and gzip.h: a frame loaded from a compressed file owns its values, not a slice of the inflate buffer
+sd/qvarma.h: the impulse response bands allocate and release per draw rather than accumulating
+
+PASSED, 0 failures
+
+=== npz_to_statistics: PASS ===
+schema: column count, names, types and declaration order all survive the archive
+premise: a column of an npz-loaded frame is a strided view, not a contiguous buffer
+values: every numeric element is bit-identical, not merely close
+strings: the one column .npy cannot represent at all comes back unchanged
+statistics: every reduction, unit root test and co-integration test agrees across the two frames
+negative control: perturbing one observation by a part in 10^6 moves a statistic past the tolerance
+across formats: .npz matches .npy bit for bit on the numbers, and carries the column .npy cannot
+ownership: the frame still reads identically after the file, the source frame and the allocator's state are gone
+  windowed round trips: every prefix of the dataset, at every column width
+  120 windows round-tripped
+npz_to_statistics: all passed
+
+=== header_composition: PASS ===
+header composition: every header in one translation unit, float64 build
+
+every header included together, in both orders, and every module reachable from one binary
+
+PASSED, 0 failures
+
+=== header_composition_f32: PASS ===
+header composition: every header in one translation unit, float32 build
+
+every header included together, in both orders, and every module reachable from one binary
+
+PASSED, 0 failures
+
+
+=== summary ===
+59 passed, 0 failed

@@ -233,6 +233,47 @@ static void test_malformed_npy_aborts(void) {
     }
     expect_abort(call_df_read_npy);
 
+    /* Exactly 10 bytes, declaring format version 2.0. The v1.0 preamble
+       is 10 bytes and the v2.0 one is 12, so a single "at least 10"
+       check let the v2.0 branch read its 4-byte header-length field off
+       the end of the buffer. The one-byte overread is what a sanitizer
+       build reports (make CFLAGS="-fsanitize=address,undefined ..."
+       test, per README's Testing requirements); an ordinary build
+       aborts on either check, so this case pins the length requirement
+       rather than the symptom. */
+    {
+        FILE *f = fopen(g_bad_npy_path, "wb");
+        assert(f);
+        fwrite("\x93NUMPY", 1, 6, f);
+        unsigned char ver[2] = { 2, 0 };
+        fwrite(ver, 1, 2, f);
+        unsigned char partial_len[2] = { 0x10, 0x00 };
+        fwrite(partial_len, 1, 2, f);
+        fclose(f);
+    }
+    expect_abort(call_df_read_npy);
+
+    /* A negative extent in the shape tuple. r * c * sizeof(mreal) is a
+       size_t, so a negative dimension wraps to a value large enough to
+       pass the truncation check, and mat_new is then called with a
+       negative element count. */
+    {
+        char header[256];
+        int hlen = snprintf(header, sizeof header,
+            "{'descr': '%s', 'fortran_order': False, 'shape': (-1, 3), }\n", descr);
+        FILE *f = fopen(g_bad_npy_path, "wb");
+        assert(f);
+        fwrite("\x93NUMPY", 1, 6, f);
+        unsigned char ver[2] = { 1, 0 };
+        fwrite(ver, 1, 2, f);
+        unsigned char hlen_bytes[2] = { (unsigned char)(hlen & 0xFF), (unsigned char)((hlen >> 8) & 0xFF) };
+        fwrite(hlen_bytes, 1, 2, f);
+        fwrite(header, 1, (size_t)hlen, f);
+        fwrite(data, sizeof(mreal), 6, f);
+        fclose(f);
+    }
+    expect_abort(call_df_read_npy);
+
     remove(g_bad_npy_path);
 }
 

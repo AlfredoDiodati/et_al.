@@ -347,7 +347,7 @@ cases, from tests with opposite nulls, so running both and looking for
 disagreement did not reveal it. The check costs nothing measurable against the
 regression each test runs (27.6 us against 28.3 us for `adf` at n=200, 1382
 against 1395 at n=2,000, guarded against the same source at `-DNDEBUG`). See
-`docs/INTEGRATION_TESTS_DOCUMENTATION.md` and `docs/FRAME_DOCUMENTATION.md`'s
+`docs/INTEGRATION_DATA_SEAMS_DOCUMENTATION.md` and `docs/FRAME_DOCUMENTATION.md`'s
 note on missing values.
 
 All of these are built with `-DMAT_DOUBLE`, unconditionally, whatever precision
