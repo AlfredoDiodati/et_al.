@@ -264,9 +264,109 @@ static void test_below(void) {
     printf("  9 bounds x 5000 draws, 2^63/2^64-1 bounds, 7-bucket uniformity, lags 1..5 ok\n");
 }
 
+/* Rank of a permutation of 0..n-1 in the factorial number system, so the
+   count over all n! orderings can be indexed by it. */
+static int permutation_index(const int *permutation, int n) {
+    int index = 0;
+    for (int i = 0; i < n; i++) {
+        int smaller = 0;
+        for (int j = i + 1; j < n; j++) smaller += permutation[j] < permutation[i];
+        int factorial = 1;
+        for (int f = 2; f < n - i; f++) factorial *= f;
+        index += smaller * factorial;
+    }
+    return index;
+}
+
+static void test_permutation(void) {
+    puts("permutation: bijection, all n! orderings equally likely, reproducibility");
+
+    /* every output is a permutation: each of 0..n-1 exactly once */
+    {
+        Rng r = rng_new(101, 0);
+        int n = 500;
+        int *out = (int*)malloc((size_t)n * sizeof(int));
+        int *seen = (int*)malloc((size_t)n * sizeof(int));
+        for (int rep = 0; rep < 200; rep++) {
+            rng_permutation(&r, out, n);
+            for (int i = 0; i < n; i++) seen[i] = 0;
+            for (int i = 0; i < n; i++) {
+                assert(out[i] >= 0 && out[i] < n);
+                seen[out[i]]++;
+            }
+            for (int i = 0; i < n; i++) assert(seen[i] == 1);
+        }
+        free(out); free(seen);
+    }
+
+    /* n = 1 has one legal answer and must not loop */
+    {
+        Rng r = rng_new(102, 0);
+        int one = -1;
+        rng_permutation(&r, &one, 1);
+        assert(one == 0);
+    }
+
+    /* all 24 orderings of four elements equally likely: 240000 draws,
+       expected 10000 each, standard error ~98, so a 700-wide band is
+       >7 standard errors. The off-by-one Fisher-Yates that draws from
+       [0, n) instead of [0, i] fails this badly - it cannot produce a
+       uniform distribution over 24 orderings from 4^3 = 64 equally
+       likely paths, since 64 is not divisible by 24. */
+    {
+        int draws = 240000;
+        long counts[24] = { 0 };
+        int out[4];
+        Rng r = rng_new(103, 0);
+        for (int i = 0; i < draws; i++) {
+            rng_permutation(&r, out, 4);
+            counts[permutation_index(out, 4)]++;
+        }
+        long expected = draws / 24;
+        for (int c = 0; c < 24; c++) assert(labs(counts[c] - expected) < 700);
+    }
+
+    /* the identity must occur about as often as any other ordering: a
+       shuffle that never leaves an element in place is the other classic
+       Fisher-Yates mistake, and it puts a zero here */
+    {
+        int draws = 100000, identities = 0;
+        int out[5];
+        Rng r = rng_new(104, 0);
+        for (int i = 0; i < draws; i++) {
+            rng_permutation(&r, out, 5);
+            int is_identity = 1;
+            for (int j = 0; j < 5; j++) is_identity &= out[j] == j;
+            identities += is_identity;
+        }
+        double expected = draws / 120.0; /* ~833, se ~29 */
+        assert(fabs(identities - expected) < 150);
+    }
+
+    /* reproducibility and stream divergence, the same contract every
+       other draw here carries */
+    {
+        Rng a = rng_new(105, 0), b = rng_new(105, 0), c = rng_new(105, 1);
+        int left[64], right[64], other[64];
+        int diverged = 0;
+        for (int rep = 0; rep < 20; rep++) {
+            rng_permutation(&a, left, 64);
+            rng_permutation(&b, right, 64);
+            rng_permutation(&c, other, 64);
+            for (int i = 0; i < 64; i++) {
+                assert(left[i] == right[i]);
+                diverged += left[i] != other[i];
+            }
+        }
+        assert(diverged > 1000);
+    }
+    printf("  n=500 bijection, n=1, 24-ordering uniformity, identity rate, streams ok\n");
+}
+
 int main(void) {
     test_reproducibility();
     test_below();
+    test_permutation();
     test_uniform();
     test_normal();
     test_gamma();

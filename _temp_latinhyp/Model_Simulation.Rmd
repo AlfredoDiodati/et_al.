@@ -1,0 +1,390 @@
+---
+title: "Simulation of the DSK SFC model sample with LHS"
+author: "Mario Martinoli"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# DSK SFC model simulation
+
+This R Markdown simulates the DSK SFC model for different CoPs and MC runs. Use the CSV as a design table, but do not pass it directly to the model. The model accepts one JSON parameter file and one random seed per execution. The workflow is: CSV row --> modified JSON --> 1,000 seeded model runs --> extract 8 series --> save one 8 × 600 × 1,000 array.
+Repeating this for 1,000 CSV rows produces 1,000 arrays—or equivalently a conceptual four-dimensional object with dimensions 8 × 600 × 1000 × 1000.
+
+## Generate the parameter design
+
+```{r parameters}
+library(lhs)
+
+set.seed(1)
+
+bounds <- data.frame(
+  parameter = c(
+    "Gamma", "chi", "psi1", "psi3", "alfa",
+    "taylor1", "taylor2", "taylor", "kappa"
+  ),
+  lower = c(0.05, -1.50, 0.10, 0.10, 0.10, 1.00, 0.00, 0.50, 0.50),
+  upper = c(0.25, -1.25, 0.50, 0.50, 0.50, 1.50, 0.50, 0.95, 0.95)
+)
+
+u <- randomLHS(1000, nrow(bounds))
+
+Sample <- sweep(u, 2, bounds$upper - bounds$lower, "*")
+Sample <- sweep(Sample, 2, bounds$lower, "+")
+colnames(Sample) <- bounds$parameter
+
+stopifnot(anyDuplicated(as.data.frame(Sample)) == 0L)
+
+dir.create("calibration", recursive = TRUE, showWarnings = FALSE)
+write.csv(
+  Sample,
+  "calibration/Sample1.csv",
+  row.names = FALSE,
+  quote = FALSE
+)
+```
+
+## Compile the model
+
+The executable accepts a JSON file, run name, seed, and output flags as documented in the repository’s command-line instructions (https://github.com/CoMoS-SA/Reissl_2025/blob/main/README.md#command-line-arguments).
+
+Run in your terminal:
+
+git clone https://github.com/CoMoS-SA/Reissl_2025.git
+cd Reissl_2025
+
+cmake -S . -B build
+cmake --build build -j 8
+
+## Use the correct output columns
+
+The normal results file contains 83 whitespace-separated columns and no header. The required mapping is:
+
+| Array variable | Model expression | Output column |
+|---|---|---:|
+| GDP | `GDP_r(1)` | 2 |
+| Consumption | `Consumption_r` | 3 |
+| Investment | `Investment_r` | 4 |
+| Employment rate | `1-U(1)` | 5 |
+| CPI level | `cpi(1)` | 34 |
+| CB lending/policy rate | `r` | 50 |
+| Emissions | `Emiss1_TOT+Emiss2_TOT+Emiss_en` | 7 |
+| Energy use | `D_en_TOT` | 8 |
+
+These positions come directly from SAVE() in dsk_sfc_main.cpp (https://github.com/CoMoS-SA/Reissl_2025/blob/main/dsk_sfc_main.cpp#L6685-L6788).
+Important: column 6 is not the CPI level. It is cpi(1)/cpi(5), the four-period gross inflation factor. If that is what you intended by “CPI,” use column 6 instead of 34. Similarly, column 50 is the central-bank monetary-policy rate; the average commercial-bank loan rate is column 82.
+
+## R driver for one CoP
+
+Save this as run_one_cop.R. Each invocation handles one CSV row and creates one array.
+
+```{r compiler}
+library(jsonlite)
+
+args <- commandArgs(trailingOnly = TRUE)
+
+if (length(args) < 5L) {
+  stop(
+    "Usage: Rscript run_one_cop.R COP_ID DESIGN.csv ",
+    "BASE.json DSK_EXECUTABLE RESULT_DIR [N_MC]"
+  )
+}
+
+cop_id      <- as.integer(args[1])
+design_path <- normalizePath(args[2], mustWork = TRUE)
+base_json   <- normalizePath(args[3], mustWork = TRUE)
+source_exe  <- normalizePath(args[4], mustWork = TRUE)
+result_dir  <- args[5]
+n_mc        <- if (length(args) >= 6L) as.integer(args[6]) else 1000L
+
+n_steps <- 600L
+n_model_columns <- 83L
+
+output_columns <- c(
+  GDP             = 2L,
+  Consumption     = 3L,
+  Investment      = 4L,
+  Employment_rate = 5L,
+  CPI             = 34L,  # use 6L for four-period gross inflation
+  CB_lending_rate = 50L,
+  Emissions       = 7L,
+  Energy_use      = 8L
+)
+
+parameter_names <- c(
+  "Gamma", "chi", "psi1", "psi3", "alfa",
+  "taylor1", "taylor2", "taylor", "kappa"
+)
+
+design <- read.csv(design_path, check.names = FALSE)
+
+stopifnot(
+  cop_id >= 1L,
+  cop_id <= nrow(design),
+  all(parameter_names %in% names(design))
+)
+
+cop <- design[cop_id, parameter_names, drop = FALSE]
+
+dir.create(result_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(
+  file.path(result_dir, "errors"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+# The model writes output beside its executable. Copy it to task-local scratch
+# so parallel jobs do not overload or collide in one output directory.
+scratch_root <- Sys.getenv("SLURM_TMPDIR", unset = tempdir())
+job_dir <- tempfile(
+  pattern = sprintf("dsk_cop%04d_", cop_id),
+  tmpdir = scratch_root
+)
+
+dir.create(job_dir, recursive = TRUE)
+on.exit(unlink(job_dir, recursive = TRUE, force = TRUE), add = TRUE)
+
+local_exe <- file.path(job_dir, "dsk_SFC")
+stopifnot(file.copy(source_exe, local_exe))
+Sys.chmod(local_exe, mode = "0755")
+stopifnot(file.access(local_exe, mode = 1) == 0L)
+
+# Construct the input JSON for this CoP.
+input <- fromJSON(base_json, simplifyVector = FALSE)
+
+for (p in parameter_names) {
+  input$params[[1]][[p]] <- as.numeric(cop[[p]])
+}
+
+input$params[[1]][["T"]] <- n_steps
+
+json_path <- file.path(
+  job_dir,
+  sprintf("inputs_cop%04d.json", cop_id)
+)
+
+write_json(
+  input,
+  json_path,
+  auto_unbox = TRUE,
+  pretty = TRUE,
+  digits = NA
+)
+
+result_array <- array(
+  NA_real_,
+  dim = c(length(output_columns), n_steps, n_mc),
+  dimnames = list(
+    variable = names(output_columns),
+    step = as.character(seq_len(n_steps)),
+    MC_run = as.character(seq_len(n_mc))
+  )
+)
+
+attr(result_array, "CoP_ID") <- cop_id
+attr(result_array, "parameters") <- unlist(cop, use.names = TRUE)
+attr(result_array, "output_columns") <- output_columns
+attr(result_array, "seed_scheme") <- "MC seed 1:n_mc, repeated across CoPs"
+
+failures <- data.frame(
+  seed = integer(),
+  reason = character(),
+  stringsAsFactors = FALSE
+)
+
+run_name <- sprintf("cop%04d", cop_id)
+
+for (mc in seq_len(n_mc)) {
+  # Reusing seeds 1:1000 for every CoP implements common random numbers,
+  # which is normally useful when comparing parameter configurations.
+  seed <- mc
+
+  status <- suppressWarnings(
+    system2(
+      local_exe,
+      args = c(
+        shQuote(json_path),
+        "-r", run_name,
+        "-s", seed,
+        "-f", 0,
+        "-c", 0,
+        "-v", 0
+      ),
+      stdout = FALSE,
+      stderr = FALSE
+    )
+  )
+
+  raw_file <- file.path(
+    job_dir, "output",
+    sprintf("results_%s_%d.txt", run_name, seed)
+  )
+
+  error_file <- file.path(
+    job_dir, "output", "errors",
+    sprintf("Errors_%s_%d.txt", run_name, seed)
+  )
+
+  error_nonempty <- (
+    file.exists(error_file) &&
+    !is.na(file.info(error_file)$size) &&
+    file.info(error_file)$size > 0
+  )
+
+  values <- if (file.exists(raw_file)) {
+    tryCatch(
+      scan(raw_file, what = double(), quiet = TRUE),
+      error = function(e) numeric()
+    )
+  } else {
+    numeric()
+  }
+
+  valid_length <- length(values) == n_steps * n_model_columns
+
+  if (status == 0L && !error_nonempty && valid_length) {
+    model_output <- matrix(
+      values,
+      nrow = n_steps,
+      ncol = n_model_columns,
+      byrow = TRUE
+    )
+
+    selected <- t(
+      model_output[, unname(output_columns), drop = FALSE]
+    )
+
+    if (all(is.finite(selected))) {
+      result_array[, , mc] <- selected
+    } else {
+      failures <- rbind(
+        failures,
+        data.frame(seed = seed, reason = "Non-finite model output")
+      )
+    }
+  } else {
+    reason <- paste(
+      if (status != 0L) sprintf("exit status %d", status),
+      if (error_nonempty) "non-empty model error log",
+      if (!valid_length) {
+        sprintf(
+          "expected %d values, obtained %d",
+          n_steps * n_model_columns,
+          length(values)
+        )
+      },
+      collapse = "; "
+    )
+
+    failures <- rbind(
+      failures,
+      data.frame(seed = seed, reason = reason)
+    )
+
+    if (error_nonempty) {
+      file.copy(
+        error_file,
+        file.path(
+          result_dir, "errors",
+          sprintf("cop%04d_seed%04d.txt", cop_id, seed)
+        ),
+        overwrite = TRUE
+      )
+    }
+  }
+
+  # Avoid retaining approximately 3 MB of raw 83-column output per run.
+  unlink(c(raw_file, error_file), force = TRUE)
+
+  if (mc %% 25L == 0L || mc == n_mc) {
+    message(
+      sprintf(
+        "CoP %d: completed %d/%d runs; failures=%d",
+        cop_id, mc, n_mc, nrow(failures)
+      )
+    )
+  }
+}
+
+array_file <- file.path(
+  result_dir,
+  sprintf("cop_%04d.rds", cop_id)
+)
+
+saveRDS(result_array, array_file, compress = FALSE)
+
+if (nrow(failures) > 0L) {
+  write.csv(
+    failures,
+    file.path(result_dir, sprintf("cop_%04d_failures.csv", cop_id)),
+    row.names = FALSE
+  )
+}
+
+message("Saved ", array_file)
+
+```
+
+In your terminal, run a ten-seed pilot first:
+
+Rscript run_one_cop.R \
+  1 \
+  calibration/Sample1.csv \
+  Reissl_2025/dsk_sfc_inputs.json \
+  Reissl_2025/build/dsk_SFC \
+  simulation_results \
+  10
+
+Inspect it with:
+
+```{r MC inspection}
+x <- readRDS("simulation_results/cop_0001.rds")
+dim(x)
+# 8 600 10
+
+attr(x, "parameters")
+matplot(t(x["GDP", , ]), type = "l", lty = 1)
+```
+
+For the real run, replace 10 with 1000.
+
+## Run the 1,000 CoPs on an HPC system
+
+A Slurm array is the appropriate structure: one job per CoP, with 1,000 sequential seeds inside each job. In your terminal, run:
+
+#!/bin/bash
+#SBATCH --job-name=dsk_calibration
+#SBATCH --array=1-1000%100
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=1G
+#SBATCH --time=12:00:00
+#SBATCH --output=logs/cop_%A_%a.out
+#SBATCH --error=logs/cop_%A_%a.err
+
+cd "$SLURM_SUBMIT_DIR"
+
+Rscript run_one_cop.R \
+  "$SLURM_ARRAY_TASK_ID" \
+  calibration/Sample1.csv \
+  Reissl_2025/dsk_sfc_inputs.json \
+  Reissl_2025/build/dsk_SFC \
+  simulation_results \
+  1000
+  
+Adjust %100 to the number of simultaneous jobs permitted by your cluster.
+
+# Scale warning
+
+This is a large experiment:
+
+- Model executions: 1,000 × 1,000 = 1,000,000.
+- One requested array: approximately 38.4 MB.
+- All 1,000 arrays: approximately 38.4 GB before filesystem overhead.
+- Unfiltered model output would total approximately 3 TB.
+
+A baseline 600-step Release run took about 18 seconds in my local test, implying roughly 5,000 core-hours for the complete experiment. Run a pilot across several extreme CoPs before launching all one million simulations, use Release compilation, write transient files to node-local scratch, and delete each raw result immediately after extraction.

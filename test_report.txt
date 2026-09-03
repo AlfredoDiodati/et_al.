@@ -1,4 +1,4 @@
-test run: do  3 sep 2026 10:54:25 CEST
+test run: do  3 sep 2026 15:15:57 CEST
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -8,6 +8,7 @@ make: 'tests/correctness/test_solver' is up to date.
 make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
+make: 'tests/correctness/test_lhs' is up to date.
 make: 'tests/correctness/test_mcs' is up to date.
 make: 'tests/correctness/test_mcs_variance' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
@@ -42,147 +43,25 @@ make: 'tests/correctness/hlt_union_correctness' is up to date.
 make: 'tests/correctness/hlt_break_correctness' is up to date.
 make: 'tests/correctness/hhlt_correctness' is up to date.
 make: 'tests/correctness/zivot_andrews_correctness' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/johansen_correctness.c -lm -lopenblas -o tests/correctness/johansen_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/engle_granger_correctness.c -lm -lopenblas -o tests/correctness/engle_granger_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/maki_correctness.c -lm -lopenblas -o tests/correctness/maki_correctness
-In file included from tests/correctness/../../inference/../linalg/decomp.h:3,
-                 from tests/correctness/../../inference/../linalg/solver.h:2,
-                 from tests/correctness/../../inference/unit_root.h:2,
-                 from tests/correctness/../../inference/cointegration.h:2,
-                 from tests/correctness/maki_correctness.c:17:
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1447:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1469:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1381:47: warning: array subscript -1 is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1381 |             for (int i = 0; i < m; i++) s += x[i] * col[i];
-      |                                              ~^~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1462:25: note: at offset -8 into object of size 32 allocated by ‘malloc’
- 1462 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1447:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1469:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1382:14: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1382 |             b[row + (size_t)q * ldb] -= s;
-      |             ~^~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1463:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1463 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1447:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1469:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1382:38: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1382 |             b[row + (size_t)q * ldb] -= s;
-      |             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1463:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1463 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_outer’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1407:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1469:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1363:19: warning: array subscript [-2147483645, -1] is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1363 |             mreal f = b[row + (size_t)q * ldb];
-      |                   ^
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1463:25: note: at offset [-17179869160, -8] into object of size 16 allocated by ‘malloc’
- 1463 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1468:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1295:19: warning: array subscript [-6442450928, -2] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1295 |             mreal d21 = a[(size_t)k * lda + k + 1];
-      |                   ^~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1462:25: note: at offset [-51539607424, -16] into object of size 32 allocated by ‘malloc’
- 1462 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1468:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1302:42: warning: array subscript [-6442450926, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1302 |                 mreal wk = d21 * (d11 * a[(size_t)k * lda + j]
-      |                                         ~^~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1462:25: note: at offset [-51539607408, -8] into object of size 32 allocated by ‘malloc’
- 1462 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1468:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1309:40: warning: array subscript [-6442450926, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1309 |                 a[(size_t)k * lda + j] = wk;
-      |                 ~~~~~~~~~~~~~~~~~~~~~~~^~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1462:25: note: at offset [-51539607408, -8] into object of size 32 allocated by ‘malloc’
- 1462 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1468:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1307:48: warning: array subscript [-6442450926, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1307 |                     a[(size_t)j * lda + i] -= a[(size_t)k * lda + i] * wk
-      |                                               ~^~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1462:25: note: at offset [-51539607408, -8] into object of size 32 allocated by ‘malloc’
- 1462 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+make: 'tests/correctness/johansen_correctness' is up to date.
+make: 'tests/correctness/engle_granger_correctness' is up to date.
+make: 'tests/correctness/maki_correctness' is up to date.
 make: 'tests/correctness/qlr_test_correctness' is up to date.
 make: 'tests/correctness/lbfgs_correctness' is up to date.
 make: 'tests/correctness/score_driven_location_correctness' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -lopenblas -o tests/correctness/qvarma_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_analytic_agreement.c -lm -lopenblas -o tests/correctness/qvarma_analytic_agreement
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_gaussian_limit.c -lm -lopenblas -o tests/correctness/qvarma_gaussian_limit
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp tests/correctness/qvarma_identification.c -lm -lopenblas -o tests/correctness/qvarma_identification
-tests/correctness/qvarma_identification.c: In function ‘curvature_at’:
-tests/correctness/qvarma_identification.c:57:5: warning: missing initializer for field ‘workspace’ of ‘QvarmaFitContext’ [-Wmissing-field-initializers]
-   57 |     QvarmaFitContext context = { y, shape };
-      |     ^~~~~~~~~~~~~~~~
-In file included from tests/correctness/qvarma_identification.c:38:
-tests/correctness/../../sd/qvarma.h:1464:21: note: ‘workspace’ declared here
- 1464 |     QvarmaAnalytic *workspace;
-      |                     ^~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -lopenblas -o tests/integration/frame_to_model
+make: 'tests/correctness/qvarma_correctness' is up to date.
+make: 'tests/correctness/qvarma_analytic_agreement' is up to date.
+make: 'tests/correctness/qvarma_gaussian_limit' is up to date.
+make: 'tests/correctness/qvarma_identification' is up to date.
+make: 'tests/integration/frame_to_model' is up to date.
 make: 'tests/integration/join_missing_values' is up to date.
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
+make: 'tests/integration/pipeline_ownership' is up to date.
+make: 'tests/integration/npz_to_statistics' is up to date.
 cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
 cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/unit_root_example.c -lm -lopenblas -o examples/unit_root_example
+make: Nothing to be done for 'examples'.
 
 === test_mat: PASS ===
 construction
@@ -300,11 +179,33 @@ test_stats: all passed
 reproducibility + stream independence
 bounded integers: range, degenerate bound, reproducibility, uniformity
   9 bounds x 5000 draws, 2^63/2^64-1 bounds, 7-bucket uniformity, lags 1..5 ok
+permutation: bijection, all n! orderings equally likely, reproducibility
+  n=500 bijection, n=1, 24-ordering uniformity, identity rate, streams ok
 uniform: range + moments
 normal: first four moments
 gamma: mean/variance across shapes (incl. shape < 1 boost)
 independence: serial autocorrelation + cross-stream/seed correlation
 test_random: all passed
+
+=== test_lhs: PASS ===
+lhs.h correctness, float64 build
+
+stratification: one point per stratum per column
+float store: naive (stratum + jitter)/n leaves its stratum, lhs_random does not
+  n=  1000: naive crossings 0 / 2000000 (0.00e+00 per point)
+  n=100000: naive crossings 0 / 2000000 (0.00e+00 per point)
+extreme jitter: the largest and smallest a uniform draw can be
+no duplicate rows
+reproducibility, stream and seed divergence, column prefix
+marginal and within-stratum uniformity
+  pooled uniformity p = 0.999, jitter uniformity p = 0.0114, corr(stratum, jitter) = +0.003908
+permutation uniformity over all 4! orderings
+  48000 designs, ordering uniformity p = 0.184
+column independence at n = 2
+  40000 designs, pairing uniformity p = 0.37
+lhs_scale: affine map onto per-dimension bounds
+
+PASSED, 0 failures
 
 === test_mcs: PASS ===
 mcs_loss: known values, column naming, string columns ignored
@@ -1306,4 +1207,4 @@ PASSED, 0 failures
 
 
 === summary ===
-59 passed, 0 failed
+60 passed, 0 failed

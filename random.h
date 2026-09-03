@@ -117,6 +117,26 @@ static inline uint64_t rng_below(Rng *r, uint64_t n) {
     return (uint64_t)(m >> 64);
 }
 
+/* Uniform random permutation of 0, 1, ..., n-1, written into out (which
+   must hold n ints, n >= 1). Fisher-Yates: walk from the back, swapping
+   each position with a uniformly chosen one at or before it, which is
+   the one shuffle that reaches all n! orderings with equal probability
+   given an unbiased rng_below. Costs n-1 draws and no allocation.
+
+   Sorting n uniform draws and taking the resulting order is the other
+   common way to get a random permutation, and it is what R's sample()
+   and the lhs package do. It produces the same distribution but costs
+   n draws, n doubles of scratch and an O(n log n) comparison sort; this
+   is O(n) with no scratch at all. */
+static inline void rng_permutation(Rng *r, int *out, int n) {
+    assert(n >= 1);
+    for (int i = 0; i < n; i++) out[i] = i;
+    for (int i = n - 1; i > 0; i--) {
+        int j = (int)rng_below(r, (uint64_t)i + 1);
+        int t = out[i]; out[i] = out[j]; out[j] = t;
+    }
+}
+
 /* Standard normal via the Marsaglia polar method: draw (u,v) uniform in
    the unit disk, map to two independent N(0,1) variates, return one and
    cache the other in the Rng (so consecutive calls cost one disk draw
