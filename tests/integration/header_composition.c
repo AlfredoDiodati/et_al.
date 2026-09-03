@@ -42,7 +42,7 @@ the lot as unused.
 #include "../../linalg/solver.h"
 #include "../../ad.h"
 #include "../../special.h"
-#include "../../random.h"
+#include "../../random/random.h"
 #include "../../stats.h"
 #include "../../json.h"
 #include "../../frame/gzip.h"

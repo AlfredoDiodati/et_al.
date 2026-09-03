@@ -1,5 +1,5 @@
 #include "../cluster/cluster.h"
-#include "../random.h"
+#include "../random/random.h"
 #include <stdio.h>
 
 /* Splits a batch of independent fits across several machines on one local

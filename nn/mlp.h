@@ -2,7 +2,7 @@
 #include "../ad.h"
 #include "../solver/optimizer.h"
 #include "../json.h"
-#include "../random.h"
+#include "../random/random.h"
 
 /* Fully connected feedforward multilayer perceptron: general architecture
    (arbitrary depth and per-layer width, chosen per use case via a plain
@@ -50,8 +50,8 @@ typedef struct {
 } MLP;
 
 /* Uniform random value in [-a, a), drawn from the library's own
-   explicit-state generator (random.h) rather than libc's rand() - see
-   random.h's own rationale (implementation-defined quality, no
+   explicit-state generator (random/random.h) rather than libc's rand() - see
+   random/random.h's own rationale (implementation-defined quality, no
    cross-platform reproducibility, and one hidden global state with
    neither independent streams nor thread safety - all fatal for
    library-shipped, as opposed to test-only, randomness). The caller
@@ -69,7 +69,7 @@ static inline mreal mlp_rand_uniform(Rng *rng, mreal a) {
    arbitrary depth/width - the whole point being that this is chosen per
    use case, not fixed by this file). Weights are Glorot-uniform
    initialized per layer (limit = sqrt(6/(fan_in+fan_out))) via rng
-   (random.h's explicit-state PCG64 generator - the caller constructs it,
+   (random/random.h's explicit-state PCG64 generator - the caller constructs it,
    e.g. rng_new(seed, stream), so seeding, reproducibility, and any number
    of independent streams - one per concurrent thread/run, say - are the
    caller's to control with no hidden global state anywhere in this file);
@@ -257,7 +257,7 @@ typedef int (*MLPEpochCallback)(int epoch, mreal train_loss, const MLP *net, voi
 
 /* Training-procedural options: must never affect the trained model's
    architecture, only how training runs. seed feeds rng_new(seed, 0)
-   (random.h) to build the Rng mlp_init's Glorot init draws from - not
+   (random/random.h) to build the Rng mlp_init's Glorot init draws from - not
    libc's srand()/rand(), so two mlp_fit calls with the same seed give
    bit-for-bit identical initial weights regardless of what else is
    running concurrently, and different opts.seed values are the caller's

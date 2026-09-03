@@ -1,6 +1,6 @@
 #pragma once
 #include "../linalg/mat.h"
-#include "../random.h"
+#include "../random/random.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

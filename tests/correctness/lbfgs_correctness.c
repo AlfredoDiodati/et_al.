@@ -11,7 +11,7 @@ that is not finite everywhere, to check the guards rather than the mathematics.
 */
 
 #include "../../solver/lbfgs.h"
-#include "../../random.h"
+#include "../../random/random.h"
 #include <stdio.h>
 #include <string.h>
 

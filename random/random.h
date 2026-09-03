@@ -4,8 +4,9 @@
 #include <stdint.h>
 
 /* Pseudo-random number generation: the general engine every dist/
-   sampler draws from. Standalone root-level header like special.h -
-   includes no linalg/mat.h; distribution-shaped sampling (Mat-valued,
+   sampler draws from, and the base file of random/ - lhs.h, its only
+   sibling so far, includes it. Depends on nothing, not even
+   linalg/mat.h; distribution-shaped sampling (Mat-valued,
    loc/scale/cov-parameterized) lives in the dist/ files, which call
    down into this one - the same include direction as every other layer.
 

@@ -35,13 +35,14 @@ STAT_CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math $(BLAS_CFLAGS) -DMAT_D
 # from the optimum.
 MODEL_CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math $(BLAS_CFLAGS)
 
-UNIT_ROOT_DEPS := inference/unit_root.h stats.h random.h linalg/solver.h linalg/decomp.h linalg/mat.h tests/check.h
+UNIT_ROOT_DEPS := inference/unit_root.h stats.h random/random.h linalg/solver.h linalg/decomp.h linalg/mat.h tests/check.h
 COINTEGRATION_DEPS := inference/cointegration.h $(UNIT_ROOT_DEPS)
-SDLOC_DEPS := sd/score_driven_location.h solver/lbfgs.h ad.h json.h special.h random.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
-QVARMA_DEPS := sd/qvarma.h solver/lbfgs.h ad.h json.h special.h random.h stats.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
+SDLOC_DEPS := sd/score_driven_location.h solver/lbfgs.h ad.h json.h special.h random/random.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
+QVARMA_DEPS := sd/qvarma.h solver/lbfgs.h ad.h json.h special.h random/random.h stats.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
 
 # --- installation tiers: see README.md's "Installation tiers" policy.
-# core:  linalg/*.h (mat.h, decomp.h, solver.h), ad.h, dist/*.h, solver/*.h,
+# core:  linalg/*.h (mat.h, decomp.h, solver.h), random/*.h (random.h, lhs.h),
+#        ad.h, dist/*.h, solver/*.h,
 #        and the hypothesis tests in inference/ (unit_root.h, cointegration.h,
 #        qlr_test.h, mcs.h) - math and general-purpose statistics, no model
 #        implementations.
@@ -56,8 +57,8 @@ PREFIX  ?= /usr/local
 INCDIR  := $(PREFIX)/include/et_al.
 PKGCONFIGDIR := $(PREFIX)/lib/pkgconfig
 
-CORE_HEADERS := ad.h json.h special.h random.h lhs.h stats.h
-CORE_SUBDIRS := linalg dist dist/mv solver frame cluster inference
+CORE_HEADERS := ad.h json.h special.h stats.h
+CORE_SUBDIRS := linalg random dist dist/mv solver frame cluster inference
 MODEL_SUBDIRS := nn sd
 
 # --- examples ---
@@ -85,10 +86,13 @@ examples/mlp_example: examples/mlp_example.c nn/mlp.h json.h solver/adam.h solve
 examples/encoder: examples/encoder.c frame/csv.h frame/frame.h stats.h nn/mlp.h json.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/encoder.c $(LDLIBS) -o examples/encoder
 
-examples/mcs_example: examples/mcs_example.c inference/mcs.h stats.h random.h special.h frame/csv.h frame/frame.h linalg/mat.h
+examples/mcs_example: examples/mcs_example.c inference/mcs.h stats.h random/random.h special.h frame/csv.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/mcs_example.c $(LDLIBS) -o examples/mcs_example
 
-examples/cluster_example: examples/cluster_example.c cluster/cluster.h random.h linalg/mat.h
+examples/lhs_example: examples/lhs_example.c random/lhs.h random/random.h stats.h frame/csv.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) -I. examples/lhs_example.c $(LDLIBS) -o examples/lhs_example
+
+examples/cluster_example: examples/cluster_example.c cluster/cluster.h random/random.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/cluster_example.c $(LDLIBS) -o examples/cluster_example
 
 examples/rdata_example: examples/rdata_example.c frame/rdata.h frame/gzip.h frame/csv.h frame/frame.h stats.h linalg/mat.h
@@ -205,7 +209,7 @@ libmat.so: tests/performance/bench_mat.c linalg/mat.h
 libdecomp.so: tests/performance/bench_decomp.c linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_decomp.c $(LDLIBS) -o libdecomp.so
 
-libdist.so: tests/performance/bench_dist.c dist/student.h dist/gauss.h dist/mv/student.h dist/mv/gauss.h dist/broadcast.h special.h random.h linalg/decomp.h linalg/mat.h
+libdist.so: tests/performance/bench_dist.c dist/student.h dist/gauss.h dist/mv/student.h dist/mv/gauss.h dist/broadcast.h special.h random/random.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_dist.c $(LDLIBS) -o libdist.so
 
 libad.so: tests/performance/bench_ad.c ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
@@ -241,7 +245,7 @@ libsqlgroupbycompare.so: tests/performance/bench_sql_groupby_compare.c frame/sql
 libjoincompare.so: tests/performance/bench_join_compare.c frame/join.h frame/csv.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_join_compare.c $(LDLIBS) -o libjoincompare.so
 
-librandom.so: tests/performance/bench_random.c random.h
+librandom.so: tests/performance/bench_random.c random/random.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_random.c $(LDLIBS) -o librandom.so
 
 libstats.so: tests/performance/bench_stats.c stats.h linalg/mat.h
@@ -269,36 +273,36 @@ tests/correctness/test_solver: tests/correctness/test_solver.c linalg/solver.h l
 tests/correctness/test_special: tests/correctness/test_special.c special.h
 	$(CC) $(CFLAGS) tests/correctness/test_special.c $(LDLIBS) -o tests/correctness/test_special
 
-tests/correctness/test_stats: tests/correctness/test_stats.c stats.h random.h linalg/mat.h
+tests/correctness/test_stats: tests/correctness/test_stats.c stats.h random/random.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_stats.c $(LDLIBS) -o tests/correctness/test_stats
 
-tests/correctness/test_mcs: tests/correctness/test_mcs.c inference/mcs.h stats.h random.h special.h frame/frame.h linalg/mat.h
+tests/correctness/test_mcs: tests/correctness/test_mcs.c inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mcs.c $(LDLIBS) -o tests/correctness/test_mcs
 
-tests/correctness/test_mcs_variance: tests/correctness/test_mcs_variance.c inference/mcs.h stats.h random.h special.h frame/frame.h linalg/mat.h
+tests/correctness/test_mcs_variance: tests/correctness/test_mcs_variance.c inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mcs_variance.c $(LDLIBS) -o tests/correctness/test_mcs_variance
 
-tests/correctness/test_random: tests/correctness/test_random.c random.h stats.h linalg/mat.h
+tests/correctness/test_random: tests/correctness/test_random.c random/random.h stats.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_random.c $(LDLIBS) -o tests/correctness/test_random
 
-tests/correctness/test_lhs: tests/correctness/test_lhs.c lhs.h random.h special.h linalg/mat.h tests/check.h
+tests/correctness/test_lhs: tests/correctness/test_lhs.c random/lhs.h random/random.h special.h linalg/mat.h tests/check.h
 	$(CC) $(CFLAGS) tests/correctness/test_lhs.c $(LDLIBS) -o tests/correctness/test_lhs
 
-# lhs.h against a live R and its lhs package, the only way to check that
+# random/lhs.h against a live R and its lhs package, the only way to check that
 # the two produce the same distribution of designs. R is a development-tier
 # dependency (see README's Installation tiers), so this stays out of `test`
 # and `check.sh` and is run on its own. The .so exposes plain C symbols for
 # R's .C() interface and needs no R header to build.
-liblhsagreement.so: tests/correctness/lhs_r_agreement.c lhs.h random.h linalg/mat.h
+liblhsagreement.so: tests/correctness/lhs_r_agreement.c random/lhs.h random/random.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/correctness/lhs_r_agreement.c $(LDLIBS) -o liblhsagreement.so
 
 test-lhs-r: liblhsagreement.so
 	Rscript tests/correctness/lhs_r_agreement.R
 
-# lhs.h against R's lhs package for speed, same two entry points the
+# random/lhs.h against R's lhs package for speed, same two entry points the
 # agreement test drives. Not part of bench.sh, which drives the Python
 # comparison suites.
-liblhs.so: tests/performance/bench_lhs.c lhs.h random.h linalg/mat.h
+liblhs.so: tests/performance/bench_lhs.c random/lhs.h random/random.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_lhs.c $(LDLIBS) -o liblhs.so
 
 bench-lhs: liblhs.so
@@ -307,31 +311,31 @@ bench-lhs: liblhs.so
 tests/correctness/test_broadcast: tests/correctness/test_broadcast.c dist/broadcast.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_broadcast.c $(LDLIBS) -o tests/correctness/test_broadcast
 
-tests/correctness/test_gauss: tests/correctness/test_gauss.c dist/gauss.h dist/broadcast.h random.h stats.h linalg/mat.h
+tests/correctness/test_gauss: tests/correctness/test_gauss.c dist/gauss.h dist/broadcast.h random/random.h stats.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_gauss.c $(LDLIBS) -o tests/correctness/test_gauss
 
-tests/correctness/test_student: tests/correctness/test_student.c dist/student.h dist/gauss.h dist/broadcast.h special.h random.h stats.h linalg/mat.h
+tests/correctness/test_student: tests/correctness/test_student.c dist/student.h dist/gauss.h dist/broadcast.h special.h random/random.h stats.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_student.c $(LDLIBS) -o tests/correctness/test_student
 
-tests/correctness/test_mvgauss: tests/correctness/test_mvgauss.c dist/mv/gauss.h dist/gauss.h dist/broadcast.h random.h stats.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_mvgauss: tests/correctness/test_mvgauss.c dist/mv/gauss.h dist/gauss.h dist/broadcast.h random/random.h stats.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mvgauss.c $(LDLIBS) -o tests/correctness/test_mvgauss
 
-tests/correctness/test_mvstudent: tests/correctness/test_mvstudent.c dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h special.h random.h stats.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_mvstudent: tests/correctness/test_mvstudent.c dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h special.h random/random.h stats.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mvstudent.c $(LDLIBS) -o tests/correctness/test_mvstudent
 
-tests/correctness/test_matgauss: tests/correctness/test_matgauss.c dist/mv/matgauss.h dist/mv/gauss.h dist/gauss.h dist/broadcast.h random.h stats.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_matgauss: tests/correctness/test_matgauss.c dist/mv/matgauss.h dist/mv/gauss.h dist/gauss.h dist/broadcast.h random/random.h stats.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_matgauss.c $(LDLIBS) -o tests/correctness/test_matgauss
 
-tests/correctness/test_matgauss_recovery: tests/correctness/test_matgauss_recovery.c dist/mv/matgauss.h dist/mv/gauss.h dist/gauss.h dist/broadcast.h random.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_matgauss_recovery: tests/correctness/test_matgauss_recovery.c dist/mv/matgauss.h dist/mv/gauss.h dist/gauss.h dist/broadcast.h random/random.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_matgauss_recovery.c $(LDLIBS) -o tests/correctness/test_matgauss_recovery
 
-tests/correctness/test_ad: tests/correctness/test_ad.c ad.h dist/gauss.h dist/student.h dist/mv/gauss.h dist/mv/student.h dist/broadcast.h special.h random.h linalg/solver.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_ad: tests/correctness/test_ad.c ad.h dist/gauss.h dist/student.h dist/mv/gauss.h dist/mv/student.h dist/broadcast.h special.h random/random.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_ad.c $(LDLIBS) -o tests/correctness/test_ad
 
 tests/correctness/test_tape_reset: tests/correctness/test_tape_reset.c ad.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_tape_reset.c $(LDLIBS) -o tests/correctness/test_tape_reset
 
-tests/correctness/test_adam: tests/correctness/test_adam.c solver/adam.h solver/optimizer.h dist/gauss.h dist/broadcast.h random.h linalg/mat.h
+tests/correctness/test_adam: tests/correctness/test_adam.c solver/adam.h solver/optimizer.h dist/gauss.h dist/broadcast.h random/random.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_adam.c $(LDLIBS) -o tests/correctness/test_adam
 
 tests/correctness/test_optimizer: tests/correctness/test_optimizer.c solver/adam.h solver/optimizer.h linalg/mat.h
@@ -425,7 +429,7 @@ tests/correctness/maki_correctness: tests/correctness/maki_correctness.c $(COINT
 tests/correctness/qlr_test_correctness: tests/correctness/qlr_test_correctness.c inference/qlr_test.h linalg/mat.h tests/check.h
 	$(CC) $(STAT_CFLAGS) tests/correctness/qlr_test_correctness.c $(LDLIBS) -o tests/correctness/qlr_test_correctness
 
-tests/correctness/lbfgs_correctness: tests/correctness/lbfgs_correctness.c solver/lbfgs.h random.h linalg/mat.h
+tests/correctness/lbfgs_correctness: tests/correctness/lbfgs_correctness.c solver/lbfgs.h random/random.h linalg/mat.h
 	$(CC) $(STAT_CFLAGS) tests/correctness/lbfgs_correctness.c $(LDLIBS) -o tests/correctness/lbfgs_correctness
 
 tests/correctness/score_driven_location_correctness: tests/correctness/score_driven_location_correctness.c $(SDLOC_DEPS) tests/check.h
@@ -472,7 +476,7 @@ tests/integration/join_missing_values: tests/integration/join_missing_values.c f
 tests/integration/distributed_simulation: tests/integration/distributed_simulation.c cluster/cluster.h $(UNIT_ROOT_DEPS)
 	$(CC) $(STAT_CFLAGS) -I. tests/integration/distributed_simulation.c $(LDLIBS) -o tests/integration/distributed_simulation
 
-tests/integration/optimizer_swap: tests/integration/optimizer_swap.c nn/mlp.h solver/optimizer.h ad.h json.h special.h random.h frame/frame.h linalg/solver.h linalg/decomp.h linalg/mat.h
+tests/integration/optimizer_swap: tests/integration/optimizer_swap.c nn/mlp.h solver/optimizer.h ad.h json.h special.h random/random.h frame/frame.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. tests/integration/optimizer_swap.c $(LDLIBS) -o tests/integration/optimizer_swap
 
 tests/integration/pipeline_ownership: tests/integration/pipeline_ownership.c $(FRAME_TO_MODEL_DEPS) frame/join.h frame/sql.h frame/npy.h frame/rdata.h frame/gzip.h
@@ -487,7 +491,7 @@ tests/integration/npz_to_statistics: tests/integration/npz_to_statistics.c $(FRA
 # together; the second includes them in the reverse order and links against the
 # first, which is what would catch a duplicate external symbol.
 HEADER_COMPOSITION_SRC := tests/integration/header_composition.c tests/integration/header_composition_reverse.c
-ALL_HEADERS := $(CORE_HEADERS) $(wildcard linalg/*.h dist/*.h dist/mv/*.h solver/*.h frame/*.h cluster/*.h nn/*.h sd/*.h)
+ALL_HEADERS := $(CORE_HEADERS) $(wildcard linalg/*.h random/*.h dist/*.h dist/mv/*.h solver/*.h frame/*.h cluster/*.h nn/*.h sd/*.h)
 
 tests/integration/header_composition: $(HEADER_COMPOSITION_SRC) $(ALL_HEADERS)
 	$(CC) $(STAT_CFLAGS) -I. $(HEADER_COMPOSITION_SRC) $(LDLIBS) -o tests/integration/header_composition
@@ -626,16 +630,16 @@ tests/performance/eig_sym_status: tests/performance/eig_sym_status.c $(QVARMA_DE
 tests/performance/lbfgs_candidates: tests/performance/lbfgs_candidates.c solver/lbfgs.h linalg/mat.h
 	$(CC) $(STAT_CFLAGS) tests/performance/lbfgs_candidates.c $(LDLIBS) -o tests/performance/lbfgs_candidates
 
-tests/performance/lbfgs_performance: tests/performance/lbfgs_performance.c solver/lbfgs.h random.h linalg/mat.h
+tests/performance/lbfgs_performance: tests/performance/lbfgs_performance.c solver/lbfgs.h random/random.h linalg/mat.h
 	$(CC) $(STAT_CFLAGS) tests/performance/lbfgs_performance.c $(LDLIBS) -o tests/performance/lbfgs_performance
 
-tests/performance/lbfgs_direction_threshold: tests/performance/lbfgs_direction_threshold.c random.h linalg/mat.h
+tests/performance/lbfgs_direction_threshold: tests/performance/lbfgs_direction_threshold.c random/random.h linalg/mat.h
 	$(CC) $(STAT_CFLAGS) tests/performance/lbfgs_direction_threshold.c $(LDLIBS) -o tests/performance/lbfgs_direction_threshold
 
-tests/performance/lbfgs_largest_threshold: tests/performance/lbfgs_largest_threshold.c random.h linalg/mat.h
+tests/performance/lbfgs_largest_threshold: tests/performance/lbfgs_largest_threshold.c random/random.h linalg/mat.h
 	$(CC) $(STAT_CFLAGS) tests/performance/lbfgs_largest_threshold.c $(LDLIBS) -o tests/performance/lbfgs_largest_threshold
 
-tests/performance/lbfgs_copy_threshold: tests/performance/lbfgs_copy_threshold.c random.h linalg/mat.h
+tests/performance/lbfgs_copy_threshold: tests/performance/lbfgs_copy_threshold.c random/random.h linalg/mat.h
 	$(CC) $(STAT_CFLAGS) tests/performance/lbfgs_copy_threshold.c $(LDLIBS) -o tests/performance/lbfgs_copy_threshold
 
 # --- LAPACKE comparison targets (see LAPACKE_LIBS at the top of this file).

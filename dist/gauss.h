@@ -1,7 +1,7 @@
 #pragma once
 #include "../linalg/mat.h"
 #include "broadcast.h"
-#include "../random.h"
+#include "../random/random.h"
 
 /* Gaussian (normal) distribution: pdf, log-pdf, and log-pdf derivatives
    with respect to location and scale.
@@ -194,7 +194,7 @@ static inline Mat gauss_dlogpdf_scale(Mat x, Mat loc, Mat scale) {
    case), and loc/scale must broadcast *to* it: each of their dimensions
    equal to the output's or 1 (assert otherwise) - NumPy's
    np.random.normal(loc, scale, size) contract. rng is the caller's
-   generator (see random.h): draws are generated in double and cast to
+   generator (see random/random.h): draws are generated in double and cast to
    mreal, so a given (seed, stream) yields the same underlying sequence
    under both precision builds. Consumes exactly one rng_normal per
    element, row-major order. No fast/general path split, unlike the

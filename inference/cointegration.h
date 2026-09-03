@@ -2,7 +2,7 @@
 #include "unit_root.h"
 #include "../linalg/decomp.h"
 #include "../linalg/solver.h"
-#include "../random.h"
+#include "../random/random.h"
 #include "../stats.h"
 #include <math.h>
 

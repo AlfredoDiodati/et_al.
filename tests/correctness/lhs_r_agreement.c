@@ -1,4 +1,4 @@
-#include "../../lhs.h"
+#include "../../random/lhs.h"
 
 /* Flat-pointer entry points for lhs_r_agreement.R, which drives the
    comparison against R's lhs package. Everything is a pointer to a

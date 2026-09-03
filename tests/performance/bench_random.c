@@ -1,9 +1,9 @@
-#include "../../random.h"
+#include "../../random/random.h"
 
 /* Flat-pointer wrappers for ctypes benchmarking (see bench_random.py) -
-   the one benchmark pair for random.h. Bulk-fill loops around the
+   the one benchmark pair for random/random.h. Bulk-fill loops around the
    scalar draw functions, since that is exactly how the dist/ samplers
-   consume the engine (random.h deliberately has no bulk API). Buffers
+   consume the engine (random/random.h deliberately has no bulk API). Buffers
    are double: the engine is double-native regardless of the mreal
    build. Each call re-seeds, so runs are deterministic. */
 

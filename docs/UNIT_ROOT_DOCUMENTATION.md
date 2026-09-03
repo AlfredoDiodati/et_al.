@@ -13,7 +13,7 @@ separately in **`docs/BREAK_TESTS_DOCUMENTATION.md`**, since they share a concer
 the three here do not.
 
 Core tier. Above `linalg/solver.h` (its regressions are least squares solves),
-`random.h` (the simulated critical values) and `stats.h`, which supplies the
+`random/random.h` (the simulated critical values) and `stats.h`, which supplies the
 quantile those simulations take and the series accessors below.
 
 A series is a `1 x n` row or an `n x 1` column, either of which may be a strided

@@ -1,4 +1,4 @@
-#include "../../lhs.h"
+#include "../../random/lhs.h"
 
 /* Flat-pointer wrappers for R's .C() interface, driven by bench_lhs.R -
    the one benchmark pair here whose external comparison is R rather than

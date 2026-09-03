@@ -1,6 +1,6 @@
 #pragma once
 #include "../../linalg/decomp.h"
-#include "../../random.h"
+#include "../../random/random.h"
 
 /* Multivariate Gaussian (normal) distribution: pdf, log-pdf, and log-pdf
    derivatives with respect to the mean vector and the covariance matrix.

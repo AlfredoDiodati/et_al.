@@ -13,14 +13,14 @@
    reaching sideways to special.h for the chi-squared tail the Ljung-Box
    p-value needs; rows are observations and columns are components for
    the matrix-valued statistics, matching dist/mv/'s convention. First
-   concrete consumer: the independence tests on random.h and the dist/
+   concrete consumer: the independence tests on random/random.h and the dist/
    samplers, which assert these statistics vanish where iid draws say
    they must.
 
    Two deliberate conventions, stated once:
 
    - All accumulation is in double regardless of the mreal build, the
-     same policy as special.h and random.h: summing 1e5+ float values
+     same policy as special.h and random/random.h: summing 1e5+ float values
      in float loses digits the statistics actually need, and double
      accumulation makes a statistic of the same data agree across both
      precision builds up to the storage rounding of the inputs. Results
@@ -508,7 +508,7 @@ static inline void stats_swap_mreal(mreal *a, mreal *b) { mreal t = *a; *a = *b;
    pivot choice that keeps quickselect off its O(n^2) worst case on the
    already-sorted/reverse-sorted inputs a naive first-or-last-element
    pivot is most likely to hit in practice, without needing any RNG
-   (this project's own random.h exists specifically because relying on
+   (this project's own random/random.h exists specifically because relying on
    libc's global rand() state is the kind of silent side effect this
    codebase avoids - a statistics function reseeding/consuming from a
    caller-invisible global stream would be exactly that). */

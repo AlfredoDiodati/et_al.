@@ -1,4 +1,4 @@
-#include "../../random.h"
+#include "../../random/random.h"
 #include "../../stats.h" /* dev-tier use: the independence tests below */
 #include <stdio.h>
 #include <stdlib.h>

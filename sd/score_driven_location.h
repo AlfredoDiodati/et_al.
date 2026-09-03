@@ -3,7 +3,7 @@
 #include "../json.h"
 #include "../linalg/decomp.h"
 #include "../linalg/solver.h"
-#include "../random.h"
+#include "../random/random.h"
 #include "../dist/mv/student.h"
 #include "../solver/lbfgs.h"
 

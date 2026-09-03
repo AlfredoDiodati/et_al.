@@ -13,7 +13,7 @@ target.
 */
 
 #include "../../linalg/mat.h"
-#include "../../random.h"
+#include "../../random/random.h"
 #include <time.h>
 
 static double now(void) {

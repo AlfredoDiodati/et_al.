@@ -22,7 +22,7 @@ The test is mechanical:
 
 Both halves matter. A test that includes `stats.h` only to generate a series
 for a `linalg/` check is a correctness test with scaffolding — the second header
-is not the subject. `tests/correctness/test_stats.c` includes `random.h` and
+is not the subject. `tests/correctness/test_stats.c` includes `random/random.h` and
 `test_ad.c` includes three `dist/` headers; both stay where they are for that
 reason.
 

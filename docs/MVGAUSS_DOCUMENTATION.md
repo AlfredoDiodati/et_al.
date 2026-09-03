@@ -61,7 +61,7 @@ This is the one function in `dist/` that returns an aggregated gradient instead 
 
 ### `mvgauss_sample`
 
-Returns an `n x d` matrix whose row `i` is an independent draw from `N_d(loc_i, cov)`, via the standard construction `x = loc + L*z` with `L = mat_chol(cov)` and `z` standard normals — one Cholesky and one gemm (`Z * L^T`) for all `n` rows. `loc` is `1 x d` or `n x d` as usual; `rng` is the caller's explicit generator from `random.h` (see `docs/RANDOM_DOCUMENTATION.md`). Consumes exactly `n*d` `rng_normal` draws in row-major order; draws are generated in double and cast to `mreal`.
+Returns an `n x d` matrix whose row `i` is an independent draw from `N_d(loc_i, cov)`, via the standard construction `x = loc + L*z` with `L = mat_chol(cov)` and `z` standard normals — one Cholesky and one gemm (`Z * L^T`) for all `n` rows. `loc` is `1 x d` or `n x d` as usual; `rng` is the caller's explicit generator from `random/random.h` (see `docs/RANDOM_DOCUMENTATION.md`). Consumes exactly `n*d` `rng_normal` draws in row-major order; draws are generated in double and cast to `mreal`.
 
 ## Relationship to dist/gauss.h
 

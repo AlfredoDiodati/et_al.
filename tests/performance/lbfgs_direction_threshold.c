@@ -23,7 +23,7 @@ and the reasoning for it, live as a comment on lbfgs_direction in lbfgs.h.
 */
 
 #include "../../linalg/mat.h"
-#include "../../random.h"
+#include "../../random/random.h"
 #include <time.h>
 
 #ifndef MEMORY_FOR_SWEEP

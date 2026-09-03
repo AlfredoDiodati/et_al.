@@ -34,7 +34,7 @@ Run with make bench-lbfgs_performance.
 */
 
 #include "../../solver/lbfgs.h"
-#include "../../random.h"
+#include "../../random/random.h"
 #include <time.h>
 
 static double now(void) {

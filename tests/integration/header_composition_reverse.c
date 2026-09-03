@@ -38,7 +38,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../frame/gzip.h"
 #include "../../json.h"
 #include "../../stats.h"
-#include "../../random.h"
+#include "../../random/random.h"
 #include "../../special.h"
 #include "../../ad.h"
 #include "../../linalg/solver.h"

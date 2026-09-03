@@ -1,10 +1,10 @@
-#include "../../lhs.h"
+#include "../../random/lhs.h"
 #include "../../special.h" /* dev-tier use: chi-squared tails for the count tests */
 #include "../check.h"
 #include <stdio.h>
 #include <stdlib.h>
 
-/* lhs.h: the structural guarantees of a Latin hypercube design, and the
+/* random/lhs.h: the structural guarantees of a Latin hypercube design, and the
    distributional ones that can be checked without another library.
 
    The claim that this produces the same distribution of designs as R's
@@ -373,7 +373,7 @@ static void test_scale(void) {
 }
 
 int main(void) {
-    check_banner("lhs.h correctness");
+    check_banner("random/lhs.h correctness");
     test_stratification();
     test_stratum_rounding();
     test_extreme_jitter();

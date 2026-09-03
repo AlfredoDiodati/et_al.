@@ -1,7 +1,7 @@
 #pragma once
 #include "../frame/frame.h"
 #include "../linalg/mat.h"
-#include "../random.h"
+#include "../random/random.h"
 #include "../special.h"
 #include "../stats.h"
 
@@ -136,7 +136,7 @@
    Losses are data and stay mreal, so a loss DataFrame is storage like
    any other. Every probability, test statistic and standard error here
    is a double regardless of the mreal build - the same deliberate
-   exception to the M* macro discipline that special.h, random.h and
+   exception to the M* macro discipline that special.h, random/random.h and
    stats.h's accumulation already make, and for a sharper version of
    their reason. These are a handful of derived scalars, not bulk
    storage, so nothing is saved by narrowing them; and a two-sided
@@ -363,7 +363,7 @@ static inline void mcs_gather(const DataFrame *losses, double *restrict out) {
    negative hac_lag means block_length - 1, the conventional pairing
    (the bootstrap already assumes dependence dies out past a block, so
    the HAC estimate assumes the same), and any value is clamped to at
-   most T-1. seed and stream select the random.h stream, so a given pair
+   most T-1. seed and stream select the random/random.h stream, so a given pair
    reproduces a run exactly and different stream values give independent
    runs off one seed. */
 typedef struct {

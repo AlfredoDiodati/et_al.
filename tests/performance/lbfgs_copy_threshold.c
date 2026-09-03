@@ -6,7 +6,7 @@ files in this directory. Not wired into any build target.
 */
 
 #include "../../linalg/mat.h"
-#include "../../random.h"
+#include "../../random/random.h"
 #include <time.h>
 #include <string.h>
 

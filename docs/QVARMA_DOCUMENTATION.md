@@ -21,7 +21,7 @@ same score, and the first `K_star` series are I(0) while the remaining
 `K_dag = K - K_star` are co-integrated I(1) with co-integrating rank `R`.
 
 Model tier. The whole model is one header, `sd/qvarma.h`, above `ad.h`,
-`json.h`, `linalg/solver.h`, `random.h`, `stats.h`, `dist/gauss.h`,
+`json.h`, `linalg/solver.h`, `random/random.h`, `stats.h`, `dist/gauss.h`,
 `dist/mv/student.h` and `solver/lbfgs.h`, the quasi-Newton solver it is fitted
 with. `solver/lbfgs.h` is core tier and knows nothing about this model.
 

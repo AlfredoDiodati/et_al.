@@ -1,6 +1,6 @@
 #define STATS_TEST_INSTRUMENT 1
 #include "../../stats.h"
-#include "../../random.h" /* dev-tier use: the AR(1) series in the HAC tests */
+#include "../../random/random.h" /* dev-tier use: the AR(1) series in the HAC tests */
 #include <stdio.h>
 #include <stdlib.h>
 

@@ -239,8 +239,8 @@ static inline Mat student_dlogpdf_nu(Mat x, Mat loc, Mat scale, Mat nu) {
 
 /* One standard t_nu variate: z * sqrt(nu / chi2_nu) with z ~ N(0,1)
    and chi2_nu = 2*Gamma(nu/2) - the definitional construction, built
-   on random.h's normal and gamma. Double throughout, cast at the end,
-   same cross-build-reproducibility policy as random.h itself. Consumes
+   on random/random.h's normal and gamma. Double throughout, cast at the end,
+   same cross-build-reproducibility policy as random/random.h itself. Consumes
    one rng_normal + one rng_gamma. */
 static inline mreal student_draw(Rng *rng, mreal nu) {
     double z = rng_normal(rng);

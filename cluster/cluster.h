@@ -68,7 +68,7 @@
        hidden global state in this library outside a caller's control. It is
        unavoidable: a worker must be able to reach a function chosen before
        it knew what job was coming. It is deliberately not a general escape
-       hatch - see random.h's header for why hidden state is otherwise
+       hatch - see random/random.h's header for why hidden state is otherwise
        refused throughout this project.
 
    Three modes, selected from argv by cluster_init so that one program is

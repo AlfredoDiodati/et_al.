@@ -4,7 +4,7 @@
 
 **Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy) — a general-purpose sampling design, the analogue of R's `lhs` package or `scipy.stats.qmc.LatinHypercube`.
 
-`lhs.h` builds space-filling designs over a box: the sampling scheme a simulation study reaches for when it has to cover a parameter space with a fixed, affordable number of configurations. It sits above `linalg/mat.h` (a design comes back as a `Mat`) and `random.h` (the permutation and the within-stratum jitter), and nothing calls back into it.
+`random/lhs.h` builds space-filling designs over a box: the sampling scheme a simulation study reaches for when it has to cover a parameter space with a fixed, affordable number of configurations. It lives in `random/` beside `random/random.h`, the base file it draws its permutation and its within-stratum jitter from, and sits above `linalg/mat.h`, since a design comes back as a `Mat`. Nothing calls back into it.
 
 It is not a `dist/` file. Those describe the probability law of a random vector, and every row they produce is independent of every other. Here the rows are dependent by construction, and that dependence is the entire point.
 
@@ -70,6 +70,16 @@ Mat design = lhs_scale(unit, lower, upper);
 /* ... one simulation per row of design ... */
 mat_free(unit); mat_free(lower); mat_free(upper); mat_free(design);
 ```
+
+## Worked example
+
+`examples/lhs_example.c` (`make examples/lhs_example`) builds a 200-point design over five named parameter ranges, writes it as `examples/out/lhs_example_design.csv` — one row per configuration, one column per parameter, the table a downstream job reads — and writes `examples/out/lhs_example_report.txt` answering the three questions a reader has about the scheme, with the measurement for each rather than the claim:
+
+- **Coverage.** The occupancy of the 200 slices of each parameter's range, for the design and for an independent uniform sample of the same 200 points from the same generator. The design gives 0 empty and 1 busiest per column by construction; the independent sample left 368 of the 1,000 slices across the five parameters unvisited, 37 per cent of each parameter's range, and put up to 5 points in one slice.
+- **Unbiasedness.** Each parameter's sample mean and population standard deviation against the exact `(lower + upper)/2` and `(upper - lower)/sqrt(12)` of a uniform draw over that range. They agree to four decimals, so the coverage is not bought with a distorted marginal.
+- **What it is worth, and where it is worth nothing.** 2,000 Monte Carlo estimates of each of two integrals, 64 points per estimate, five dimensions, the two schemes differing only in how the 64 points are placed. On `sum_j sin(pi x_j)`, a sum of one-dimensional pieces with exact mean `5 * 2/pi`, the estimator's standard deviation is 0.0028 against the independent sample's 0.0849 — 30x narrower. On `prod_j 2 x_j`, a pure interaction with exact mean 1, it is 0.159 against 0.225 — 1.4x, essentially nothing. Both schemes centre on the exact answer. A real model sits between those two, and where it sits is what decides how much the scheme is worth on it.
+
+The example also shows the one thing a caller has to know about the float build beyond what the header handles: `(mreal)rng_uniform(rng)` can round to exactly `1.0f`, which is outside the unit hypercube, so its independent sample steps such a draw back inside the interval before `lhs_stratum` sees it.
 
 ## The stratum edge under the float build
 

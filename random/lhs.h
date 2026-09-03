@@ -1,5 +1,5 @@
 #pragma once
-#include "linalg/mat.h"
+#include "../linalg/mat.h"
 #include "random.h"
 
 /* Latin hypercube sampling: space-filling designs over a box, the
@@ -19,9 +19,10 @@
    is still exactly U(0,1) and the design is unbiased for any quantity a
    uniform sample estimates.
 
-   Where it sits. Above linalg/mat.h (the design comes back as a Mat)
-   and random.h (the permutation and the within-stratum jitter), and
-   nothing calls back into it. It is not a dist/ file: those describe a
+   Where it sits. In random/ beside random.h, the base file it draws its
+   permutation and its within-stratum jitter from, and above
+   linalg/mat.h, since the design comes back as a Mat. Nothing calls back
+   into it. It is not a dist/ file: those describe a
    probability law of a random vector, and this is a sampling design
    whose whole point is that the n rows are dependent on each other by
    construction.
