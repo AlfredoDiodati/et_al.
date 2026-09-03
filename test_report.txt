@@ -1,4 +1,4 @@
-test run: do  3 sep 2026 17:46:56 CEST
+test run: do  3 sep 2026 18:06:20 CEST (STRESS=1)
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -6,24 +6,24 @@ make: 'tests/correctness/test_mat_special' is up to date.
 make: 'tests/correctness/test_decomp' is up to date.
 make: 'tests/correctness/test_solver' is up to date.
 make: 'tests/correctness/test_special' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_stats.c -lm -lopenblas -o tests/correctness/test_stats
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_random.c -lm -lopenblas -o tests/correctness/test_random
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_lhs.c -lm -lopenblas -o tests/correctness/test_lhs
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs.c -lm -lopenblas -o tests/correctness/test_mcs
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs_variance.c -lm -lopenblas -o tests/correctness/test_mcs_variance
+make: 'tests/correctness/test_stats' is up to date.
+make: 'tests/correctness/test_random' is up to date.
+make: 'tests/correctness/test_lhs' is up to date.
+make: 'tests/correctness/test_mcs' is up to date.
+make: 'tests/correctness/test_mcs_variance' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_gauss.c -lm -lopenblas -o tests/correctness/test_gauss
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_student.c -lm -lopenblas -o tests/correctness/test_student
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mvgauss.c -lm -lopenblas -o tests/correctness/test_mvgauss
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mvstudent.c -lm -lopenblas -o tests/correctness/test_mvstudent
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_matgauss.c -lm -lopenblas -o tests/correctness/test_matgauss
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_matgauss_recovery.c -lm -lopenblas -o tests/correctness/test_matgauss_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_ad.c -lm -lopenblas -o tests/correctness/test_ad
+make: 'tests/correctness/test_gauss' is up to date.
+make: 'tests/correctness/test_student' is up to date.
+make: 'tests/correctness/test_mvgauss' is up to date.
+make: 'tests/correctness/test_mvstudent' is up to date.
+make: 'tests/correctness/test_matgauss' is up to date.
+make: 'tests/correctness/test_matgauss_recovery' is up to date.
+make: 'tests/correctness/test_ad' is up to date.
 make: 'tests/correctness/test_tape_reset' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_adam.c -lm -lopenblas -o tests/correctness/test_adam
+make: 'tests/correctness/test_adam' is up to date.
 make: 'tests/correctness/test_optimizer' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_cluster.c -lm -lopenblas -o tests/correctness/test_cluster
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mlp.c -lm -lopenblas -o tests/correctness/test_mlp
+make: 'tests/correctness/test_cluster' is up to date.
+make: 'tests/correctness/test_mlp' is up to date.
 make: 'tests/correctness/test_frame' is up to date.
 make: 'tests/correctness/test_csv' is up to date.
 make: 'tests/correctness/test_txt' is up to date.
@@ -35,161 +35,33 @@ make: 'tests/correctness/test_join' is up to date.
 make: 'tests/correctness/gzip_inflate' is up to date.
 make: 'tests/correctness/gzip_deflate' is up to date.
 make: 'tests/correctness/rdata_array_read' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/adf_correctness.c -lm -lopenblas -o tests/correctness/adf_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/kpss_correctness.c -lm -lopenblas -o tests/correctness/kpss_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/dfgls_correctness.c -lm -lopenblas -o tests/correctness/dfgls_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/otto_correctness.c -lm -lopenblas -o tests/correctness/otto_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hlt_union_correctness.c -lm -lopenblas -o tests/correctness/hlt_union_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hlt_break_correctness.c -lm -lopenblas -o tests/correctness/hlt_break_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hhlt_correctness.c -lm -lopenblas -o tests/correctness/hhlt_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/zivot_andrews_correctness.c -lm -lopenblas -o tests/correctness/zivot_andrews_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/johansen_correctness.c -lm -lopenblas -o tests/correctness/johansen_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/engle_granger_correctness.c -lm -lopenblas -o tests/correctness/engle_granger_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/maki_correctness.c -lm -lopenblas -o tests/correctness/maki_correctness
-In file included from tests/correctness/../../inference/../linalg/decomp.h:3,
-                 from tests/correctness/../../inference/../linalg/solver.h:2,
-                 from tests/correctness/../../inference/unit_root.h:2,
-                 from tests/correctness/../../inference/cointegration.h:2,
-                 from tests/correctness/maki_correctness.c:17:
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1447:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1469:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1381:47: warning: array subscript -1 is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1381 |             for (int i = 0; i < m; i++) s += x[i] * col[i];
-      |                                              ~^~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1462:25: note: at offset -8 into object of size 32 allocated by ‘malloc’
- 1462 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1447:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1469:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1382:14: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1382 |             b[row + (size_t)q * ldb] -= s;
-      |             ~^~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1463:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1463 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1447:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1469:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1382:38: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1382 |             b[row + (size_t)q * ldb] -= s;
-      |             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1463:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1463 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_outer’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1407:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1469:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1363:19: warning: array subscript [-2147483645, -1] is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1363 |             mreal f = b[row + (size_t)q * ldb];
-      |                   ^
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1463:25: note: at offset [-17179869160, -8] into object of size 16 allocated by ‘malloc’
- 1463 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1468:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1295:19: warning: array subscript [-6442450928, -2] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1295 |             mreal d21 = a[(size_t)k * lda + k + 1];
-      |                   ^~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1462:25: note: at offset [-51539607424, -16] into object of size 32 allocated by ‘malloc’
- 1462 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1468:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1302:42: warning: array subscript [-6442450926, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1302 |                 mreal wk = d21 * (d11 * a[(size_t)k * lda + j]
-      |                                         ~^~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1462:25: note: at offset [-51539607408, -8] into object of size 32 allocated by ‘malloc’
- 1462 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1468:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1309:40: warning: array subscript [-6442450926, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1309 |                 a[(size_t)k * lda + j] = wk;
-      |                 ~~~~~~~~~~~~~~~~~~~~~~~^~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1462:25: note: at offset [-51539607408, -8] into object of size 32 allocated by ‘malloc’
- 1462 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1468:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1307:48: warning: array subscript [-6442450926, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1307 |                     a[(size_t)j * lda + i] -= a[(size_t)k * lda + i] * wk
-      |                                               ~^~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:56:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1462:25: note: at offset [-51539607408, -8] into object of size 32 allocated by ‘malloc’
- 1462 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+make: 'tests/correctness/adf_correctness' is up to date.
+make: 'tests/correctness/kpss_correctness' is up to date.
+make: 'tests/correctness/dfgls_correctness' is up to date.
+make: 'tests/correctness/otto_correctness' is up to date.
+make: 'tests/correctness/hlt_union_correctness' is up to date.
+make: 'tests/correctness/hlt_break_correctness' is up to date.
+make: 'tests/correctness/hhlt_correctness' is up to date.
+make: 'tests/correctness/zivot_andrews_correctness' is up to date.
+make: 'tests/correctness/johansen_correctness' is up to date.
+make: 'tests/correctness/engle_granger_correctness' is up to date.
+make: 'tests/correctness/maki_correctness' is up to date.
 make: 'tests/correctness/qlr_test_correctness' is up to date.
 make: 'tests/correctness/lbfgs_correctness' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/score_driven_location_correctness.c -lm -lopenblas -o tests/correctness/score_driven_location_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -lopenblas -o tests/correctness/qvarma_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_analytic_agreement.c -lm -lopenblas -o tests/correctness/qvarma_analytic_agreement
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_gaussian_limit.c -lm -lopenblas -o tests/correctness/qvarma_gaussian_limit
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp tests/correctness/qvarma_identification.c -lm -lopenblas -o tests/correctness/qvarma_identification
-tests/correctness/qvarma_identification.c: In function ‘curvature_at’:
-tests/correctness/qvarma_identification.c:57:5: warning: missing initializer for field ‘workspace’ of ‘QvarmaFitContext’ [-Wmissing-field-initializers]
-   57 |     QvarmaFitContext context = { y, shape };
-      |     ^~~~~~~~~~~~~~~~
-In file included from tests/correctness/qvarma_identification.c:38:
-tests/correctness/../../sd/qvarma.h:1464:21: note: ‘workspace’ declared here
- 1464 |     QvarmaAnalytic *workspace;
-      |                     ^~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -lopenblas -o tests/integration/frame_to_model
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/join_missing_values.c -lm -lopenblas -o tests/integration/join_missing_values
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/distributed_simulation.c -lm -lopenblas -o tests/integration/distributed_simulation
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -I. tests/integration/optimizer_swap.c -lm -lopenblas -o tests/integration/optimizer_swap
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -I. examples/cluster_example.c -lm -lopenblas -o examples/cluster_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -I. examples/encoder.c -lm -lopenblas -o examples/encoder
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -I. examples/lhs_example.c -lm -lopenblas -o examples/lhs_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -I. examples/mcs_example.c -lm -lopenblas -o examples/mcs_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -I. examples/mlp_example.c -lm -lopenblas -o examples/mlp_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -I. examples/rdata_example.c -lm -lopenblas -o examples/rdata_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/unit_root_example.c -lm -lopenblas -o examples/unit_root_example
+make: 'tests/correctness/score_driven_location_correctness' is up to date.
+make: 'tests/correctness/qvarma_correctness' is up to date.
+make: 'tests/correctness/qvarma_analytic_agreement' is up to date.
+make: 'tests/correctness/qvarma_gaussian_limit' is up to date.
+make: 'tests/correctness/qvarma_identification' is up to date.
+make: 'tests/integration/frame_to_model' is up to date.
+make: 'tests/integration/join_missing_values' is up to date.
+make: 'tests/integration/distributed_simulation' is up to date.
+make: 'tests/integration/optimizer_swap' is up to date.
+make: 'tests/integration/pipeline_ownership' is up to date.
+make: 'tests/integration/npz_to_statistics' is up to date.
+make: 'tests/integration/header_composition' is up to date.
+make: 'tests/integration/header_composition_f32' is up to date.
+make: Nothing to be done for 'examples'.
 
 === test_mat: PASS ===
 construction
@@ -197,6 +69,13 @@ views
 arithmetic contiguous
 arithmetic strided
 mat_mul
+  mat_mul stress
+    n=127 ok
+    n=128 ok
+    n=129 ok
+    n=255 ok
+    n=256 ok
+    n=257 ok
 mat_gemm
 reductions
 mat_max/mat_min propagate NaN correctly even under -ffast-math
@@ -236,21 +115,45 @@ inf propagation: ok
 === test_decomp: PASS ===
 cholesky
 lu
+  lu stress
+  n=2..24 ok
 qr
+  qr stress
+  n=2..16 (rows=n+2) ok
 eig_sym
+  eig_sym stress
+  n=2..20 ok
 svd
+  svd stress
+  n=2..16 (rows=n+2) ok
 det
+  det stress
+  n=2..6 vs naive Laplace expansion ok
 inv
+  inv stress
+  n=2..20 ok
 cond/rank
 eig
+  eig stress
+  n=2..16 (sum(eigenvalues)==trace) ok
 test_decomp: all passed
 
 === test_solver: PASS ===
 vec_solve
+  vec_solve stress
+  n=2..24 ok
 vec_solve_sym
+  vec_solve_sym stress
+  n=2..24 ok
 vec_lu_solve / vec_chol_solve
+  reuse-solve stress
+  n=2..20, 5 right-hand sides each ok
 mat_lstsq
+  mat_lstsq stress
+  n=2..16 (rows=n+2) ok
 mat_lstsq_rd
+  mat_lstsq_rd stress
+  n=2..16 (rows=n+2), agrees with mat_lstsq on full-rank input ok
 test_solver: all passed
 
 === test_special: PASS ===
@@ -270,6 +173,8 @@ large-x asymptotics
   at x = 5e14 the subtraction gives 34.0000000000, log(x) is 33.8456292144
   lgamma_diff composition split against whole: worst relative 1.22e-15
   digamma_diff is the x-derivative of lgamma_diff to 1e-05
+  stress
+  2000 log-spaced x in [1e-2, 1e6] ok
 test_special: all passed
 
 === test_stats: PASS ===
@@ -283,17 +188,25 @@ autocov: gemm path centers the sample exactly once (not once per gemm operand)
 autocov_f32: known values (hand-computed)
 autocov_f32: views (stride != c)
 autocov_f32: randomized vs independent double reference (looser float32 tolerance)
+  stress
+  400 randomized strided runs (n up to ~300, d up to 4) ok
+  autocov gemm path checked at n=50000, d up to 32, ok
+  autocov_f32 checked at n=50000, d up to 32, ok
 prediction-quality metrics: known values (hand-computed)
 prediction-quality metrics: views (stride != c)
 prediction-quality metrics: invariants
 prediction-quality metrics: adversarial (minimal sizes, ties, badly scaled)
 prediction-quality metrics: randomized vs independent reference (fixed seed)
+  prediction-quality metrics stress
+  400 randomized strided runs (n up to ~300) ok
 HAC long-run variance: known values
 HAC long-run variance: rectangular window known values
 HAC long-run variance: invariants
 HAC long-run variance: strided views vs contiguous twins
 HAC long-run variance: adversarial inputs
 HAC long-run variance: randomized vs independent reference (fixed seed)
+  HAC long-run variance stress
+  600 randomized strided runs (n up to ~400) ok
 series length and element access, both orientations
 quantile against hand-computed interpolations
 quantile on views and degenerate samples
@@ -313,6 +226,8 @@ uniform: range + moments
 normal: first four moments
 gamma: mean/variance across shapes (incl. shape < 1 boost)
 independence: serial autocorrelation + cross-stream/seed correlation
+  stress
+  4 normal streams (n=1e6) + gamma shape sweep + autocorr lags 1..10 ok
 test_random: all passed
 
 === test_lhs: PASS ===
@@ -326,11 +241,11 @@ extreme jitter: the largest and smallest a uniform draw can be
 no duplicate rows
 reproducibility, stream and seed divergence, column prefix
 marginal and within-stratum uniformity
-  pooled uniformity p = 0.999, jitter uniformity p = 0.0113, corr(stratum, jitter) = +0.003908
+  pooled uniformity p = 1, jitter uniformity p = 0.952, corr(stratum, jitter) = +0.001356
 permutation uniformity over all 4! orderings
-  48000 designs, ordering uniformity p = 0.184
+  240000 designs, ordering uniformity p = 0.509
 column independence at n = 2
-  40000 designs, pairing uniformity p = 0.37
+  200000 designs, pairing uniformity p = 0.889
 lhs_scale: affine map onto per-dimension bounds
 
 PASSED, 0 failures
@@ -361,6 +276,8 @@ mcs_fwrite_report: contents, alignment, both termination cases
 mcs_effective_hac_lag: derived once, and the run agrees with it
 mcs_pvalue_frame: same numbers as the report, as data
 dm_fwrite_report: one branch per status
+  mcs stress: larger samples, more models, more resamples
+  2 runs at 2000 observations x 10 models, 500 resamples, structure ok
 test_mcs: all passed
 
 === test_mcs_variance: PASS ===
@@ -375,7 +292,11 @@ test_broadcast: all passed
 
 === test_gauss: PASS ===
 pdf/logpdf
+  pdf/logpdf stress
+  n=1..64 (3 cols) vs independent reference ok
 dlogpdf_loc/dlogpdf_scale
+  derivatives stress
+  n=1..64 (3 cols) vs independent reference ok
 degenerate scale (undocumented, unguarded - pinning current behavior)
 broadcast shape resolution
 sampling: moments + broadcast + independence (fixed seed)
@@ -390,6 +311,8 @@ nu = infinity is the Gaussian, exactly
 a large finite nu converges on the Gaussian
   worst gap to the Gaussian at nu = 1e14: 1.19e-07
 sampling: moments + independence + Gaussian-limit delegation (fixed seed)
+  stress
+  n=1..64 (3 cols, inf-mixed nu) vs independent reference ok
 test_student: all passed
 
 === test_mvgauss: PASS ===
@@ -402,6 +325,11 @@ per-observation loc
 views
 non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)
 sampling: empirical mean/covariance + row independence (fixed seed)
+  stress
+  d=1, n=1..40 vs independent reference ok
+  d=2, n=1..40 vs independent reference ok
+  d=3, n=1..40 vs independent reference ok
+  d=5, n=1..40 vs independent reference ok
 test_mvgauss: all passed
 
 === test_mvstudent: PASS ===
@@ -418,6 +346,11 @@ per-observation loc + views
 non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)
 degenerate nu (undocumented, unguarded - pinning current behavior)
 sampling: moments + row independence + zero-score at truth (fixed seed)
+  stress
+  d=1, n=1..40 vs independent reference ok
+  d=2, n=1..40 vs independent reference ok
+  d=3, n=1..40 vs independent reference ok
+  d=5, n=1..40 vs independent reference ok
 test_mvstudent: all passed
 
 === test_matgauss: PASS ===
@@ -436,15 +369,32 @@ bad shapes and non-positive-definite covariances abort
 standard draw == stacked standard normal vectors
 sampling: empirical vec covariance vs the Kronecker product (fixed seed)
 mean score at the true parameters is zero
+  stress
+  n=1 p=1, 20 random draws vs independent reference ok
+  n=1 p=2, 20 random draws vs independent reference ok
+  n=1 p=3, 20 random draws vs independent reference ok
+  n=1 p=5, 20 random draws vs independent reference ok
+  n=2 p=1, 20 random draws vs independent reference ok
+  n=2 p=2, 20 random draws vs independent reference ok
+  n=2 p=3, 20 random draws vs independent reference ok
+  n=2 p=5, 20 random draws vs independent reference ok
+  n=3 p=1, 20 random draws vs independent reference ok
+  n=3 p=2, 20 random draws vs independent reference ok
+  n=3 p=3, 20 random draws vs independent reference ok
+  n=3 p=5, 20 random draws vs independent reference ok
+  n=5 p=1, 20 random draws vs independent reference ok
+  n=5 p=2, 20 random draws vs independent reference ok
+  n=5 p=3, 20 random draws vs independent reference ok
+  n=5 p=5, 20 random draws vs independent reference ok
 test_matgauss: all passed
 
 === test_matgauss_recovery: PASS ===
 matgauss: covariance recovery from simulated samples
-  homogeneous diagonal   converged in <= 8 sweeps, score 4.9e-07
-  diagonal               converged in <= 8 sweeps, score 2.4e-06
+  homogeneous diagonal   converged in <= 8 sweeps, score 6.3e-07
+  diagonal               converged in <= 9 sweeps, score 3.0e-06
   sparse                 converged in <= 8 sweeps, score 8.4e-07
-  dense                  converged in <= 8 sweeps, score 2.4e-06
-  30 replications per case per sample size, written to out/matgauss_recovery_report.txt
+  dense                  converged in <= 9 sweeps, score 2.6e-06
+  200 replications per case per sample size, written to out/matgauss_recovery_report.txt
 test_matgauss_recovery: all passed
 
 === test_ad: PASS ===
@@ -458,11 +408,19 @@ ad_broadcast_mul (finite-difference, chain rule through s)
 ad_squared_error / ad_identity
 ad_huber_error / ad_logcosh_error
 ad-computed gradient vs analytical gauss_dlogpdf_loc/scale
+  ad vs analytical stress
+  n=1..64 ok
 ad_lgamma (forward + digamma backward)
 ad_log1p (forward + 1/(1+a) backward)
 ad_lgamma_diff (forward + digamma-difference backward)
 ad-computed gradient vs analytical student_dlogpdf_loc/scale/nu
+  ad vs analytical stress (student)
+  n=1..64 ok
 ad-computed gradient vs analytical mvgauss/mvstudent scores
+  ad vs analytical stress (mv)
+  d=1, n=1..20 ok
+  d=2, n=1..20 ok
+  d=3, n=1..20 ok
 ad_slice / ad_reshape (known output, fan-out, finite-difference)
 ad_solve (finite-difference)
 ad_chol_solve (finite-difference)
@@ -485,6 +443,8 @@ test_tape_reset: all passed
 adam_step: exact per-step arithmetic (not just convergence)
 adam_hyperparams_default: matches the paper's recommended defaults
 quadratic bowl: known minimum
+  quadratic bowl stress
+  30 random quadratic bowls (n=1..8) ok
 ill-conditioned bowl: different curvature per dimension
 adversarial: single-element parameter
 view: strided parameter/gradient
@@ -560,6 +520,198 @@ cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
 cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
 cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
 cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9537 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9537 failed, trying it as an already-running worker
+cluster: 127.0.0.1:9538 did not confirm the deploy (no valid reply)
+cluster: deploy to 127.0.0.1:9538 failed, trying it as an already-running worker
 queue: every index handed out exactly once, no gaps, no repeats
 queue: a range reclaimed from a lost machine is handed out again, and only that range
 framing: a multi-megabyte message arrives whole and unchanged
@@ -573,12 +725,14 @@ map: a sliced (strided) input, a single task, and a range larger than the job
 map: a range knows the global index of its own first column
 discovery: a worker that was never given an address is found and used
   discovery found 1 machine(s)
-fuzz: 12 randomized (task count, range width) pairs against a direct reference
+fuzz: 60 randomized (task count, range width) pairs against a direct reference
 test_cluster: all passed
 
 === test_mlp: PASS ===
 forward pass: known 2-2-1 network vs independent reference
 gradient (finite-difference) vs independent reference forward pass
+  gradient stress: random architectures
+  15 random architectures (depth 1..3, width 1..5) ok
 adversarial: no hidden layers, and single-neuron layers
 out_act: identity forecasts an unsquashed value tanh would clamp into (-1,1)
 integration: mlp_fit + mlp_forecast train and predict XOR
@@ -612,6 +766,8 @@ ragged row / empty file abort (fork + expect SIGABRT)
 unterminated quote at EOF: silently tolerated, not rejected (pinning current behavior)
 write/read round-trip: mixed numeric+string columns, values needing quoting
 write with write_header=0: no header row, columns get generated names on reread
+  random write/read round-trip fuzzing (fixed seed, fragile-biased)
+  100 random DataFrames (mixed numeric/string columns, fragile-biased) round-tripped ok
 test_csv: all passed
 
 === test_txt: PASS ===
@@ -622,6 +778,8 @@ has_header option: first row becomes column names
 adversarial: single value, no trailing newline
 write/read round-trip: numeric DataFrame survives a save/load cycle exactly
 write with write_header=1: header round-trips through has_header=1 on reread
+  random write/read round-trip fuzzing (fixed seed, fragile-biased magnitudes)
+  100 random all-numeric DataFrames round-tripped ok
 test_txt: all passed
 
 === test_npy: PASS ===
@@ -631,6 +789,8 @@ genuine .npy v2.0 header format (4-byte header-length field, 12-byte preamble) p
 adversarial: single-element array
 malformed .npy aborts (fork + expect SIGABRT)
 write/read round-trip: DataFrame -> .npy -> DataFrame preserves values exactly
+  random write/read round-trip fuzzing (fixed seed, fragile-biased magnitudes)
+  100 random all-numeric DataFrames round-tripped ok
 test_npy: all passed
 
 === test_npz: PASS ===
@@ -645,6 +805,8 @@ df_write_npz_compressed: smaller file, same frame back
 a frame rebuilt from the archive is a valid df_sql and df_join input
 malformed .npz aborts (fork + expect SIGABRT)
 df_write_npz contract violations abort (empty frame, reserved column name)
+  random mixed-column round-trip fuzzing (fixed seed, unicode and fragile magnitudes)
+  200 random mixed DataFrames round-tripped ok (stored and deflated alternating)
 test_npz: all passed
 
 === test_json: PASS ===
@@ -656,6 +818,8 @@ duplicate object key: last value wins, matching JSON semantics
 adversarial: empty object/array, deep nesting, negative/fractional/exponent numbers
 file round-trip: json_write_file then json_parse_file
 malformed JSON aborts (fork + expect SIGABRT)
+  random round-trip fuzzing (fixed seed, fragile-biased)
+  200 random JSON trees (depth<=4, fragile-biased strings/numbers) round-tripped ok
 test_json: all passed
 
 === test_sql: PASS ===
@@ -684,6 +848,28 @@ WHERE on a multi-column DataFrame should use the AVX2 fast path, not silently fa
 df_sql_try: a valid query returns SQL_OK and the same result df_sql would
 df_sql_try: malformed query text is SQL_ERR_SYNTAX, independent of the DataFrame
 df_sql_try: syntactically valid SQL that doesn't fit the schema is SQL_ERR_DATA
+  random WHERE filtering across every comparison operator vs. a naive reference (fixed seed, fragile-biased magnitudes)
+  300 random WHERE queries (all 6 comparison operators, on both a continuous and a small-integer column) matched the naive reference
+  random WHERE compound boolean expressions (AND/OR/NOT) vs. a naive reference (fixed seed)
+  300 random compound WHERE queries (AND/OR/NOT, with parenthesized grouping) matched the naive reference
+  random string equality/inequality WHERE filter vs. a naive reference (fixed seed)
+  200 random string equality/inequality WHERE queries matched the naive reference
+  random arithmetic SELECT projection (+ - *) vs. a naive elementwise reference (fixed seed)
+  200 random arithmetic projections (+ - *) matched the naive elementwise reference
+  random GROUP BY + a random aggregate kind (SUM/AVG/MIN/MAX/COUNT) vs. a naive reference accumulation (fixed seed)
+  300 random GROUP BY + aggregate queries (every aggregate kind) matched the naive reference
+  random multi-key ORDER BY vs. an independent reference sort (fixed seed)
+  200 random multi-key ORDER BY queries matched an independent reference sort
+  random single-numeric-key ORDER BY at randomized n >= SQL_RADIX_MIN_N vs. an independent reference sort (fixed seed)
+  30 randomized n/column/direction combinations matched the independent reference
+  random WHERE on wide/large DataFrames (bitmask+SIMD+gather path, OpenMP-parallel row-extraction path) vs. a naive reference, with injected NaN
+  155 random wide/parallel WHERE queries (n in {50,500,50000,200000,400001}, ncols in {1,2,4,9}, injected NaN) matched the naive reference
+  random WHERE + GROUP BY + ORDER BY pipeline vs. a full naive reference (fixed seed)
+  150 random WHERE+GROUP BY+ORDER BY pipelines matched a full naive reference
+  random GROUP BY at n >= SQL_GROUP_PARALLEL_MIN_N (parallel construction + aggregation) vs. a naive reference, with injected NaN
+  16509 random GROUP BY output rows (n up to 400,001, cardinality up to 5,000, SUM/AVG/MIN/MAX/COUNT, injected NaN) matched the naive reference
+  random query mutations vs. df_sql_try never crashing or leaking (fixed seed)
+  600 random/mutated queries handled by df_sql_try with no crash
 test_sql: all passed
 
 === test_join: PASS ===
@@ -704,6 +890,7 @@ ported from Polars py-polars/tests/unit/operations/test_join.py::test_join_coale
 ported from Polars crates/polars/tests/it/core/joins.rs::test_empty_df_join (probe-side-empty variants)
 ported from Polars crates/polars/tests/it/core/joins.rs::test_join_floats (adapted to a single float join column)
 independent reference: row counts match a naive O(n*m) join across INNER/LEFT/FULL
+  join stress: many unique keys, forcing repeated hash table growth
 regression: join_hash_to_partition(join_mix64(...)) splits realistic keys roughly evenly across partitions
 regression (real build): join_build_partitions_mt itself splits realistic keys roughly evenly across partitions
 crosses JOIN_PARALLEL_MIN_N: the dispatched (parallel-eligible) path matches join_probe_serial exactly, as a set
@@ -718,6 +905,8 @@ a real fixed-Huffman-coded block (BTYPE=01) decompresses correctly
 gzip header optional fields (FEXTRA, FNAME, FCOMMENT, FHCRC) are skipped correctly, all four at once
 gzip_is_gzip on empty/1-byte buffers returns false rather than reading out of bounds
 malformed gzip input aborts (fork + expect SIGABRT)
+  random/mutated gzip input vs. gzip_inflate never crashing or hanging (fixed seed)
+  100 random/mutated gzip inputs handled with no crash or hang
 gzip_inflate: all passed
 
 === gzip_deflate: PASS ===
@@ -730,6 +919,8 @@ every length from 0 to 600, so block and match boundaries are all crossed
 matches at the window edge and at the maximum match length
 every level 0-9 round-trips; effort buys ratio across the range
 the same input compresses to the same bytes twice
+  random round-trip fuzzing (fixed seed, four input shapes)
+  300 random buffers round-tripped ok
 gzip_deflate: all passed
 
 === rdata_array_read: PASS ===
@@ -746,6 +937,8 @@ synthetic workspace: data.frame, NA string, dim matrix, and symbol back-referenc
 REFSXP long form (explicit 4-byte index, not the packed index-in-flags form) resolves correctly
 API contract violations abort (fork + expect SIGABRT)
 malformed .RData input aborts (fork + expect SIGABRT)
+  random/mutated .RData input vs. rdata_read never crashing or hanging (fixed seed)
+  60 random/mutated .RData inputs handled with no crash or hang
 rdata_array_read: all passed
 
 === adf_correctness: PASS ===
@@ -769,6 +962,11 @@ the trend variant rejects where the constant one fails
 verdicts on white noise and on a random walk
   rejects the unit root on white noise 40/40, on a random walk 3/40
   ok
+the trend response surface against a simulation of the null
+  level 0: table -3.9893, simulated -3.9877
+  level 1: table -3.4252, simulated -3.4104
+  level 2: table -3.1357, simulated -3.1142
+  ok
 
 PASSED, 0 failures
 
@@ -787,6 +985,10 @@ stationarity around a trend
 verdicts on white noise and on a random walk
   rejects stationarity on white noise 2/40, on a random walk 39/40
   ok
+the statistic grows with the sample on a random walk and not on white noise
+  white noise: mean statistic at n=800 over n=100 is 0.954
+  random walk: mean statistic at n=800 over n=100 is 7.922
+  ok
 
 PASSED, 0 failures
 
@@ -796,6 +998,14 @@ DF-GLS, float64 build
 the quasi-differencing constant
   ok
 the detrending absorbs the terms it claims to
+  ok
+simulated critical values have the shape a table has
+  constant 1/5/10 per cent: -2.719 -2.033 -1.721
+  trend    1/5/10 per cent: -3.523 -2.941 -2.659
+  ok
+size on the null and power against a persistent alternative
+  size 24/400, rate 0.060 against a nominal 0.05
+  power at AR 0.85 around a trend: ordinary ADF 363/400, DF-GLS 391/400
   ok
 
 PASSED, 0 failures
@@ -820,6 +1030,13 @@ both asymptotics produce a finite statistic and a verdict
   small-b: B=35, statistic -2.2634 against -1.6449, rejects 1
   fixed-b: B=60, statistic -1.2518 against -1.3510, rejects 0
   ok
+size under a unit root with a wandering trend
+  small-b, B=40: rejects 6/400, rate 0.015 against a nominal 0.05
+  fixed-b, B=75: rejects 11/400, rate 0.028 against a nominal 0.05
+  ok
+power on a stationary series around a wandering trend
+  Otto small-b 200/200, trend ADF 0/200
+  ok
 
 PASSED, 0 failures
 
@@ -832,6 +1049,21 @@ the weighted average against its formula
   ok
 the trend Wald statistic separates a trend from none
   without a trend 4.9019, with one 51031.8
+  ok
+the trend union keeps power whether or not a trend is present
+  without a trend: union 200/200, demeaned alone 200/200, detrended alone 199/200
+  with a trend   : union 199/200, demeaned alone 0/200, detrended alone 199/200
+  ok
+the initial condition union tracks whichever component is ahead
+  initial condition 0: union 200/200, QD 200/200, OLS 170/200
+  initial condition 12: union 200/200, QD 0/200, OLS 200/200
+  ok
+the union's size against the paper's section 4.2
+  trend union 0.135; initial condition demeaned 0.098 against the paper's 0.090, detrended 0.096 against 0.069
+  ok
+the size correction brings the union back to nominal
+  scale factor 1.1609
+  uncorrected 0.093, corrected 0.047 against a nominal 0.05
   ok
 
 PASSED, 0 failures
@@ -852,6 +1084,14 @@ the statistic and weight against equations (13) and (10)
   ok
 the pretest route through the unit root test
   with a break: weighted allows 1 at 0.507, pretest allows 1 at 0.507
+  ok
+a break is detected under both I(0) and I(1) shocks
+  I(0) shocks: rejects 40/40
+  I(1) shocks: rejects 40/40
+  ok
+size under both kinds of shock, against the paper's Table 2
+  n=150: I(1) shocks 0.175 against the paper's 0.139; I(0) shocks 0.028 against 0.015
+  n=300: I(1) shocks 0.103 against the paper's 0.098; I(0) shocks 0.048 against 0.022
   ok
 
 PASSED, 0 failures
@@ -878,6 +1118,14 @@ the weight is exp(-g W / sqrt(n)) and falls as g rises
   g=3.0: weight 0.871021, Wald 0.7973, tau_bar 0.0950
   g=6.0: weight 0.758678, Wald 0.7973, tau_bar 0.1778
   ok
+rejects in both cases, choosing the branch by itself
+  without a break: rejects 60/60, took the break branch 1/60; DF-GLS rejects 60/60
+  with a break   : rejects 60/60, took the break branch 60/60; DF-GLS rejects 0/60
+  ok
+size under the null against the paper's tabulated values
+  n=150: rejects 64/500, rate 0.128 against a nominal 0.05; break branch 239/500
+  n=300: rejects 39/500, rate 0.078 against a nominal 0.05; break branch 212/500
+  ok
 
 PASSED, 0 failures
 
@@ -894,6 +1142,9 @@ a planted break is found
   ok
 rejects where an ordinary ADF is fooled by the break
   Zivot-Andrews -10.730 against -4.732, ordinary ADF -1.197 against -2.876
+  ok
+size on random walks with no break
+  rejects 11/200, rate 0.055 against a nominal 0.05
   ok
 
 PASSED, 0 failures
@@ -915,6 +1166,14 @@ simulated critical values have the shape a table has
   2 common trends: trace 95 per cent 18.286, max 95 per cent 15.249
   3 common trends: trace 95 per cent 32.300, max 95 per cent 21.444
   ok
+size of the trace test on independent random walks
+  rejects rank zero 23/400, rate 0.058 against a nominal 0.05
+  ok
+rank recovery on systems of known rank
+  true rank 0: chose 0/1/2/3 as 59/1/0/0 over 60 draws
+  true rank 1: chose 0/1/2/3 as 0/55/5/0 over 60 draws
+  true rank 2: chose 0/1/2/3 as 0/0/55/5 over 60 draws
+  ok
 
 PASSED, 0 failures
 
@@ -931,6 +1190,9 @@ residual-based critical values are below the ordinary ones and fall with size
   2 variables: 1/5/10 per cent -3.888 -3.354 -3.062, ordinary 5 per cent -2.876
   3 variables: 1/5/10 per cent -4.339 -3.731 -3.438, ordinary 5 per cent -2.876
   4 variables: 1/5/10 per cent -4.700 -4.108 -3.803, ordinary 5 per cent -2.876
+  ok
+size on independent random walks
+  rejects 52/1200, rate 0.043 against a nominal 0.05
   ok
 
 PASSED, 0 failures
@@ -952,6 +1214,20 @@ allowing more breaks can only lower the statistic
   max 1 breaks: statistic -11.4887 over 181 candidates
   max 2 breaks: statistic -11.4887 over 343 candidates
   max 3 breaks: statistic -11.4887 over 486 candidates
+  ok
+a break costs Engle-Granger its margin and does not cost Maki its
+  Maki -10.273 against a 1 per cent value of -5.142
+  Engle-Granger -3.591 against a 1 per cent value of -3.983
+  ok
+simulated values against the paper's Table 1
+  m=1, T=300: simulated 1/5/10 per cent -5.009 -4.634 -4.389, table 5 per cent -4.602
+  m=2, T=300: simulated 1/5/10 per cent -5.984 -5.373 -5.075, table 5 per cent -4.893
+  m=3, T=300: simulated 1/5/10 per cent -6.195 -5.926 -5.681, table 5 per cent -5.083
+  m=2 at T=300 gives -5.317 and at T=600 gives -5.221, table -4.893: the gap to the
+  table does not close as the sample grows
+  ok
+size on independent random walks
+  rejects 9/200, rate 0.045 against a nominal 0.05
   ok
 
 PASSED, 0 failures
@@ -1069,7 +1345,9 @@ the JSON cache round trips and refuses a different sample
 standard errors at a fit, and the curvature they rest on
   is_maximum 1, 0 flat directions, condition 66.7, 10 of 10 errors usable
   ok
-slow checks skipped, run make test-stress
+parameter recovery from a perturbed start
+  4 of 4 fits converged, worst unconstrained error 0.193 at T=4000
+  ok
 
 PASSED, 0 failures
 
@@ -1132,7 +1410,21 @@ fit from a starting guess where the likelihood is not a number
   overflow: 0 iterations, converged 0, log-likelihood -inf
   underflow: 0 iterations, converged 0, log-likelihood -inf
   ok
-slow checks skipped, run make test-correctness-stress
+simulated innovation covariance against equation 11
+  worst absolute discrepancy 0.003345 over 60000 periods
+  ok
+parameter recovery
+  truth -1842.457, fit -1832.897, gap 9.560, Wilks expectation 12.0
+  gradient norm 0.101 after 450 iterations, converged yes
+  worst c 0.3672, worst Omega_inv 0.04209
+  ok
+shapes with a co-integrated block, over several draws
+  rank two                 2 of 5 converged, 0 stalled, 3 hit the cap, slowest converged fit 1316 iterations
+  two co-integration lags  3 of 5 converged, 1 stalled, 1 hit the cap, slowest converged fit 1135 iterations
+  ok
+interval coverage from the standard errors
+  256 of 276 inside, coverage 0.928 from 24 converged fits, nominal 0.95
+  ok
 
 PASSED, 0 failures
 
@@ -1230,9 +1522,9 @@ PASSED, 0 failures
 qvarma identification, float32 build
 
 the intercept is learned far more slowly once the model has an I(1) block
-  with an I(1) block      9.888 at T=250 to    25.95 at T=1000, growth 2.62
-  without one             683.6 at T=250 to     2869 at T=1000, growth 4.20
-  and 111 times less curvature at T=1000
+  with an I(1) block      9.888 at T=250 to    43.05 at T=2000, growth 4.35
+  without one             683.6 at T=250 to     5723 at T=2000, growth 8.37
+  and 133 times less curvature at T=2000
   ok
 Phi_star loses its curvature when the score loading is near zero
   Psi_star ~ 0.12:    16.79     Psi_star ~ 0.02:   -2.573
@@ -1257,6 +1549,7 @@ inference/unit_root.h: ADF, ADF with trend, KPSS and DFGLS are the same through 
 inference/cointegration.h: Johansen and Engle-Granger agree on a system built from views and from copies
 sd/qvarma.h: the log-likelihood is the same on a windowed (strided) y as on a contiguous one
 nn/mlp.h: training on a window (strided view) of a longer design matrix matches training on a copy
+stress: a full qvarma fit and simulated co-integration critical values through views
 
 PASSED, 0 failures
 
@@ -1281,6 +1574,7 @@ distributed simulation: does a Monte Carlo across machines give what it gives he
 cluster + random: a simulated ADF null distribution comes back identical whether it ran here or across machines
 cluster + random: a task that ignores its global index produces one value repeated, which the comparison above would catch
 cluster + random: a range reclaimed from a machine that dies mid-job is recomputed to the same values
+stress: 2000 replications distributed against 2000 run here, and the critical value both produce
 
 PASSED, 0 failures
 
@@ -1317,6 +1611,8 @@ statistics: every reduction, unit root test and co-integration test agrees acros
 negative control: perturbing one observation by a part in 10^6 moves a statistic past the tolerance
 across formats: .npz matches .npy bit for bit on the numbers, and carries the column .npy cannot
 ownership: the frame still reads identically after the file, the source frame and the allocator's state are gone
+  windowed round trips: every prefix of the dataset, at every column width
+  120 windows round-tripped
 npz_to_statistics: all passed
 
 === header_composition: PASS ===
