@@ -589,7 +589,7 @@ grows with the break maximum and with the sample. Keep the draw count modest and
 read the 1 per cent value as the noisiest of the three.
 
 The paper's Table 1 gives values at T = 1000 over 10000 replications, which
-tests/maki_correctness.c compares against.
+tests/correctness/maki_correctness.c compares against.
 */
 static inline MakiCritical maki_critical(int n_variables, int periods, int model,
                                          int max_breaks, int lags, mreal trim,

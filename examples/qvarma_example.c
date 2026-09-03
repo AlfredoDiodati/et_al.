@@ -15,8 +15,9 @@ not to produce a result.
    the model goes through _qvarma_link - which every other entry point (simulate,
    fit, qvarma_params_from_theta) already does on its way in. Round-tripping once
    through the unconstrained vector is how a QvarmaParams already sitting in
-   constrained form reaches _qvarma_link; tests/qvarma_recovery_study.c's
-   draw_truth uses the same round trip for the same reason. */
+   constrained form reaches _qvarma_link; the draw_truth of
+   tests/correctness/qvarma_recovery_study.c uses the same round trip for the
+   same reason. */
 static void resolve_dependents(QvarmaParams *m) {
     Vec theta = mat_new(qvarma_n_theta(m), 1);
     _qvarma_unlink(m, theta);
@@ -77,7 +78,7 @@ int main(void) {
 
     /* Fit from the truth perturbed by 0.25 per coordinate on the
        unconstrained scale, the same starting distance
-       tests/qvarma_recovery_study.c uses. */
+       tests/correctness/qvarma_recovery_study.c uses. */
     Vec true_theta = mat_new(qvarma_n_theta(&truth), 1);
     _qvarma_unlink(&truth, true_theta);
     QvarmaParams start = qvarma_params_new(K, K_star, p, q, r, R, 1, 0);

@@ -23,7 +23,10 @@ FAILED=0
 FAILED_NAMES=""
 
 : > "$REPORT"
-printf "bench run: %s (interpreter: %s)\n\n" "$(date)" "$PYTHON" >> "$REPORT"
+# The interpreter is recorded by version rather than by path, since the
+# version is what another reader needs to compare their numbers against and
+# the path is particular to the machine that ran it.
+printf "bench run: %s (%s)\n\n" "$(date)" "$("$PYTHON" --version 2>&1)" >> "$REPORT"
 
 SUITES="bench_mat bench_decomp bench_dist bench_ad bench_frame bench_random bench_stats bench_adam bench_special bench_json"
 

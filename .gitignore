@@ -59,9 +59,7 @@ out/
 
 # compiled example binaries: one per examples/<noun>_example.c source, same
 # auto-covering reasoning as above. encoder is named separately because it is
-# the one example whose name does not end in _example; it is also tracked in
-# git from before this rule existed, so `git rm --cached examples/encoder`
-# is still owed.
+# the one example whose name does not end in _example.
 examples/*_example
 !examples/*_example.c
 examples/encoder

@@ -9,10 +9,10 @@ buffer, across n from 10 (well below the smallest model in sd/) to 500
 (well above its largest). lbfgs_direction dispatches on n at
 LBFGS_DIRECTION_BLAS_THRESHOLD, defined in lbfgs.h - restrict-qualified loops
 below it, BLAS1 (MBLAS(dot)/MBLAS(axpy)/MBLAS(scal)) at and above it. That
-threshold was chosen in tests/lbfgs_direction_threshold.c, which times the two
-paths against each other directly; this table exists to show the dispatch
-actually working end to end in the shipped function, not to re-derive the
-threshold.
+threshold was chosen in tests/performance/lbfgs_direction_threshold.c, which
+times the two paths against each other directly; this table exists to show the
+dispatch actually working end to end in the shipped function, not to re-derive
+the threshold.
 
 time_full_runs times whole lbfgs() calls on the toy objectives
 lbfgs_candidates.c already uses, at a parameter count matching sd/'s own

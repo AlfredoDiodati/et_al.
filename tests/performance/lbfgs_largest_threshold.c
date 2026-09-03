@@ -8,7 +8,8 @@ compare-and-track loop on 1M elements. Whether that holds up at the n this
 project actually runs (5 to a few hundred) is what this measures - not assumed.
 
 Both compared here directly, interleaved, same method as
-tests/lbfgs_direction_threshold.c. Not wired into any build target.
+tests/performance/lbfgs_direction_threshold.c. Not wired into any build
+target.
 */
 
 #include "../../linalg/mat.h"

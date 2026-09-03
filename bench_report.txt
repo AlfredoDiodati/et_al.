@@ -1,4 +1,4 @@
-bench run: ma 27 jul 2026 21:19:43 CEST (interpreter: /home/dioda/home/usami/.venv/bin/python)
+bench run: ma 27 jul 2026 21:19:43 CEST
 
 === bench_mat: done ===
 cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_mat.c -lm -lopenblas -o libmat.so

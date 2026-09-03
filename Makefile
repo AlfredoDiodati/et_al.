@@ -65,9 +65,8 @@ MODEL_SUBDIRS := nn sd
 # Every example, in one target. An example is documentation that has to keep
 # compiling, and until this existed nothing built any of them: each had its own
 # rule and no target named them together, so a rename or a signature change in
-# a header broke an example silently. It had already happened - the rule for
-# examples/standardize_example outlived the file, which was never committed at
-# all. check.sh builds this alongside the test binaries.
+# a header broke an example silently. check.sh builds this alongside the test
+# binaries.
 #
 # Derived from the sources rather than listed, so a new example is covered the
 # moment it exists. An example .c with no rule below fails this target rather

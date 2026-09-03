@@ -1388,11 +1388,11 @@ typedef struct {
 static inline QvarmaFitOptions qvarma_default_fit_options(void) {
     QvarmaFitOptions options;
     /* Shapes without a co-integrated block settle in one to three hundred
-       iterations; ones with a co-integrated block took fourteen hundred to two
-       thousand in tests/qvarma_recovery_study.c, because the likelihood's
-       curvature there spans five to six orders of magnitude rather than two or
-       three. A budget that fits the easy shapes silently returns unconverged
-       estimates for the hard ones. */
+       iterations; ones with a co-integrated block took fourteen hundred to
+       two thousand in tests/correctness/qvarma_recovery_study.c, because the
+       likelihood's curvature there spans five to six orders of magnitude
+       rather than two or three. A budget that fits the easy shapes silently
+       returns unconverged estimates for the hard ones. */
     options.max_iterations = 4000;
     options.gradient_tolerance = (mreal)1e-5;
     options.function_tolerance = (mreal)1e-12;

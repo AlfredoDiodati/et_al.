@@ -590,7 +590,7 @@ int main(void) {
     fprintf(out, "wander, and a shift in c is largely met by an offsetting shift in that\n");
     fprintf(out, "level. Measured as the curvature of the log-likelihood in c once every\n");
     fprintf(out, "other parameter is free to adjust, averaged over six draws at the true\n");
-    fprintf(out, "parameters, in tests/qvarma_identification.c:\n\n");
+    fprintf(out, "parameters, in tests/correctness/qvarma_identification.c:\n\n");
     fprintf(out, "  baseline shape        9.87    25.1    44.5   at T = 250, 1000, 2000\n");
     fprintf(out, "  no co-integrated block  684    2869    5722\n\n");
     fprintf(out, "Two orders of magnitude less information about the same parameter, and\n");

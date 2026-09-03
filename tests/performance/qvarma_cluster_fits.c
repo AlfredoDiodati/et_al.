@@ -54,7 +54,7 @@ deploy daemon and let this run ship its own binary across:
 
 Where broadcast does not reach, or where the network's gateway answers every
 port and the scan wastes seconds on it, CLUSTER_ADDRS names the machines
-instead: CLUSTER_ADDRS=192.168.1.7 ./qvarma_cluster_fits. The first non-flag
+instead: CLUSTER_ADDRS=<worker ip> ./qvarma_cluster_fits. The first non-flag
 argument is the number of fits, since a two-machine run wants a batch long
 enough that a round trip is a small part of it.
 

@@ -1585,7 +1585,7 @@ no co-integrated block.
 Averaged over the block and over draws, since one coordinate of one finite
 sample moves a good deal on its own. c is excluded, since with a co-integrated
 block present it converges more slowly than the square root of the sample,
-which is tests/qvarma_identification.c's subject.
+which is tests/correctness/qvarma_identification.c's subject.
 */
 static void test_standard_errors_against_sample_size(void) {
     printf("standard errors against the sample size\n");
