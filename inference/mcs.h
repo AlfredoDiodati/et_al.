@@ -1,9 +1,9 @@
 #pragma once
-#include "frame/frame.h"
-#include "linalg/mat.h"
-#include "random.h"
-#include "special.h"
-#include "stats.h"
+#include "../frame/frame.h"
+#include "../linalg/mat.h"
+#include "../random.h"
+#include "../special.h"
+#include "../stats.h"
 
 /* Tests of equal predictive ability between competing forecasts: the
    Model Confidence Set of Hansen, Lunde and Nason (2011) and the

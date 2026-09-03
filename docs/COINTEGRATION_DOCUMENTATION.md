@@ -1,4 +1,4 @@
-# cointegration.h - tests for co-integration between series
+# inference/cointegration.h - tests for co-integration between series
 
 ## Overview
 
@@ -7,7 +7,7 @@ rank of a system, the Engle-Granger two-step test for whether one particular
 combination is stationary, and Maki's test for a relation that breaks at dates
 and in a number that are not known in advance.
 
-Core tier. The header includes `unit_root.h`, since Engle-Granger's second step
+Core tier. The header includes `inference/unit_root.h`, since Engle-Granger's second step
 is an ADF regression, and both reach `stats.h` for the `stats_quantile` their
 simulated critical values take.
 

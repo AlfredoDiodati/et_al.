@@ -1,6 +1,6 @@
 /*
-Does cointegration.h's Johansen trace and maximum eigenvalue tests compute what
-they claim to.
+Does inference/cointegration.h's Johansen trace and maximum eigenvalue tests
+compute what they claim to.
 
 A rank test returns a verdict, so a wrong implementation does not crash: it
 returns a plausible number and the wrong number of co-integrating relations.
@@ -12,7 +12,7 @@ checks, which fit many simulated systems.
 */
 
 #include "../check.h"
-#include "../../cointegration.h"
+#include "../../inference/cointegration.h"
 
 /* Squared canonical correlations, so every eigenvalue lies in [0,1), and they
    come back in descending order. */

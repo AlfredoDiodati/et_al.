@@ -1,10 +1,10 @@
-# mcs.h - model confidence set and Diebold-Mariano test
+# inference/mcs.h - model confidence set and Diebold-Mariano test
 
 ## Overview
 
 **Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy) — general-purpose statistical tests, with no model implementation in them, the analogue of `arch.bootstrap`'s `MCS`/`SPA` and `statsmodels`' forecast-comparison tools.
 
-`mcs.h` holds tests of equal predictive ability between competing forecasts: the Model Confidence Set of Hansen, Lunde and Nason (2011) and the pairwise Diebold-Mariano test (1995) it generalizes. Both start from the same object, a `DataFrame` of losses whose numeric columns are the competing models and whose rows are observations — row `t` of column `j` is model `j`'s loss on observation `t`, the same rows-are-observations convention `stats.h` and `dist/mv/` use. String columns (a date, an identifier) are ignored, so a loss table loaded straight from `frame/csv.h` with its date column intact needs no preparation.
+`inference/mcs.h` holds tests of equal predictive ability between competing forecasts: the Model Confidence Set of Hansen, Lunde and Nason (2011) and the pairwise Diebold-Mariano test (1995) it generalizes. Both start from the same object, a `DataFrame` of losses whose numeric columns are the competing models and whose rows are observations — row `t` of column `j` is model `j`'s loss on observation `t`, the same rows-are-observations convention `stats.h` and `dist/mv/` use. String columns (a date, an identifier) are ignored, so a loss table loaded straight from `frame/csv.h` with its date column intact needs no preparation.
 
 Neither test fits anything. They are statistics of forecasts somebody else already produced, which is why this is a core-tier header rather than a model-tier one exposing the README's fit/forecast API. It is a standalone root-level header (`<noun>.h`, per README's naming policy) and includes `frame/frame.h` (the input type), `linalg/mat.h`, `random.h` (the bootstrap's draws), `special.h` (the normal tail), and `stats.h` (the HAC variance the two HAC variants and `dm_test` use).
 
@@ -41,7 +41,7 @@ The first two divide both the observed statistic and every bootstrap statistic b
 
 **The measurement.** A moving-block resample has no dependence across block boundaries, so a HAC computed on it is smaller than the same HAC computed on the data, every bootstrap t-statistic is correspondingly larger, the p-value rises and the confidence set grows.
 
-`tests/correctness/test_mcs_variance.c` measures this on the shipped code path — it builds loss differentials and hands them to `mcs_round`, so the numbers below come from `mcs.h` itself rather than from a reimplementation of it. Run it with `make tests/correctness/test_mcs_variance && ./tests/correctness/test_mcs_variance`; it writes `out/mcs_variance_size.txt` and asserts the directions stated here.
+`tests/correctness/test_mcs_variance.c` measures this on the shipped code path — it builds loss differentials and hands them to `mcs_round`, so the numbers below come from `inference/mcs.h` itself rather than from a reimplementation of it. Run it with `make tests/correctness/test_mcs_variance && ./tests/correctness/test_mcs_variance`; it writes `out/mcs_variance_size.txt` and asserts the directions stated here.
 
 Setup: 400 replications, each one `T = 250` observations of `M = 5` models under the null of equal expected loss, `L(i,t) = v(i,t)` with `v(i,t) = phi*v(i,t-1) + sqrt(1-phi^2)*e` and `e ~ N(0,1)` drawn independently across models and observations, `phi = 0.5`, 200 burn-in draws discarded. Fixed across the three estimates: `MCS_TMAX`, round one only (the full set of five), moving-block bootstrap with block length 10, `B = 500` resamples with the block indices shared across series within a draw, Bartlett truncation lag 9, losses from seed 20260820 stream 0, resamples from seed 999 with the stream set to the replication index. All three are applied to the same data and the same resamples, so the comparison is paired, and with the seeds fixed the table is reproducible rather than a Monte Carlo answer that moves run to run. A rejection is `p <= alpha`.
 
@@ -191,7 +191,7 @@ A negative `stat` means `loss_a` is the smaller of the two on average, so `loss_
 
 `mcs` and `dm_test` assert that the loss matrix is finite, and that check is not a formality. Before it existed, a confidence set on losses with one hole came back as an ordinary answer — finite p-values, a set — and it was not the answer the clean data gives. Three models over 200 periods, one `NaN` placed in the second model's column, everything else identical: the clean data kept all three at p = 1.00, 0.48, 0.48; the holed data rejected the first two at p = 0.0000 and kept only the third. Rejecting a model because one of its losses was missing is the failure this guards against, and a p-value a caller reads off a comparison cannot reveal it, since a `NaN` loses every comparison however it is written. One scan against a block bootstrap of `opt.bootstrap` resamples is not a cost worth weighing. `tests/integration/join_missing_values.c` holds it in place, and `docs/FRAME_DOCUMENTATION.md`'s note on missing values has the project-wide rule this is one instance of.
 
-`tests/correctness/test_mcs.c` compares against independent double reference implementations written from the definitions, not by calling `mcs.h`: in particular the pairwise references form both `(i,j)` and `(j,i)` explicitly, so the header's `d_ji = -d_ij` storage shortcut is checked rather than assumed, and the "mean of the others" reference sums the other `M-1` models directly rather than subtracting from a total.
+`tests/correctness/test_mcs.c` compares against independent double reference implementations written from the definitions, not by calling `inference/mcs.h`: in particular the pairwise references form both `(i,j)` and `(j,i)` explicitly, so the header's `d_ji = -d_ij` storage shortcut is checked rather than assumed, and the "mean of the others" reference sums the other `M-1` models directly rather than subtracting from a total.
 
 Known values: a hand-computed two-model case (`[1,2,3,4]` against `[1,1,1,1]`, giving `gamma_0 = 1.25` and `t = 1.5/sqrt(0.3125)`) checked through `mcs_tstats` under both statistics, `mcs_statistic`, `mcs_worst`, and `dm_test`, so five entry points must agree on one hand-derived number; hand-computed `mcs_loss` output for all three loss kinds, with the loss columns' names checked to be the forecast columns' names and a loss column's mean checked against `stats_mse`; and a string column added to both the source and the loss table, which must change neither the model count, the model names, nor the statistic.
 
@@ -250,13 +250,13 @@ This lives in the header rather than at each call site because the parts of the 
 
 `examples/mcs_example.c` is the canonical application: five cheap one-day variance forecasts for the XLK sector ETF (two rolling windows, two RiskMetrics EWMAs, an expanding-window sample variance) scored against the squared daily return over 6,869 days, run through the MCS under two loss functions, and written to `examples/out/`.
 
-The file is split into two halves and says so. The first manufactures the loss table out of a returns file — rolling windows, an EWMA recursion, a warmup period — and touches nothing in this header; in a real application somebody else's forecasting code sits there instead. The second is `main`, and it contains no loops and no hand-written tables, only calls into `mcs.h` and the file handles they write through. That property is the example's real purpose: whenever an earlier draft needed a loop at the call site, the missing piece went into this header instead, which is where `mcs_fwrite_report`, `mcs_in_set`, `mcs_fwrite_options`, `mcs_pvalue_frame` and `mcs_effective_hac_lag` all came from.
+The file is split into two halves and says so. The first manufactures the loss table out of a returns file — rolling windows, an EWMA recursion, a warmup period — and touches nothing in this header; in a real application somebody else's forecasting code sits there instead. The second is `main`, and it contains no loops and no hand-written tables, only calls into `inference/mcs.h` and the file handles they write through. That property is the example's real purpose: whenever an earlier draft needed a loop at the call site, the missing piece went into this header instead, which is where `mcs_fwrite_report`, `mcs_in_set`, `mcs_fwrite_options`, `mcs_pvalue_frame` and `mcs_effective_hac_lag` all came from.
 
 Its result is the point of the procedure: under QLIKE the set collapses to `ewma94` alone, while under squared error nothing at all is eliminated (`p = 0.155` at the first round). A confidence set is a statement about a loss function, not about the models on their own.
 
 ## Benchmark results
 
-None. `mcs.h` has no `tests/performance/` pair yet — see the limitation below.
+None. `inference/mcs.h` has no `tests/performance/` pair yet — see the limitation below.
 
 ## Known limitations and future work
 

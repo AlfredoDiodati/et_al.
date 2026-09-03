@@ -1,7 +1,7 @@
 #pragma once
-#include "linalg/solver.h"
-#include "random.h"
-#include "stats.h"
+#include "../linalg/solver.h"
+#include "../random.h"
+#include "../stats.h"
 #include <math.h>
 
 /*
@@ -67,7 +67,7 @@ tests/correctness/adf_correctness.c rather than against another implementation.
 
 There is no response surface for ADF_NO_CONSTANT here. That regression is only
 ever run on a fitted residual, where the right values depend on how many
-regressors produced the residual and come from cointegration.h's
+regressors produced the residual and come from inference/cointegration.h's
 engle_granger_critical instead.
 */
 static inline mreal adf_critical_value_for(int observations, int level_index,

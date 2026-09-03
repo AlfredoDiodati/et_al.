@@ -1,5 +1,5 @@
 /*
-Does cointegration.h's Engle-Granger test compute what it claims to.
+Does inference/cointegration.h's Engle-Granger test compute what it claims to.
 
 Two steps, and each can be wrong on its own: the first-step regression can
 recover the wrong relation, and the second step can judge the right residual
@@ -11,7 +11,7 @@ Run with make test-engle_granger_correctness. STRESS=1 adds the size check.
 */
 
 #include "../check.h"
-#include "../../cointegration.h"
+#include "../../inference/cointegration.h"
 
 /*
 The test recovers the relation it was given. Building y1 as a random walk and

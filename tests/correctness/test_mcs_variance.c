@@ -1,11 +1,11 @@
-#include "../../mcs.h"
+#include "../../inference/mcs.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 
-/* Size of the MCS equivalence test under each of mcs.h's three variance
-   estimates, measured on the shipped code path rather than on a copy of
-   it: the design below builds loss differentials, hands them to
+/* Size of the MCS equivalence test under each of inference/mcs.h's three
+   variance estimates, measured on the shipped code path rather than on a
+   copy of it: the design below builds loss differentials, hands them to
    mcs_round, and reads the p-value that function returns.
 
    The measurement backs two statements in docs/MCS_DOCUMENTATION.md.
@@ -202,7 +202,7 @@ int main(void) {
     mkdir("out", 0777);
     FILE *f = fopen("out/mcs_variance_size.txt", "w");
     assert(f && "test_mcs_variance: cannot open out/mcs_variance_size.txt for writing");
-    fprintf(f, "Size of the MCS equivalence test under mcs.h's three variance estimates\n");
+    fprintf(f, "Size of the MCS equivalence test under inference/mcs.h's three variance estimates\n");
     fprintf(f, "Produced by tests/correctness/test_mcs_variance.c\n\n");
     write_panel(f, &dependent, dep, dep_hac_data, dep_hac_resample, dep_bootstrap_var);
     write_panel(f, &independent, ind, ind_hac_data, ind_hac_resample, ind_bootstrap_var);

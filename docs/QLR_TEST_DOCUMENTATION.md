@@ -1,8 +1,8 @@
-# qlr_test.h - testing for the absence of score-driven dynamics
+# inference/qlr_test.h - testing for the absence of score-driven dynamics
 
 ## Overview
 
-**Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy) — a hypothesis test on numbers a model already produced, with no fitting procedure of its own, the same reason `mcs.h` is core.
+**Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy) — a hypothesis test on numbers a model already produced, with no fitting procedure of its own, the same reason `inference/mcs.h` is core.
 
 The quasi-likelihood ratio test of
 

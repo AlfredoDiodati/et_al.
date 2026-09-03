@@ -1,5 +1,5 @@
 /*
-Does unit_root.h's Zivot-Andrews test compute what it claims to.
+Does inference/unit_root.h's Zivot-Andrews test compute what it claims to.
 
 The test searches for a break date and reports the smallest t ratio over all
 candidates, so there are two answers to get right and two ways to be wrong: the
@@ -12,7 +12,7 @@ is slow: every draw runs one regression per candidate date.
 */
 
 #include "../check.h"
-#include "../../unit_root.h"
+#include "../../inference/unit_root.h"
 
 /* A series that is stationary around a level which jumps once, at a date chosen
    here so the test can be asked to find it. Caller must mat_free. */

@@ -1,8 +1,8 @@
-# Break tests in unit_root.h - unit roots when the trend may break
+# Break tests in inference/unit_root.h - unit roots when the trend may break
 
 ## Overview
 
-Three procedures from `unit_root.h`, split out of `docs/UNIT_ROOT_DOCUMENTATION.md`
+Three procedures from `inference/unit_root.h`, split out of `docs/UNIT_ROOT_DOCUMENTATION.md`
 because they share a concern the tests there do not: what happens when the
 deterministic part of the series changes once, at a date nobody supplied.
 

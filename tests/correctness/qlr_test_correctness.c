@@ -1,5 +1,5 @@
 /*
-Does qlr_test.h assemble the statistic the paper defines, and does the
+Does inference/qlr_test.h assemble the statistic the paper defines, and does the
 transcribed Table B.3 say what the paper says.
 
 The header does no fitting, so every check here is on arrays built by hand
@@ -11,7 +11,7 @@ Run with make tests/correctness/qlr_test_correctness. There are no slow
 checks, so STRESS=1 adds nothing.
 */
 
-#include "../../qlr_test.h"
+#include "../../inference/qlr_test.h"
 #include "../check.h"
 #include <stdio.h>
 #include <string.h>

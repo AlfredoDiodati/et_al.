@@ -1,6 +1,6 @@
 /*
-Does unit_root.h's Harvey-Leybourne-Taylor union of rejections compute what it
-claims to.
+Does inference/unit_root.h's Harvey-Leybourne-Taylor union of rejections
+compute what it claims to.
 
 A union of rejections is almost too simple to get wrong in its arithmetic, so
 almost nothing here checks arithmetic. What it checks is the two claims that make
@@ -14,7 +14,7 @@ comparisons, which fit hundreds of series.
 */
 
 #include "../check.h"
-#include "../../unit_root.h"
+#include "../../inference/unit_root.h"
 
 /* Stationary around a constant, or around a line when slope is nonzero. The
    persistence is what makes the unit root tests work for their living. */

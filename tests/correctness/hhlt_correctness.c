@@ -1,5 +1,6 @@
 /*
-Does unit_root.h's Harris-Harvey-Leybourne-Taylor test compute what it claims to.
+Does inference/unit_root.h's Harris-Harvey-Leybourne-Taylor test compute what
+it claims to.
 
 The test is a decision rule wrapped around two other tests, so most of what can
 go wrong is in the parts that do the deciding rather than in the final statistic:
@@ -16,7 +17,7 @@ hundreds of series.
 */
 
 #include "../check.h"
-#include "../../unit_root.h"
+#include "../../inference/unit_root.h"
 
 /* A series with a slope change: trend-stationary around a line whose gradient
    changes once. Caller must mat_free. */

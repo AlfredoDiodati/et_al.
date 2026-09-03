@@ -1,5 +1,5 @@
 /*
-Does cointegration.h's Maki test compute what it claims to.
+Does inference/cointegration.h's Maki test compute what it claims to.
 
 Maki (2012) searches for breaks and reports a minimum over everything it tried,
 so there are three ways to be wrong and only one of them is loud: the design
@@ -14,7 +14,7 @@ that is itself expensive.
 */
 
 #include "../check.h"
-#include "../../cointegration.h"
+#include "../../inference/cointegration.h"
 
 /* Two series co-integrated after a level break in the relation: y follows x with
    a stationary deviation, and the intercept of that relation jumps once. Caller

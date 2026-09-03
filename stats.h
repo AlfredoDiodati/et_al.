@@ -60,10 +60,11 @@
      the test needs, so the check is on two scalars rather than on the samples
      and costs nothing.
 
-   The statistical tests built on this file (unit_root.h, cointegration.h) all
-   assert, whatever they accumulate, because each returns a verdict a caller
-   reads off a comparison and a NaN fails every comparison it is put through -
-   the branch taken is always the one that says nothing is wrong.
+   The statistical tests built on this file (inference/unit_root.h and
+   inference/cointegration.h) all assert, whatever they accumulate, because
+   each returns a verdict a caller reads off a comparison and a NaN fails
+   every comparison it is put through - the branch taken is always the one
+   that says nothing is wrong.
 
    A caller holding data that might have holes checks with mat_all_finite
    before calling anything here. frame/join.h's unmatched rows are the only

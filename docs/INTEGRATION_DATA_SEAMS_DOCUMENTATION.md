@@ -16,7 +16,7 @@ a value moving through it, are in
 column count, not 1, because a `DataFrame` keeps every numeric column in one
 block. That is the shape every real caller has, and every correctness suite
 builds its input with `mat_new` instead — so the strided path into `stats.h`,
-`unit_root.h`, `cointegration.h`, `sd/` and `nn/` had never been run. A
+`inference/unit_root.h`, `inference/cointegration.h`, `sd/` and `nn/` had never been run. A
 reduction written with `x.d[i]` where it should say `AT(x,i,0)` reads a
 diagonal stripe through the frame's other columns, and every existing suite
 still passes.
@@ -57,8 +57,8 @@ the file is that this is now checked rather than true by luck.
 `frame/join.h` is the one place in this project that writes a real NaN into a
 numeric column: a `JOIN_LEFT` or `JOIN_FULL` row with no match on one side has
 no other honest value to carry. `frame/sql.h` handles NaN deliberately at
-eighteen separate places; above that layer nothing does, since `unit_root.h`,
-`cointegration.h`, `mcs.h` and `nn/mlp.h` contain no NaN handling at all
+eighteen separate places; above that layer nothing does, since `inference/unit_root.h`,
+`inference/cointegration.h`, `inference/mcs.h` and `nn/mlp.h` contain no NaN handling at all
 between them.
 
 **This file found a real defect, and it is fixed.** Measuring what actually
@@ -120,7 +120,7 @@ labels all travel in the archive, and the numbers travel through a zip member
 whose bytes are checked by a CRC32 `frame/gzip.h` computes. Each of those pieces is
 tested on its own in `tests/correctness/test_npz.c`. What no per-module suite
 reaches is the composition — whether the frame that comes back drives `stats.h`,
-`unit_root.h` and `cointegration.h` to the same answers as the frame that went
+`inference/unit_root.h` and `inference/cointegration.h` to the same answers as the frame that went
 in, and whether it still owns its memory once the archive behind it is gone.
 
 The second path to the same answer is `examples/datasets/us_real.csv` loaded

@@ -1,17 +1,17 @@
-#include "../../mcs.h"
+#include "../../inference/mcs.h"
 #include <stdio.h>
 #include <stdlib.h>
 
 #define TOL 1e-4f
 #define CHECK(got, exp) assert(MABS((got) - (mreal)(exp)) < TOL)
-/* Probabilities and test statistics are doubles in mcs.h regardless of
-   the mreal build, so comparing them through CHECK would narrow both
+/* Probabilities and test statistics are doubles in inference/mcs.h regardless
+   of the mreal build, so comparing them through CHECK would narrow both
    sides back to float and hide exactly the range that type exists for. */
 #define CHECKD(got, exp) assert(fabs((double)(got) - (double)(exp)) < 1e-9)
 
 /* Independent double reference implementations, written from the
-   definitions rather than by calling mcs.h. In particular the pairwise
-   references below form both (i,j) and (j,i) explicitly, so the
+   definitions rather than by calling inference/mcs.h. In particular the
+   pairwise references below form both (i,j) and (j,i) explicitly, so the
    header's d_ji = -d_ij storage shortcut is checked rather than
    assumed, and the "mean of the others" series sums the other m-1
    models directly rather than subtracting a model from a total. */

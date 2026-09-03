@@ -6,9 +6,9 @@ df_col_numeric returns mat_slice(df->numeric, 0, r, idx, idx+1): an r x 1 view
 whose stride is the frame's numeric column count, not 1. That is the shape
 every real caller has, because a DataFrame keeps all its numeric columns in one
 r x n_numeric block. Every correctness suite in this project builds its input
-with mat_new instead, so the strided path into stats.h, unit_root.h,
-cointegration.h, sd/ and nn/ has never been run. A reduction written with
-x.d[i] where it should say AT(x,i,0) reads a diagonal stripe through the
+with mat_new instead, so the strided path into stats.h, inference/unit_root.h,
+inference/cointegration.h, sd/ and nn/ has never been run. A reduction written
+with x.d[i] where it should say AT(x,i,0) reads a diagonal stripe through the
 frame's other columns and every existing suite still passes.
 
 So each check here computes the same quantity twice, once through the frame's
@@ -27,8 +27,8 @@ critical values at float32.
 #include "../check.h"
 #include "../../frame/csv.h"
 #include "../../stats.h"
-#include "../../unit_root.h"
-#include "../../cointegration.h"
+#include "../../inference/unit_root.h"
+#include "../../inference/cointegration.h"
 #include "../../sd/qvarma.h"
 #include "../../nn/mlp.h"
 #include "../../solver/adam.h"
@@ -109,7 +109,7 @@ static void test_statistics_ignore_the_stride(const DataFrame *frame) {
    the n x 1 orientation while every existing suite passes 1 x n. A test that
    only ever used one of the two would not notice the branch. */
 static void test_orientation_does_not_change_the_answer(const DataFrame *frame) {
-    puts("unit_root.h: a column-oriented series and a row-oriented one give the same statistic");
+    puts("inference/unit_root.h: a column-oriented series and a row-oriented one give the same statistic");
 
     int n = frame->r;
     int lags = adf_max_lags(n);
@@ -131,7 +131,7 @@ static void test_orientation_does_not_change_the_answer(const DataFrame *frame) 
 
 /* The four unit root tests a real caller runs on a loaded column. */
 static void test_unit_root_tests_through_a_view(const DataFrame *frame) {
-    puts("unit_root.h: ADF, ADF with trend, KPSS and DFGLS are the same through a view");
+    puts("inference/unit_root.h: ADF, ADF with trend, KPSS and DFGLS are the same through a view");
 
     int n = frame->r;
     int lags = adf_max_lags(n);
@@ -157,12 +157,13 @@ static void test_unit_root_tests_through_a_view(const DataFrame *frame) {
     }
 }
 
-/* A DataFrame is one row per observation and cointegration.h is one column per
-   period, so a caller has to turn the frame's block around. This builds the
-   n x T system out of the frame's strided views and out of contiguous copies
-   of the same columns, and requires the two systems to test the same. */
+/* A DataFrame is one row per observation and inference/cointegration.h is one
+   column per period, so a caller has to turn the frame's block around. This
+   builds the n x T system out of the frame's strided views and out of
+   contiguous copies of the same columns, and requires the two systems to test
+   the same. */
 static void test_cointegration_on_a_transposed_block(const DataFrame *frame) {
-    puts("cointegration.h: Johansen and Engle-Granger agree on a system built from views and from copies");
+    puts("inference/cointegration.h: Johansen and Engle-Granger agree on a system built from views and from copies");
 
     int periods = frame->r;
     const int pick[3] = { 2, 9, 4 }; /* Cpi, Fed_rate, Unemployment */

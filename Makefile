@@ -35,15 +35,15 @@ STAT_CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math $(BLAS_CFLAGS) -DMAT_D
 # from the optimum.
 MODEL_CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math $(BLAS_CFLAGS)
 
-UNIT_ROOT_DEPS := unit_root.h stats.h random.h linalg/solver.h linalg/decomp.h linalg/mat.h tests/check.h
-COINTEGRATION_DEPS := cointegration.h $(UNIT_ROOT_DEPS)
+UNIT_ROOT_DEPS := inference/unit_root.h stats.h random.h linalg/solver.h linalg/decomp.h linalg/mat.h tests/check.h
+COINTEGRATION_DEPS := inference/cointegration.h $(UNIT_ROOT_DEPS)
 SDLOC_DEPS := sd/score_driven_location.h solver/lbfgs.h ad.h json.h special.h random.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
 QVARMA_DEPS := sd/qvarma.h solver/lbfgs.h ad.h json.h special.h random.h stats.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
 
 # --- installation tiers: see README.md's "Installation tiers" policy.
 # core:  linalg/*.h (mat.h, decomp.h, solver.h), ad.h, dist/*.h, solver/*.h,
-#        and the hypothesis tests at the root (unit_root.h, cointegration.h,
-#        qlr_test.h) - math and general-purpose statistics, no model
+#        and the hypothesis tests in inference/ (unit_root.h, cointegration.h,
+#        qlr_test.h, mcs.h) - math and general-purpose statistics, no model
 #        implementations.
 #        Note solver.h (linalg/, "solving Ax=b") and solver/ (this dir, the
 #        Optimizer interface + Adam) are deliberately unrelated despite the
@@ -56,8 +56,8 @@ PREFIX  ?= /usr/local
 INCDIR  := $(PREFIX)/include/et_al.
 PKGCONFIGDIR := $(PREFIX)/lib/pkgconfig
 
-CORE_HEADERS := ad.h json.h special.h random.h stats.h mcs.h unit_root.h cointegration.h qlr_test.h
-CORE_SUBDIRS := linalg dist dist/mv solver frame cluster
+CORE_HEADERS := ad.h json.h special.h random.h stats.h
+CORE_SUBDIRS := linalg dist dist/mv solver frame cluster inference
 MODEL_SUBDIRS := nn sd
 
 # --- examples ---
@@ -86,7 +86,7 @@ examples/mlp_example: examples/mlp_example.c nn/mlp.h json.h solver/adam.h solve
 examples/encoder: examples/encoder.c frame/csv.h frame/frame.h stats.h nn/mlp.h json.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/encoder.c $(LDLIBS) -o examples/encoder
 
-examples/mcs_example: examples/mcs_example.c mcs.h stats.h random.h special.h frame/csv.h frame/frame.h linalg/mat.h
+examples/mcs_example: examples/mcs_example.c inference/mcs.h stats.h random.h special.h frame/csv.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/mcs_example.c $(LDLIBS) -o examples/mcs_example
 
 examples/cluster_example: examples/cluster_example.c cluster/cluster.h random.h linalg/mat.h
@@ -273,10 +273,10 @@ tests/correctness/test_special: tests/correctness/test_special.c special.h
 tests/correctness/test_stats: tests/correctness/test_stats.c stats.h random.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_stats.c $(LDLIBS) -o tests/correctness/test_stats
 
-tests/correctness/test_mcs: tests/correctness/test_mcs.c mcs.h stats.h random.h special.h frame/frame.h linalg/mat.h
+tests/correctness/test_mcs: tests/correctness/test_mcs.c inference/mcs.h stats.h random.h special.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mcs.c $(LDLIBS) -o tests/correctness/test_mcs
 
-tests/correctness/test_mcs_variance: tests/correctness/test_mcs_variance.c mcs.h stats.h random.h special.h frame/frame.h linalg/mat.h
+tests/correctness/test_mcs_variance: tests/correctness/test_mcs_variance.c inference/mcs.h stats.h random.h special.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mcs_variance.c $(LDLIBS) -o tests/correctness/test_mcs_variance
 
 tests/correctness/test_random: tests/correctness/test_random.c random.h stats.h linalg/mat.h
@@ -400,7 +400,7 @@ tests/correctness/engle_granger_correctness: tests/correctness/engle_granger_cor
 tests/correctness/maki_correctness: tests/correctness/maki_correctness.c $(COINTEGRATION_DEPS)
 	$(CC) $(STAT_CFLAGS) tests/correctness/maki_correctness.c $(LDLIBS) -o tests/correctness/maki_correctness
 
-tests/correctness/qlr_test_correctness: tests/correctness/qlr_test_correctness.c qlr_test.h linalg/mat.h tests/check.h
+tests/correctness/qlr_test_correctness: tests/correctness/qlr_test_correctness.c inference/qlr_test.h linalg/mat.h tests/check.h
 	$(CC) $(STAT_CFLAGS) tests/correctness/qlr_test_correctness.c $(LDLIBS) -o tests/correctness/qlr_test_correctness
 
 tests/correctness/lbfgs_correctness: tests/correctness/lbfgs_correctness.c solver/lbfgs.h random.h linalg/mat.h
@@ -436,7 +436,7 @@ tests/correctness/qvarma_identification: tests/correctness/qvarma_identification
 # headers from at least two different directories, which is what tells them
 # apart from a correctness suite at a glance.
 
-# Anything reaching unit_root.h, cointegration.h or sd/ is built at float64
+# Anything reaching inference/unit_root.h, inference/cointegration.h or sd/ is built at float64
 # through STAT_CFLAGS, for the reason given above that variable.
 FRAME_TO_MODEL_DEPS := frame/csv.h frame/frame.h nn/mlp.h solver/adam.h \
                        solver/optimizer.h $(COINTEGRATION_DEPS) $(QVARMA_DEPS)
@@ -444,7 +444,7 @@ FRAME_TO_MODEL_DEPS := frame/csv.h frame/frame.h nn/mlp.h solver/adam.h \
 tests/integration/frame_to_model: tests/integration/frame_to_model.c $(FRAME_TO_MODEL_DEPS)
 	$(CC) $(STAT_CFLAGS) -I. tests/integration/frame_to_model.c $(LDLIBS) -o tests/integration/frame_to_model
 
-tests/integration/join_missing_values: tests/integration/join_missing_values.c frame/join.h frame/csv.h frame/frame.h mcs.h nn/mlp.h solver/adam.h solver/optimizer.h $(UNIT_ROOT_DEPS)
+tests/integration/join_missing_values: tests/integration/join_missing_values.c frame/join.h frame/csv.h frame/frame.h inference/mcs.h nn/mlp.h solver/adam.h solver/optimizer.h $(UNIT_ROOT_DEPS)
 	$(CC) $(STAT_CFLAGS) -I. tests/integration/join_missing_values.c $(LDLIBS) -o tests/integration/join_missing_values
 
 tests/integration/distributed_simulation: tests/integration/distributed_simulation.c cluster/cluster.h $(UNIT_ROOT_DEPS)

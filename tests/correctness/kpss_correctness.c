@@ -1,5 +1,5 @@
 /*
-Does unit_root.h's KPSS test compute what it claims to.
+Does inference/unit_root.h's KPSS test compute what it claims to.
 
 KPSS has stationarity as its null, the reverse of every other test in this
 project, so the checks are the reverse too: it should reject on a random walk and
@@ -10,7 +10,7 @@ fits many series to watch the statistic move the way theory says it must.
 */
 
 #include "../check.h"
-#include "../../unit_root.h"
+#include "../../inference/unit_root.h"
 
 /* The Newey-West bandwidth at sizes worked out by hand: 4 (100/100)^(1/4) = 4
    and 4 (188/100)^(1/4) = 4.68, so 4. */

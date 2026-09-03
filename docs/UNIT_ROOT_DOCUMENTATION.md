@@ -1,4 +1,4 @@
-# unit_root.h - tests for a unit root in one series
+# inference/unit_root.h - tests for a unit root in one series
 
 ## Overview
 
@@ -6,7 +6,7 @@ Four tests on a single series whose deterministic part is not assumed to break:
 augmented Dickey-Fuller, KPSS, DF-GLS and Otto, plus the union-of-rejections
 strategies that combine them.
 
-`unit_root.h` also holds three procedures for the case where the trend may break
+`inference/unit_root.h` also holds three procedures for the case where the trend may break
 once at an unknown date — Zivot-Andrews, the Harvey-Leybourne-Taylor trend break
 test, and the Harris-Harvey-Leybourne-Taylor unit root test. Those are documented
 separately in **`docs/BREAK_TESTS_DOCUMENTATION.md`**, since they share a concern
@@ -73,7 +73,7 @@ criteria in `AdfResult` are only comparable across lag orders when the sample is
 held fixed, which is why the parameter exists at all.
 
 `ADF_NO_CONSTANT` is for a residual that already has zero sample mean, which is
-what `cointegration.h`'s Engle-Granger second step regresses. Its critical values
+what `inference/cointegration.h`'s Engle-Granger second step regresses. Its critical values
 depend on how many regressors produced the residual, so `critical` comes back
 not-a-number rather than carrying values that would be wrong.
 
@@ -300,14 +300,14 @@ comparable to the statistic they will judge. It asserts that.
 The quantile those simulations take is `stats.h`'s `stats_quantile`: linear
 interpolation between order statistics, the definition NumPy and R's type 7 use.
 It lives there rather than here because it is a sample statistic like any other,
-and `cointegration.h` needs it too.
+and `inference/cointegration.h` needs it too.
 
 Where the break tests get theirs is in `docs/BREAK_TESTS_DOCUMENTATION.md`.
 
 ## Example
 
 `examples/unit_root_example.c` runs every test in this file, and the co-integration
-tests of `cointegration.h`, on 192 quarters of US macro data
+tests of `inference/cointegration.h`, on 192 quarters of US macro data
 (`examples/datasets/us_real.csv`), and writes
 `examples/out/unit_root_example_report.txt`. It is the one place the verdicts of
 all of them sit side by side on the same series, which is what makes their

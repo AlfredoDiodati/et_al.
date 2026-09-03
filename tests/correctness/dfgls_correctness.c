@@ -1,5 +1,5 @@
 /*
-Does unit_root.h's DF-GLS test compute what it claims to.
+Does inference/unit_root.h's DF-GLS test compute what it claims to.
 
 Elliott, Rothenberg and Stock's test exists for one reason, to lose less power
 than an ordinary ADF when the deterministic terms have to be removed first, so
@@ -11,7 +11,7 @@ which fit hundreds of series.
 */
 
 #include "../check.h"
-#include "../../unit_root.h"
+#include "../../inference/unit_root.h"
 
 /* The quasi-differencing constant is 1 - c/n with c of 7 without a trend and
    13.5 with one, the values the paper derives. */

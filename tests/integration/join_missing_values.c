@@ -6,8 +6,8 @@ numeric column: a JOIN_LEFT or JOIN_FULL output row with no match on one side
 has no other honest value to carry (docs/JOIN_DOCUMENTATION.md, and the note on
 missing values in docs/FRAME_DOCUMENTATION.md). frame/sql.h then handles NaN
 deliberately at eighteen separate places. Above that layer nothing does:
-unit_root.h, cointegration.h, mcs.h and nn/mlp.h contain no NaN handling at all
-between them.
+inference/unit_root.h, inference/cointegration.h, inference/mcs.h and
+nn/mlp.h contain no NaN handling at all between them.
 
 The composition is what this file is about. A join and a unit root test are
 each correct on their own, and every existing suite tests them that way.
@@ -45,15 +45,16 @@ containing an NA marker is typed as a string column, so asking for it as
 numeric aborts before any statistic runs. frame/join.h is the only route by
 which a NaN reaches a numeric column at all.
 
-Built at float64 with the statistical binaries, since it calls unit_root.h.
+Built at float64 with the statistical binaries, since it calls
+inference/unit_root.h.
 */
 
 #include "../check.h"
 #include "../../frame/join.h"
 #include "../../frame/csv.h"
 #include "../../stats.h"
-#include "../../unit_root.h"
-#include "../../mcs.h"
+#include "../../inference/unit_root.h"
+#include "../../inference/mcs.h"
 #include "../../nn/mlp.h"
 #include "../../solver/adam.h"
 #include <sys/resource.h>
@@ -256,7 +257,7 @@ static void call_kpss_on_a_hole(void) {
 }
 
 static void test_the_reductions_that_abort(void) {
-    puts("stats.h and unit_root.h: autocorrelation, Ljung-Box, ADF, DFGLS and KPSS all abort on a hole (fork + expect SIGABRT)");
+    puts("stats.h and inference/unit_root.h: autocorrelation, Ljung-Box, ADF, DFGLS and KPSS all abort on a hole (fork + expect SIGABRT)");
 
     g_holed = mat_new(200, 1);
     Rng rng = rng_new(4242ull, 0);
@@ -294,7 +295,7 @@ static void test_the_reductions_that_abort(void) {
    than left to callers: there is no comparison a caller can write that a NaN
    does not silently pass. */
 static void test_why_a_verdict_cannot_be_left_to_the_caller(void) {
-    puts("unit_root.h: a NaN statistic reads as the non-rejecting verdict at every level, which is why the tests refuse it rather than returning it");
+    puts("inference/unit_root.h: a NaN statistic reads as the non-rejecting verdict at every level, which is why the tests refuse it rather than returning it");
 
     DataFrame left, right;
     build_pair(&left, &right, 200, 180);
@@ -381,7 +382,7 @@ static void call_dm_on_a_hole(void) {
 }
 
 static void test_a_model_comparison_refuses_a_hole(void) {
-    puts("mcs.h: a confidence set and a Diebold-Mariano test abort on a hole rather than returning a set that is not the clean-data answer (fork + expect SIGABRT)");
+    puts("inference/mcs.h: a confidence set and a Diebold-Mariano test abort on a hole rather than returning a set that is not the clean-data answer (fork + expect SIGABRT)");
 
     int n = 200, m = 3;
     g_losses = df_new(n);

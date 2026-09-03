@@ -1,6 +1,6 @@
 /*
-Does unit_root.h's Harvey-Leybourne-Taylor trend break test compute what it
-claims to.
+Does inference/unit_root.h's Harvey-Leybourne-Taylor trend break test compute
+what it claims to.
 
 The whole design of this test is one claim: that its null distribution does not
 depend on whether the shocks are I(0) or I(1), so a single critical value serves
@@ -17,7 +17,7 @@ which need hundreds of draws of a search over every candidate date.
 */
 
 #include "../check.h"
-#include "../../unit_root.h"
+#include "../../inference/unit_root.h"
 
 /* Trend-stationary with an optional slope break: the I(0) case. */
 static Mat stationary_shocks(Rng *rng, int n, int break_at, mreal extra_slope) {

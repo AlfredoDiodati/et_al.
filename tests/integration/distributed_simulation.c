@@ -5,11 +5,11 @@ cluster/cluster.h is well tested at the protocol level: real sockets, a killed
 worker, discovery, framing, a strided input. Every task in that suite is a pure
 arithmetic loop - square_task and index_task. The one workload anybody would
 actually distribute is a simulation, and a simulation is the case where being
-wrong leaves no trace: unit_root.h and cointegration.h simulate their own
-critical values, qvarma_impulse_bands draws a million times, and if the ranges
-handed to different machines all seed the same generator, every machine draws
-the same numbers, the quantile comes out of a sample that is a fraction of the
-size it claims, and nothing anywhere reports a problem.
+wrong leaves no trace: inference/unit_root.h and inference/cointegration.h
+simulate their own critical values, qvarma_impulse_bands draws a million times,
+and if the ranges handed to different machines all seed the same generator,
+every machine draws the same numbers, the quantile comes out of a sample that
+is a fraction of the size it claims, and nothing anywhere reports a problem.
 
 The engine's part of that contract is chunk->lo, the global index of the range's
 first column, which is what a task derives a per-task RNG stream from. The
@@ -27,12 +27,13 @@ The first two must agree to the last bit. The third must not, which is what
 makes the first two agreeing evidence rather than a coincidence - without it
 this file would pass just as happily if every draw in it were identical.
 
-Built at float64 with the statistical binaries, since it calls unit_root.h.
+Built at float64 with the statistical binaries, since it calls
+inference/unit_root.h.
 */
 
 #include "../check.h"
 #include "../../cluster/cluster.h"
-#include "../../unit_root.h"
+#include "../../inference/unit_root.h"
 #include <stdio.h>
 #include <fcntl.h>
 

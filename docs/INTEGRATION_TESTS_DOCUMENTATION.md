@@ -88,7 +88,7 @@ run and only mean something under a sanitizer.
 
 ## Build configuration
 
-Anything reaching `unit_root.h`, `cointegration.h` or `sd/` is built at float64
+Anything reaching `inference/unit_root.h`, `inference/cointegration.h` or `sd/` is built at float64
 through the Makefile's `STAT_CFLAGS`, for the reason stated above that variable:
 those tests do not reproduce their published critical values at float32, and
 `qvarma` aborts there. `optimizer_swap.c` is built at the default precision,
@@ -127,7 +127,7 @@ holds** — `docs/INTEGRATION_STRUCTURE_SEAMS_DOCUMENTATION.md`:
 
 The split is by when a reader needs the content rather than by size alone, the
 same criterion `README.md`'s documentation-structure policy applies to
-`unit_root.h`'s break tests and `sd/qvarma.h`'s reliability limits. What is
+`inference/unit_root.h`'s break tests and `sd/qvarma.h`'s reliability limits. What is
 below stays here because it is read alongside the rules above: what this
 directory has already changed in the library, and what it still does not cover.
 
@@ -135,7 +135,7 @@ directory has already changed in the library, and what it still does not cover.
 
 Two of them did more than report. `join_missing_values.c`'s finding produced
 the missing-value rule described above, `mat_all_finite` in `linalg/mat.h`, and
-finiteness asserts in `stats.h`, `unit_root.h`, `cointegration.h` and `mcs.h` -
+finiteness asserts in `stats.h`, `inference/unit_root.h`, `inference/cointegration.h` and `inference/mcs.h` -
 the last of which was a second defect of the same class, found only because
 writing the rule down forced the question of which functions it applied to. Item 9 of
 the original scan produced `make examples` and removed a Makefile rule whose

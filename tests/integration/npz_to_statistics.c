@@ -5,12 +5,12 @@ questions as the frame that never left memory?
 frame/npz.h is the first format here that carries a whole DataFrame rather than
 a bare matrix: column names, declaration order, string columns and row labels
 all travel in the archive, and the numeric values travel through a zip member
-whose bytes are checked by a CRC32 that frame/gzip.h computes. Each of those pieces
-is tested on its own in tests/correctness/test_npz.c. What no per-module suite
-can reach is the composition: whether the frame that comes back out drives
-stats.h, unit_root.h and cointegration.h to the same answers as the frame that
-went in, and whether it still owns its own memory once the archive, the source
-frame and the file behind them are gone.
+whose bytes are checked by a CRC32 that frame/gzip.h computes. Each of those
+pieces is tested on its own in tests/correctness/test_npz.c. What no per-module
+suite can reach is the composition: whether the frame that comes back out
+drives stats.h, inference/unit_root.h and inference/cointegration.h to the same
+answers as the frame that went in, and whether it still owns its own memory
+once the archive, the source frame and the file behind them are gone.
 
 The reference is the second path to the same answer that this directory asks
 for in place of a reference implementation: examples/datasets/us_real.csv
@@ -49,8 +49,8 @@ critical values at float32.
 #include "../../frame/npy.h"
 #include "../../frame/npz.h"
 #include "../../stats.h"
-#include "../../unit_root.h"
-#include "../../cointegration.h"
+#include "../../inference/unit_root.h"
+#include "../../inference/cointegration.h"
 
 #define DATASET "examples/datasets/us_real.csv"
 #define NPZ_PATH "/tmp/et_al_integration_npz_to_statistics.npz"
@@ -156,7 +156,7 @@ static void compare_statistics(const DataFrame *csv, const DataFrame *npz, const
                     kpss_level(a, kpss_bandwidth(csv->r)).statistic, tol, name);
     }
 
-    /* cointegration.h wants one column per period, the opposite of a
+    /* inference/cointegration.h wants one column per period, the opposite of a
        DataFrame's one row per observation, so the block is turned around on
        both sides the way frame_to_model.c does it. */
     enum { N_SERIES = 3 };

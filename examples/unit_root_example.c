@@ -1,7 +1,7 @@
 #include <sys/stat.h>
 #include "frame/csv.h"
-#include "unit_root.h"
-#include "cointegration.h"
+#include "inference/unit_root.h"
+#include "inference/cointegration.h"
 
 /* Is each of these US macro series stationary, and are any two of them
    co-integrated - the question every one of these tests exists to answer,

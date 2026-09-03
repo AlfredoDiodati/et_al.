@@ -1,5 +1,5 @@
 /*
-Does unit_root.h's Otto pooled block test compute what it claims to.
+Does inference/unit_root.h's Otto pooled block test compute what it claims to.
 
 The claim that distinguishes this test from every other one here is that it does
 not care what shape the deterministic trend has, provided the trend is smooth
@@ -13,7 +13,7 @@ comparisons, which fit hundreds of series.
 */
 
 #include "../check.h"
-#include "../../unit_root.h"
+#include "../../inference/unit_root.h"
 
 /* An AR(1) with the given persistence, no deterministic part. */
 static Mat autoregressive(Rng *rng, int n, mreal persistence) {

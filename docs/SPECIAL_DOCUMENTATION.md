@@ -4,7 +4,7 @@
 
 **Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy) — a general-purpose math utility, usable independently of any distribution or model, the analogue of `scipy.special`.
 
-`special.h` holds scalar special functions: general math tools that are not linear algebra (so they don't belong in `linalg/`) and not tied to any one distribution (so they don't belong in a `dist/` file). It is a standalone root-level header like `json.h` — it includes only `<assert.h>` and `<math.h>`, with no dependency on `linalg/mat.h` — and follows the root-header naming pattern (`<noun>.h`, functions prefixed `special_`). It currently contains seven entry points: digamma, added because `dist/student.h`/`dist/mv/student.h` needed it for their `_dlogpdf_nu` scores; `special_lgamma_diff` and `special_digamma_diff`, the two *differences* those same distributions need at a light tail, added when the plain subtractions they replace were found to return no correct digits at a `nu` a fit actually reaches; the standard normal CDF, added because `mcs.h`'s Diebold-Mariano test needed a normal tail probability for its p-value; and the regularized incomplete gamma function with the chi-squared survival function built on it, added because `stats.h`'s Ljung-Box p-value needed a chi-squared tail. Future special functions (trigamma, incomplete beta, ...) belong here when something concretely needs them, not before.
+`special.h` holds scalar special functions: general math tools that are not linear algebra (so they don't belong in `linalg/`) and not tied to any one distribution (so they don't belong in a `dist/` file). It is a standalone root-level header like `json.h` — it includes only `<assert.h>` and `<math.h>`, with no dependency on `linalg/mat.h` — and follows the root-header naming pattern (`<noun>.h`, functions prefixed `special_`). It currently contains seven entry points: digamma, added because `dist/student.h`/`dist/mv/student.h` needed it for their `_dlogpdf_nu` scores; `special_lgamma_diff` and `special_digamma_diff`, the two *differences* those same distributions need at a light tail, added when the plain subtractions they replace were found to return no correct digits at a `nu` a fit actually reaches; the standard normal CDF, added because `inference/mcs.h`'s Diebold-Mariano test needed a normal tail probability for its p-value; and the regularized incomplete gamma function with the chi-squared survival function built on it, added because `stats.h`'s Ljung-Box p-value needed a chi-squared tail. Future special functions (trigamma, incomplete beta, ...) belong here when something concretely needs them, not before.
 
 ## Differences, not terms
 
@@ -99,7 +99,7 @@ The algebraically equal `(1 + erf(x/sqrt(2)))/2` is deliberately **not** used, a
 
 This lives here rather than in `dist/gauss.h` because it is a scalar function of one argument, like everything else in this file, while `dist/gauss.h` is built entirely around `Mat`-valued, `loc`/`scale`-broadcasting evaluation — reaching a single tail probability through that API would mean allocating three matrices to divide two numbers. A broadcasting `gauss_cdf` remains a reasonable future addition to `dist/gauss.h`, and would be built on this function.
 
-Note `special.h` is standalone by design, so there is no `dist/` dependency in either direction: `mcs.h` includes `special.h` directly.
+Note `special.h` is standalone by design, so there is no `dist/` dependency in either direction: `inference/mcs.h` includes `special.h` directly.
 
 ### `special_gammainc_p`, `special_gammainc_q`
 
@@ -132,5 +132,5 @@ Two evaluations split at `x = a + 1`: the series expansion `P(a,x) = x^a e^-x / 
 - `x > 0` only — no reflection formula for negative arguments, deferred until needed.
 - Trigamma (`psi'`, needed for Fisher information of `nu`) and the incomplete beta function are natural future residents, each added when a concrete caller appears — same YAGNI stance as everywhere else in this project.
 - No inverse of `special_gammainc_p`, so no chi-squared *quantile*. The callers here compare a statistic against a tail probability, not against a critical value read off the inverse.
-- No normal *quantile* function (the inverse of `special_norm_cdf`). Nothing needs it yet: the p-values in `mcs.h` go through the CDF, not its inverse. A caller wanting a confidence interval rather than a p-value would need it, and that is the point at which to add it.
+- No normal *quantile* function (the inverse of `special_norm_cdf`). Nothing needs it yet: the p-values in `inference/mcs.h` go through the CDF, not its inverse. A caller wanting a confidence interval rather than a p-value would need it, and that is the point at which to add it.
 - `special_norm_cdf` is untimed — `bench_special.py` covers digamma only.

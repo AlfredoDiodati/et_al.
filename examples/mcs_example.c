@@ -1,6 +1,6 @@
 #include <sys/stat.h>
 #include "frame/csv.h"
-#include "mcs.h"
+#include "inference/mcs.h"
 
 /* Which of five variance forecasts for a sector ETF can be told apart
    from the best one - the application the Model Confidence Set was
@@ -9,17 +9,17 @@
    The file has two halves and they are not equally interesting. The
    first half manufactures a loss table out of a returns file: rolling
    windows, an EWMA recursion, a warmup period. It is ordinary
-   forecasting code, it touches nothing in mcs.h, and in a real
+   forecasting code, it touches nothing in inference/mcs.h, and in a real
    application somebody else's model would be sitting there instead - a
    nn/-style fit/forecast object, a GARCH implementation, a csv of
    forecasts produced last night. Read it only to know what the numbers
    are.
 
    The second half is main, and it is what this example is for: it
-   contains no loops and no hand-written tables, only mcs.h calls and
+   contains no loops and no hand-written tables, only inference/mcs.h calls and
    the file handles they write through. If a call site of this library
    ever needs more than that to produce an answer, the missing piece
-   belongs in mcs.h rather than at the call site - which is how
+   belongs in inference/mcs.h rather than at the call site - which is how
    mcs_fwrite_report, mcs_fwrite_options and mcs_pvalue_frame came to
    exist, each replacing a loop an earlier draft of this file had.
 

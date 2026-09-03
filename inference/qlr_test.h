@@ -1,5 +1,5 @@
 #pragma once
-#include "linalg/mat.h"
+#include "../linalg/mat.h"
 #include <stdlib.h>
 #include <math.h>
 

@@ -1,5 +1,6 @@
 /*
-Does unit_root.h's augmented Dickey-Fuller test compute what it claims to.
+Does inference/unit_root.h's augmented Dickey-Fuller test compute what it
+claims to.
 
 The test returns a verdict, so a wrong implementation does not crash: it returns
 a plausible number and the wrong answer about a unit root. Every check here is an
@@ -11,7 +12,7 @@ constant-and-trend critical values, which needs a Monte Carlo of the null.
 */
 
 #include "../check.h"
-#include "../../unit_root.h"
+#include "../../inference/unit_root.h"
 
 /*
 The response surface for the constant case against the values statsmodels

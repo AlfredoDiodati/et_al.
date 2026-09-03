@@ -1,9 +1,9 @@
 #pragma once
 #include "unit_root.h"
-#include "linalg/decomp.h"
-#include "linalg/solver.h"
-#include "random.h"
-#include "stats.h"
+#include "../linalg/decomp.h"
+#include "../linalg/solver.h"
+#include "../random.h"
+#include "../stats.h"
 #include <math.h>
 
 /*
@@ -18,7 +18,7 @@ to regress on the others and tests whether that specific residual has a unit
 root, so it has a normalization and is not symmetric in the variables. Maki adds
 breaks in the co-integrating relation, found by the test rather than supplied.
 
-unit_root.h is included because Engle-Granger's second step is an ADF
+inference/unit_root.h is included because Engle-Granger's second step is an ADF
 regression.
 
 The VECM estimated is
@@ -264,7 +264,7 @@ was fitted rather than observed, so the first step's estimation has already used
 up some of the variation the second step tests, which pushes the distribution
 lower. The critical values therefore depend on how many regressors step one had
 and are simulated by engle_granger_critical below, never taken from
-unit_root.h's table.
+inference/unit_root.h's table.
 
 The test is not symmetric. Regressing the inflation rate on the funds rate is a
 different test from the reverse, and the two can disagree, so a caller reporting
