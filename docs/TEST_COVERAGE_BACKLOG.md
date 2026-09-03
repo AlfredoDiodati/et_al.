@@ -75,16 +75,16 @@ where called out explicitly below.
 Exercised only as a side effect of testing something else; no assertion
 targets the function itself.
 
-- [ ] `gzip_inflate_raw` - `gzip.h:309` - the `expected_size == 0`
+- [ ] `gzip_inflate_raw` - `frame/gzip.h:309` - the `expected_size == 0`
       (grow-on-demand) branch is never exercised, only `expected_size > 0`.
       Needs a direct call with `expected_size = 0` against a known small
       DEFLATE stream.
-- [ ] `gzip_build_dynamic_trees` - `gzip.h:247` - happy path covered via real
+- [ ] `gzip_build_dynamic_trees` - `frame/gzip.h:247` - happy path covered via real
       `.RData` files; its three malformed-input asserts (repeat code with no
       previous length, invalid code-length symbol, bad HLIT/HDIST/HCLEN)
       are only hit incidentally by fuzzing, never targeted. Needs a
       hand-built dynamic-block header per assert.
-- [ ] `gzip_decode_symbol` - `gzip.h:152` - "invalid huffman code" assert
+- [ ] `gzip_decode_symbol` - `frame/gzip.h:152` - "invalid huffman code" assert
       only reachable incidentally through fuzzing. Needs a targeted
       corrupted-code test.
 - [ ] `json_parse_file` - `json.h:290` - only exercised on a valid path.

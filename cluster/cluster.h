@@ -44,7 +44,7 @@
 
    Dependencies: none beyond libc. Sockets, poll, and fork are all in
    libc.so.6 on glibc, so nothing here adds a link flag or a package, the
-   same standard gzip.h's from-scratch DEFLATE decoder was held to rather
+   same standard frame/gzip.h's from-scratch DEFLATE decoder was held to rather
    than linking zlib. See README.md's Dependencies policy.
 
    The one thing C cannot do is ship a function to another machine, so every

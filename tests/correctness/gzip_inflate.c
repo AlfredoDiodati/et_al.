@@ -1,4 +1,4 @@
-#include "../../gzip.h"
+#include "../../frame/gzip.h"
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -234,7 +234,7 @@ static void test_is_gzip_boundary(void) {
    file that would produce is never looked at, only the exit status is,
    but generating one is not free: a child that reserved a large buffer
    before aborting (see the fuzz test's bogus-ISIZE-driven allocations,
-   and GZIP_PREALLOC_CAP's own comment in gzip.h) can otherwise sit in
+   and GZIP_PREALLOC_CAP's own comment in frame/gzip.h) can otherwise sit in
    the kernel/systemd-coredump pipeline for a real, measurable amount of
    wall-clock time per crash - observed directly during development: this
    file's fuzz test went from over a minute to a few seconds once this
@@ -381,7 +381,7 @@ static void call_gzip_inflate_fuzz(void) {
    every trial that rejects its input (the overwhelming majority of
    random/mutated bytes) has to fork+abort to be checked safely - and
    measured directly during development, fork()+abort() alone (no
-   gzip.h involved at all) costs on the order of 100ms+ per call in a
+   frame/gzip.h involved at all) costs on the order of 100ms+ per call in a
    sandboxed dev container (crash-reporting overhead, not this project's
    code - a bare-metal machine would not see this), independent of
    RLIMIT_CORE. 50 trials per batch keeps this test's wall-clock cost

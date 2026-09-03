@@ -117,7 +117,7 @@ convenient.
 `frame/npz.h` is the first format here that carries a whole `DataFrame` rather
 than a bare matrix: column names, declaration order, string columns and row
 labels all travel in the archive, and the numbers travel through a zip member
-whose bytes are checked by a CRC32 `gzip.h` computes. Each of those pieces is
+whose bytes are checked by a CRC32 `frame/gzip.h` computes. Each of those pieces is
 tested on its own in `tests/correctness/test_npz.c`. What no per-module suite
 reaches is the composition — whether the frame that comes back drives `stats.h`,
 `unit_root.h` and `cointegration.h` to the same answers as the frame that went

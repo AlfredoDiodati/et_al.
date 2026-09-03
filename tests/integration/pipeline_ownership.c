@@ -303,7 +303,7 @@ static void test_a_file_round_trip_releases_every_intermediate(void) {
    access - which is exactly the shape of mistake a per-module test cannot see,
    because the module's own test never lets the frame outlive anything. */
 static void test_an_rdata_frame_does_not_point_into_the_decompressed_buffer(void) {
-    puts("frame/rdata.h and gzip.h: a frame loaded from a compressed file owns its values, not a slice of the inflate buffer");
+    puts("frame/rdata.h and frame/gzip.h: a frame loaded from a compressed file owns its values, not a slice of the inflate buffer");
 
     DataFrame df = df_read_rdata(RDATA_FIXTURE, "df_factor");
     CHECK(df.r > 0, "the fixture must load, got %d rows", df.r);

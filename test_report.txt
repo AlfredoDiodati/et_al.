@@ -1,4 +1,4 @@
-test run: wo  2 sep 2026 20:52:31 CEST (STRESS=1)
+test run: do  3 sep 2026 10:06:14 CEST (STRESS=1)
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -27,13 +27,13 @@ make: 'tests/correctness/test_frame' is up to date.
 make: 'tests/correctness/test_csv' is up to date.
 make: 'tests/correctness/test_txt' is up to date.
 make: 'tests/correctness/test_npy' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_npz.c -lm -lopenblas -o tests/correctness/test_npz
+make: 'tests/correctness/test_npz' is up to date.
 make: 'tests/correctness/test_json' is up to date.
 make: 'tests/correctness/test_sql' is up to date.
 make: 'tests/correctness/test_join' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/gzip_inflate.c -lm -lopenblas -o tests/correctness/gzip_inflate
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/gzip_deflate.c -lm -lopenblas -o tests/correctness/gzip_deflate
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/rdata_array_read.c -lm -lopenblas -o tests/correctness/rdata_array_read
+make: 'tests/correctness/gzip_inflate' is up to date.
+make: 'tests/correctness/gzip_deflate' is up to date.
+make: 'tests/correctness/rdata_array_read' is up to date.
 make: 'tests/correctness/adf_correctness' is up to date.
 make: 'tests/correctness/kpss_correctness' is up to date.
 make: 'tests/correctness/dfgls_correctness' is up to date.
@@ -56,11 +56,11 @@ make: 'tests/integration/frame_to_model' is up to date.
 make: 'tests/integration/join_missing_values' is up to date.
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -I. examples/rdata_example.c -lm -lopenblas -o examples/rdata_example
+make: 'tests/integration/pipeline_ownership' is up to date.
+make: 'tests/integration/npz_to_statistics' is up to date.
+make: 'tests/integration/header_composition' is up to date.
+make: 'tests/integration/header_composition_f32' is up to date.
+make: Nothing to be done for 'examples'.
 
 === test_mat: PASS ===
 construction
@@ -1574,7 +1574,7 @@ frame/frame.h: a column view writes through to the frame, and a later append mov
 nn/mlp.h and sd/qvarma.h: a fit result owns its parameters, still usable after the frame and the design matrix are gone
 sd/qvarma.h and json.h: a fit written to disk reloads into a fresh model after the original is freed
 frame/csv.h and frame/npy.h: a frame written and read back is a new owner each time, with nothing shared between the two
-frame/rdata.h and gzip.h: a frame loaded from a compressed file owns its values, not a slice of the inflate buffer
+frame/rdata.h and frame/gzip.h: a frame loaded from a compressed file owns its values, not a slice of the inflate buffer
 sd/qvarma.h: the impulse response bands allocate and release per draw rather than accumulating
 
 PASSED, 0 failures

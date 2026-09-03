@@ -1,9 +1,9 @@
-#include "../../gzip.h"
+#include "../../frame/gzip.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* gzip.h's encoder, checked the only way an encoder can be checked
+/* frame/gzip.h's encoder, checked the only way an encoder can be checked
    without a second implementation present at test time: everything it
    produces must come back byte-identical through the decoder next to it,
    which tests/correctness/gzip_inflate.c has already checked against

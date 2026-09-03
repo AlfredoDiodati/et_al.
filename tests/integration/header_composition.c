@@ -45,7 +45,7 @@ the lot as unused.
 #include "../../random.h"
 #include "../../stats.h"
 #include "../../json.h"
-#include "../../gzip.h"
+#include "../../frame/gzip.h"
 #include "../../mcs.h"
 #include "../../unit_root.h"
 #include "../../cointegration.h"

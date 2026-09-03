@@ -5,7 +5,7 @@
    Separate from bench_frame.c, which already covers csv/txt/npy and
    sql, because .npz is the one frame/ format whose cost is dominated by
    something other than parsing: a compressed archive is DEFLATE work,
-   so this pair measures gzip.h's encoder and decoder against zlib's as
+   so this pair measures frame/gzip.h's encoder and decoder against zlib's as
    much as it measures the container. Folding it into bench_frame.c
    would have put two different questions under one heading.
 
@@ -63,7 +63,7 @@ int c_npz_load(const char *path) {
     return r;
 }
 
-/* gzip.h's two directions on their own, with no container or DataFrame
+/* frame/gzip.h's two directions on their own, with no container or DataFrame
    around them - this is what isolates the encoder and decoder from the
    zip bookkeeping when the archive numbers come out slower than numpy's. */
 static unsigned char *g_blob = NULL;

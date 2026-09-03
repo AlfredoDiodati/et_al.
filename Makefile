@@ -56,7 +56,7 @@ PREFIX  ?= /usr/local
 INCDIR  := $(PREFIX)/include/et_al.
 PKGCONFIGDIR := $(PREFIX)/lib/pkgconfig
 
-CORE_HEADERS := ad.h json.h special.h random.h stats.h mcs.h gzip.h unit_root.h cointegration.h qlr_test.h
+CORE_HEADERS := ad.h json.h special.h random.h stats.h mcs.h unit_root.h cointegration.h qlr_test.h
 CORE_SUBDIRS := linalg dist dist/mv solver frame cluster
 MODEL_SUBDIRS := nn sd
 
@@ -92,7 +92,7 @@ examples/mcs_example: examples/mcs_example.c mcs.h stats.h random.h special.h fr
 examples/cluster_example: examples/cluster_example.c cluster/cluster.h random.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/cluster_example.c $(LDLIBS) -o examples/cluster_example
 
-examples/rdata_example: examples/rdata_example.c frame/rdata.h gzip.h frame/csv.h frame/frame.h stats.h linalg/mat.h
+examples/rdata_example: examples/rdata_example.c frame/rdata.h frame/gzip.h frame/csv.h frame/frame.h stats.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/rdata_example.c $(LDLIBS) -o examples/rdata_example
 
 examples/join_example: examples/join_example.c frame/join.h frame/frame.h linalg/mat.h
@@ -217,8 +217,8 @@ libframe.so: tests/performance/bench_frame.c frame/sql.h frame/csv.h frame/txt.h
 
 # Separate from libframe.so because .npz is the one frame/ format whose
 # cost is dominated by DEFLATE rather than by parsing, so its benchmark
-# is as much about gzip.h's two directions as about the container.
-libnpz.so: tests/performance/bench_npz.c frame/npz.h frame/npy.h frame/frame.h gzip.h linalg/mat.h
+# is as much about frame/gzip.h's two directions as about the container.
+libnpz.so: tests/performance/bench_npz.c frame/npz.h frame/npy.h frame/frame.h frame/gzip.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_npz.c $(LDLIBS) -o libnpz.so
 
 # ctypes-loadable .so exposing production df_sql plus all three session
@@ -333,7 +333,7 @@ tests/correctness/test_txt: tests/correctness/test_txt.c frame/txt.h frame/frame
 tests/correctness/test_npy: tests/correctness/test_npy.c frame/npy.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_npy.c $(LDLIBS) -o tests/correctness/test_npy
 
-tests/correctness/test_npz: tests/correctness/test_npz.c frame/npz.h frame/npy.h frame/sql.h frame/join.h frame/frame.h gzip.h linalg/mat.h
+tests/correctness/test_npz: tests/correctness/test_npz.c frame/npz.h frame/npy.h frame/sql.h frame/join.h frame/frame.h frame/gzip.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_npz.c $(LDLIBS) -o tests/correctness/test_npz
 
 # The one check here that runs against a live numpy rather than against bytes
@@ -342,7 +342,7 @@ tests/correctness/test_npz: tests/correctness/test_npz.c frame/npz.h frame/npy.h
 # pandas are development-tier dependencies (see README's Installation tiers),
 # so this stays out of `test` and `check.sh` and is run on its own; the script
 # reports a skip rather than a failure when neither is installed.
-tests/correctness/npz_python_interop: tests/correctness/npz_python_interop.c frame/npz.h frame/npy.h frame/frame.h gzip.h linalg/mat.h
+tests/correctness/npz_python_interop: tests/correctness/npz_python_interop.c frame/npz.h frame/npy.h frame/frame.h frame/gzip.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/npz_python_interop.c $(LDLIBS) -o tests/correctness/npz_python_interop
 
 test-npz-python: tests/correctness/npz_python_interop
@@ -357,13 +357,13 @@ tests/correctness/test_sql: tests/correctness/test_sql.c frame/sql.h frame/frame
 tests/correctness/test_join: tests/correctness/test_join.c frame/join.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_join.c $(LDLIBS) -o tests/correctness/test_join
 
-tests/correctness/gzip_inflate: tests/correctness/gzip_inflate.c gzip.h
+tests/correctness/gzip_inflate: tests/correctness/gzip_inflate.c frame/gzip.h
 	$(CC) $(CFLAGS) tests/correctness/gzip_inflate.c $(LDLIBS) -o tests/correctness/gzip_inflate
 
-tests/correctness/gzip_deflate: tests/correctness/gzip_deflate.c gzip.h
+tests/correctness/gzip_deflate: tests/correctness/gzip_deflate.c frame/gzip.h
 	$(CC) $(CFLAGS) tests/correctness/gzip_deflate.c $(LDLIBS) -o tests/correctness/gzip_deflate
 
-tests/correctness/rdata_array_read: tests/correctness/rdata_array_read.c frame/rdata.h gzip.h frame/frame.h linalg/mat.h
+tests/correctness/rdata_array_read: tests/correctness/rdata_array_read.c frame/rdata.h frame/gzip.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/rdata_array_read.c $(LDLIBS) -o tests/correctness/rdata_array_read
 
 # --- statistical test and model suites (built at float64, see STAT_CFLAGS).
@@ -453,12 +453,12 @@ tests/integration/distributed_simulation: tests/integration/distributed_simulati
 tests/integration/optimizer_swap: tests/integration/optimizer_swap.c nn/mlp.h solver/optimizer.h ad.h json.h special.h random.h frame/frame.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. tests/integration/optimizer_swap.c $(LDLIBS) -o tests/integration/optimizer_swap
 
-tests/integration/pipeline_ownership: tests/integration/pipeline_ownership.c $(FRAME_TO_MODEL_DEPS) frame/join.h frame/sql.h frame/npy.h frame/rdata.h gzip.h
+tests/integration/pipeline_ownership: tests/integration/pipeline_ownership.c $(FRAME_TO_MODEL_DEPS) frame/join.h frame/sql.h frame/npy.h frame/rdata.h frame/gzip.h
 	$(CC) $(STAT_CFLAGS) -I. tests/integration/pipeline_ownership.c $(LDLIBS) -o tests/integration/pipeline_ownership
 
 # Built at float64 like every other statistical binary here, since it runs the
 # unit root and co-integration tests through both arms of the round trip.
-tests/integration/npz_to_statistics: tests/integration/npz_to_statistics.c $(FRAME_TO_MODEL_DEPS) frame/npz.h frame/npy.h frame/csv.h gzip.h
+tests/integration/npz_to_statistics: tests/integration/npz_to_statistics.c $(FRAME_TO_MODEL_DEPS) frame/npz.h frame/npy.h frame/csv.h frame/gzip.h
 	$(CC) $(STAT_CFLAGS) -I. tests/integration/npz_to_statistics.c $(LDLIBS) -o tests/integration/npz_to_statistics
 
 # Two translation units on purpose. One proves every header can be included

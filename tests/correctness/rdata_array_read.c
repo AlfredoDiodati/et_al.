@@ -490,7 +490,7 @@ static void test_real_zero_row_dataframe_fixture(void) {
 }
 
 /* rdata_xz_compressed.RData is real R output from save(y, ..., compress
-   = "xz") - a compression this parser does not (and, per gzip.h's own
+   = "xz") - a compression this parser does not (and, per frame/gzip.h's own
    scope, never will) support. gzip_is_gzip correctly says "not gzip"
    (xz's magic bytes are FD 37 7A 58 5A, nothing like gzip's 1F 8B), so
    rdata_read falls through to the "must already be an uncompressed RDX2/

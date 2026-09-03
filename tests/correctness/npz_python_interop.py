@@ -26,7 +26,7 @@ Four things are checked, and the first is the one that only works here:
      from the C source, handed to np.load, and required to hold the
      values that file asserts, so an embedded fixture cannot drift into
      being merely self-consistent.
-  4. zlib accepts what gzip.h's DEFLATE encoder produces. The C suite can
+  4. zlib accepts what frame/gzip.h's DEFLATE encoder produces. The C suite can
      only round-trip the encoder through the decoder beside it, which
      proves the two halves agree but not that what they agree on is
      DEFLATE. This is also where the ratio-against-zlib figures in
@@ -236,7 +236,7 @@ DEFLATE_CASES = {
 
 
 def check_zlib_accepts_our_deflate(tmp):
-    """The encoder half of gzip.h, judged by an implementation that is not ours.
+    """The encoder half of frame/gzip.h, judged by an implementation that is not ours.
 
     tests/correctness/gzip_deflate.c can only round-trip its output through the
     decoder beside it, which proves the two halves agree but not that what they

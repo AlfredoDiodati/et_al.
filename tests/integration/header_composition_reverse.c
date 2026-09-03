@@ -35,7 +35,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../cointegration.h"
 #include "../../unit_root.h"
 #include "../../mcs.h"
-#include "../../gzip.h"
+#include "../../frame/gzip.h"
 #include "../../json.h"
 #include "../../stats.h"
 #include "../../random.h"

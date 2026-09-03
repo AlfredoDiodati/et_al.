@@ -1632,7 +1632,7 @@ else on this list.
 **Status: lowest actionability of the whole list - investigate feasibility
 before committing to a fix.**
 
-## 9. `gzip_decode_symbol` table cache pressure (`gzip.h`)
+## 9. `gzip_decode_symbol` table cache pressure (`frame/gzip.h`)
 
 **Now measured against an external reference.** This entry used to open by
 saying no external package made sense to compare a from-scratch DEFLATE
@@ -1724,7 +1724,7 @@ amortised across a cache line's worth of output.
 Both are worth doing in that order: the read fix is a bigger win, is shared
 with three other loaders, and does not touch the storage model.
 
-## 11. `gzip_deflate_raw` speed against zlib at equal ratio (`gzip.h`)
+## 11. `gzip_deflate_raw` speed against zlib at equal ratio (`frame/gzip.h`)
 
 From `tests/performance/bench_npz.py`. The encoder matches zlib's ratio and
 trails its speed, and by how much depends entirely on how compressible the

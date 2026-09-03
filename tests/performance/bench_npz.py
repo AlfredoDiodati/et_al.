@@ -1,4 +1,4 @@
-"""frame/npz.h and gzip.h against numpy and zlib.
+"""frame/npz.h and frame/gzip.h against numpy and zlib.
 
 Three questions, deliberately separated, because .npz is the one frame/
 format whose cost is not mostly parsing:
@@ -8,7 +8,7 @@ format whose cost is not mostly parsing:
      on either side, so it is comparable to the npy row in bench_frame.py.
   2. df_write_npz_compressed / reading it back, against
      np.savez_compressed. Both sides are now dominated by DEFLATE, so
-     this measures gzip.h's encoder and decoder through the archive.
+     this measures frame/gzip.h's encoder and decoder through the archive.
   3. gzip_deflate_raw and gzip_inflate_raw against zlib directly, with no
      container around them, at every compression level. When (2) comes
      out slower this is what says whether the container or the codec is
@@ -168,7 +168,7 @@ with tempfile.TemporaryDirectory() as tmp:
         ref = bench(load_numpy_compressed)
         row(f"{n}x{COLS + 1}", ours, ref)
 
-# gzip.h against zlib with no container in the way. Two payloads: the raw
+# frame/gzip.h against zlib with no container in the way. Two payloads: the raw
 # bytes of a float32 column, which is what a numeric .npz member actually
 # holds and barely compresses, and this project's own sources, which is
 # the shape anything text-like has.

@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
     }
 
     /* Raw DEFLATE of a file, for zlib to judge on its own - the encoder
-       half of gzip.h has no other independent check available. */
+       half of frame/gzip.h has no other independent check available. */
     if (strcmp(argv[1], "deflate") == 0 || strncmp(argv[1], "deflate", 7) == 0) {
         int level = argv[1][7] ? atoi(argv[1] + 7) : GZIP_LEVEL_DEFAULT;
         long size;

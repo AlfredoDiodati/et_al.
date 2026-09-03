@@ -5,7 +5,7 @@ questions as the frame that never left memory?
 frame/npz.h is the first format here that carries a whole DataFrame rather than
 a bare matrix: column names, declaration order, string columns and row labels
 all travel in the archive, and the numeric values travel through a zip member
-whose bytes are checked by a CRC32 that gzip.h computes. Each of those pieces
+whose bytes are checked by a CRC32 that frame/gzip.h computes. Each of those pieces
 is tested on its own in tests/correctness/test_npz.c. What no per-module suite
 can reach is the composition: whether the frame that comes back out drives
 stats.h, unit_root.h and cointegration.h to the same answers as the frame that
@@ -26,7 +26,7 @@ Three things make this more than a restatement of test_npz.c:
     silently become contiguous, or acquire a different stride, without any
     single-value comparison noticing.
   - The npz frame has to survive its source. df_read_npz decompresses through
-    gzip.h into a buffer it then frees, and reads the whole file into another;
+    frame/gzip.h into a buffer it then frees, and reads the whole file into another;
     a frame pointing into either would read correct values right up until
     something else reused that memory.
   - .npz is compared against the two formats already here. It has to match

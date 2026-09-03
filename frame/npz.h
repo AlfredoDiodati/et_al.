@@ -1,6 +1,6 @@
 #pragma once
 #include "npy.h"
-#include "../gzip.h"
+#include "gzip.h"
 
 /* NumPy .npz loader and writer for DataFrame. A .npz is a zip archive
    whose members are .npy files, one per named array - which is exactly
@@ -10,11 +10,11 @@
    frame/npy.h can carry none of the three: .npy is one anonymous array.
 
    Core tier (see README's "Installation tiers" policy), above frame/npy.h
-   (whose header parsing and writing it reuses) and gzip.h (whose DEFLATE
+   (whose header parsing and writing it reuses) and frame/gzip.h (whose DEFLATE
    decoder reads a compressed member and whose encoder writes one). docs/NPY_DOCUMENTATION.md used to
    rule .npz out on the ground that it "reintroduces the deflate-
    decompression problem that ruled out Parquet"; that stopped being true
-   when gzip.h was written for frame/rdata.h, so the only piece .npz
+   when frame/gzip.h was written for frame/rdata.h, so the only piece .npz
    needed beyond frame/npy.h was the zip container itself, which is a
    fixed-layout record format with no compression in it.
 
@@ -30,7 +30,7 @@
    - Both stored (np.savez) and deflated (np.savez_compressed) members,
      in both directions: df_write_npz and df_write_npz_compressed are the
      two entry points, and df_read_npz accepts either. The DEFLATE
-     encoder gzip.h grew for this is what makes the writing half
+     encoder frame/gzip.h grew for this is what makes the writing half
      possible; before it, this file could read a compressed archive and
      not produce one.
    - No ZIP64. A member at or above 4 GiB is rejected rather than read
@@ -176,7 +176,7 @@ static inline size_t frame_npz_find_eocd(const unsigned char *buf, size_t size) 
 }
 
 /* Reads every member of an in-memory zip archive, decompressing the
-   deflated ones through gzip.h and checking each member's CRC32 against
+   deflated ones through frame/gzip.h and checking each member's CRC32 against
    the archive's own. Returns a freshly allocated array the caller
    releases with frame_npz_members_free. */
 static inline FrameNpzMember *frame_npz_read_members(const unsigned char *buf, size_t size, int *out_n) {
@@ -447,7 +447,7 @@ typedef struct {
 } FrameNpzEntry;
 
 /* Writes one member. With compress set the payload goes through
-   gzip.h's DEFLATE encoder, exactly as np.savez_compressed does; the
+   frame/gzip.h's DEFLATE encoder, exactly as np.savez_compressed does; the
    CRC32 recorded is always of the uncompressed .npy image, which is what
    the zip format asks for and what df_read_npz checks after inflating.
 

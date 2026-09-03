@@ -1,6 +1,6 @@
 #pragma once
 #include "frame.h"
-#include "../gzip.h"
+#include "gzip.h"
 
 /* Reader for R's binary serialization format - the format behind both
    .RData (a saved workspace, produced by save()) and .rds (a single
@@ -8,8 +8,8 @@
    manual's "Serialization Formats" chapter. Core tier (see README's
    "Installation tiers" policy): a data-loading primitive, sitting next
    to frame/csv.h and frame/npy.h, needing frame/frame.h for DataFrame
-   plus the project's own gzip.h (save() gzip-compresses by default, and
-   this project's dependency policy rules out zlib - see gzip.h's own
+   plus the project's own frame/gzip.h (save() gzip-compresses by default, and
+   this project's dependency policy rules out zlib - see frame/gzip.h's own
    comment).
 
    Scope, stated so a caller with an unusual .RData file knows where the

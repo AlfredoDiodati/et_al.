@@ -570,7 +570,15 @@ static void test_against_naive_reference(void) {
     if (getenv("STRESS")) {
         puts("  join stress: many unique keys, forcing repeated hash table growth");
         fuzz_against_reference(5000, 3000, 2000);
-        fuzz_against_reference(20000, 20000, 1);
+        /* The cardinality argument is the number of distinct keys, so 1
+           means every row on both sides carries the same key and the
+           inner join is a full cartesian product: 20000 x 20000 is
+           400 million output rows, about 4.8 GB, which OOM-killed this
+           binary on a 7 GB machine. It also did the opposite of what the
+           line above says this stress case is for - one key is the
+           fewest possible, not "many unique keys", so the hash table it
+           was meant to grow never grew at all. */
+        fuzz_against_reference(20000, 20000, 20000);
     }
 }
 
