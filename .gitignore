@@ -36,15 +36,22 @@ tests/correctness/npz_python_interop
 tests/correctness/*_correctness
 tests/correctness/qvarma_identification
 tests/correctness/qvarma_recovery_study
-tests/performance/qvarma_performance
-tests/performance/qvarma_precision
+tests/correctness/qvarma_analytic_agreement
+tests/correctness/qvarma_gaussian_limit
+tests/performance/qvarma_*
 tests/performance/eig_sym_status
-tests/performance/qvarma_precision_float64
 tests/performance/lbfgs_candidates
 tests/performance/lbfgs_performance
 tests/performance/lbfgs_direction_threshold
 tests/performance/lbfgs_largest_threshold
 tests/performance/lbfgs_copy_threshold
+
+# compiled benchmark binaries, one per tests/performance/bench_<subject>.c,
+# and the float64 twin every numeric benchmark gets built with. Both are
+# patterns so a new benchmark or a new precision variant is covered without
+# another line here.
+tests/performance/bench_*
+tests/performance/small_blas_threshold*
 !tests/performance/*.c
 
 # compiled integration binaries. Every file in tests/integration/ is a test,
