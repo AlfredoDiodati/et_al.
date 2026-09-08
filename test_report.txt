@@ -1,4 +1,4 @@
-test run: do  3 sep 2026 18:06:20 CEST (STRESS=1)
+test run: di  8 sep 2026 10:48:07 CEST (STRESS=1)
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -1336,11 +1336,19 @@ the simulator and the filter agree on the recursion
   largest disagreement between the two residual paths 2.220e-16 over 200 periods
   ok
 an unusable scale returns infinity rather than aborting
+  diagonal theta -400, the density overflows: objective inf
+  diagonal theta -800, the factor underflows to zero: objective inf
+  diagonal theta 800, the factor overflows: objective inf
   ok
 the reported likelihood and gradient belong to the returned parameters
   converged yes after 26 iterations, gradient norm 0.000513, status: function decrease below tolerance
   ok
 the JSON cache round trips and refuses a different sample
+  ok
+a chain of resumed fits accumulates its iterations and its runs
+  3 runs of 4 iterations reported as 3 runs, 12 iterations in total
+  ok
+an incomplete cache is refused, and a refused load changes nothing
   ok
 standard errors at a fit, and the curvature they rest on
   is_maximum 1, 0 flat directions, condition 66.7, 10 of 10 errors usable
@@ -1388,6 +1396,18 @@ impulse response file layout
 parameter cache round-trip and shape rejection
   ok
 fit reuses a cache, reports what it recorded, and refits on demand
+  ok
+a chain of resumed fits accumulates its iterations and its runs
+  3 runs of 5 iterations reported as 3 runs, 15 iterations in total
+  ok
+only a fit that ran out of iterations is resumed
+  ok
+an incomplete cache is refused, and a refused load changes nothing
+  ok
+an unusable scale returns the sentinel, not a number that is not one
+  diagonal theta -400, the density overflows: objective inf
+  diagonal theta -800, the factor underflows to zero: objective inf
+  diagonal theta 800, the factor overflows: objective inf
   ok
 reported likelihood and gradient against the returned parameters
   ok
@@ -1596,6 +1616,7 @@ frame/join.h: a join's output owns its own copy of everything, including the str
 frame/frame.h: a column view writes through to the frame, and a later append moves the block the view pointed at
 nn/mlp.h and sd/qvarma.h: a fit result owns its parameters, still usable after the frame and the design matrix are gone
 sd/qvarma.h and json.h: a fit written to disk reloads into a fresh model after the original is freed
+  the fit stopped after 204 iterations: function decrease below tolerance
 frame/csv.h and frame/npy.h: a frame written and read back is a new owner each time, with nothing shared between the two
 frame/rdata.h and frame/gzip.h: a frame loaded from a compressed file owns its values, not a slice of the inflate buffer
 sd/qvarma.h: the impulse response bands allocate and release per draw rather than accumulating

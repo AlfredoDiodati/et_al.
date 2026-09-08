@@ -327,10 +327,13 @@ memory - is a field of `QvarmaFitOptions`.
 
 `QvarmaFitResult` carries the parameters, the log-likelihood, the gradient norm, the
 three information criteria (per period, the scale the paper's Table 3 uses),
-the iteration count, `is_converged`, and `status`, which says **why** the search
+the iteration counts, `is_converged`, and `status`, which says **why** the search
 stopped. A boolean cannot separate a fit that was still improving when the
 budget ran out from one whose line search could not move, and those call for
-different responses.
+different responses. There are three iteration counts because a fit can be
+resumed from a cached one: `niter` is this run alone, `total_niter` the sum over
+every run in the chain, and `nruns` how many runs there were. See
+[Resuming a fit](#resuming-a-fit-and-what-a-chain-of-runs-cost).
 
 Standard errors:
 
@@ -455,9 +458,46 @@ void qvarma_write_impulse_bands(const QvarmaImpulseBands *b, const Mat *lower, c
 ```
 
 The cache stores the diagnostics alongside the parameters, and a fingerprint of
-the data. A reloaded fit reports the gradient norm and convergence flag the fit
-actually reached, rather than inventing `gradient_norm = 0, is_converged = 1`,
-and refuses to load against different data.
+the data. A reloaded fit reports the gradient norm, the convergence flag and the
+reason the search stopped that the fit actually reached, rather than inventing
+`gradient_norm = 0, is_converged = 1`, and refuses to load against different
+data. It refuses a file whose diagnostics block is missing a field as well: a
+cache is something a user can truncate or hand-edit, so an incomplete one is a
+refusal to load rather than programmer error. A refusal leaves the caller's
+model untouched, which is why the diagnostics are read before the parameters.
+
+### Resuming a fit, and what a chain of runs cost
+
+`qvarma_fit_cached` reloads a fit the solver finished with. A fit that stopped at
+its iteration cap it **resumes**: the cached parameters become the starting
+point of a new run, which is then written back. Returning a capped fit as it
+stands would mean a script could be rerun for ever without the estimate moving.
+
+Only the cap is resumed from. A run that stopped because the line search could
+not decrease the objective, or because the objective stopped being finite, did
+not run short of iterations, and starting the same search from the same point
+spends a whole fit to arrive back where it was: on `examples/datasets/us_real.csv`
+a restart from a stalled search moved the log-likelihood by 3e-9. Those come
+back as they stand. This is what the stored `status` is for; `is_converged`
+alone cannot tell a capped run from a stalled one.
+
+Three fields therefore describe the cost, and they mean different things:
+
+| field | what it counts |
+|---|---|
+| `niter` | the iterations of this run alone |
+| `total_niter` | the iterations of every run in the chain, this one included |
+| `nruns` | how many runs the chain is made of, 1 for a fit that started from scratch |
+
+A chain of three runs of four thousand iterations reports `nruns` 3 and
+`total_niter` 12000, where `niter` alone would report 4000 three times over and
+leave how many runs it took unknowable. `force_refit` abandons a chain and
+starts the count again from `initial_guess`. `qvarma_write_report` prints the
+chain line only when there was more than one run.
+
+A cache written before the chain was tracked carries neither the totals nor the
+status; it loads as the single run it was, with the status derived from
+`is_converged` as before.
 
 ### Infeasible points return a sentinel, they do not abort
 
@@ -473,6 +513,24 @@ programmer error only. It reads `Omega_inv`'s diagonal and `nu` out of a plain
 `K x K` buffer, which is the layout both the traced and the analytic
 representation use, so one function serves both; `qvarma_scale_is_usable` is
 the thin wrapper that takes a `QvarmaLinked`.
+
+Checking the parameters is not enough on its own, and `_qvarma_likelihood_is_usable`
+checks the computed value as well. At a diagonal `theta` of `-400` the Cholesky
+diagonal is `exp(-400)`, an ordinary positive number that no check on the
+parameters can fault; what overflows is the quadratic form inside the density,
+after which the score multiplies that infinity by the zero it produces in the
+shrinkage factor and every period after it is not-a-number. A not-a-number
+reaching the line search is worse than an infinity, because every comparison
+against it is false in both directions and the search cannot tell the point was
+bad. So a computed likelihood that is not-a-number, or plus infinity, becomes
+the same sentinel with a zeroed gradient, and the backward pass is skipped.
+
+Both checks are written with `MISNAN`/`MISINF` rather than a comparison against
+`INFINITY`, for the reason `linalg/mat.h` gives where they are defined: this
+project builds with `-ffast-math`, and a comparison the compiler can settle
+under `-ffinite-math-only` is one it deletes. `tests/correctness/score_driven_location_correctness.c`
+had this check written as `value > 1e30`, which accepted a not-a-number in the
+default build while the same source at `-O1` reported the failure.
 
 ## The solver
 
@@ -624,12 +682,23 @@ slow ones, including:
 - the mean score Jacobian of (21) against a slow, obviously correct version
 - the impulse response and confidence band file layouts
 - the cache, and that `qvarma_fit_cached` reloads what `qvarma_fit` found
+- that a chain of three capped runs against one cache reports three runs and the
+  sum of their iterations, and that the likelihood rises from run to run, which
+  is what says each run continued from the cache rather than restarting
+- that a fit the solver finished, whether converged or stalled, is loaded rather
+  than resumed, and that all five stopping reasons survive the cache
+- that a diagnostics block missing a field is refused rather than read past, and
+  that a refused load leaves the caller's model untouched
 - that a fit's reported likelihood, gradient and criteria describe the
   parameters it returns, not the point before the last step
 - that the convergence flag agrees with the gradient it claims to have reached
 - that the reported **reason** agrees with the verdict, checked on both a capped
   fit and a converged one
 - a fit from a start where the likelihood is not a number
+- that an unusable scale returns the sentinel with a zeroed gradient by both
+  routes: a factor that underflows to zero or overflows, which the check on the
+  parameters catches, and a factor of `exp(-400)`, which it cannot and the check
+  on the computed value does
 
 Slow checks (`STRESS=1`): simulated moments, parameter recovery against Wilks'
 expectation, how reliably the two shapes carrying a co-integrated block fit, and

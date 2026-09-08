@@ -121,9 +121,15 @@ int        sdloc_load_fit(SdlocFitResult *result, Mat y, const char *path);
 
 An optimizer probes parameter values the model cannot evaluate. When the `exp` link drives a diagonal entry of `Omega_inv` to zero the factor is singular and the triangular solve is meaningless, so `sdloc_negative_log_likelihood` returns `INFINITY` and zeroes the gradient rather than asserting. Programmer error still aborts; an infeasible parameter value is not programmer error. This is the same policy `sd/qvarma.h` follows and `solver/lbfgs.h` expects.
 
+Checking the parameters is not enough on its own, and `_sdloc_likelihood_is_usable` checks the computed value as well. At a diagonal `theta` of `-400` the Cholesky diagonal is `exp(-400)`, an ordinary positive number that `sdloc_scale_is_usable` cannot fault; what overflows is the quadratic form `q_t = v_t' Sigma^-1 v_t` inside the density, after which the scaled score multiplies that infinity by the zero it produces in the shrinkage factor and every period after it is not-a-number. A not-a-number reaching the line search is worse than an infinity, because every comparison against it is false in both directions and the search cannot tell the point was bad. So a computed likelihood that is not-a-number, or plus infinity, becomes the same sentinel with a zeroed gradient, and the backward pass is skipped.
+
+Both checks are written with `MISNAN`/`MISINF` rather than a comparison against `INFINITY`, for the reason `linalg/mat.h` gives where they are defined: this project builds with `-ffast-math`, and a comparison the compiler can settle under `-ffinite-math-only` is one it deletes. The test here had been written as `value > 1e30`, which accepted a not-a-number in the default build while the same source at `-O1` reported the failure — so the check had been passing on a NaN, and the model had been returning one.
+
 ### Diagnostics are part of the result
 
-`SdlocFitResult` carries `is_converged`, `status` (an `LbfgsStatus`, printable via `lbfgs_status_text`), `niter` and `gradient_norm`. A fit whose status cannot be determined is not a result.
+`SdlocFitResult` carries `is_converged`, `status` (an `LbfgsStatus`, printable via `lbfgs_status_text`), `niter`, `total_niter`, `nruns` and `gradient_norm`. A fit whose status cannot be determined is not a result.
+
+`niter` is the iterations of one call to the solver. When a fit is resumed from an earlier one — see the parameter cache below — `total_niter` is the sum over every run in the chain and `nruns` is how many runs there were; a fit that started from scratch has `total_niter` equal to `niter` and `nruns` 1.
 
 `is_converged` is true for exactly the two `LbfgsStatus` values that are convergence, so it cannot disagree with `status` — the test checks that. Note `gradient_norm` is the Euclidean norm while the solver's stopping test uses the largest component; see `docs/LBFGS_DOCUMENTATION.md`.
 
@@ -145,7 +151,11 @@ A parameter whose error cannot be computed is a result: it says the sample does 
 
 ## The parameter cache
 
-`sdloc_save_fit` writes the parameters and the diagnostics together with a fingerprint of the data they were fitted on; `sdloc_load_fit` refuses a file whose fingerprint, shape or diagnostics do not match, returning 0 rather than aborting so a caller can just refit. Without the fingerprint a stored log-likelihood silently describes a different sample. `sdloc_fit_cached` is the loop a script wants: load if valid, otherwise fit and write.
+`sdloc_save_fit` writes the parameters and the diagnostics together with a fingerprint of the data they were fitted on; `sdloc_load_fit` refuses a file whose fingerprint, shape or diagnostics do not match, returning 0 rather than aborting so a caller can just refit. A diagnostics block missing a field is refused too: a cache is something a user can truncate or hand-edit, so an incomplete one is a refusal to load rather than programmer error. A refusal leaves the caller's model untouched, which is why the diagnostics are read before the parameters. Without the fingerprint a stored log-likelihood silently describes a different sample.
+
+`sdloc_fit_cached` is the loop a script wants. It loads a fit the solver finished with, and **resumes** one that stopped at its iteration cap: the cached parameters become the starting point of a new run, which is then written back. Returning a capped fit as it stands would mean a script could be rerun for ever without the estimate moving. Only the cap is resumed from — a run that stalled or went non-finite did not run short of iterations, and starting the same search from the same point spends a whole fit to arrive back where it was. That is what the stored `status` is for; `is_converged` alone cannot tell a capped run from a stalled one.
+
+The iterations of the runs in a chain are summed into `total_niter` and the runs counted in `nruns`, so a chain of three runs of four thousand iterations reports `nruns` 3 and `total_niter` 12000 rather than `niter` 4000 three times over. `force_refit` abandons a chain and starts the count again from `initial_guess`. A cache written before the chain was tracked carries neither the totals nor the status; it loads as the single run it was.
 
 ## Testing
 
@@ -158,9 +168,10 @@ The failure this file is built against is a filter that returns a plausible log-
 - **The static case against `dist/mv/student.h`.** With `a = b = 0` the recursion is `m_t = m0` for every `t`, so the log-likelihood must be the sum of `T` i.i.d. multivariate-t log densities — a completely independent implementation sharing no code with the filter. A wrong constant term or a wrong quadratic form cannot survive this.
 - **The autodiff gradient against central differences**, at `K = 1, 2, 3` and at a parameter vector deliberately off the truth, since a gradient near zero hides a scale error. Worst relative error `1.0e-06`.
 - **The simulator against the filter**: the residual path rebuilt by hand from the simulated series matches the one the filter reports to `4.4e-16` over 200 periods.
-- **Infeasible points return the sentinel** and zero the gradient, rather than aborting.
+- **Infeasible points return the sentinel** and zero the gradient, rather than aborting, at three diagonal `theta` values covering both routes: `-800` and `800`, where the factor underflows to zero or overflows and the check on the parameters catches it, and `-400`, where the factor is an ordinary number and only the check on the computed value can. Asserted through `MISNAN`/`MISINF`, never a comparison against a large number.
 - **The reported diagnostics describe the returned parameters**, not the point before the last step: the log-likelihood and gradient are recomputed at the returned `theta` and compared, the three information criteria against their definitions, and `is_converged` against `status`.
-- **The cache round trips** and refuses a fit written on a different sample, and returns 0 rather than aborting on a missing file.
+- **The cache round trips** and refuses a fit written on a different sample, and returns 0 rather than aborting on a missing file. It refuses a diagnostics block missing a field rather than reading past it, and a refused load leaves the caller's model untouched.
+- **A chain of three capped runs** against one cache reports three runs and the sum of their iterations, and the likelihood rises from run to run, which is what says each run continued from the cache rather than restarting. A fit the solver finished is loaded rather than resumed, and the reason it stopped survives the cache.
 - **Standard errors** at a fit: none negative, the condition number at least one, the flat-direction count in range, and the point estimates beside them being the fitted ones.
 - **`STRESS=1` adds recovery**: 4 draws at `T = 4000` from a start perturbed by 0.2 per coordinate on the unconstrained scale. 4 of 4 converge with a worst unconstrained coordinate error of 0.193.
 

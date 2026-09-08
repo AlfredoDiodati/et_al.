@@ -683,6 +683,32 @@ static inline int _qvarma_scale_is_usable(const mreal *Omega_inv, int K, mreal n
 }
 
 /*
+Whether a computed log-likelihood is a number the caller can use. The check
+above rejects a scale that is singular outright, which is the one that would
+abort the triangular solve, and it cannot do more than that: a Cholesky
+diagonal of exp(-400) is an ordinary positive number, and what breaks there is
+the arithmetic the density is made of rather than the parameter. The quadratic
+form overflows, the score then multiplies that infinity by the zero it produces
+in the shrinkage factor, and every period after it is not-a-number.
+
+A not-a-number reaching the line search is worse than an infinity, since every
+comparison against it is false in both directions and the search cannot even
+tell that the point was bad. So the value is checked as well as the parameters,
+and a likelihood of plus infinity is rejected with it: a point the density
+claims is infinitely good is one the arithmetic overflowed at, not a maximum.
+A likelihood of minus infinity is the sentinel itself and passes through.
+
+The test is MISNAN and MISINF rather than a comparison against INFINITY, for
+the reason mat.h gives at their definition: this project builds with
+-ffast-math, and a comparison the compiler can settle under -ffinite-math-only
+is one it deletes.
+*/
+static inline int _qvarma_likelihood_is_usable(mreal log_likelihood) {
+    if (MISNAN(log_likelihood)) return 0;
+    return !(MISINF(log_likelihood) && log_likelihood > 0);
+}
+
+/*
 The same recursion _qvarma_filter runs, differentiated analytically rather
 than by the tape. The gradient below is derived in closed form from the
 recursion - the adjoints are written out further down, block by block - and
@@ -1334,6 +1360,10 @@ static inline mreal qvarma_analytic_log_likelihood(QvarmaAnalytic *f, Vec theta,
         return -(mreal)INFINITY;
     }
     mreal value = _qvarma_analytic_forward(f, y);
+    if (!_qvarma_likelihood_is_usable(value)) {
+        if (gradient.d) for (int i = 0; i < f->n_theta; i++) gradient.d[i] = 0;
+        return -(mreal)INFINITY;
+    }
     if (gradient.d) _qvarma_analytic_backward(f, gradient);
     return value;
 }
@@ -1408,6 +1438,14 @@ the tolerance from one that ran out of iterations, and gradient_norm is the
 norm of the gradient at the returned parameters: a fit reporting neither
 cannot be judged from its point estimates.
 
+niter counts the iterations of one call to the solver. When a fit is resumed
+from an earlier unconverged one, as qvarma_fit_cached does, that number no
+longer answers what the estimate cost: total_niter is the sum over every run
+in the chain and nruns is how many runs there were, so a chain that took three
+runs of four thousand iterations reports nruns 3 and total_niter 12000 rather
+than niter 4000 three times over. A fit that started from scratch has
+total_niter equal to niter and nruns 1.
+
 The information criteria are per period, the scale the paper's Table 3 uses,
 so aic is 2k/T - 2 L/T and likewise for the others.
 */
@@ -1417,6 +1455,8 @@ typedef struct {
     mreal gradient_norm;
     mreal aic, bic, hannan_quinn;
     int niter;
+    int total_niter;
+    int nruns;
     int is_converged;
     LbfgsStatus status;   /* why the search stopped; is_converged is derived from it */
 } QvarmaFitResult;
@@ -1527,6 +1567,8 @@ static inline QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_gues
     result.log_likelihood = -solved.value;
     result.gradient_norm = solved.gradient_norm;
     result.niter = solved.niter;
+    result.total_niter = solved.niter;
+    result.nruns = 1;
     result.is_converged = solved.is_converged;
     result.status = solved.status;
 
@@ -2196,54 +2238,119 @@ static inline void qvarma_save_fit(const QvarmaFitResult *result, Mat y, const c
     json_object_set(diagnostics, "bic", json_number((double)result->bic));
     json_object_set(diagnostics, "hannan_quinn", json_number((double)result->hannan_quinn));
     json_object_set(diagnostics, "niter", json_number(result->niter));
+    json_object_set(diagnostics, "total_niter", json_number(result->total_niter));
+    json_object_set(diagnostics, "nruns", json_number(result->nruns));
     json_object_set(diagnostics, "is_converged", json_number(result->is_converged));
+    json_object_set(diagnostics, "status", json_number(result->status));
     json_object_set(diagnostics, "data_fingerprint", json_number(qvarma_data_fingerprint(y)));
     json_object_set(root, "fit", diagnostics);
     json_write_file(root, path);
     json_free(root);
 }
 
+/* json_as_number asserts on the type, so it dereferences a key that is not
+   there. A cache file is something a user can truncate or hand-edit, which is
+   not programmer error, so a missing field has to read as a refusal to load
+   rather than as an abort. */
+static inline int _qvarma_diagnostic(const JsonValue *diagnostics, const char *key, double *out) {
+    JsonValue *field = json_object_get(diagnostics, key);
+    if (!field || field->type != JSON_NUMBER) return 0;
+    *out = json_as_number(field);
+    return 1;
+}
+
 /*
 Load a fit written by qvarma_save_fit. Returns 0 without touching result when the file
-is missing, its shape disagrees, it carries no diagnostics, or it was fit on
-different data, each of which means refit.
+is missing, its shape disagrees, it carries no diagnostics or an incomplete
+set of them, or it was fit on different data, each of which means refit.
+
+The diagnostics are read before the parameters so that a rejection really does
+leave result alone: qvarma_load_params writes into the model as soon as the
+shape agrees, and a fingerprint checked after that would leave a caller holding
+parameters from the wrong sample beside a return value saying nothing was
+loaded.
+
+total_niter, nruns and status are optional, so a cache written before a fit
+chain was tracked reads back as a single run of its own niter rather than being
+rejected. Without a stored status the best a load can do is the coarse split
+is_converged carries, which is why the status is written: whether a run stopped
+at its iteration cap or stalled decides whether resuming it can help.
 */
 static inline int qvarma_load_fit(QvarmaFitResult *result, Mat y, const char *path) {
-    if (!qvarma_load_params(&result->params, path)) return 0;
-
+    FILE *probe = fopen(path, "r");
+    if (!probe) return 0;
+    fclose(probe);
     JsonValue *root = json_parse_file(path);
     JsonValue *diagnostics = root ? json_object_get(root, "fit") : NULL;
     if (!diagnostics) {
         if (root) json_free(root);
         return 0;
     }
-    JsonValue *stored = json_object_get(diagnostics, "data_fingerprint");
-    if (!stored || json_as_number(stored) != qvarma_data_fingerprint(y)) {
+
+    double log_likelihood, gradient_norm, aic, bic, hannan_quinn;
+    double niter, is_converged, fingerprint;
+    int complete = _qvarma_diagnostic(diagnostics, "log_likelihood", &log_likelihood)
+                && _qvarma_diagnostic(diagnostics, "gradient_norm", &gradient_norm)
+                && _qvarma_diagnostic(diagnostics, "aic", &aic)
+                && _qvarma_diagnostic(diagnostics, "bic", &bic)
+                && _qvarma_diagnostic(diagnostics, "hannan_quinn", &hannan_quinn)
+                && _qvarma_diagnostic(diagnostics, "niter", &niter)
+                && _qvarma_diagnostic(diagnostics, "is_converged", &is_converged)
+                && _qvarma_diagnostic(diagnostics, "data_fingerprint", &fingerprint);
+    if (!complete || fingerprint != qvarma_data_fingerprint(y)) {
         json_free(root);
         return 0;
     }
 
-    result->log_likelihood = (mreal)json_as_number(json_object_get(diagnostics, "log_likelihood"));
-    result->gradient_norm = (mreal)json_as_number(json_object_get(diagnostics, "gradient_norm"));
-    result->aic = (mreal)json_as_number(json_object_get(diagnostics, "aic"));
-    result->bic = (mreal)json_as_number(json_object_get(diagnostics, "bic"));
-    result->hannan_quinn = (mreal)json_as_number(json_object_get(diagnostics, "hannan_quinn"));
-    result->niter = (int)json_as_number(json_object_get(diagnostics, "niter"));
-    result->is_converged = (int)json_as_number(json_object_get(diagnostics, "is_converged"));
-    result->status = result->is_converged ? LBFGS_FUNCTION_TOLERANCE : LBFGS_MAX_ITERATIONS;
+    double total_niter, nruns, status;
+    if (!_qvarma_diagnostic(diagnostics, "total_niter", &total_niter)) total_niter = niter;
+    if (!_qvarma_diagnostic(diagnostics, "nruns", &nruns)) nruns = 1;
+    if (!_qvarma_diagnostic(diagnostics, "status", &status))
+        status = is_converged ? LBFGS_FUNCTION_TOLERANCE : LBFGS_MAX_ITERATIONS;
     json_free(root);
+
+    if (!qvarma_load_params(&result->params, path)) return 0;
+    result->log_likelihood = (mreal)log_likelihood;
+    result->gradient_norm = (mreal)gradient_norm;
+    result->aic = (mreal)aic;
+    result->bic = (mreal)bic;
+    result->hannan_quinn = (mreal)hannan_quinn;
+    result->niter = (int)niter;
+    result->total_niter = (int)total_niter;
+    result->nruns = (int)nruns;
+    result->is_converged = (int)is_converged;
+    result->status = (LbfgsStatus)(int)status;
     return 1;
 }
 
 /*
 Fit, reusing a cached result when one exists for this shape and this data, and
-writing the whole fit back after a fresh one. This is what a script applying
-the model to a dataset should call, so that rerunning it does not refit.
-force_refit skips the load.
+writing the whole fit back afterwards. This is what a script applying the model
+to a dataset should call, so that rerunning it does not refit. force_refit
+skips the load and starts a new chain from initial_guess.
 
-A load runs no optimizer and no filter: every number it reports was recorded by
-the fit that produced it, including niter and is_converged, which a load has no
-way to determine for itself and must not invent.
+A cached fit that converged is returned as it stands. Loading it runs no
+optimizer and no filter: every number it reports was recorded by the fit that
+produced it, including niter and is_converged, which a load has no way to
+determine for itself and must not invent.
+
+A cached fit that stopped at its iteration cap is a starting point, not an
+answer, so the run continues from its parameters instead of returning them.
+Returning them would mean a script could be rerun for ever without the estimate
+moving. The iteration counts of the runs are then summed into total_niter and
+the runs counted in nruns, since what a chain cost is the sum over its runs and
+the last run's niter alone understates it.
+
+Only the iteration cap is resumed from, not every way of not converging. A run
+that stopped because the line search could not decrease the objective, or
+because the objective stopped being finite, did not run short of iterations,
+and starting the same search from the same point spends a whole fit to arrive
+back where it was: on examples/datasets/us_real.csv a restart from a stalled
+search moved the log-likelihood by 3e-9. Those come back as they stand.
+
+The initial_guess is still where a chain starts, and its shape is what the
+cache is checked against, so a cache from a different specification is rejected
+by qvarma_load_fit rather than resumed into a model it does not describe.
 */
 static inline QvarmaFitResult qvarma_fit_cached(Mat y, const QvarmaParams *initial_guess, QvarmaFitOptions options,
                                   const char *cache_path, int force_refit) {
@@ -2254,7 +2361,15 @@ static inline QvarmaFitResult qvarma_fit_cached(Mat y, const QvarmaParams *initi
                                    initial_guess->shared_beta, initial_guess->warmup_longest);
         cached.params.phi_star_bound = initial_guess->phi_star_bound;
         cached.params.mu_star_stationary_only = initial_guess->mu_star_stationary_only;
-        if (qvarma_load_fit(&cached, y, cache_path)) return cached;
+        if (qvarma_load_fit(&cached, y, cache_path)) {
+            if (cached.status != LBFGS_MAX_ITERATIONS) return cached;
+            QvarmaFitResult resumed = qvarma_fit(y, &cached.params, options);
+            resumed.total_niter = cached.total_niter + resumed.niter;
+            resumed.nruns = cached.nruns + 1;
+            qvarma_fit_result_free(&cached);
+            qvarma_save_fit(&resumed, y, cache_path);
+            return resumed;
+        }
         qvarma_params_free(&cached.params);
     }
     QvarmaFitResult result = qvarma_fit(y, initial_guess, options);
@@ -2527,6 +2642,9 @@ static inline void qvarma_write_report(const QvarmaFitResult *result, Mat y, con
     fprintf(out, "iterations %d, converged %s, gradient_norm %.6g\n",
             result->niter, result->is_converged ? "yes" : "no",
             (double)result->gradient_norm);
+    if (result->nruns > 1)
+        fprintf(out, "resumed from a cache: %d runs, %d iterations in total\n",
+                result->nruns, result->total_niter);
     fprintf(out, "log_likelihood %.6f, per_period %.6f, parameters %d\n",
             (double)result->log_likelihood, (double)result->log_likelihood / y.c, qvarma_n_theta(m));
     fprintf(out, "aic %.6f, bic %.6f, hannan_quinn %.6f\n",

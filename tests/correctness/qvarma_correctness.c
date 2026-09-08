@@ -1042,9 +1042,22 @@ static void test_fit_cached(void) {
 
     QvarmaFitOptions options = qvarma_default_fit_options();
     options.max_iterations = 200;
+    /* The load path is reached only by a fit the solver finished, and this
+       shape never meets the gradient test: the co-integration loading enters a
+       random walk and its gradient stays large. So the search is left to stop
+       on the function decrease, at a tolerance these 150 periods reach in every
+       build. At the default 1e-12 whether 200 iterations suffice depends on the
+       optimization flags, and under -O1 without -ffast-math they do not. */
+    options.function_tolerance = (mreal)1e-6;
 
     QvarmaFitResult first = qvarma_fit_cached(y, &truth, options, path, 0);
     CHECK(first.niter > 1, "the first call must actually fit, got niter %d", first.niter);
+    /* Only a fit that finished is loaded back; one that ran out of iterations
+       is resumed instead, which is what test_fit_cached_accumulates_a_chain
+       covers. So the load path is under test here only while this holds. */
+    CHECK(first.status != LBFGS_MAX_ITERATIONS,
+          "the fit must finish for the load path to be the one under test, got %s",
+          lbfgs_status_text(first.status));
 
     /* One iteration is far from the optimum, so a second call that returns the
        first call's answer can only have loaded it. This distinguishes a load
@@ -1089,6 +1102,346 @@ static void test_fit_cached(void) {
     qvarma_fit_result_free(&first); qvarma_fit_result_free(&second);
     qvarma_fit_result_free(&forced); qvarma_fit_result_free(&refit);
     mat_free(other); mat_free(y); qvarma_params_free(&truth);
+    printf("  ok\n");
+}
+
+/* A start 0.3 away from the truth per coordinate on the unconstrained scale,
+   far enough that a handful of iterations cannot reach the optimum from it.
+   The seed is the caller's so that two tests wanting the same sample get it. */
+static Mat chain_sample(QvarmaParams *truth, QvarmaParams *start, unsigned long long seed) {
+    Rng rng = rng_new(seed, 0);
+    fill_plausible(truth, &rng);
+    Mat y = qvarma_simulate(&rng, truth, 150);
+    Vec theta = mat_new(qvarma_n_theta(truth), 1);
+    _qvarma_unlink(truth, theta);
+    for (int i = 0; i < theta.r; i++) theta.d[i] += (mreal)(0.3 * rng_normal(&rng));
+    qvarma_params_from_theta(theta, start);
+    mat_free(theta);
+    return y;
+}
+
+/*
+Three runs of qvarma_fit_cached against one cache, each capped at five
+iterations so that none of them can finish. What the third run reports has to
+describe the whole chain: niter is that run on its own, total_niter the sum
+over the three, nruns the count of them. With only niter recorded, three runs
+of five iterations were indistinguishable from one, so how much a chained
+estimate cost could not be read off the result at all.
+
+The likelihood rising from run to run is what says each run continued from the
+cache rather than starting again from the initial guess, which would return the
+first run's number every time.
+*/
+static void test_fit_cached_accumulates_a_chain(void) {
+    printf("a chain of resumed fits accumulates its iterations and its runs\n");
+    QvarmaParams truth = baseline(), start = baseline();
+    Mat y = chain_sample(&truth, &start, 4242);
+
+    const char *path = "out/correctness_fit_chain.json";
+    remove(path);
+
+    QvarmaFitOptions capped = qvarma_default_fit_options();
+    capped.max_iterations = 5;
+
+    mreal previous = -(mreal)INFINITY;
+    int chain_runs = 0, chain_iterations = 0;
+    for (int run = 1; run <= 3; run++) {
+        QvarmaFitResult result = qvarma_fit_cached(y, &start, capped, path, 0);
+        CHECK(result.status == LBFGS_MAX_ITERATIONS,
+              "run %d must stop at the cap for the chain to continue, got %s",
+              run, lbfgs_status_text(result.status));
+        CHECK(result.niter == 5, "run %d: niter is this run alone, got %d", run, result.niter);
+        CHECK(result.nruns == run, "run %d: nruns must count the runs, got %d", run, result.nruns);
+        CHECK(result.total_niter == 5 * run,
+              "run %d: total_niter must sum the chain, got %d", run, result.total_niter);
+        CHECK(result.log_likelihood > previous,
+              "run %d must continue from the cache rather than restart: %.10g against %.10g",
+              run, (double)result.log_likelihood, (double)previous);
+        previous = result.log_likelihood;
+        chain_runs = result.nruns;
+        chain_iterations = result.total_niter;
+        qvarma_fit_result_free(&result);
+    }
+
+    /* force_refit is the way to abandon a chain, so it starts the count again
+       rather than adding to what is on disk. */
+    QvarmaFitResult forced = qvarma_fit_cached(y, &start, capped, path, 1);
+    CHECK(forced.nruns == 1, "force_refit must start a new chain, got nruns %d", forced.nruns);
+    CHECK(forced.total_niter == forced.niter,
+          "a new chain's total is its own niter, got %d against %d",
+          forced.total_niter, forced.niter);
+
+    /* And the count on disk is the one the next run continues from, not the one
+       held in memory by the caller that wrote it. */
+    QvarmaFitResult after = qvarma_fit_cached(y, &start, capped, path, 0);
+    CHECK(after.nruns == 2, "the run after a forced refit is the chain's second, got %d",
+          after.nruns);
+    CHECK(after.total_niter == forced.niter + after.niter,
+          "total_niter must come from the file, got %d against %d",
+          after.total_niter, forced.niter + after.niter);
+
+    printf("  %d runs of %d iterations reported as %d runs, %d iterations in total\n",
+           chain_runs, capped.max_iterations, chain_runs, chain_iterations);
+    qvarma_fit_result_free(&forced); qvarma_fit_result_free(&after);
+    mat_free(y); qvarma_params_free(&truth); qvarma_params_free(&start);
+    printf("  ok\n");
+}
+
+/*
+Resuming is for a run that ran out of iterations. A run that stopped for any
+other reason did not run short of them, and starting the same search from the
+same point spends a whole fit to arrive back where it was: on
+examples/datasets/us_real.csv, in tests/integration/pipeline_ownership.c, a
+restart from a stalled search moved the log-likelihood by 3e-9. So a converged
+cache and a stalled one both come back as they stand.
+
+The stalled cache is written by hand rather than fitted, since which samples
+stall the line search is not something a test should have to arrange.
+*/
+static void test_a_finished_fit_is_not_resumed(void) {
+    printf("only a fit that ran out of iterations is resumed\n");
+    QvarmaParams truth = baseline();
+    Rng rng = rng_new(5150, 0);
+    fill_plausible(&truth, &rng);
+    Mat y = qvarma_simulate(&rng, &truth, 150);
+
+    const char *path = "out/correctness_fit_finished.json";
+    remove(path);
+
+    QvarmaFitOptions options = qvarma_default_fit_options();
+    options.max_iterations = 3000;
+    /* The point here is a cache the solver finished with, not a well-fitted
+       model, and this shape does not meet the gradient test at all: the
+       co-integration loading enters a random walk and its gradient stays large.
+       So the search is left to stop on the function decrease, at a tolerance
+       these 150 periods actually reach. */
+    options.function_tolerance = (mreal)1e-6;
+    QvarmaFitResult finished = qvarma_fit_cached(y, &truth, options, path, 1);
+    CHECK(finished.status != LBFGS_MAX_ITERATIONS,
+          "the fit must finish for this test to say anything, got %s",
+          lbfgs_status_text(finished.status));
+
+    QvarmaFitResult reloaded = qvarma_fit_cached(y, &truth, options, path, 0);
+    CHECK(reloaded.nruns == finished.nruns,
+          "a finished cache must not count a further run, got %d against %d",
+          reloaded.nruns, finished.nruns);
+    CHECK(reloaded.total_niter == finished.total_niter,
+          "a finished cache must not add iterations, got %d against %d",
+          reloaded.total_niter, finished.total_niter);
+    qvarma_fit_result_free(&reloaded);
+
+    /* The same fit relabelled as a stalled search: the parameters and the
+       sample are unchanged, only the reason it stopped. */
+    finished.status = LBFGS_NO_PROGRESS;
+    finished.is_converged = 0;
+    qvarma_save_fit(&finished, y, path);
+    QvarmaFitResult stalled = qvarma_fit_cached(y, &truth, options, path, 0);
+    CHECK(stalled.status == LBFGS_NO_PROGRESS,
+          "the reason a fit stopped must survive the cache, got %s",
+          lbfgs_status_text(stalled.status));
+    CHECK(stalled.nruns == 1 && stalled.niter == finished.niter,
+          "a stalled cache must come back untouched, got %d runs and niter %d against %d",
+          stalled.nruns, stalled.niter, finished.niter);
+    qvarma_fit_result_free(&stalled);
+
+    /* Every reason round trips, not only the one above. A load that derived the
+       status from is_converged could only ever produce two of the five, and
+       resuming is decided on the difference between them. */
+    LbfgsStatus reasons[] = { LBFGS_MAX_ITERATIONS, LBFGS_GRADIENT_TOLERANCE,
+                              LBFGS_FUNCTION_TOLERANCE, LBFGS_NO_PROGRESS, LBFGS_NOT_FINITE };
+    for (size_t i = 0; i < sizeof reasons / sizeof reasons[0]; i++) {
+        finished.status = reasons[i];
+        qvarma_save_fit(&finished, y, path);
+        QvarmaFitResult back;
+        back.params = baseline();
+        CHECK(qvarma_load_fit(&back, y, path) == 1, "%s must load", lbfgs_status_text(reasons[i]));
+        CHECK(back.status == reasons[i], "%s came back as %s",
+              lbfgs_status_text(reasons[i]), lbfgs_status_text(back.status));
+        qvarma_fit_result_free(&back);
+    }
+
+    qvarma_fit_result_free(&finished);
+    mat_free(y); qvarma_params_free(&truth);
+    printf("  ok\n");
+}
+
+/*
+A cache file is something a user can truncate or hand-edit, so an incomplete
+one has to read as a refusal to load. json_as_number asserts on the value's
+type, which means it dereferences a key that is not in the object: reading the
+diagnostics without checking each key first ended the process on a file missing
+one of them, rather than returning 0 the way a missing file already did.
+
+The second half is the other half of the same contract. A refused load must
+leave the caller's model alone, and the parameters used to be read before the
+fingerprint was checked, so a cache from another sample was written into the
+model and then reported as not loaded.
+*/
+static void test_cache_refuses_a_file_it_cannot_use(void) {
+    printf("an incomplete cache is refused, and a refused load changes nothing\n");
+    QvarmaParams truth = baseline();
+    Rng rng = rng_new(6161, 0);
+    fill_plausible(&truth, &rng);
+    Mat y = qvarma_simulate(&rng, &truth, 120);
+
+    const char *path = "out/correctness_fit_incomplete.json";
+
+    /* A well-formed shape and theta, and a diagnostics block holding two of the
+       eight numbers a fit records. */
+    JsonValue *root = qvarma_params_to_json(&truth);
+    JsonValue *diagnostics = json_object();
+    json_object_set(diagnostics, "log_likelihood", json_number(-1.0));
+    json_object_set(diagnostics, "data_fingerprint", json_number(qvarma_data_fingerprint(y)));
+    json_object_set(root, "fit", diagnostics);
+    json_write_file(root, path);
+    json_free(root);
+
+    QvarmaFitResult incomplete;
+    incomplete.params = baseline();
+    CHECK(qvarma_load_fit(&incomplete, y, path) == 0,
+          "a diagnostics block missing a field must be refused, not read past");
+    qvarma_fit_result_free(&incomplete);
+
+    /* A complete cache, written on a different sample. */
+    Mat other = qvarma_simulate(&rng, &truth, 120);
+    QvarmaFitOptions capped = qvarma_default_fit_options();
+    capped.max_iterations = 3;
+    QvarmaFitResult elsewhere = qvarma_fit(other, &truth, capped);
+    qvarma_save_fit(&elsewhere, other, path);
+
+    QvarmaParams mine = baseline();
+    Rng other_rng = rng_new(7171, 0);
+    fill_plausible(&mine, &other_rng);
+    Vec before = mat_new(qvarma_n_theta(&mine), 1);
+    _qvarma_unlink(&mine, before);
+
+    QvarmaFitResult refused;
+    refused.params = mine;
+    CHECK(qvarma_load_fit(&refused, y, path) == 0,
+          "a cache from another sample must be refused");
+    Vec after = mat_new(qvarma_n_theta(&mine), 1);
+    _qvarma_unlink(&refused.params, after);
+    mreal worst = 0;
+    for (int i = 0; i < before.r; i++) {
+        mreal difference = (mreal)fabs((double)(before.d[i] - after.d[i]));
+        if (difference > worst) worst = difference;
+    }
+    CHECK_NEAR(worst, 0, 0, "a refused load must leave the model untouched");
+
+    /* A cache from before the chain was tracked carries neither the totals nor
+       the reason, and must still load as the single run it was. */
+    JsonValue *old = qvarma_params_to_json(&elsewhere.params);
+    JsonValue *old_fit = json_object();
+    json_object_set(old_fit, "log_likelihood", json_number((double)elsewhere.log_likelihood));
+    json_object_set(old_fit, "gradient_norm", json_number((double)elsewhere.gradient_norm));
+    json_object_set(old_fit, "aic", json_number((double)elsewhere.aic));
+    json_object_set(old_fit, "bic", json_number((double)elsewhere.bic));
+    json_object_set(old_fit, "hannan_quinn", json_number((double)elsewhere.hannan_quinn));
+    json_object_set(old_fit, "niter", json_number(elsewhere.niter));
+    json_object_set(old_fit, "is_converged", json_number(0));
+    json_object_set(old_fit, "data_fingerprint", json_number(qvarma_data_fingerprint(other)));
+    json_object_set(old, "fit", old_fit);
+    json_write_file(old, path);
+    json_free(old);
+
+    QvarmaFitResult legacy;
+    legacy.params = baseline();
+    CHECK(qvarma_load_fit(&legacy, other, path) == 1,
+          "a cache written before the chain was tracked must still load");
+    CHECK(legacy.nruns == 1, "an untracked cache is one run, got %d", legacy.nruns);
+    CHECK(legacy.total_niter == legacy.niter,
+          "an untracked cache totals its own niter, got %d against %d",
+          legacy.total_niter, legacy.niter);
+    CHECK(legacy.status == LBFGS_MAX_ITERATIONS,
+          "an unconverged untracked cache reads as the iteration cap, got %s",
+          lbfgs_status_text(legacy.status));
+    qvarma_fit_result_free(&legacy);
+
+    mat_free(before); mat_free(after);
+    qvarma_fit_result_free(&refused);
+    qvarma_fit_result_free(&elsewhere);
+    mat_free(other); mat_free(y); qvarma_params_free(&truth);
+    remove(path);
+    printf("  ok\n");
+}
+
+/*
+The objective at a parameter value the model cannot evaluate. The optimizer's
+line search compares values, so a not-a-number is worse than an infinity: every
+comparison against it is false in both directions and the search cannot tell
+that the point was bad.
+
+Two routes reach the sentinel and both are checked. At a diagonal theta of -800
+the exp link underflows to exactly zero, a singular Cholesky factor, and
+_qvarma_scale_is_usable rejects the parameters before the filter runs; at 800 it
+overflows to infinity and the same check rejects it. At -400 the diagonal is
+exp(-400), an ordinary positive number that no check on the parameters can
+fault, and what breaks is the arithmetic the density is made of.
+
+The assertions go through MISNAN and MISINF rather than comparing against a
+large number, for the reason mat.h gives at their definition. The same check
+written as `value > 1e30` in the score-driven location suite accepted a
+not-a-number under -ffast-math, so the default build reported a pass that the
+same source at -O1 reported as a failure.
+*/
+static void test_infeasible_points_return_a_sentinel(void) {
+    printf("an unusable scale returns the sentinel, not a number that is not one\n");
+    QvarmaParams m = baseline();
+    Rng rng = rng_new(2727, 0);
+    fill_plausible(&m, &rng);
+    Mat y = qvarma_simulate(&rng, &m, 120);
+
+    int n = qvarma_n_theta(&m);
+    Vec feasible = mat_new(n, 1);
+    _qvarma_unlink(&m, feasible);
+
+    QvarmaFitContext context;
+    context.observations = y;
+    context.shape = &m;
+    context.workspace = qvarma_analytic_new(&m, y.c);
+
+    Vec gradient = mat_new(n, 1);
+    mreal finite = qvarma_negative_log_likelihood(feasible, gradient, &context);
+    CHECK(!MISNAN(finite) && !MISINF(finite),
+          "a feasible point gives a finite objective, got %.6g", (double)finite);
+
+    /* theta runs c, Phi_star, Psi_star, then the K diagonal entries of
+       Omega_inv, which is what this test moves. */
+    int diagonal_at = m.K + m.p + m.q * qvarma_psi_star_rows(&m) * m.K;
+    mreal diagonals[] = { (mreal)-400, (mreal)-800, (mreal)800 };
+    const char *routes[] = { "the density overflows", "the factor underflows to zero",
+                             "the factor overflows" };
+    for (size_t k = 0; k < sizeof diagonals / sizeof diagonals[0]; k++) {
+        Vec theta = mat_new(n, 1);
+        for (int i = 0; i < n; i++) theta.d[i] = feasible.d[i];
+        for (int a = 0; a < m.K; a++) theta.d[diagonal_at + a] = diagonals[k];
+        for (int i = 0; i < n; i++) gradient.d[i] = (mreal)1;
+
+        mreal sentinel = qvarma_negative_log_likelihood(theta, gradient, &context);
+        printf("  diagonal theta %.0f, %s: objective %.6g\n",
+               (double)diagonals[k], routes[k], (double)sentinel);
+        CHECK(!MISNAN(sentinel),
+              "diagonal theta %.0f: the objective must never be not-a-number, which the "
+              "line search cannot compare against", (double)diagonals[k]);
+        CHECK(MISINF(sentinel) && sentinel > 0,
+              "diagonal theta %.0f: an unusable scale must return the sentinel, got %.6g",
+              (double)diagonals[k], (double)sentinel);
+        for (int i = 0; i < n; i++)
+            CHECK(gradient.d[i] == 0,
+                  "diagonal theta %.0f: the sentinel path zeroes the gradient at %d",
+                  (double)diagonals[k], i);
+
+        /* The value-only entry point takes the same decision with the opposite
+           sign, since it returns the log-likelihood rather than its negation. */
+        mreal value_only = qvarma_log_likelihood_at(theta, &m, y);
+        CHECK(!MISNAN(value_only) && MISINF(value_only) && value_only < 0,
+              "diagonal theta %.0f: the log-likelihood must be minus infinity, got %.6g",
+              (double)diagonals[k], (double)value_only);
+        mat_free(theta);
+    }
+
+    qvarma_analytic_free(context.workspace);
+    mat_free(gradient); mat_free(feasible); mat_free(y); qvarma_params_free(&m);
     printf("  ok\n");
 }
 
@@ -1832,6 +2185,10 @@ int main(void) {
     test_impulse_response_file();
     test_cache();
     test_fit_cached();
+    test_fit_cached_accumulates_a_chain();
+    test_a_finished_fit_is_not_resumed();
+    test_cache_refuses_a_file_it_cannot_use();
+    test_infeasible_points_return_a_sentinel();
     test_fit_reports_what_it_returns();
     test_convergence_flag();
     test_fit_reports_why_it_stopped();

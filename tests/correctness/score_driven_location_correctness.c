@@ -183,8 +183,10 @@ static void test_gradient_against_finite_differences(void) {
         Vec analytic = mat_new(n, 1);
         sdloc_negative_log_likelihood(theta, analytic, &context);
 
-        Vec none = mat_new(n, 1);
-        none.d = NULL;
+        /* The objective reads only gradient.d to decide whether a gradient is
+           wanted, so the way to ask for the value alone is a Vec with no
+           buffer. Allocating one and then dropping the pointer leaks it. */
+        Vec none = { 0, 0, 0, NULL };
         mreal step = (mreal)1e-4;
         int largest_index = 0;
         mreal largest_error = 0;
@@ -286,8 +288,28 @@ static void test_simulator_matches_the_filter(void) {
     printf("  ok\n");
 }
 
-/* An optimizer probes parameter values the model cannot evaluate, and the
-   filter must return a sentinel there rather than aborting. */
+/*
+An optimizer probes parameter values the model cannot evaluate, and the filter
+must return a sentinel there rather than aborting or handing back a number that
+is not one.
+
+Three diagonal values, because the sentinel is reached by two different routes
+and only one of them was covered. At -800 and +800 the exp link takes the
+Cholesky diagonal to exactly zero or to infinity, and sdloc_scale_is_usable
+rejects the parameters before the filter runs. At -400 the diagonal is
+exp(-400), an ordinary positive number that no check on the parameters can
+fault: what overflows is the quadratic form v' Sigma^-1 v inside the density,
+and the scaled score then multiplies that infinity by the zero it produces in
+the shrinkage factor, so every period after it is not-a-number. That route is
+caught on the computed value instead.
+
+The assertions go through MISNAN and MISINF rather than comparing against a
+large number, for the reason mat.h gives at their definition. This test used to
+read `sentinel > 1e30`, which under -ffast-math's -ffinite-math-only the
+compiler settles in its own favour: it accepted the not-a-number above, and the
+default build reported a pass while the same binary at -O1 reported the
+failure.
+*/
 static void test_infeasible_points_return_a_sentinel(void) {
     printf("an unusable scale returns infinity rather than aborting\n");
     int K = 2, T = 40;
@@ -296,25 +318,48 @@ static void test_infeasible_points_return_a_sentinel(void) {
     Mat y = sdloc_simulate(&rng, &m, T);
 
     int n = sdloc_n_theta(K);
-    Vec theta = mat_new(n, 1);
-    _sdloc_unlink(&m, theta);
+    Vec feasible = mat_new(n, 1);
+    _sdloc_unlink(&m, feasible);
     SdlocFitContext context = { y };
     Vec gradient = mat_new(n, 1);
 
-    mreal finite = sdloc_negative_log_likelihood(theta, gradient, &context);
-    CHECK(finite == finite && MABS(finite) < (mreal)1e30,
+    mreal finite = sdloc_negative_log_likelihood(feasible, gradient, &context);
+    CHECK(!MISNAN(finite) && !MISINF(finite),
           "a feasible point gives a finite objective, got %.6g", (double)finite);
 
-    /* drive the diagonal of Omega_inv to underflow: the exp link takes a
-       large negative theta to a zero diagonal, which is a singular factor */
-    for (int k = 0; k < K; k++) theta.d[3 * K + k] = (mreal)-400;
-    mreal sentinel = sdloc_negative_log_likelihood(theta, gradient, &context);
-    CHECK(sentinel > (mreal)1e30, "an unusable scale must return the sentinel, got %.6g",
-          (double)sentinel);
-    for (int i = 0; i < n; i++)
-        CHECK(gradient.d[i] == 0, "the sentinel path zeroes the gradient at %d", i);
+    mreal diagonals[] = { (mreal)-400, (mreal)-800, (mreal)800 };
+    const char *routes[] = { "the density overflows", "the factor underflows to zero",
+                             "the factor overflows" };
+    for (size_t k = 0; k < sizeof diagonals / sizeof diagonals[0]; k++) {
+        Vec theta = mat_new(n, 1);
+        for (int i = 0; i < n; i++) theta.d[i] = feasible.d[i];
+        for (int j = 0; j < K; j++) theta.d[3 * K + j] = diagonals[k];
+        for (int i = 0; i < n; i++) gradient.d[i] = (mreal)1;
 
-    mat_free(gradient); mat_free(theta); mat_free(y); sdloc_params_free(&m);
+        mreal sentinel = sdloc_negative_log_likelihood(theta, gradient, &context);
+        printf("  diagonal theta %.0f, %s: objective %.6g\n",
+               (double)diagonals[k], routes[k], (double)sentinel);
+        CHECK(!MISNAN(sentinel),
+              "diagonal theta %.0f: the objective must never be not-a-number, which the "
+              "line search cannot compare against", (double)diagonals[k]);
+        CHECK(MISINF(sentinel) && sentinel > 0,
+              "diagonal theta %.0f: an unusable scale must return the sentinel, got %.6g",
+              (double)diagonals[k], (double)sentinel);
+        for (int i = 0; i < n; i++)
+            CHECK(gradient.d[i] == 0,
+                  "diagonal theta %.0f: the sentinel path zeroes the gradient at %d",
+                  (double)diagonals[k], i);
+
+        /* The value-only entry point takes the same decision with the opposite
+           sign, since it returns the log-likelihood rather than its negation. */
+        mreal value_only = sdloc_log_likelihood_at(theta, y);
+        CHECK(!MISNAN(value_only) && MISINF(value_only) && value_only < 0,
+              "diagonal theta %.0f: the log-likelihood must be minus infinity, got %.6g",
+              (double)diagonals[k], (double)value_only);
+        mat_free(theta);
+    }
+
+    mat_free(gradient); mat_free(feasible); mat_free(y); sdloc_params_free(&m);
     printf("  ok\n");
 }
 
@@ -417,6 +462,151 @@ static void test_parameter_cache(void) {
     sdloc_params_free(&loaded.params);
     sdloc_fit_result_free(&first);
     mat_free(other); mat_free(y); sdloc_params_free(&truth);
+    printf("  ok\n");
+}
+
+/*
+Three runs of sdloc_fit_cached against one cache, each capped at four
+iterations so none of them can finish. The third run has to report the whole
+chain: niter is that run alone, total_niter the sum, nruns the count. With only
+niter recorded, three runs of four iterations read the same as one, so what a
+chained estimate cost could not be read off the result.
+
+The likelihood rising from run to run is what says each run continued from the
+cache rather than starting again from the initial guess, which would return the
+first run's number every time.
+*/
+static void test_a_resumed_chain_accumulates(void) {
+    printf("a chain of resumed fits accumulates its iterations and its runs\n");
+    int K = 2, T = 150;
+    SdlocParams truth = plausible_params(K);
+    Rng rng = rng_new(2468u, 0);
+    Mat y = sdloc_simulate(&rng, &truth, T);
+
+    /* A start far enough from the truth that four iterations cannot reach the
+       optimum from it. */
+    SdlocParams start = sdloc_params_new(K);
+    Vec theta = mat_new(sdloc_n_theta(K), 1);
+    _sdloc_unlink(&truth, theta);
+    for (int i = 0; i < theta.r; i++) theta.d[i] += (mreal)(0.4 * rng_normal(&rng));
+    sdloc_params_from_theta(theta, &start);
+    mat_free(theta);
+
+    const char *path = "out/score_driven_location_correctness_chain.json";
+    remove(path);
+
+    SdlocFitOptions capped = sdloc_default_fit_options();
+    capped.max_iterations = 4;
+
+    mreal previous = -(mreal)INFINITY;
+    int chain_runs = 0, chain_iterations = 0;
+    for (int run = 1; run <= 3; run++) {
+        SdlocFitResult result = sdloc_fit_cached(y, &start, capped, path, 0);
+        CHECK(result.status == LBFGS_MAX_ITERATIONS,
+              "run %d must stop at the cap for the chain to continue, got %s",
+              run, lbfgs_status_text(result.status));
+        CHECK(result.niter == 4, "run %d: niter is this run alone, got %d", run, result.niter);
+        CHECK(result.nruns == run, "run %d: nruns must count the runs, got %d", run, result.nruns);
+        CHECK(result.total_niter == 4 * run,
+              "run %d: total_niter must sum the chain, got %d", run, result.total_niter);
+        CHECK(result.log_likelihood > previous,
+              "run %d must continue from the cache rather than restart: %.10g against %.10g",
+              run, (double)result.log_likelihood, (double)previous);
+        previous = result.log_likelihood;
+        chain_runs = result.nruns;
+        chain_iterations = result.total_niter;
+        sdloc_fit_result_free(&result);
+    }
+
+    SdlocFitResult forced = sdloc_fit_cached(y, &start, capped, path, 1);
+    CHECK(forced.nruns == 1, "force_refit must start a new chain, got nruns %d", forced.nruns);
+    CHECK(forced.total_niter == forced.niter,
+          "a new chain's total is its own niter, got %d against %d",
+          forced.total_niter, forced.niter);
+
+    /* A finished fit is loaded, not continued: resuming is for a run that ran
+       out of iterations, and one that stopped for any other reason would only
+       repeat the search that already stopped. */
+    SdlocFitOptions generous = sdloc_default_fit_options();
+    SdlocFitResult finished = sdloc_fit_cached(y, &start, generous, path, 1);
+    CHECK(finished.status != LBFGS_MAX_ITERATIONS,
+          "the fit must finish for the load path to be the one under test, got %s",
+          lbfgs_status_text(finished.status));
+    SdlocFitResult reloaded = sdloc_fit_cached(y, &start, generous, path, 0);
+    CHECK(reloaded.nruns == finished.nruns && reloaded.niter == finished.niter,
+          "a finished cache must come back untouched, got %d runs and niter %d against %d",
+          reloaded.nruns, reloaded.niter, finished.niter);
+    CHECK(reloaded.status == finished.status,
+          "the reason a fit stopped must survive the cache, got %s against %s",
+          lbfgs_status_text(reloaded.status), lbfgs_status_text(finished.status));
+
+    printf("  %d runs of %d iterations reported as %d runs, %d iterations in total\n",
+           chain_runs, capped.max_iterations, chain_runs, chain_iterations);
+    sdloc_fit_result_free(&forced); sdloc_fit_result_free(&finished);
+    sdloc_fit_result_free(&reloaded);
+    mat_free(y); sdloc_params_free(&truth); sdloc_params_free(&start);
+    printf("  ok\n");
+}
+
+/*
+A cache file is something a user can truncate or hand-edit, so an incomplete
+one has to read as a refusal to load. json_as_number asserts on the value's
+type, which means it dereferences a key that is not in the object: reading the
+diagnostics without checking each key first ended the process on a file missing
+one of them, rather than returning 0 the way a missing file already did.
+
+A refused load must also leave the caller's model alone. The parameters used to
+be read before the fingerprint was checked, so a cache from another sample was
+written into the model and then reported as not loaded.
+*/
+static void test_cache_refuses_a_file_it_cannot_use(void) {
+    printf("an incomplete cache is refused, and a refused load changes nothing\n");
+    int K = 2, T = 120;
+    SdlocParams truth = plausible_params(K);
+    Rng rng = rng_new(3690u, 0);
+    Mat y = sdloc_simulate(&rng, &truth, T);
+    Mat other = sdloc_simulate(&rng, &truth, T);
+
+    const char *path = "out/score_driven_location_correctness_incomplete.json";
+
+    JsonValue *root = sdloc_params_to_json(&truth);
+    JsonValue *diagnostics = json_object();
+    json_object_set(diagnostics, "log_likelihood", json_number(-1.0));
+    json_object_set(diagnostics, "data_fingerprint", json_number(sdloc_data_fingerprint(y)));
+    json_object_set(root, "fit", diagnostics);
+    json_write_file(root, path);
+    json_free(root);
+
+    SdlocFitResult incomplete;
+    incomplete.params = sdloc_params_new(K);
+    CHECK(sdloc_load_fit(&incomplete, y, path) == 0,
+          "a diagnostics block missing a field must be refused, not read past");
+    sdloc_params_free(&incomplete.params);
+
+    SdlocFitOptions capped = sdloc_default_fit_options();
+    capped.max_iterations = 3;
+    SdlocFitResult elsewhere = sdloc_fit(other, &truth, capped);
+    sdloc_save_fit(&elsewhere, other, path);
+
+    SdlocFitResult refused;
+    refused.params = plausible_params(K);
+    Vec before = mat_new(sdloc_n_theta(K), 1);
+    _sdloc_unlink(&refused.params, before);
+    CHECK(sdloc_load_fit(&refused, y, path) == 0, "a cache from another sample must be refused");
+    Vec after = mat_new(sdloc_n_theta(K), 1);
+    _sdloc_unlink(&refused.params, after);
+    mreal worst = 0;
+    for (int i = 0; i < before.r; i++) {
+        mreal difference = (mreal)fabs((double)(before.d[i] - after.d[i]));
+        if (difference > worst) worst = difference;
+    }
+    CHECK_NEAR(worst, 0, 0, "a refused load must leave the model untouched");
+
+    mat_free(before); mat_free(after);
+    sdloc_fit_result_free(&refused);
+    sdloc_fit_result_free(&elsewhere);
+    mat_free(other); mat_free(y); sdloc_params_free(&truth);
+    remove(path);
     printf("  ok\n");
 }
 
@@ -589,6 +779,8 @@ int main(void) {
     test_infeasible_points_return_a_sentinel();
     test_fit_diagnostics_describe_the_result();
     test_parameter_cache();
+    test_a_resumed_chain_accumulates();
+    test_cache_refuses_a_file_it_cannot_use();
     test_standard_errors();
     if (getenv("STRESS")) test_recovery();
     else printf("slow checks skipped, run make test-stress\n");

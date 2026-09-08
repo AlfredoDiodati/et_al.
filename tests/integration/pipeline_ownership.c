@@ -245,10 +245,24 @@ static void test_a_cached_fit_survives_the_model_it_came_from(void) {
     qvarma_params_from_theta(start_theta, &start);
     mat_free(start_theta);
 
+    /* The reload is what this test is about, and qvarma_fit_cached reloads only
+       a fit that stopped on its own: one that ran out of iterations it resumes.
+       So the cap has to be high enough that the search finishes. */
     QvarmaFitOptions options = qvarma_default_fit_options();
-    options.max_iterations = 25;
+    options.max_iterations = 2000;
+    /* This shape on this sample never meets the gradient test - the
+       co-integration loading enters a random walk and its gradient stays large
+       - so the search stops only on the function decrease, and the default
+       1e-12 is below what these 192 quarters ever deliver. What is being
+       tested is ownership across a reload, not the quality of the estimate. */
+    options.function_tolerance = (mreal)1e-6;
 
     QvarmaFitResult first = qvarma_fit_cached(y, &start, options, path, 1);
+    CHECK(first.status != LBFGS_MAX_ITERATIONS,
+          "the search must finish for the reload path to be the one under test, got %s",
+          lbfgs_status_text(first.status));
+    printf("  the fit stopped after %d iterations: %s\n", first.niter,
+           lbfgs_status_text(first.status));
     mreal recorded = first.log_likelihood;
     qvarma_fit_result_free(&first);
     qvarma_params_free(&start);
@@ -257,6 +271,8 @@ static void test_a_cached_fit_survives_the_model_it_came_from(void) {
     QvarmaFitResult second = qvarma_fit_cached(y, &reload_start, options, path, 0);
     CHECK_CLOSE(second.log_likelihood, recorded, 1e-12,
                 "a reloaded fit must report the likelihood the first one recorded");
+    CHECK(second.nruns == 1, "a load must not count itself as a further run, got %d",
+          second.nruns);
     qvarma_fit_result_free(&second);
     qvarma_params_free(&reload_start);
 
