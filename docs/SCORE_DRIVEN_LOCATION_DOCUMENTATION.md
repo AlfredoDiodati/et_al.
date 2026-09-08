@@ -127,9 +127,13 @@ Both checks are written with `MISNAN`/`MISINF` rather than a comparison against 
 
 ### Diagnostics are part of the result
 
-`SdlocFitResult` carries `is_converged`, `status` (an `LbfgsStatus`, printable via `lbfgs_status_text`), `niter`, `total_niter`, `nruns` and `gradient_norm`. A fit whose status cannot be determined is not a result.
+`SdlocFitResult` carries `is_converged`, `status` (an `LbfgsStatus`, printable via `lbfgs_status_text`), `run_status`, `status_is_known`, `niter`, `total_niter`, `nruns` and `gradient_norm`. A fit whose status cannot be determined is not a result.
 
 `niter` is the iterations of one call to the solver. When a fit is resumed from an earlier one — see the parameter cache below — `total_niter` is the sum over every run in the chain and `nruns` is how many runs there were; a fit that started from scratch has `total_niter` equal to `niter` and `nruns` 1.
+
+`LbfgsStatus` separates five outcomes and `is_converged` collapses them to two, losing the distinction that decides what to do next: a run that hit its cap wants more iterations, one whose line search could not move wants a different starting point, and one whose objective stopped being finite wants neither. So the reason is kept for every run in `run_status`, oldest first and `nruns` long, with `status` the last of them. `status_is_known` is 0 only for a cache written before the reasons were recorded, and then neither may be read; a fit always knows why it stopped.
+
+`sdloc_fit_result_new(K)` makes an empty result ready for `sdloc_load_fit` to fill in and safe to pass to `sdloc_fit_result_free` whether the load succeeded or not. A result owns `run_status` as well as its parameters, so one declared without it holds a pointer that was never set.
 
 `is_converged` is true for exactly the two `LbfgsStatus` values that are convergence, so it cannot disagree with `status` — the test checks that. Note `gradient_norm` is the Euclidean norm while the solver's stopping test uses the largest component; see `docs/LBFGS_DOCUMENTATION.md`.
 
@@ -155,7 +159,15 @@ A parameter whose error cannot be computed is a result: it says the sample does 
 
 `sdloc_fit_cached` is the loop a script wants. It loads a fit the solver finished with, and **resumes** one that stopped at its iteration cap: the cached parameters become the starting point of a new run, which is then written back. Returning a capped fit as it stands would mean a script could be rerun for ever without the estimate moving. Only the cap is resumed from — a run that stalled or went non-finite did not run short of iterations, and starting the same search from the same point spends a whole fit to arrive back where it was. That is what the stored `status` is for; `is_converged` alone cannot tell a capped run from a stalled one.
 
-The iterations of the runs in a chain are summed into `total_niter` and the runs counted in `nruns`, so a chain of three runs of four thousand iterations reports `nruns` 3 and `total_niter` 12000 rather than `niter` 4000 three times over. `force_refit` abandons a chain and starts the count again from `initial_guess`. A cache written before the chain was tracked carries neither the totals nor the status; it loads as the single run it was.
+The iterations of the runs in a chain are summed into `total_niter` and the runs counted in `nruns`, so a chain of three runs of four thousand iterations reports `nruns` 3 and `total_niter` 12000 rather than `niter` 4000 three times over. Why each run stopped is kept beside them in `run_status`, so the chain says what every run did rather than only the last, and `sdloc_write_report` prints it run by run. `force_refit` abandons a chain and starts the count again from `initial_guess`.
+
+### A cache from before these fields existed
+
+A cache in the format that shipped earlier carries the parameters and eight diagnostics: `log_likelihood`, `gradient_norm`, `aic`, `bic`, `hannan_quinn`, `niter`, `is_converged`, `data_fingerprint`. No `total_niter`, no `nruns`, no `run_status`. Those files still load, and everything they do record comes back exactly: what one holds is a fit somebody has already paid for.
+
+What is missing is reported missing rather than guessed. Such a file loads as one run, `total_niter` equal to its own `niter`, and `status_is_known` 0 — and `sdloc_fit_cached` hands it back untouched, converged or not, because resuming it on the guess that it was capped would spend another whole fit on a search that may have had nothing left to give. Refitting one is an explicit `force_refit`.
+
+A `run_status` whose length disagrees with `nruns`, or one carrying a number that is not one of the five outcomes, is the same answer: the reasons were not recorded. That covers a hand-edited file and a file from some later format this build does not understand, and in neither case does the rest of the file become unreadable.
 
 ## Testing
 
@@ -171,7 +183,8 @@ The failure this file is built against is a filter that returns a plausible log-
 - **Infeasible points return the sentinel** and zero the gradient, rather than aborting, at three diagonal `theta` values covering both routes: `-800` and `800`, where the factor underflows to zero or overflows and the check on the parameters catches it, and `-400`, where the factor is an ordinary number and only the check on the computed value can. Asserted through `MISNAN`/`MISINF`, never a comparison against a large number.
 - **The reported diagnostics describe the returned parameters**, not the point before the last step: the log-likelihood and gradient are recomputed at the returned `theta` and compared, the three information criteria against their definitions, and `is_converged` against `status`.
 - **The cache round trips** and refuses a fit written on a different sample, and returns 0 rather than aborting on a missing file. It refuses a diagnostics block missing a field rather than reading past it, and a refused load leaves the caller's model untouched.
-- **A chain of three capped runs** against one cache reports three runs and the sum of their iterations, and the likelihood rises from run to run, which is what says each run continued from the cache rather than restarting. A fit the solver finished is loaded rather than resumed, and the reason it stopped survives the cache.
+- **A chain of three capped runs** against one cache reports three runs and the sum of their iterations, and the likelihood rises from run to run, which is what says each run continued from the cache rather than restarting. A fourth run with a budget it can finish inside puts two different reasons in the chain rather than one repeated. A fit the solver finished is loaded rather than resumed, and the reasons survive the cache.
+- **A cache in the format that shipped before any of these fields existed** loads, reports what it recorded, reports no reason rather than a guessed one, and is handed back by `sdloc_fit_cached` untouched under either convergence flag and over two consecutive reruns. A `run_status` carrying a value outside the five outcomes, or one whose length disagrees with `nruns`, reads as no reason recorded rather than making the file unreadable.
 - **Standard errors** at a fit: none negative, the condition number at least one, the flat-direction count in range, and the point estimates beside them being the fitted ones.
 - **`STRESS=1` adds recovery**: 4 draws at `T = 4000` from a start perturbed by 0.2 per coordinate on the unconstrained scale. 4 of 4 converge with a worst unconstrained coordinate error of 0.193.
 

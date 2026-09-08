@@ -1,4 +1,4 @@
-test run: di  8 sep 2026 10:48:07 CEST (STRESS=1)
+test run: di  8 sep 2026 11:26:19 CEST (STRESS=1)
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -48,8 +48,8 @@ make: 'tests/correctness/engle_granger_correctness' is up to date.
 make: 'tests/correctness/maki_correctness' is up to date.
 make: 'tests/correctness/qlr_test_correctness' is up to date.
 make: 'tests/correctness/lbfgs_correctness' is up to date.
-make: 'tests/correctness/score_driven_location_correctness' is up to date.
-make: 'tests/correctness/qvarma_correctness' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/score_driven_location_correctness.c -lm -lopenblas -o tests/correctness/score_driven_location_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -lopenblas -o tests/correctness/qvarma_correctness
 make: 'tests/correctness/qvarma_analytic_agreement' is up to date.
 make: 'tests/correctness/qvarma_gaussian_limit' is up to date.
 make: 'tests/correctness/qvarma_identification' is up to date.
@@ -57,7 +57,7 @@ make: 'tests/integration/frame_to_model' is up to date.
 make: 'tests/integration/join_missing_values' is up to date.
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
-make: 'tests/integration/pipeline_ownership' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
 make: 'tests/integration/npz_to_statistics' is up to date.
 make: 'tests/integration/header_composition' is up to date.
 make: 'tests/integration/header_composition_f32' is up to date.
@@ -1346,9 +1346,12 @@ the reported likelihood and gradient belong to the returned parameters
 the JSON cache round trips and refuses a different sample
   ok
 a chain of resumed fits accumulates its iterations and its runs
+  the chain's reasons: hit the iteration limit, hit the iteration limit, hit the iteration limit, function decrease below tolerance
   3 runs of 4 iterations reported as 3 runs, 12 iterations in total
   ok
 an incomplete cache is refused, and a refused load changes nothing
+  ok
+a cache in the original format still loads, and is not refitted
   ok
 standard errors at a fit, and the curvature they rest on
   is_maximum 1, 0 flat directions, condition 66.7, 10 of 10 errors usable
@@ -1398,11 +1401,14 @@ parameter cache round-trip and shape rejection
 fit reuses a cache, reports what it recorded, and refits on demand
   ok
 a chain of resumed fits accumulates its iterations and its runs
+  the chain's reasons: hit the iteration limit, hit the iteration limit, hit the iteration limit, function decrease below tolerance
   3 runs of 5 iterations reported as 3 runs, 15 iterations in total
   ok
 only a fit that ran out of iterations is resumed
   ok
 an incomplete cache is refused, and a refused load changes nothing
+  ok
+a cache in the original format still loads, and is not refitted
   ok
 an unusable scale returns the sentinel, not a number that is not one
   diagonal theta -400, the density overflows: objective inf

@@ -267,6 +267,16 @@ unconverged one, as sdloc_fit_cached does, total_niter is the sum over every
 run in the chain and nruns is how many runs there were, since what the estimate
 cost is the sum and the last run's niter alone understates it. A fit that
 started from scratch has total_niter equal to niter and nruns 1.
+
+is_converged is a boolean over five outcomes, and it loses the distinction that
+decides what to do next: a run that hit the iteration cap wants more
+iterations, one whose line search could not move wants a different starting
+point, and one whose objective stopped being finite wants neither. So the
+reason is kept per run, in run_status, oldest run first and nruns long. status
+is the most recent of them, the one describing the parameters returned here.
+
+status_is_known is 0 only for a cache written before the reasons were recorded,
+where status and run_status say nothing and must not be read.
 */
 typedef struct {
     SdlocParams params;
@@ -277,11 +287,54 @@ typedef struct {
     int total_niter;
     int nruns;
     int is_converged;
-    LbfgsStatus status;
+    LbfgsStatus status;        /* why the most recent run stopped */
+    int status_is_known;
+    LbfgsStatus *run_status;   /* nruns entries, oldest first; NULL when not known */
 } SdlocFitResult;
 
 static inline void sdloc_fit_result_free(SdlocFitResult *result) {
     sdloc_params_free(&result->params);
+    free(result->run_status);
+    result->run_status = NULL;
+}
+
+/*
+An empty result at K series, which sdloc_load_fit fills in. It owns its memory
+from the moment it is made, so sdloc_fit_result_free is correct on it whether
+the load succeeded or not, and a result declared without it holds a run_status
+pointer that has never been set.
+*/
+static inline SdlocFitResult sdloc_fit_result_new(int K) {
+    SdlocFitResult result;
+    result.params = sdloc_params_new(K);
+    result.log_likelihood = 0;
+    result.gradient_norm = 0;
+    result.aic = result.bic = result.hannan_quinn = 0;
+    result.niter = 0;
+    result.total_niter = 0;
+    result.nruns = 0;
+    result.is_converged = 0;
+    result.status = LBFGS_MAX_ITERATIONS;
+    result.status_is_known = 0;
+    result.run_status = NULL;
+    return result;
+}
+
+/* The chain's reasons, oldest run first, with this run's appended. Returns the
+   array the result takes ownership of. */
+static inline LbfgsStatus *_sdloc_run_status_extend(const LbfgsStatus *earlier, int n_earlier,
+                                                    LbfgsStatus latest) {
+    LbfgsStatus *history = (LbfgsStatus*)malloc((size_t)(n_earlier + 1) * sizeof(LbfgsStatus));
+    for (int i = 0; i < n_earlier; i++) history[i] = earlier[i];
+    history[n_earlier] = latest;
+    return history;
+}
+
+/* Whether a number read out of a cache names one of the solver's outcomes. A
+   file carrying anything else is a file whose reasons were not recorded. */
+static inline int _sdloc_status_is_valid(double stored) {
+    return stored >= LBFGS_MAX_ITERATIONS && stored <= LBFGS_NOT_FINITE
+           && stored == (double)(int)stored;
 }
 
 static inline int sdloc_scale_is_usable(const SdlocLinked *linked, int K) {
@@ -400,6 +453,8 @@ static inline SdlocFitResult sdloc_fit(Mat y, const SdlocParams *initial_guess,
     result.nruns = 1;
     result.is_converged = solved.is_converged;
     result.status = solved.status;
+    result.status_is_known = 1;
+    result.run_status = _sdloc_run_status_extend(NULL, 0, solved.status);
 
     mreal k = (mreal)n, periods = (mreal)T, mean = result.log_likelihood / periods;
     result.aic = 2 * k / periods - 2 * mean;
@@ -535,7 +590,16 @@ static inline void sdloc_save_fit(const SdlocFitResult *result, Mat y, const cha
     json_object_set(diagnostics, "total_niter", json_number(result->total_niter));
     json_object_set(diagnostics, "nruns", json_number(result->nruns));
     json_object_set(diagnostics, "is_converged", json_number(result->is_converged));
-    json_object_set(diagnostics, "status", json_number(result->status));
+    /* One entry per run, oldest first, and the last of them is what status
+       holds, so the scalar is not written beside it. A result whose reasons are
+       not known writes no array rather than a placeholder, which is what makes
+       a reader able to tell the two apart. */
+    if (result->status_is_known) {
+        JsonValue *reasons = json_array();
+        for (int i = 0; i < result->nruns; i++)
+            json_array_push(reasons, json_number(result->run_status[i]));
+        json_object_set(diagnostics, "run_status", reasons);
+    }
     json_object_set(diagnostics, "data_fingerprint", json_number(sdloc_data_fingerprint(y)));
     json_object_set(root, "fit", diagnostics);
     json_write_file(root, path);
@@ -564,11 +628,17 @@ shape agrees, and a fingerprint checked after that would leave a caller holding
 parameters from the wrong sample beside a return value saying nothing was
 loaded.
 
-total_niter, nruns and status are optional, so a cache written before a fit
-chain was tracked reads back as a single run of its own niter rather than being
-rejected. Without a stored status the best a load can do is the coarse split
-is_converged carries, which is why the status is written: whether a run stopped
-at its iteration cap or stalled decides whether resuming it can help.
+total_niter, nruns and run_status are optional, so a cache written before a fit
+chain was tracked loads rather than being rejected: it reads back as a single
+run of its own niter whose stopping reason is not known. Files like that are the
+whole point of a cache, since what they hold is a fit somebody paid for, and a
+change to the format that made them unreadable would throw that away.
+
+An absent run_status, one whose length disagrees with nruns, and one carrying a
+number that is not one of the solver's five outcomes are all the same answer:
+the reasons were not recorded. The alternative is deriving them from
+is_converged, which cannot tell a run that stopped at its cap from one whose
+line search stalled, and those are the two the resume decision turns on.
 */
 static inline int sdloc_load_fit(SdlocFitResult *result, Mat y, const char *path) {
     FILE *probe = fopen(path, "r");
@@ -596,14 +666,32 @@ static inline int sdloc_load_fit(SdlocFitResult *result, Mat y, const char *path
         return 0;
     }
 
-    double total_niter, nruns, status;
+    double total_niter, nruns;
     if (!_sdloc_diagnostic(diagnostics, "total_niter", &total_niter)) total_niter = niter;
     if (!_sdloc_diagnostic(diagnostics, "nruns", &nruns)) nruns = 1;
-    if (!_sdloc_diagnostic(diagnostics, "status", &status))
-        status = is_converged ? LBFGS_FUNCTION_TOLERANCE : LBFGS_MAX_ITERATIONS;
+
+    JsonValue *reasons = json_object_get(diagnostics, "run_status");
+    LbfgsStatus *history = NULL;
+    if (reasons && reasons->type == JSON_ARRAY && json_array_len(reasons) == (int)nruns
+        && nruns > 0) {
+        history = (LbfgsStatus*)malloc((size_t)nruns * sizeof(LbfgsStatus));
+        for (int i = 0; i < (int)nruns; i++) {
+            JsonValue *entry = json_array_get(reasons, i);
+            if (!entry || entry->type != JSON_NUMBER
+                || !_sdloc_status_is_valid(json_as_number(entry))) {
+                free(history);
+                history = NULL;
+                break;
+            }
+            history[i] = (LbfgsStatus)(int)json_as_number(entry);
+        }
+    }
     json_free(root);
 
-    if (!sdloc_load_params(&result->params, path)) return 0;
+    if (!sdloc_load_params(&result->params, path)) {
+        free(history);
+        return 0;
+    }
     result->log_likelihood = (mreal)log_likelihood;
     result->gradient_norm = (mreal)gradient_norm;
     result->aic = (mreal)aic;
@@ -613,7 +701,10 @@ static inline int sdloc_load_fit(SdlocFitResult *result, Mat y, const char *path
     result->total_niter = (int)total_niter;
     result->nruns = (int)nruns;
     result->is_converged = (int)is_converged;
-    result->status = (LbfgsStatus)(int)status;
+    free(result->run_status);
+    result->run_status = history;
+    result->status_is_known = history != NULL;
+    result->status = history ? history[(int)nruns - 1] : LBFGS_MAX_ITERATIONS;
     return 1;
 }
 
@@ -625,25 +716,30 @@ mean a script could be rerun for ever without the estimate moving. The
 iteration counts are then summed into total_niter and the runs counted in
 nruns. A run that stalled or went non-finite did not run short of iterations,
 so starting the same search from the same point spends a whole fit to arrive
-back where it was; those come back as they stand. force_refit skips the load
-and starts a new chain from initial_guess.
+back where it was; those come back as they stand. A cache that does not say why
+its run stopped comes back as it stands too: that is a cache written before the
+reason was recorded, and resuming it on the guess that it was capped would
+spend another whole fit on a search that may have had nothing left to give.
+force_refit skips the load and starts a new chain from initial_guess.
 */
 static inline SdlocFitResult sdloc_fit_cached(Mat y, const SdlocParams *initial_guess,
                                               SdlocFitOptions options,
                                               const char *cache_path, int force_refit) {
     if (!force_refit) {
-        SdlocFitResult cached;
-        cached.params = sdloc_params_new(initial_guess->K);
+        SdlocFitResult cached = sdloc_fit_result_new(initial_guess->K);
         if (sdloc_load_fit(&cached, y, cache_path)) {
-            if (cached.status != LBFGS_MAX_ITERATIONS) return cached;
+            if (!cached.status_is_known || cached.status != LBFGS_MAX_ITERATIONS) return cached;
             SdlocFitResult resumed = sdloc_fit(y, &cached.params, options);
             resumed.total_niter = cached.total_niter + resumed.niter;
             resumed.nruns = cached.nruns + 1;
+            free(resumed.run_status);
+            resumed.run_status = _sdloc_run_status_extend(cached.run_status, cached.nruns,
+                                                          resumed.status);
             sdloc_fit_result_free(&cached);
             sdloc_save_fit(&resumed, y, cache_path);
             return resumed;
         }
-        sdloc_params_free(&cached.params);
+        sdloc_fit_result_free(&cached);
     }
     SdlocFitResult result = sdloc_fit(y, initial_guess, options);
     sdloc_save_fit(&result, y, cache_path);
@@ -813,9 +909,18 @@ static inline void sdloc_write_report(const SdlocFitResult *result, Mat y, const
                  "Student-t shock\n");
     fprintf(out, "iterations %d, converged %s, gradient_norm %.6g\n",
             result->niter, result->is_converged ? "yes" : "no", (double)result->gradient_norm);
-    if (result->nruns > 1)
+    if (result->status_is_known)
+        fprintf(out, "stopping reason: %s\n", lbfgs_status_text(result->status));
+    else
+        fprintf(out, "stopping reason: not recorded by the cache this was loaded from\n");
+    if (result->nruns > 1) {
         fprintf(out, "resumed from a cache: %d runs, %d iterations in total\n",
                 result->nruns, result->total_niter);
+        if (result->status_is_known)
+            for (int run = 0; run < result->nruns; run++)
+                fprintf(out, "  run %d stopped: %s\n", run + 1,
+                        lbfgs_status_text(result->run_status[run]));
+    }
     fprintf(out, "log_likelihood %.6f, per_period %.6f, parameters %d\n",
             (double)result->log_likelihood, (double)result->log_likelihood / y.c, sdloc_n_theta(K));
     fprintf(out, "aic %.6f, bic %.6f, hannan_quinn %.6f\n",

@@ -438,8 +438,7 @@ static void test_parameter_cache(void) {
     SdlocFitResult first = sdloc_fit(y, &truth, options);
     sdloc_save_fit(&first, y, path);
 
-    SdlocFitResult loaded;
-    loaded.params = sdloc_params_new(K);
+    SdlocFitResult loaded = sdloc_fit_result_new(K);
     CHECK(sdloc_load_fit(&loaded, y, path) == 1, "a fit written on y must load back for y");
     CHECK_NEAR(loaded.log_likelihood, first.log_likelihood, 1e-6, "cached log-likelihood");
     CHECK(loaded.niter == first.niter, "cached iteration count");
@@ -451,15 +450,14 @@ static void test_parameter_cache(void) {
     }
     CHECK_NEAR(loaded.params.nu, first.params.nu, 1e-5, "cached nu");
 
-    SdlocFitResult wrong;
-    wrong.params = sdloc_params_new(K);
+    SdlocFitResult wrong = sdloc_fit_result_new(K);
     CHECK(sdloc_load_fit(&wrong, other, path) == 0,
           "a fit written on y must not load for a different sample");
     CHECK(sdloc_load_fit(&wrong, y, "out/score_driven_location_missing.json") == 0,
           "a missing file must return 0 rather than aborting");
 
-    sdloc_params_free(&wrong.params);
-    sdloc_params_free(&loaded.params);
+    sdloc_fit_result_free(&wrong);
+    sdloc_fit_result_free(&loaded);
     sdloc_fit_result_free(&first);
     mat_free(other); mat_free(y); sdloc_params_free(&truth);
     printf("  ok\n");
@@ -512,11 +510,46 @@ static void test_a_resumed_chain_accumulates(void) {
         CHECK(result.log_likelihood > previous,
               "run %d must continue from the cache rather than restart: %.10g against %.10g",
               run, (double)result.log_likelihood, (double)previous);
+        /* The reason is kept per run, so the chain says what every one of them
+           did rather than only the last. */
+        CHECK(result.status_is_known && result.run_status,
+              "run %d: a fit always knows why it stopped", run);
+        if (result.run_status) {
+            for (int earlier = 0; earlier < result.nruns; earlier++)
+                CHECK(result.run_status[earlier] == LBFGS_MAX_ITERATIONS,
+                      "run %d: run %d of the chain came back as %s", run, earlier + 1,
+                      lbfgs_status_text(result.run_status[earlier]));
+            CHECK(result.status == result.run_status[result.nruns - 1],
+                  "run %d: status must be the last of the chain's reasons", run);
+        }
         previous = result.log_likelihood;
         chain_runs = result.nruns;
         chain_iterations = result.total_niter;
         sdloc_fit_result_free(&result);
     }
+
+    /* A fourth run with a budget the search can finish inside, so the chain
+       carries two different reasons and not one repeated. */
+    SdlocFitResult finishing = sdloc_fit_cached(y, &start, sdloc_default_fit_options(), path, 0);
+    CHECK(finishing.nruns == 4, "the finishing run is the chain's fourth, got %d",
+          finishing.nruns);
+    CHECK(finishing.status != LBFGS_MAX_ITERATIONS,
+          "the finishing run must stop on its own for this to say anything, got %s",
+          lbfgs_status_text(finishing.status));
+    if (finishing.run_status && finishing.nruns == 4) {
+        for (int earlier = 0; earlier < 3; earlier++)
+            CHECK(finishing.run_status[earlier] == LBFGS_MAX_ITERATIONS,
+                  "the first three runs must still read as capped, run %d reads %s",
+                  earlier + 1, lbfgs_status_text(finishing.run_status[earlier]));
+        CHECK(finishing.run_status[3] == finishing.status,
+              "the fourth run's reason must be the one it stopped for");
+        printf("  the chain's reasons: %s, %s, %s, %s\n",
+               lbfgs_status_text(finishing.run_status[0]),
+               lbfgs_status_text(finishing.run_status[1]),
+               lbfgs_status_text(finishing.run_status[2]),
+               lbfgs_status_text(finishing.run_status[3]));
+    }
+    sdloc_fit_result_free(&finishing);
 
     SdlocFitResult forced = sdloc_fit_cached(y, &start, capped, path, 1);
     CHECK(forced.nruns == 1, "force_refit must start a new chain, got nruns %d", forced.nruns);
@@ -577,19 +610,27 @@ static void test_cache_refuses_a_file_it_cannot_use(void) {
     json_write_file(root, path);
     json_free(root);
 
-    SdlocFitResult incomplete;
-    incomplete.params = sdloc_params_new(K);
+    SdlocFitResult incomplete = sdloc_fit_result_new(K);
     CHECK(sdloc_load_fit(&incomplete, y, path) == 0,
           "a diagnostics block missing a field must be refused, not read past");
-    sdloc_params_free(&incomplete.params);
+    sdloc_fit_result_free(&incomplete);
 
     SdlocFitOptions capped = sdloc_default_fit_options();
     capped.max_iterations = 3;
     SdlocFitResult elsewhere = sdloc_fit(other, &truth, capped);
     sdloc_save_fit(&elsewhere, other, path);
 
-    SdlocFitResult refused;
-    refused.params = plausible_params(K);
+    /* before is read off the model the load is handed, not off the one it was
+       filled from: the link round trip is exact to a few ulp rather than bit
+       for bit, and what is being tested is that the load changes nothing at
+       all. */
+    SdlocParams mine = plausible_params(K);
+    Vec seed = mat_new(sdloc_n_theta(K), 1);
+    _sdloc_unlink(&mine, seed);
+    SdlocFitResult refused = sdloc_fit_result_new(K);
+    sdloc_params_from_theta(seed, &refused.params);
+    sdloc_params_free(&mine); mat_free(seed);
+
     Vec before = mat_new(sdloc_n_theta(K), 1);
     _sdloc_unlink(&refused.params, before);
     CHECK(sdloc_load_fit(&refused, y, path) == 0, "a cache from another sample must be refused");
@@ -606,6 +647,134 @@ static void test_cache_refuses_a_file_it_cannot_use(void) {
     sdloc_fit_result_free(&refused);
     sdloc_fit_result_free(&elsewhere);
     mat_free(other); mat_free(y); sdloc_params_free(&truth);
+    remove(path);
+    printf("  ok\n");
+}
+
+/*
+A cache in the format that shipped before any of the chain fields existed:
+parameters and a diagnostics block holding exactly the eight numbers
+sdloc_save_fit used to write. No total_niter, no nruns, no run_status.
+
+Files like this are the reason a cache exists at all. What one holds is a fit
+somebody has already paid for, and a format change that made them unreadable
+would throw that away. So: such a file loads, everything it does record comes
+back exactly, and sdloc_fit_cached hands it back untouched.
+
+What it does not record cannot be invented. It says whether the fit converged
+but not why the search stopped, and those are different questions: a run that
+hit its iteration cap and a run whose line search stalled both report
+is_converged 0, and only the first is worth resuming. So the reason reads as
+not known, and a fit whose reason is not known is left alone rather than
+resumed on a guess.
+*/
+static void write_sdloc_cache_in_the_original_format(const SdlocFitResult *fit, Mat y,
+                                                     int is_converged, const char *path) {
+    JsonValue *root = sdloc_params_to_json(&fit->params);
+    JsonValue *diagnostics = json_object();
+    json_object_set(diagnostics, "log_likelihood", json_number((double)fit->log_likelihood));
+    json_object_set(diagnostics, "gradient_norm", json_number((double)fit->gradient_norm));
+    json_object_set(diagnostics, "aic", json_number((double)fit->aic));
+    json_object_set(diagnostics, "bic", json_number((double)fit->bic));
+    json_object_set(diagnostics, "hannan_quinn", json_number((double)fit->hannan_quinn));
+    json_object_set(diagnostics, "niter", json_number(fit->niter));
+    json_object_set(diagnostics, "is_converged", json_number(is_converged));
+    json_object_set(diagnostics, "data_fingerprint", json_number(sdloc_data_fingerprint(y)));
+    json_object_set(root, "fit", diagnostics);
+    json_write_file(root, path);
+    json_free(root);
+}
+
+static void test_a_cache_from_before_the_reasons_were_recorded(void) {
+    printf("a cache in the original format still loads, and is not refitted\n");
+    int K = 2, T = 150;
+    SdlocParams truth = plausible_params(K);
+    Rng rng = rng_new(9753u, 0);
+    Mat y = sdloc_simulate(&rng, &truth, T);
+
+    const char *path = "out/score_driven_location_correctness_original_format.json";
+    SdlocFitOptions capped = sdloc_default_fit_options();
+    capped.max_iterations = 5;
+    SdlocFitResult source = sdloc_fit(y, &truth, capped);
+
+    int flags[] = { 0, 1 };
+    for (size_t k = 0; k < sizeof flags / sizeof flags[0]; k++) {
+        write_sdloc_cache_in_the_original_format(&source, y, flags[k], path);
+
+        SdlocFitResult legacy = sdloc_fit_result_new(K);
+        CHECK(sdloc_load_fit(&legacy, y, path) == 1,
+              "is_converged %d: a cache in the original format must load", flags[k]);
+        CHECK(legacy.niter == source.niter,
+              "is_converged %d: it must report the iterations it recorded, got %d against %d",
+              flags[k], legacy.niter, source.niter);
+        CHECK(legacy.is_converged == flags[k],
+              "is_converged %d: it must report the flag it recorded, got %d",
+              flags[k], legacy.is_converged);
+        CHECK_NEAR(legacy.log_likelihood, source.log_likelihood, 1e-6,
+                   "the log-likelihood it recorded");
+        CHECK(legacy.nruns == 1, "is_converged %d: it is one run, got %d", flags[k], legacy.nruns);
+        CHECK(legacy.total_niter == legacy.niter,
+              "is_converged %d: its total is its own niter, got %d against %d",
+              flags[k], legacy.total_niter, legacy.niter);
+        CHECK(legacy.status_is_known == 0 && legacy.run_status == NULL,
+              "is_converged %d: it records no reason, and none may be invented for it",
+              flags[k]);
+        sdloc_fit_result_free(&legacy);
+
+        SdlocFitResult reused = sdloc_fit_cached(y, &truth, capped, path, 0);
+        CHECK(reused.niter == source.niter && reused.nruns == 1,
+              "is_converged %d: it must come back untouched, got %d runs and niter %d against %d",
+              flags[k], reused.nruns, reused.niter, source.niter);
+        CHECK_NEAR(reused.log_likelihood, source.log_likelihood, 1e-6,
+                   "a reused original-format cache must report what it recorded");
+        CHECK(reused.status_is_known == 0,
+              "is_converged %d: reusing it must not invent a reason", flags[k]);
+        sdloc_fit_result_free(&reused);
+
+        SdlocFitResult again = sdloc_fit_cached(y, &truth, capped, path, 0);
+        CHECK(again.niter == source.niter && again.nruns == 1,
+              "is_converged %d: a second rerun must change nothing either, got %d runs, niter %d",
+              flags[k], again.nruns, again.niter);
+        sdloc_fit_result_free(&again);
+    }
+
+    /* A reason outside the enum names no outcome, so it reads as no reason. */
+    write_sdloc_cache_in_the_original_format(&source, y, 0, path);
+    JsonValue *root = json_parse_file(path);
+    JsonValue *diagnostics = json_object_get(root, "fit");
+    json_object_set(diagnostics, "nruns", json_number(1));
+    JsonValue *nonsense = json_array();
+    json_array_push(nonsense, json_number(7));
+    json_object_set(diagnostics, "run_status", nonsense);
+    json_write_file(root, path);
+    json_free(root);
+
+    SdlocFitResult garbled = sdloc_fit_result_new(K);
+    CHECK(sdloc_load_fit(&garbled, y, path) == 1,
+          "a reason outside the enum must not make the whole file unreadable");
+    CHECK(garbled.status_is_known == 0 && garbled.run_status == NULL,
+          "a reason outside the enum names no outcome, so none is known");
+    sdloc_fit_result_free(&garbled);
+
+    /* A length that disagrees with nruns is the same answer. */
+    sdloc_save_fit(&source, y, path);
+    root = json_parse_file(path);
+    diagnostics = json_object_get(root, "fit");
+    CHECK(json_array_len(json_object_get(diagnostics, "run_status")) == 1,
+          "the setup here starts from a chain of one");
+    json_object_set(diagnostics, "nruns", json_number(3));
+    json_write_file(root, path);
+    json_free(root);
+
+    SdlocFitResult short_history = sdloc_fit_result_new(K);
+    CHECK(sdloc_load_fit(&short_history, y, path) == 1,
+          "a run_status shorter than nruns must not make the file unreadable");
+    CHECK(short_history.status_is_known == 0,
+          "a run_status that does not cover every run says nothing about any of them");
+    sdloc_fit_result_free(&short_history);
+
+    sdloc_fit_result_free(&source);
+    mat_free(y); sdloc_params_free(&truth);
     remove(path);
     printf("  ok\n");
 }
@@ -781,6 +950,7 @@ int main(void) {
     test_parameter_cache();
     test_a_resumed_chain_accumulates();
     test_cache_refuses_a_file_it_cannot_use();
+    test_a_cache_from_before_the_reasons_were_recorded();
     test_standard_errors();
     if (getenv("STRESS")) test_recovery();
     else printf("slow checks skipped, run make test-stress\n");

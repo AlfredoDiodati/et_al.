@@ -1157,11 +1157,58 @@ static void test_fit_cached_accumulates_a_chain(void) {
         CHECK(result.log_likelihood > previous,
               "run %d must continue from the cache rather than restart: %.10g against %.10g",
               run, (double)result.log_likelihood, (double)previous);
+        /* The reason is kept per run, so the chain says what every one of them
+           did rather than only the last. */
+        CHECK(result.status_is_known && result.run_status,
+              "run %d: a fit always knows why it stopped", run);
+        if (result.run_status) {
+            for (int earlier = 0; earlier < result.nruns; earlier++)
+                CHECK(result.run_status[earlier] == LBFGS_MAX_ITERATIONS,
+                      "run %d: run %d of the chain came back as %s", run, earlier + 1,
+                      lbfgs_status_text(result.run_status[earlier]));
+            CHECK(result.status == result.run_status[result.nruns - 1],
+                  "run %d: status must be the last of the chain's reasons", run);
+        }
         previous = result.log_likelihood;
         chain_runs = result.nruns;
         chain_iterations = result.total_niter;
         qvarma_fit_result_free(&result);
     }
+
+    /* A fourth run with a budget the search can finish inside, so the chain
+       carries two different reasons and not one repeated. A single stored
+       reason, or a chain that recorded only the last, could not show this. */
+    QvarmaFitOptions generous = capped;
+    generous.max_iterations = 2000;
+    generous.function_tolerance = (mreal)1e-6;
+    QvarmaFitResult finishing = qvarma_fit_cached(y, &start, generous, path, 0);
+    CHECK(finishing.nruns == 4, "the finishing run is the chain's fourth, got %d",
+          finishing.nruns);
+    CHECK(finishing.status != LBFGS_MAX_ITERATIONS,
+          "the finishing run must stop on its own for this to say anything, got %s",
+          lbfgs_status_text(finishing.status));
+    if (finishing.run_status && finishing.nruns == 4) {
+        for (int earlier = 0; earlier < 3; earlier++)
+            CHECK(finishing.run_status[earlier] == LBFGS_MAX_ITERATIONS,
+                  "the first three runs must still read as capped, run %d reads %s",
+                  earlier + 1, lbfgs_status_text(finishing.run_status[earlier]));
+        CHECK(finishing.run_status[3] == finishing.status,
+              "the fourth run's reason must be the one it stopped for");
+        printf("  the chain's reasons: %s, %s, %s, %s\n",
+               lbfgs_status_text(finishing.run_status[0]),
+               lbfgs_status_text(finishing.run_status[1]),
+               lbfgs_status_text(finishing.run_status[2]),
+               lbfgs_status_text(finishing.run_status[3]));
+    }
+    /* And now that the chain has finished, it is loaded rather than continued. */
+    QvarmaFitResult settled = qvarma_fit_cached(y, &start, generous, path, 0);
+    CHECK(settled.nruns == 4 && settled.total_niter == finishing.total_niter,
+          "a finished chain must be loaded, not extended: got %d runs, %d iterations",
+          settled.nruns, settled.total_niter);
+    CHECK(settled.run_status && settled.run_status[3] == finishing.status,
+          "the whole chain of reasons must survive the cache");
+    qvarma_fit_result_free(&settled);
+    qvarma_fit_result_free(&finishing);
 
     /* force_refit is the way to abandon a chain, so it starts the count again
        rather than adding to what is on disk. */
@@ -1231,7 +1278,9 @@ static void test_a_finished_fit_is_not_resumed(void) {
     qvarma_fit_result_free(&reloaded);
 
     /* The same fit relabelled as a stalled search: the parameters and the
-       sample are unchanged, only the reason it stopped. */
+       sample are unchanged, only the reason it stopped. run_status is what gets
+       written, and status is its last entry, so both move together. */
+    finished.run_status[finished.nruns - 1] = LBFGS_NO_PROGRESS;
     finished.status = LBFGS_NO_PROGRESS;
     finished.is_converged = 0;
     qvarma_save_fit(&finished, y, path);
@@ -1250,13 +1299,20 @@ static void test_a_finished_fit_is_not_resumed(void) {
     LbfgsStatus reasons[] = { LBFGS_MAX_ITERATIONS, LBFGS_GRADIENT_TOLERANCE,
                               LBFGS_FUNCTION_TOLERANCE, LBFGS_NO_PROGRESS, LBFGS_NOT_FINITE };
     for (size_t i = 0; i < sizeof reasons / sizeof reasons[0]; i++) {
+        finished.run_status[finished.nruns - 1] = reasons[i];
         finished.status = reasons[i];
         qvarma_save_fit(&finished, y, path);
-        QvarmaFitResult back;
-        back.params = baseline();
+        QvarmaParams back_shape = baseline();
+        QvarmaFitResult back = qvarma_fit_result_new(&back_shape);
+        qvarma_params_free(&back_shape);
         CHECK(qvarma_load_fit(&back, y, path) == 1, "%s must load", lbfgs_status_text(reasons[i]));
+        CHECK(back.status_is_known, "%s must come back as a known reason",
+              lbfgs_status_text(reasons[i]));
         CHECK(back.status == reasons[i], "%s came back as %s",
               lbfgs_status_text(reasons[i]), lbfgs_status_text(back.status));
+        CHECK(back.run_status && back.run_status[back.nruns - 1] == reasons[i],
+              "%s must be the last entry of the chain's reasons",
+              lbfgs_status_text(reasons[i]));
         qvarma_fit_result_free(&back);
     }
 
@@ -1296,8 +1352,8 @@ static void test_cache_refuses_a_file_it_cannot_use(void) {
     json_write_file(root, path);
     json_free(root);
 
-    QvarmaFitResult incomplete;
-    incomplete.params = baseline();
+    QvarmaParams empty_shape = baseline();
+    QvarmaFitResult incomplete = qvarma_fit_result_new(&empty_shape);
     CHECK(qvarma_load_fit(&incomplete, y, path) == 0,
           "a diagnostics block missing a field must be refused, not read past");
     qvarma_fit_result_free(&incomplete);
@@ -1309,14 +1365,21 @@ static void test_cache_refuses_a_file_it_cannot_use(void) {
     QvarmaFitResult elsewhere = qvarma_fit(other, &truth, capped);
     qvarma_save_fit(&elsewhere, other, path);
 
+    /* before is read off the model the load is handed, not off the one it was
+       filled from: the link round trip is exact to a few ulp rather than bit
+       for bit, and what is being tested is that the load changes nothing at
+       all. */
     QvarmaParams mine = baseline();
     Rng other_rng = rng_new(7171, 0);
     fill_plausible(&mine, &other_rng);
-    Vec before = mat_new(qvarma_n_theta(&mine), 1);
-    _qvarma_unlink(&mine, before);
+    Vec seed = mat_new(qvarma_n_theta(&mine), 1);
+    _qvarma_unlink(&mine, seed);
+    QvarmaFitResult refused = qvarma_fit_result_new(&mine);
+    qvarma_params_from_theta(seed, &refused.params);
+    mat_free(seed);
 
-    QvarmaFitResult refused;
-    refused.params = mine;
+    Vec before = mat_new(qvarma_n_theta(&mine), 1);
+    _qvarma_unlink(&refused.params, before);
     CHECK(qvarma_load_fit(&refused, y, path) == 0,
           "a cache from another sample must be refused");
     Vec after = mat_new(qvarma_n_theta(&mine), 1);
@@ -1328,39 +1391,154 @@ static void test_cache_refuses_a_file_it_cannot_use(void) {
     }
     CHECK_NEAR(worst, 0, 0, "a refused load must leave the model untouched");
 
-    /* A cache from before the chain was tracked carries neither the totals nor
-       the reason, and must still load as the single run it was. */
-    JsonValue *old = qvarma_params_to_json(&elsewhere.params);
-    JsonValue *old_fit = json_object();
-    json_object_set(old_fit, "log_likelihood", json_number((double)elsewhere.log_likelihood));
-    json_object_set(old_fit, "gradient_norm", json_number((double)elsewhere.gradient_norm));
-    json_object_set(old_fit, "aic", json_number((double)elsewhere.aic));
-    json_object_set(old_fit, "bic", json_number((double)elsewhere.bic));
-    json_object_set(old_fit, "hannan_quinn", json_number((double)elsewhere.hannan_quinn));
-    json_object_set(old_fit, "niter", json_number(elsewhere.niter));
-    json_object_set(old_fit, "is_converged", json_number(0));
-    json_object_set(old_fit, "data_fingerprint", json_number(qvarma_data_fingerprint(other)));
-    json_object_set(old, "fit", old_fit);
-    json_write_file(old, path);
-    json_free(old);
-
-    QvarmaFitResult legacy;
-    legacy.params = baseline();
-    CHECK(qvarma_load_fit(&legacy, other, path) == 1,
-          "a cache written before the chain was tracked must still load");
-    CHECK(legacy.nruns == 1, "an untracked cache is one run, got %d", legacy.nruns);
-    CHECK(legacy.total_niter == legacy.niter,
-          "an untracked cache totals its own niter, got %d against %d",
-          legacy.total_niter, legacy.niter);
-    CHECK(legacy.status == LBFGS_MAX_ITERATIONS,
-          "an unconverged untracked cache reads as the iteration cap, got %s",
-          lbfgs_status_text(legacy.status));
-    qvarma_fit_result_free(&legacy);
-
     mat_free(before); mat_free(after);
     qvarma_fit_result_free(&refused);
     qvarma_fit_result_free(&elsewhere);
+    qvarma_params_free(&mine); qvarma_params_free(&empty_shape);
     mat_free(other); mat_free(y); qvarma_params_free(&truth);
+    remove(path);
+    printf("  ok\n");
+}
+
+/*
+A cache in the format that shipped before any of the chain fields existed:
+parameters, a shape, and a diagnostics block holding exactly the eight numbers
+qvarma_save_fit used to write. No total_niter, no nruns, no run_status.
+
+Files like this are the reason a cache exists at all. What one holds is a fit
+somebody has already paid for, on a model expensive enough to be worth not
+refitting, and a format change that made them unreadable would throw that away.
+So the requirement is stated three ways: such a file loads, everything it does
+record comes back exactly, and qvarma_fit_cached hands it back untouched.
+
+What it does not record cannot be invented. It says whether the fit converged
+but not why the search stopped, and those are different questions: a run that
+hit its iteration cap and a run whose line search stalled both report
+is_converged 0, and only the first is worth resuming. So the reason reads as
+not known, and a fit whose reason is not known is left alone rather than
+resumed on a guess. Refitting one is an explicit force_refit.
+
+A run_status carrying something that is not one of the solver's five outcomes
+is the same answer, since a number outside the enum names no outcome. That
+covers a hand-edited file and a file from some later format this build does not
+understand.
+*/
+static void write_cache_in_the_original_format(const QvarmaFitResult *fit, Mat y,
+                                               int is_converged, const char *path) {
+    JsonValue *root = qvarma_params_to_json(&fit->params);
+    JsonValue *diagnostics = json_object();
+    json_object_set(diagnostics, "log_likelihood", json_number((double)fit->log_likelihood));
+    json_object_set(diagnostics, "gradient_norm", json_number((double)fit->gradient_norm));
+    json_object_set(diagnostics, "aic", json_number((double)fit->aic));
+    json_object_set(diagnostics, "bic", json_number((double)fit->bic));
+    json_object_set(diagnostics, "hannan_quinn", json_number((double)fit->hannan_quinn));
+    json_object_set(diagnostics, "niter", json_number(fit->niter));
+    json_object_set(diagnostics, "is_converged", json_number(is_converged));
+    json_object_set(diagnostics, "data_fingerprint", json_number(qvarma_data_fingerprint(y)));
+    json_object_set(root, "fit", diagnostics);
+    json_write_file(root, path);
+    json_free(root);
+}
+
+static void test_a_cache_from_before_the_reasons_were_recorded(void) {
+    printf("a cache in the original format still loads, and is not refitted\n");
+    QvarmaParams truth = baseline();
+    Rng rng = rng_new(8484, 0);
+    fill_plausible(&truth, &rng);
+    Mat y = qvarma_simulate(&rng, &truth, 150);
+
+    const char *path = "out/correctness_fit_original_format.json";
+    QvarmaFitOptions capped = qvarma_default_fit_options();
+    capped.max_iterations = 6;
+    QvarmaFitResult source = qvarma_fit(y, &truth, capped);
+
+    /* Both convergence flags, since the two take different paths through
+       qvarma_fit_cached and neither may refit. */
+    int flags[] = { 0, 1 };
+    for (size_t k = 0; k < sizeof flags / sizeof flags[0]; k++) {
+        write_cache_in_the_original_format(&source, y, flags[k], path);
+
+        QvarmaFitResult legacy = qvarma_fit_result_new(&truth);
+        CHECK(qvarma_load_fit(&legacy, y, path) == 1,
+              "is_converged %d: a cache in the original format must load", flags[k]);
+        CHECK(legacy.niter == source.niter,
+              "is_converged %d: it must report the iterations it recorded, got %d against %d",
+              flags[k], legacy.niter, source.niter);
+        CHECK(legacy.is_converged == flags[k],
+              "is_converged %d: it must report the flag it recorded, got %d",
+              flags[k], legacy.is_converged);
+        CHECK_NEAR(legacy.log_likelihood, source.log_likelihood, 1e-6,
+                   "the log-likelihood it recorded");
+        CHECK(legacy.nruns == 1, "is_converged %d: it is one run, got %d", flags[k], legacy.nruns);
+        CHECK(legacy.total_niter == legacy.niter,
+              "is_converged %d: its total is its own niter, got %d against %d",
+              flags[k], legacy.total_niter, legacy.niter);
+        CHECK(legacy.status_is_known == 0 && legacy.run_status == NULL,
+              "is_converged %d: it records no reason, and none may be invented for it",
+              flags[k]);
+        qvarma_fit_result_free(&legacy);
+
+        /* The property the expensive models depend on: rerunning the script
+           costs nothing and changes nothing. */
+        QvarmaFitResult reused = qvarma_fit_cached(y, &truth, capped, path, 0);
+        CHECK(reused.niter == source.niter && reused.nruns == 1,
+              "is_converged %d: it must come back untouched, got %d runs and niter %d against %d",
+              flags[k], reused.nruns, reused.niter, source.niter);
+        CHECK_NEAR(reused.log_likelihood, source.log_likelihood, 1e-6,
+                   "a reused original-format cache must report what it recorded");
+        CHECK(reused.status_is_known == 0,
+              "is_converged %d: reusing it must not invent a reason", flags[k]);
+        qvarma_fit_result_free(&reused);
+
+        /* And rerunning the script again reads back what the reuse wrote, which
+           must still be the original numbers rather than a chain of one. */
+        QvarmaFitResult again = qvarma_fit_cached(y, &truth, capped, path, 0);
+        CHECK(again.niter == source.niter && again.nruns == 1,
+              "is_converged %d: a second rerun must change nothing either, got %d runs, niter %d",
+              flags[k], again.nruns, again.niter);
+        qvarma_fit_result_free(&again);
+    }
+
+    /* A reason outside the enum names no outcome, so it reads as no reason
+       rather than as a fifth-and-a-half one. */
+    write_cache_in_the_original_format(&source, y, 0, path);
+    JsonValue *root = json_parse_file(path);
+    JsonValue *diagnostics = json_object_get(root, "fit");
+    json_object_set(diagnostics, "nruns", json_number(1));
+    JsonValue *nonsense = json_array();
+    json_array_push(nonsense, json_number(7));
+    json_object_set(diagnostics, "run_status", nonsense);
+    json_write_file(root, path);
+    json_free(root);
+
+    QvarmaFitResult garbled = qvarma_fit_result_new(&truth);
+    CHECK(qvarma_load_fit(&garbled, y, path) == 1,
+          "a reason outside the enum must not make the whole file unreadable");
+    CHECK(garbled.status_is_known == 0 && garbled.run_status == NULL,
+          "a reason outside the enum names no outcome, so none is known");
+    qvarma_fit_result_free(&garbled);
+
+    /* A length that disagrees with nruns is the same answer: the file does not
+       say what every run did. Written by editing a well-formed cache, so that
+       the only thing wrong with it is the disagreement. */
+    qvarma_save_fit(&source, y, path);
+    root = json_parse_file(path);
+    diagnostics = json_object_get(root, "fit");
+    CHECK(json_array_len(json_object_get(diagnostics, "run_status")) == 1,
+          "the setup here starts from a chain of one");
+    json_object_set(diagnostics, "nruns", json_number(3));
+    json_write_file(root, path);
+    json_free(root);
+
+    QvarmaFitResult short_history = qvarma_fit_result_new(&truth);
+    CHECK(qvarma_load_fit(&short_history, y, path) == 1,
+          "a run_status shorter than nruns must not make the file unreadable");
+    CHECK(short_history.status_is_known == 0,
+          "a run_status that does not cover every run says nothing about any of them");
+    qvarma_fit_result_free(&short_history);
+
+    qvarma_fit_result_free(&source);
+    mat_free(y); qvarma_params_free(&truth);
     remove(path);
     printf("  ok\n");
 }
@@ -2188,6 +2366,7 @@ int main(void) {
     test_fit_cached_accumulates_a_chain();
     test_a_finished_fit_is_not_resumed();
     test_cache_refuses_a_file_it_cannot_use();
+    test_a_cache_from_before_the_reasons_were_recorded();
     test_infeasible_points_return_a_sentinel();
     test_fit_reports_what_it_returns();
     test_convergence_flag();

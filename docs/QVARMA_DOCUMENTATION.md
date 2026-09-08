@@ -285,6 +285,7 @@ mreal     qvarma_negative_log_likelihood(Vec theta, Vec gradient, void *context)
 QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_guess, QvarmaFitOptions options);
 QvarmaFitResult qvarma_fit_cached(Mat y, const QvarmaParams *initial_guess, QvarmaFitOptions options,
                      const char *cache_path, int force_refit);
+QvarmaFitResult qvarma_fit_result_new(const QvarmaParams *shape);
 void      qvarma_fit_result_free(QvarmaFitResult *result);
 ```
 
@@ -330,10 +331,16 @@ three information criteria (per period, the scale the paper's Table 3 uses),
 the iteration counts, `is_converged`, and `status`, which says **why** the search
 stopped. A boolean cannot separate a fit that was still improving when the
 budget ran out from one whose line search could not move, and those call for
-different responses. There are three iteration counts because a fit can be
-resumed from a cached one: `niter` is this run alone, `total_niter` the sum over
-every run in the chain, and `nruns` how many runs there were. See
+different responses. Because a fit can be resumed from a cached one, the counts
+and the reason are per chain rather than per call: `niter` is this run alone,
+`total_niter` the sum over every run, `nruns` how many runs there were, and
+`run_status` why each of them stopped, with `status` the last of those. See
 [Resuming a fit](#resuming-a-fit-and-what-a-chain-of-runs-cost).
+
+`qvarma_fit_result_new` makes an empty result at a shape, ready for
+`qvarma_load_fit` to fill in and safe to pass to `qvarma_fit_result_free`
+whether the load succeeded or not. A result owns `run_status` as well as its
+parameters, so one declared without it holds a pointer that was never set.
 
 Standard errors:
 
@@ -478,26 +485,56 @@ not decrease the objective, or because the objective stopped being finite, did
 not run short of iterations, and starting the same search from the same point
 spends a whole fit to arrive back where it was: on `examples/datasets/us_real.csv`
 a restart from a stalled search moved the log-likelihood by 3e-9. Those come
-back as they stand. This is what the stored `status` is for; `is_converged`
+back as they stand. This is what the stored reason is for; `is_converged`
 alone cannot tell a capped run from a stalled one.
 
-Three fields therefore describe the cost, and they mean different things:
+Five fields describe the chain, and they mean different things:
 
-| field | what it counts |
+| field | what it holds |
 |---|---|
 | `niter` | the iterations of this run alone |
 | `total_niter` | the iterations of every run in the chain, this one included |
 | `nruns` | how many runs the chain is made of, 1 for a fit that started from scratch |
+| `run_status` | why each run stopped, oldest first, `nruns` entries |
+| `status` | why the most recent run stopped, the last entry of `run_status` |
 
 A chain of three runs of four thousand iterations reports `nruns` 3 and
 `total_niter` 12000, where `niter` alone would report 4000 three times over and
 leave how many runs it took unknowable. `force_refit` abandons a chain and
-starts the count again from `initial_guess`. `qvarma_write_report` prints the
-chain line only when there was more than one run.
+starts the count again from `initial_guess`.
 
-A cache written before the chain was tracked carries neither the totals nor the
-status; it loads as the single run it was, with the status derived from
-`is_converged` as before.
+`LbfgsStatus` separates five outcomes and `is_converged` collapses them to two,
+losing the distinction that decides what to do next: a run that hit its cap
+wants more iterations, one whose line search could not move wants a different
+starting point, and one whose objective stopped being finite wants neither. So
+the reason is kept for every run rather than only the last, and
+`qvarma_write_report` prints the chain run by run.
+
+`status_is_known` is 0 only for a cache written before the reasons were
+recorded, and then neither `status` nor `run_status` may be read. A fit always
+knows why it stopped.
+
+### A cache from before these fields existed
+
+A cache in the format that shipped earlier carries the parameters, the shape and
+eight diagnostics: `log_likelihood`, `gradient_norm`, `aic`, `bic`,
+`hannan_quinn`, `niter`, `is_converged`, `data_fingerprint`. No `total_niter`,
+no `nruns`, no `run_status`. Those files still load, and everything they do
+record comes back exactly: what one holds is a fit somebody has already paid
+for, on a model expensive enough to be worth not refitting.
+
+What is missing is reported missing rather than guessed. Such a file loads as
+one run, `total_niter` equal to its own `niter`, and `status_is_known` 0 — and
+`qvarma_fit_cached` hands it back untouched, converged or not, because resuming
+it on the guess that it was capped would spend another whole fit on a search
+that may have had nothing left to give. Refitting one is an explicit
+`force_refit`.
+
+A `run_status` whose length disagrees with `nruns`, or one carrying a number
+that is not one of the five outcomes, is the same answer: the reasons were not
+recorded. That covers a hand-edited file and a file from some later format this
+build does not understand, and in neither case does the rest of the file become
+unreadable.
 
 ### Infeasible points return a sentinel, they do not abort
 
@@ -684,9 +721,18 @@ slow ones, including:
 - the cache, and that `qvarma_fit_cached` reloads what `qvarma_fit` found
 - that a chain of three capped runs against one cache reports three runs and the
   sum of their iterations, and that the likelihood rises from run to run, which
-  is what says each run continued from the cache rather than restarting
+  is what says each run continued from the cache rather than restarting; then a
+  fourth run with a budget it can finish inside, so the chain carries two
+  different reasons rather than one repeated
 - that a fit the solver finished, whether converged or stalled, is loaded rather
   than resumed, and that all five stopping reasons survive the cache
+- that a cache in the format that shipped before any of these fields existed
+  loads, reports what it recorded, reports no reason rather than a guessed one,
+  and is handed back by `qvarma_fit_cached` untouched under either convergence
+  flag and over two consecutive reruns
+- that a `run_status` carrying a value outside the five outcomes, or one whose
+  length disagrees with `nruns`, reads as no reason recorded rather than making
+  the file unreadable
 - that a diagnostics block missing a field is refused rather than read past, and
   that a refused load leaves the caller's model untouched
 - that a fit's reported likelihood, gradient and criteria describe the
