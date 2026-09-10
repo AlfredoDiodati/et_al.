@@ -6,6 +6,12 @@ what it is, current numbers, what a fix would look like. Update this file
 as items are picked up or re-measured - it is the single source of truth
 for this backlog, not any session's task list.
 
+Two entries are not of that shape and say so in place: item 12 is a harness
+that does not exist rather than a measured gap, and item 13 is a memory
+footprint rather than a speed one. Both are here because this is where an
+open performance question is looked for, and a second file would only split
+that search.
+
 Per the root `README.md`'s "Testing and benchmarking" policy, benchmarking
 exists to build a reusable record of what has already been tried and why it
 worked, not just to produce a pass/fail speed check - so every entry here
@@ -1795,3 +1801,56 @@ revision harness needs the old revision to still compile against the current
 core, which is exactly what a model-tier interface change breaks.
 
 **Status: not started.** No numbers, no harness, no baseline format chosen.
+
+## 13. `mcs()`'s bootstrap draw buffer at large `M` (`inference/mcs.h`)
+
+**Why it is large.** `MCSScratch.bmean` holds every resampled mean of every
+differential series at once — `8 * opt.bootstrap * mcs_n_series(stat, M)`
+bytes — and it dominates the procedure's footprint under `MCS_TR`, where
+`mcs_n_series` is `M(M-1)/2` and the buffer therefore grows quadratically in
+the model count. Measured with the exact allocation counter in
+`tests/performance/mcs_arm.c` (float32 build, default variance): 1651 KiB peak
+at `T = 200`, `M = 16`, 1500 draws, of which `bmean` is 1406 KiB (85%); 9372 KiB
+at `T = 120`, `M = 34`, 2000 draws, of which `bmean` is 8766 KiB (93%).
+
+**Why it is there.** The draws are read twice. `mcs_round` fills `bmean` with
+each draw's mean deviation from `dbar[k]`, then makes one pass over `k` to turn
+those deviations into the bootstrap variance `v_k`, then a second pass over `b`
+to divide each stored deviation by `sqrt(v_k)` and reduce it to that draw's
+statistic. Under `MCS_VARIANCE_HAC_RESAMPLE` no such buffer exists at all,
+because each draw is divided by its own HAC and discarded as it is made — the
+34.5 KiB row of the table in `docs/MCS_DOCUMENTATION.md` against 112.7 KiB for
+the same shape under the default variance.
+
+**Two ways out, neither measured yet.** Accumulate `sum_b e^2` online and keep
+only that, then draw the same blocks a second time from a re-seeded `Rng` to
+reduce each draw — trading `opt.bootstrap` extra block draws and a second gather
+pass for a buffer of `k_count` doubles instead of `bootstrap * k_count`.
+Or keep the draws but store one round's worth per series rather than all series
+per draw, which does not reduce the total and only helps if the reduction is
+restructured. The first is the real candidate; what it costs is the second
+gather over `opt.bootstrap * k_count * T` elements, which is the dominant cost
+of the procedure already, so the honest expectation is that it roughly doubles
+the time and should be an option rather than a replacement.
+
+**A second, separate term.** At long `T` and few models the draw buffer is not
+the largest block. `mcs()` holds two `T x M0` copies of the loss table, `all`
+and `active_losses`, and at `T = 1500`, `M = 12`, 1500 draws those are 281 of
+the 593 KiB peak against `bmean`'s 141. `active_losses` is rebuilt from `all`
+at the top of every round and read only by `mcs_build_diffs`; fusing the two so
+that the differentials are formed from `all` through `active[]` directly would
+remove one of the copies outright. That is a smaller win in absolute bytes and a
+much smaller change.
+
+**How to measure a candidate.** `make bench-mcs_candidates MCS_CANDIDATE=<header>`
+builds the candidate and the shipped header into one binary and compares them on
+agreement first and on time and allocated bytes second. See the "Benchmark
+results" section of `docs/MCS_DOCUMENTATION.md` for what it checks and why the
+memory is counted rather than read off resident set size, and
+`tests/correctness/mcs_primitives.c` for the correctness invariant a
+memory-reduction candidate is most likely to break: `mcs()` reuses one scratch
+allocation sized for the first round across every later round, and its answer
+must not depend on that.
+
+**Status: not started.** The harness exists and the footprint is measured. No
+candidate has been written.

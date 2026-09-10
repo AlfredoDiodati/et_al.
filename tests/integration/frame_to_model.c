@@ -29,6 +29,7 @@ critical values at float32.
 #include "../../stats.h"
 #include "../../inference/unit_root.h"
 #include "../../inference/cointegration.h"
+#include "../../inference/mcs.h"
 #include "../../sd/qvarma.h"
 #include "../../nn/mlp.h"
 #include "../../solver/adam.h"
@@ -357,6 +358,136 @@ static void test_stress_a_fit_through_a_view(const DataFrame *frame) {
     mat_free(wide);
 }
 
+/* inference/mcs.h reaches a loaded column the same way everything above
+   does, and was the one consumer this file did not cover. Two of its
+   entry points read a column through df_col_numeric rather than being
+   handed a buffer: mcs_loss reads the actual series and each forecast
+   that way when it builds the loss table, and dm_test reads both of its
+   loss series that way. mcs itself does not - it reads the frame's whole
+   numeric block, which is contiguous by construction - so what is
+   checked here is the path into it and the verdict that comes out the
+   far end.
+
+   GDP against three other series is not a forecast comparison anybody
+   would run. The loss functions are arithmetic on two columns whatever
+   the columns mean, and what this asks is whether that arithmetic reads
+   the same numbers through a stride-ten view as it does out of a fresh
+   buffer. QLIKE is included because it is the one loss that divides by
+   and takes the log of the forecast, so a stride bug there produces
+   something wilder than a wrong number; every column of this fixture is
+   strictly positive, which is what that loss requires. */
+#define MCS_ACTUAL "GDP"
+#define N_FORECASTS 3
+static const char *forecast_names[N_FORECASTS] = { "Consumption", "Cpi", "Investment" };
+
+/* The reference arm: the same loss table off contiguous copies of the
+   same columns, which is what every correctness suite already builds. */
+static DataFrame losses_from_copies(const DataFrame *frame, MCSLoss kind) {
+    Mat actual = mat_copy(df_col_numeric(frame, MCS_ACTUAL));
+    DataFrame out = df_new(frame->r);
+    Vec col = vec_new(frame->r);
+    for (int j = 0; j < N_FORECASTS; j++) {
+        Mat forecast = mat_copy(df_col_numeric(frame, forecast_names[j]));
+        for (int t = 0; t < frame->r; t++) {
+            double a = (double)AT(actual, t, 0), f = (double)AT(forecast, t, 0);
+            double loss = 0;
+            switch (kind) {
+            case MCS_LOSS_MSE: loss = (a - f) * (a - f); break;
+            case MCS_LOSS_MAE: loss = fabs(a - f); break;
+            default: loss = log(f) + a / f; break;
+            }
+            AT(col, t, 0) = (mreal)loss;
+        }
+        df_add_numeric_col(&out, forecast_names[j], col);
+        mat_free(forecast);
+    }
+    mat_free(col);
+    mat_free(actual);
+    return out;
+}
+
+/* A two-column frame of contiguous copies, so that the same pair of loss
+   series can be read at stride two as well as at the loaded frame's
+   stride ten. Neither arm is stride one - a DataFrame keeps its numeric
+   columns in one block and never gives out a stride-one column - so what
+   separates them is whether the stride is read or assumed. */
+static DataFrame pair_from_copies(const DataFrame *losses, const char *a, const char *b) {
+    DataFrame out = df_new(losses->r);
+    const char *names[2] = { a, b };
+    Vec col = vec_new(losses->r);
+    for (int j = 0; j < 2; j++) {
+        Mat view = df_col_numeric(losses, names[j]);
+        for (int t = 0; t < losses->r; t++) AT(col, t, 0) = AT(view, t, 0);
+        df_add_numeric_col(&out, names[j], col);
+    }
+    mat_free(col);
+    return out;
+}
+
+static void test_mcs_through_a_view(const DataFrame *frame) {
+    puts("inference/mcs.h: the loss table, the confidence set and the Diebold-Mariano test are the same through a view");
+
+    MCSLoss kinds[3] = { MCS_LOSS_MSE, MCS_LOSS_MAE, MCS_LOSS_QLIKE };
+    const char *kind_names[3] = { "MSE", "MAE", "QLIKE" };
+
+    for (int k = 0; k < 3; k++) {
+        DataFrame through_view = mcs_loss(frame, MCS_ACTUAL, forecast_names, N_FORECASTS, kinds[k]);
+        DataFrame through_copy = losses_from_copies(frame, kinds[k]);
+
+        CHECK(mcs_n_models(&through_view) == N_FORECASTS, "%s: three loss columns", kind_names[k]);
+        for (int j = 0; j < N_FORECASTS; j++) {
+            CHECK(strcmp(mcs_model_name(&through_view, j), forecast_names[j]) == 0,
+                  "%s: loss column %d keeps the forecast's name", kind_names[k], j);
+            for (int t = 0; t < frame->r; t++)
+                CHECK_CLOSE(AT(through_view.numeric, t, j), AT(through_copy.numeric, t, j),
+                            TOL, kind_names[k]);
+        }
+
+        MCSOptions options = mcs_options_default();
+        options.bootstrap = 400;
+        options.block_length = 8;
+        options.seed = 20260910;
+        MCSResult from_view = mcs(&through_view, options);
+        MCSResult from_copy = mcs(&through_copy, options);
+        CHECK(from_view.converged == from_copy.converged, "%s: converged", kind_names[k]);
+        CHECK(from_view.n_surviving == from_copy.n_surviving,
+              "%s: %d survive through the view, %d through the copy",
+              kind_names[k], from_view.n_surviving, from_copy.n_surviving);
+        for (int i = 0; i < from_view.n_eliminated && i < from_copy.n_eliminated; i++)
+            CHECK(from_view.elimination_order[i] == from_copy.elimination_order[i],
+                  "%s: elimination %d", kind_names[k], i);
+        for (int j = 0; j < N_FORECASTS; j++)
+            CHECK_CLOSE(from_view.pvalue[j], from_copy.pvalue[j], TOL, kind_names[k]);
+
+        /* The same two loss series at stride ten and at stride two. */
+        DataFrame pair = pair_from_copies(&through_view, forecast_names[0], forecast_names[1]);
+        DieboldMariano wide = dm_test(&through_view, forecast_names[0], forecast_names[1],
+                                      dm_options_default());
+        DieboldMariano narrow = dm_test(&pair, forecast_names[0], forecast_names[1],
+                                        dm_options_default());
+        CHECK(wide.status == narrow.status, "%s: Diebold-Mariano status", kind_names[k]);
+        CHECK_CLOSE(wide.mean_diff, narrow.mean_diff, TOL, kind_names[k]);
+        CHECK_CLOSE(wide.std_error, narrow.std_error, TOL, kind_names[k]);
+        CHECK_CLOSE(wide.stat, narrow.stat, TOL, kind_names[k]);
+        CHECK_CLOSE(wide.pvalue, narrow.pvalue, TOL, kind_names[k]);
+
+        /* mcs_pvalue_frame reads each loss column back through
+           stats_mean, so its mean_loss column is the third place a
+           stride reaches this header. */
+        DataFrame view_table = mcs_pvalue_frame(&through_view, &from_view);
+        DataFrame copy_table = mcs_pvalue_frame(&through_copy, &from_copy);
+        Mat view_means = df_col_numeric(&view_table, "mean_loss");
+        Mat copy_means = df_col_numeric(&copy_table, "mean_loss");
+        for (int j = 0; j < N_FORECASTS; j++)
+            CHECK_CLOSE(AT(view_means, j, 0), AT(copy_means, j, 0), TOL, kind_names[k]);
+
+        df_free(&view_table); df_free(&copy_table);
+        df_free(&pair);
+        mcs_free(&from_view); mcs_free(&from_copy);
+        df_free(&through_view); df_free(&through_copy);
+    }
+}
+
 int main(void) {
     check_banner("frame to model: a loaded column reaching the statistics and the models");
 
@@ -372,6 +503,7 @@ int main(void) {
     test_cointegration_on_a_transposed_block(&frame);
     test_qvarma_likelihood_through_a_view(&frame);
     test_mlp_trains_the_same_on_a_view(&frame);
+    test_mcs_through_a_view(&frame);
     if (getenv("STRESS")) test_stress_a_fit_through_a_view(&frame);
 
     df_free(&frame);

@@ -292,8 +292,9 @@ static inline void mcs_build_diffs(const double *restrict losses, int n, int m,
     }
 }
 
-/* Mean of series s, written back centered into out (which may alias s).
-   Returns the mean, since every caller here needs both. */
+/* Mean of series s, written back centered into out, which is a separate
+   buffer: both pointers are restrict, so out must not alias s. Returns
+   the mean, since every caller here needs both. */
 static inline double mcs_center(const double *restrict s, int n, double *restrict out) {
     double mu = 0;
     for (int t = 0; t < n; t++) mu += s[t];

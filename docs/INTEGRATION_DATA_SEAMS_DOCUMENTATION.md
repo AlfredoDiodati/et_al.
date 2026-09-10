@@ -31,11 +31,32 @@ through `mat_copy` of that view, and requires agreement:
 - `adf`, `adf_with_deterministic`, `kpss_level`, `dfgls`, `hlt_trend_union`;
 - Johansen and Engle-Granger on a three-series system built both ways;
 - `qvarma`'s log-likelihood on a windowed (genuinely strided) `y`;
-- `mlp_fit` and `mlp_forecast` on a windowed design matrix, same seed.
+- `mlp_fit` and `mlp_forecast` on a windowed design matrix, same seed;
+- `mcs_loss` under all three loss functions, then the confidence set, the
+  elimination order and the p-values that come out of it.
 
 It also checks that a column-oriented series and a row-oriented one give the
 same statistic, which is the branch in `stats_series_at` that a frame drives
 one way and every existing suite drives the other.
+
+`inference/mcs.h` was the one consumer above `frame/` the file did not reach,
+and it was added later than the rest. Two of its entry points read a column
+through `df_col_numeric`: `mcs_loss` reads the actual series and each forecast
+when it builds the loss table, and `dm_test` reads both of its loss series.
+`mcs` itself does not — it reads the frame's whole numeric block, which is
+contiguous by construction — so what is covered is the path into it and the
+verdict at the far end. `dm_test` is run on the same pair of loss series at
+stride ten and at stride two rather than against a contiguous copy: a
+`DataFrame` never hands out a stride-one column, so what separates the two arms
+is whether the stride is read or assumed to be some particular value.
+`mcs_pvalue_frame`'s `mean_loss` column is checked too, since it reaches
+`stats_mean` through a view of the loss table. QLIKE is included alongside MSE
+and MAE because it is the one loss that divides by and takes the log of the
+forecast, so a stride bug there produces something wilder than a wrong number;
+every column of this fixture is strictly positive, which is what that loss
+requires. GDP against three other macro series is not a forecast comparison
+anybody would run — the loss functions are arithmetic on two columns whatever
+the columns mean, and the question here is which numbers that arithmetic reads.
 
 The tolerance is relative, `1e-12`, through `CHECK_CLOSE`. Both arms read
 identical values in identical order; the only difference is that the contiguous

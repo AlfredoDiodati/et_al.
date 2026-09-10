@@ -210,8 +210,8 @@ signals agree.
 ## Well-covered (verified during audit, no action needed)
 
 `frame/csv.h`, `frame/sql.h`'s 2 public functions, `stats.h` (all 20,
-including `stats_hac_var`/`stats_hac_var_centered`), `inference/mcs.h` (all 18 public
-functions, including the report/export writers and `dm_test`), `random/random.h`'s `rng_below`, `special.h`'s
+including `stats_hac_var`/`stats_hac_var_centered`), `inference/mcs.h` (see the
+note below), `random/random.h`'s `rng_below`, `special.h`'s
 `special_digamma` and `special_norm_cdf`, `dist/gauss.h`/`dist/student.h`/
 `dist/broadcast.h`/`dist/mv/gauss.h`/`dist/mv/student.h`'s main pdf/logpdf/
 gradient/sample functions, `solver/adam.h`'s `adam_step` and init/free
@@ -222,3 +222,31 @@ via a hand-rolled SGD in `test_optimizer.c`), `nn/mlp.h`'s `mlp_init`/
 tested module overall - real R 4.3.3 fixtures, every R type, NA in every
 scalar type, 60-trial fuzz - only the logical-column gap above), and
 `frame/npy.h`/`frame/txt.h`'s main entry points.
+
+### `inference/mcs.h`, re-audited 2026-09-10
+
+The entry above read "all 18 public functions" and was written when the header
+had 18. It has 31, the difference being the structural primitives
+(`mcs_gather`, `mcs_build_diffs`, `mcs_center`, `mcs_floor_var`,
+`mcs_hac_var_mean`, `mcs_tstat`, `mcs_reduce`, `mcs_worst_from_tstats`,
+`mcs_n_series`, `mcs_scratch_new`, `mcs_scratch_free`, `mcs_round`) the header
+exposes so a caller can run their own elimination loop. Eight of those had no
+direct call in any suite at the re-audit, and `mcs_write_report` had none
+either. `tests/correctness/mcs_primitives.c` now covers all of them with
+hand-computed values, and checks that an elimination loop built out of them
+reproduces `mcs()` exactly. `mcs_name_width` is still only reached indirectly,
+through the report writer's column-alignment check in
+`tests/correctness/test_mcs.c`, which is where its contract actually lives.
+
+One thing remains uncovered, and it is a decision rather than an oversight:
+
+- [ ] **`mcs_round` called with `keep_draws = 0` under a variance that needs the
+  draws.** The function asserts, which is the documented behaviour;
+  reaching it needs the fork-and-expect-`SIGABRT` machinery
+  `tests/integration/join_missing_values.c` already has, in a file that
+  otherwise needs none of it.
+
+The re-audit also found `mcs_center` documented as accepting `out` aliasing
+`s` while both its parameters are `restrict`, which forbids exactly that. The
+comment was the wrong half and now says what the signature says; no caller
+inside the header aliases them.
