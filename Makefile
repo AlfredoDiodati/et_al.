@@ -707,6 +707,7 @@ test-mcs-candidate:
 	./tests/correctness/test_mcs_variance_candidate
 	./tests/correctness/mcs_primitives_candidate
 	./tests/correctness/mcs_size_and_power_candidate
+	rm -f tests/correctness/test_mcs_candidate tests/correctness/test_mcs_variance_candidate tests/correctness/mcs_primitives_candidate tests/correctness/mcs_size_and_power_candidate
 
 MCS_CANDIDATE ?= inference/mcs.h
 MCS_ARM_DEPS := inference/mcs.h tests/performance/mcs_arm.h stats.h random/random.h special.h frame/frame.h linalg/mat.h

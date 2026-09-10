@@ -87,6 +87,12 @@ static const MCSArmCase cases[] = {
     { "tr_hac", 300, 8, 1000, 12, -1, 0.05, 1, MCS_ARM_VAR_HAC, 7, 1, 12, 0.3, 0.05, 0, 0, 0 },
     { "tmax_long", 1500, 12, 1500, 25, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 31, 2, 13, 0.7, 0.03, 0, 0, 0 },
     { "tr_wide", 200, 16, 1500, 10, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 14, 0.4, 0.02, 0, 0, 0 },
+    /* A ladder across the model count, which is what any change to the
+       per-pair scan has to be judged on: the pair count grows as the
+       square of it, so a change can lose at one end of this and win at
+       the other. */
+    { "tr_m24_stress", 200, 24, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 41, 9, 21, 0.4, 0.02, 1, 0, 0 },
+    { "tr_m32_stress", 200, 32, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 43, 10, 22, 0.4, 0.02, 1, 0, 0 },
     { "tr_m34_stress", 120, 34, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 15, 0.4, 0.02, 1, 0, 0 },
     { "tmax_m60_stress", 500, 60, 2000, 20, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 9, 4, 16, 0.5, 0.01, 1, 0, 0 },
     /* The two rungs that show where the pair count starts to hurt. The

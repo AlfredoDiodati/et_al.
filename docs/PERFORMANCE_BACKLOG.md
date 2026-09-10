@@ -1838,9 +1838,19 @@ three decimals in `tests/correctness/mcs_size_and_power.c`, a suite written for
 this change because a change that moves p-values cannot be judged by comparing
 p-values.
 
+**A third change followed**, once a phase clock showed the exceedance loop was
+91% of the run at a thousand models. A model's largest possible deviation
+against any other is its distance to the further extreme of the draw, and every
+pair in its row divides by at least that row's smallest standard error; if the
+product falls short of the observed statistic the row cannot contain an
+exceedance and is skipped unentered. Exact, so every result is bit-identical.
+It costs more than it saves on short rows, so it is gated at 24 models, which
+is where the loss stops. 1.1x at 32 models, 2.4x at 120, 12.5x at a thousand,
+where the run went from 38.7 seconds to 3.09.
+
 **What is left.** `MCS_TR` under the two HAC variants is still quadratic in `M`
 in time and memory: those variants estimate each series' standard error from
-that series, so a pair's number cannot be reached through its two models'. The
-one large term remaining under the bootstrap variance is the exceedance
-reduction, `opt.bootstrap * C(m0+1, 3)` pair visits over a run, which is closer
-to memory bound than compute bound.
+that series, so a pair's number cannot be reached through its two models'.
+Under the bootstrap variance the profile has inverted - 45% one-off precompute,
+35% per-round table fill, 20% exceedance loop - so the largest per-round term
+is now one reciprocal square root per surviving pair per round.

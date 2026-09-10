@@ -278,11 +278,11 @@ Its result is the point of the procedure: under QLIKE the set collapses to `ewma
 | 50 | 200 | 42x | 11.4 MiB | 864 KiB |
 | 120 | 200 | 228x | 38.7 MiB | 2.1 MiB |
 
-and the second change on top of that: 6.4x at 8 models, 16.3x at 16, 15.8x at 1000.
+then a second change sharing one set of resamples across all rounds (6.4x at 8 models, 16.3x at 16, 15.8x at 1000), and a third skipping the rows of a bootstrap draw that provably cannot exceed the observed statistic (1.1x at 32 models, 2.4x at 120, 12.5x at 1000). The three together take a thousand models over a thousand observations from an allocation of 12.0 GiB and a run time in weeks to **3.1 seconds and 103 MiB**.
 
 `MCS_TMAX` and both HAC variants are untouched and return bit-identical results; the two factored cases agree with the old code to between `5e-16` and `1.9e-15` relative, with no p-value and no confidence set moved.
 
-A second change followed, sharing one set of resamples across every elimination round rather than redrawing per round — what the paper and the common implementations do, and what makes the per-model means and the pair spreads a one-off rather than per-round cost. A thousand models over a thousand observations with two thousand draws, the size these changes were made for, now runs in **38.7 seconds and 103.2 MiB**; before either change it would have allocated 12.0 GiB.
+A second change followed, sharing one set of resamples across every elimination round rather than redrawing per round — what the paper and the common implementations do, and what makes the per-model means and the pair spreads a one-off rather than per-round cost. A thousand models over a thousand observations with two thousand draws, the size these changes were made for, now runs in **3.1 seconds and 103.2 MiB**; before any of them it would have allocated 12.0 GiB.
 
 That second change moves p-values, so it was gated statistically rather than on agreement: over 200 paired replications the mean MCS p-value is indistinguishable from the per-round scheme's, and the two return the same confidence set *more* often than two runs of one scheme under different streams do.
 

@@ -137,6 +137,70 @@ the same study established; `docs/MCS_RELIABILITY_DOCUMENTATION.md` traces it to
 the block bootstrap's handling of serial correlation and rules out the resample
 count.
 
+## Fix 3: skipping the rows of a draw that cannot exceed
+
+**Where the time was, measured rather than assumed.** With the draws shared,
+a phase clock around each of the three phases of the factored path at
+`T = 1000`, `M = 1000`, 2000 draws put the split at 3.4% in the one-off
+precompute, 5.6% in the per-round table fill and **91.1% in the exceedance
+loop** - 34.8 seconds of 38.7. Nothing else was worth looking at.
+
+**What that loop was doing.** For each draw it walked the surviving pairs
+until one exceeded the observed statistic, which over a run is
+`opt.bootstrap * C(m0+1, 3)` pair visits - `3.3e11` at a thousand models. The
+early exit helps least where it is needed most: a round that rejects is one
+where few draws exceed, so few draws exit early and most scan every pair.
+
+**Why the replacement is faster.** Model `i`'s largest possible deviation
+against any other surviving model is its distance to whichever extreme of the
+draw is further away, and every pair in its row divides by at least that row's
+smallest standard error. If that product still falls short of the observed
+statistic then no pair in the row can exceed it, and the row is skipped
+without being entered. The test is exact, not a heuristic: it skips only rows
+that provably contain nothing, so the exceedance count is the same count and
+every result is bit-for-bit what it was. It costs one comparison per row plus
+one pass over the draw to find its extremes, against the `m(m-1)/2` visits it
+replaces.
+
+**It does not pay at every size**, and is gated on a measured threshold rather
+than applied always. Against the unpruned scan, `MCS_TR` under the bootstrap
+variance:
+
+| models | speedup |
+|---|---|
+| 8 | 0.93x |
+| 16 | 0.86x |
+| 24 | 1.11x |
+| 50 | 1.16x |
+| 120 | 2.3x |
+| 1000 | 12.1x |
+
+Short rows do not repay the row test, so `MCS_ROW_PRUNE_MIN_MODELS` is 24 -
+where the loss stops, not where the gain becomes large. With the gate in
+place no case in the harness reads as slower: the one that measures below
+1.00x, `tr_wide` at 16 models, comes back at 0.958 under one ordering and
+1.015 under the other, which is the harness declining to call it a difference.
+
+**Measured**, with the gate, best of three rounds after a discarded warmup:
+
+| case | T | M | draws | speedup |
+|---|---|---|---|---|
+| `tr_m32_stress` | 200 | 32 | 2000 | 1.12x |
+| `tr_m34_stress` | 120 | 34 | 2000 | 1.11x |
+| `tr_m50_stress` | 200 | 50 | 1000 | 1.41x |
+| `tr_m120_stress` | 200 | 120 | 500 | 2.41x |
+| `tr_m1000_candidate` | 1000 | 1000 | 2000 | **12.5x** (38.7s to 3.09s) |
+
+All thirteen A/B cases come back `identical`, which is the gate this change
+had to pass and did: an exact prune changes no number anywhere.
+
+**What the profile looks like now.** At a thousand models the exceedance loop
+is 0.585 seconds against 34.8, and the split has inverted - 45% precompute,
+35% per-round table fill, 20% exceedances. The next change to this path, if
+there is one, belongs in the per-round table fill, which is
+`O(m(m-1)/2)` reciprocal square roots per round and is now the largest
+per-round term.
+
 ## The size this was changed for
 
 `STRESS=1 MCS_HUGE=1 make bench-mcs_candidates` runs two rungs past where a
@@ -155,8 +219,8 @@ set size.
 
 | case | T | M | draws | block | seconds | peak |
 |---|---|---|---|---|---|---|
-| `tr_m250_candidate` | 250 | 250 | 500 | 15 | 0.16 | 6.5 MiB |
-| `tr_m1000_candidate` | 1000 | 1000 | 2000 | 20 | 38.7 | 103.2 MiB |
+| `tr_m250_candidate` | 250 | 250 | 500 | 15 | 0.045 | 6.5 MiB |
+| `tr_m1000_candidate` | 1000 | 1000 | 2000 | 20 | 3.09 | 103.2 MiB |
 
 **What that replaced, by arithmetic rather than by measurement.** At a thousand
 models the previous version allocated `8 * bootstrap * C(m0, 2)` for `bmean`
@@ -165,19 +229,18 @@ above. Its gather was `bootstrap * n * C(m0+1, 3)` = `3.3e14` additions, which
 at the roughly `1e9` per second per core this code sustains is days on sixteen
 cores. Neither figure was run, and neither is quoted as a speedup: a number
 nobody measured is not a measurement. What is measured is that the size runs,
-in under a minute and in a tenth of a gigabyte.
+in three seconds and in a tenth of a gigabyte.
 
 **One pass carries about ten percent.** These are single measurements, enough
 to answer "does this size run, and in what order of time", not enough to quote
 to three digits.
 
-**Where the remaining time goes.** With the draws shared, the gather and the
-spread accumulation are both one-off - `bootstrap * m0 * n` = `2e9` and
-`bootstrap * C(m0, 2)` = `1e9`. What is left per round is the exceedance
-reduction, `bootstrap * C(m0+1, 3)` = `3.3e11` pair visits over the run, cut
-by the early exit, and it is the only large term remaining. It parallelises
-over draws and reads a 4 MiB spread array per round, so it is closer to memory
-bound than to compute bound; that is where a further change would have to look.
+**Where the remaining time goes.** Measured with a phase clock at a thousand
+models: 45% in the one-off precompute, 35% in the per-round table fill, 20% in
+the exceedance loop. The row prune of Fix 3 moved the exceedance loop from
+being nine tenths of the run to a fifth of it, so the per-round table fill -
+one reciprocal square root per surviving pair per round - is now the largest
+per-round term and is where a further change would have to look.
 
 ## Threads
 
