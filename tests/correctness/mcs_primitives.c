@@ -1,5 +1,15 @@
 #include "../check.h"
-#include "../../inference/mcs.h"
+/* The header under test, so that a candidate rewrite of inference/mcs.h
+   can be run through this suite unchanged:
+
+     make test-mcs-candidate MCS_CANDIDATE=inference/mcs_fast.h
+
+   Defaults to the shipped header, which is what every ordinary build
+   compiles. */
+#ifndef MCS_HEADER
+#define MCS_HEADER "../../inference/mcs.h"
+#endif
+#include MCS_HEADER
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -412,6 +422,15 @@ static void test_manual_loop_matches_mcs(void) {
     puts("an elimination loop over the primitives reproduces mcs(), with scratch sized per round");
     char names[24][8];
     struct { int m; int n; int tr; MCSVariance variance; const char *label; } panels[] = {
+        /* Two models is one pair, the one shape where the model count
+           exceeds the pair count. mcs() and a scratch sized by pairs
+           reach the round through different code there, and the two
+           forms are the same expression, so they have to agree to the
+           bit and not merely to a tolerance. Three models is the first
+           shape where they do not diverge. */
+        { 2, 150, 1, MCS_VARIANCE_BOOTSTRAP, "TR, bootstrap variance, 2 models" },
+        { 3, 150, 1, MCS_VARIANCE_BOOTSTRAP, "TR, bootstrap variance, 3 models" },
+        { 2, 150, 0, MCS_VARIANCE_BOOTSTRAP, "Tmax, bootstrap variance, 2 models" },
         { 4, 150, 0, MCS_VARIANCE_BOOTSTRAP, "Tmax, bootstrap variance, 4 models" },
         { 4, 150, 0, MCS_VARIANCE_HAC, "Tmax, sample HAC, 4 models" },
         { 4, 150, 0, MCS_VARIANCE_HAC_RESAMPLE, "Tmax, resampled HAC, 4 models" },
@@ -437,7 +456,7 @@ static void test_manual_loop_matches_mcs(void) {
         compare_to_manual(&L, o, panels[p].label);
         df_free(&L);
     }
-    printf("  8 panels, both statistics, all three variances, exact agreement\n");
+    printf("  11 panels, both statistics, all three variances, exact agreement\n");
 }
 
 static void test_write_report_matches_the_stream_writer(void) {

@@ -671,6 +671,24 @@ tests/performance/lbfgs_copy_threshold: tests/performance/lbfgs_copy_threshold.c
 # cannot see that it changed. Exits nonzero when the two arms disagree.
 # Results go to out/mcs_candidates_report.txt. Not part of `test` or
 # `bench.sh`.
+# Run the three MCS correctness suites against a candidate header instead
+# of the shipped one, which is the gate a candidate has to pass before its
+# speed is worth reading:
+#
+#   make test-mcs-candidate MCS_CANDIDATE=inference/mcs_fast.h
+#   STRESS=1 make test-mcs-candidate MCS_CANDIDATE=inference/mcs_fast.h
+#
+# The binaries are built beside the ordinary ones with a _candidate suffix
+# so a candidate run never leaves a stale binary where `make test` looks
+# for one. Always rebuilt, since MCS_CANDIDATE is a command-line variable.
+test-mcs-candidate:
+	$(CC) $(CFLAGS) -I. -DMCS_HEADER='"$(MCS_CANDIDATE)"' tests/correctness/test_mcs.c $(LDLIBS) -o tests/correctness/test_mcs_candidate
+	$(CC) $(CFLAGS) -I. -DMCS_HEADER='"$(MCS_CANDIDATE)"' tests/correctness/test_mcs_variance.c $(LDLIBS) -o tests/correctness/test_mcs_variance_candidate
+	$(CC) $(CFLAGS) -I. -DMCS_HEADER='"$(MCS_CANDIDATE)"' tests/correctness/mcs_primitives.c $(LDLIBS) -o tests/correctness/mcs_primitives_candidate
+	./tests/correctness/test_mcs_candidate
+	./tests/correctness/test_mcs_variance_candidate
+	./tests/correctness/mcs_primitives_candidate
+
 MCS_CANDIDATE ?= inference/mcs.h
 MCS_ARM_DEPS := inference/mcs.h tests/performance/mcs_arm.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
 
@@ -903,4 +921,4 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: bench-mcs_candidates test test-stress test-special test-npz-python test-lhs-r bench-lhs test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model
+.PHONY: bench-mcs_candidates test-mcs-candidate test test-stress test-special test-npz-python test-lhs-r bench-lhs test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model

@@ -234,7 +234,10 @@ exposes so a caller can run their own elimination loop. Eight of those had no
 direct call in any suite at the re-audit, and `mcs_write_report` had none
 either. `tests/correctness/mcs_primitives.c` now covers all of them with
 hand-computed values, and checks that an elimination loop built out of them
-reproduces `mcs()` exactly. `mcs_name_width` is still only reached indirectly,
+reproduces `mcs()` exactly. That last check has since earned its place twice:
+it is the gate a rewrite of this header's working memory has to pass, and its
+two- and three-model panels caught a version where `mcs()` and a caller's own
+loop summed the same quantity in a different order. `mcs_name_width` is still only reached indirectly,
 through the report writer's column-alignment check in
 `tests/correctness/test_mcs.c`, which is where its contract actually lives.
 

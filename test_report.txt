@@ -1,4 +1,4 @@
-test run: do 10 sep 2026 18:59:21 CEST
+test run: do 10 sep 2026 20:26:14 CEST
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -54,15 +54,15 @@ make: 'tests/correctness/qvarma_correctness' is up to date.
 make: 'tests/correctness/qvarma_analytic_agreement' is up to date.
 make: 'tests/correctness/qvarma_gaussian_limit' is up to date.
 make: 'tests/correctness/qvarma_identification' is up to date.
-make: 'tests/integration/frame_to_model' is up to date.
-make: 'tests/integration/join_missing_values' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -lopenblas -o tests/integration/frame_to_model
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/join_missing_values.c -lm -lopenblas -o tests/integration/join_missing_values
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
-make: 'tests/integration/pipeline_ownership' is up to date.
-make: 'tests/integration/npz_to_statistics' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
 make: 'tests/integration/header_composition' is up to date.
 make: 'tests/integration/header_composition_f32' is up to date.
-make: Nothing to be done for 'examples'.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -I. examples/mcs_example.c -lm -lopenblas -o examples/mcs_example
 
 === test_mat: PASS ===
 construction
@@ -254,7 +254,7 @@ mcs_reduce: max |t| over the pairs, max t over the models
 mcs_worst_from_tstats: which model the elimination rule drops
 mcs_scratch_new: the keep_draws = 0 shape a HAC-only caller asks for
 an elimination loop over the primitives reproduces mcs(), with scratch sized per round
-  8 panels, both statistics, all three variances, exact agreement
+  11 panels, both statistics, all three variances, exact agreement
 mcs_write_report: the same text mcs_fwrite_report puts on an open stream
 
 PASSED, 0 failures

@@ -45,6 +45,17 @@ typedef struct {
     double phi;
     double spread;
     int stress_only;
+    /* Run the candidate alone. Past a few hundred models the shipped
+       header takes hours on one case, so a paired A/B stops being a
+       measurement anybody will wait for; agreement is established at the
+       rungs where both arms fit and only the cost is carried upward. */
+    int candidate_only;
+    /* Fingerprint the confidence set and the Diebold-Mariano test, but
+       not mcs_tstats/mcs_statistic/mcs_worst. Those three allocate their
+       own scratch per call, sized by the pair count and the draw count
+       together, which at a thousand models under the shipped header is
+       eight gigabytes for a fingerprint nobody reads at that size. */
+    int light_fingerprint;
 } MCSArmCase;
 
 /* What one run of one arm reports back.
@@ -96,8 +107,10 @@ static inline int mcs_arm_exact_needed(int m) {
     return 6 + m;
 }
 
-static inline int mcs_arm_real_needed(int stat_is_range, int m) {
-    /* one p-value per model, the final p-value, the round statistic,
-       every t-statistic of the first round, and dm_test's four. */
+static inline int mcs_arm_real_needed(int stat_is_range, int m, int light) {
+    /* one p-value per model, the final p-value, dm_test's four, and -
+       unless the fingerprint is the light one - the round statistic and
+       every t-statistic of the first round. */
+    if (light) return m + 1 + 4;
     return m + 2 + mcs_arm_n_series(stat_is_range, m) + 4;
 }

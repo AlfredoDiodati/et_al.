@@ -80,15 +80,25 @@
 static const MCSArmCase cases[] = {
     /* name, n, m, bootstrap, block, hac_lag, alpha, TR?, variance,
        seed, stream, data_seed, phi, spread, stress_only */
-    { "tmax_bootstrap", 250, 5, 2000, 10, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 123, 0, 11, 0.5, 0.06, 0 },
-    { "tmax_hac", 250, 5, 2000, 10, -1, 0.05, 0, MCS_ARM_VAR_HAC, 123, 0, 11, 0.5, 0.06, 0 },
-    { "tmax_hac_resample", 250, 5, 500, 10, -1, 0.05, 0, MCS_ARM_VAR_HAC_RESAMPLE, 123, 0, 11, 0.5, 0.06, 0 },
-    { "tr_bootstrap", 300, 8, 1000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 7, 1, 12, 0.3, 0.05, 0 },
-    { "tr_hac", 300, 8, 1000, 12, -1, 0.05, 1, MCS_ARM_VAR_HAC, 7, 1, 12, 0.3, 0.05, 0 },
-    { "tmax_long", 1500, 12, 1500, 25, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 31, 2, 13, 0.7, 0.03, 0 },
-    { "tr_wide", 200, 16, 1500, 10, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 14, 0.4, 0.02, 0 },
-    { "tr_wide_stress", 120, 34, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 15, 0.4, 0.02, 1 },
-    { "tmax_wide_stress", 500, 60, 2000, 20, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 9, 4, 16, 0.5, 0.01, 1 },
+    { "tmax_bootstrap", 250, 5, 2000, 10, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 123, 0, 11, 0.5, 0.06, 0, 0, 0 },
+    { "tmax_hac", 250, 5, 2000, 10, -1, 0.05, 0, MCS_ARM_VAR_HAC, 123, 0, 11, 0.5, 0.06, 0, 0, 0 },
+    { "tmax_hac_resample", 250, 5, 500, 10, -1, 0.05, 0, MCS_ARM_VAR_HAC_RESAMPLE, 123, 0, 11, 0.5, 0.06, 0, 0, 0 },
+    { "tr_bootstrap", 300, 8, 1000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 7, 1, 12, 0.3, 0.05, 0, 0, 0 },
+    { "tr_hac", 300, 8, 1000, 12, -1, 0.05, 1, MCS_ARM_VAR_HAC, 7, 1, 12, 0.3, 0.05, 0, 0, 0 },
+    { "tmax_long", 1500, 12, 1500, 25, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 31, 2, 13, 0.7, 0.03, 0, 0, 0 },
+    { "tr_wide", 200, 16, 1500, 10, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 14, 0.4, 0.02, 0, 0, 0 },
+    { "tr_m34_stress", 120, 34, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 15, 0.4, 0.02, 1, 0, 0 },
+    { "tmax_m60_stress", 500, 60, 2000, 20, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 9, 4, 16, 0.5, 0.01, 1, 0, 0 },
+    /* The two rungs that show where the pair count starts to hurt. The
+       second takes about half a minute per run under the shipped header,
+       so run the stress set with MCS_ROUNDS=1. */
+    { "tr_m50_stress", 200, 50, 1000, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 17, 5, 17, 0.4, 0.015, 1, 0, 0 },
+    { "tr_m120_stress", 200, 120, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 23, 6, 18, 0.4, 0.006, 1, 0, 0 },
+    /* Past here the shipped header is the thing that cannot be waited
+       for, so only the candidate runs and only its cost is reported.
+       Agreement is settled at the rungs above, where both arms fit. */
+    { "tr_m250_candidate", 250, 250, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 29, 7, 19, 0.4, 0.003, 1, 1, 1 },
+    { "tr_m1000_candidate", 1000, 1000, 2000, 20, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 31, 8, 20, 0.4, 0.001, 1, 1, 1 },
 };
 
 #define N_CASES ((int)(sizeof cases / sizeof cases[0]))
@@ -184,11 +194,16 @@ int main(void) {
         if (parsed >= 1) rounds = parsed;
     }
     int stress = getenv("STRESS") != NULL;
+    /* The candidate-only rungs are minutes each and are not part of the
+       stress set for that reason: they answer "does the size we changed
+       this for run at all", which is a question asked once, not on every
+       measurement of a tweak. */
+    int huge = getenv("MCS_HUGE") != NULL;
 
     int exact_cap = 0, real_cap = 0, loss_cap = 0;
     for (int i = 0; i < N_CASES; i++) {
         int e = mcs_arm_exact_needed(cases[i].m);
-        int v = mcs_arm_real_needed(cases[i].stat_is_range, cases[i].m);
+        int v = mcs_arm_real_needed(cases[i].stat_is_range, cases[i].m, cases[i].light_fingerprint);
         int l = cases[i].n * cases[i].m;
         if (e > exact_cap) exact_cap = e;
         if (v > real_cap) real_cap = v;
@@ -223,7 +238,14 @@ int main(void) {
     for (int round = 0; round <= rounds; round++) {
         for (int i = 0; i < N_CASES; i++) {
             if (cases[i].stress_only && !stress) continue;
+            if (cases[i].candidate_only && !huge) continue;
             simulate_losses(&cases[i], losses);
+
+            if (cases[i].candidate_only) {
+                mcs_arm_candidate(&cases[i], losses, &run);
+                if (round > 0) record_arm(&candidate[i], &run, round == 1);
+                continue;
+            }
 
             double first_a, first_b, second_b, second_a;
 
@@ -271,6 +293,7 @@ int main(void) {
             "case", "T", "M", "draws", "block", "stat", "variance");
     for (int i = 0; i < N_CASES; i++) {
         if (cases[i].stress_only && !stress) continue;
+        if (cases[i].candidate_only && !huge) continue;
         fprintf(f, "  %-18s %6d %5d %7d %7d %6s %-13s\n",
                 cases[i].name, cases[i].n, cases[i].m, cases[i].bootstrap, cases[i].block_length,
                 cases[i].stat_is_range ? "TR" : "Tmax", variance_name(cases[i].variance));
@@ -281,6 +304,7 @@ int main(void) {
     fprintf(f, "  %-18s %-11s %14s %14s\n", "case", "verdict", "max deviation", "p-value flips");
     for (int i = 0; i < N_CASES; i++) {
         if (cases[i].stress_only && !stress) { skipped++; continue; }
+        if (cases[i].candidate_only) continue;
         const ArmRecord *a = &current[i], *b = &candidate[i];
         int discrete_ok = a->n_exact == b->n_exact && a->n_real == b->n_real;
         if (discrete_ok)
@@ -322,7 +346,7 @@ int main(void) {
     fprintf(f, "  %-18s %11s %11s %8s %11s %11s %8s\n",
             "case", "current ms", "cand ms", "speedup", "current KiB", "cand KiB", "saved");
     for (int i = 0; i < N_CASES; i++) {
-        if (cases[i].stress_only && !stress) continue;
+        if ((cases[i].stress_only && !stress) || cases[i].candidate_only) continue;
         const ArmRecord *a = &current[i], *b = &candidate[i];
         double saved = a->peak_bytes ? 1.0 - (double)b->peak_bytes / (double)a->peak_bytes : 0.0;
         fprintf(f, "  %-18s %11.3f %11.3f %7.2fx %11.1f %11.1f %7.1f%%\n",
@@ -335,7 +359,7 @@ int main(void) {
     fprintf(f, "  %-18s %11s %11s %13s %13s\n",
             "case", "current n", "cand n", "current KiB", "cand KiB");
     for (int i = 0; i < N_CASES; i++) {
-        if (cases[i].stress_only && !stress) continue;
+        if ((cases[i].stress_only && !stress) || cases[i].candidate_only) continue;
         fprintf(f, "  %-18s %11ld %11ld %13.1f %13.1f\n", cases[i].name,
                 current[i].allocations, candidate[i].allocations,
                 current[i].total_bytes / 1024.0, candidate[i].total_bytes / 1024.0);
@@ -344,17 +368,39 @@ int main(void) {
     fprintf(f, "\ntiming order check: the mean within-pair ratio under each ordering\n");
     fprintf(f, "  %-18s %14s %14s  %s\n", "case", "current first", "candidate first", "reading");
     for (int i = 0; i < N_CASES; i++) {
-        if (cases[i].stress_only && !stress) continue;
+        if ((cases[i].stress_only && !stress) || cases[i].candidate_only) continue;
         if (pairing[i].n_pairs == 0) continue;
         double first = pairing[i].sum_ratio_first / pairing[i].n_pairs;
         double second = pairing[i].sum_ratio_second / pairing[i].n_pairs;
         double largest = fabs(first - 1.0) > fabs(second - 1.0) ? fabs(first - 1.0) : fabs(second - 1.0);
+        double smaller = first < second ? first : second;
+        double spread = fabs(first - second) / smaller;
         const char *reading;
         if (largest < TIMING_NOISE_FLOOR) reading = "no difference this machine can measure";
-        else if ((first - 1.0) * (second - 1.0) > 0)
-            reading = first > 1.0 ? "candidate faster" : "current faster";
-        else reading = "noise, the sign flips with the order";
+        else if ((first - 1.0) * (second - 1.0) <= 0) reading = "noise, the sign flips with the order";
+        /* Agreeing on the sign is not enough. A case whose two orderings
+           put the ratio at 1.04 and 1.90 has measured something other
+           than the candidate - a machine changing speed under a long run
+           is the usual one - and quoting either number would be quoting
+           the room. */
+        else if (spread > 0.25) reading = "orderings disagree too widely to quote";
+        else reading = first > 1.0 ? "candidate faster" : "current faster";
         fprintf(f, "  %-18s %14.3f %14.3f  %s\n", cases[i].name, first, second, reading);
+    }
+
+    int solo = 0;
+    for (int i = 0; i < N_CASES; i++)
+        if (cases[i].candidate_only && huge) solo++;
+    if (solo) {
+        fprintf(f, "\ncandidate alone, no production arm to compare against\n");
+        fprintf(f, "  %-20s %6s %6s %7s %12s %12s\n",
+                "case", "T", "M", "draws", "seconds", "peak MiB");
+        for (int i = 0; i < N_CASES; i++) {
+            if (!cases[i].candidate_only) continue;
+            fprintf(f, "  %-20s %6d %6d %7d %12.3f %12.1f\n",
+                    cases[i].name, cases[i].n, cases[i].m, cases[i].bootstrap,
+                    candidate[i].best_seconds, candidate[i].peak_bytes / 1048576.0);
+        }
     }
 
     if (skipped) fprintf(f, "\n%d case(s) held back; set STRESS=1 to run them.\n", skipped);

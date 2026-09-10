@@ -1,4 +1,14 @@
-#include "../../inference/mcs.h"
+/* The header under test, so that a candidate rewrite of inference/mcs.h
+   can be run through this suite unchanged:
+
+     make test-mcs-candidate MCS_CANDIDATE=inference/mcs_fast.h
+
+   Defaults to the shipped header, which is what every ordinary build
+   compiles. */
+#ifndef MCS_HEADER
+#define MCS_HEADER "../../inference/mcs.h"
+#endif
+#include MCS_HEADER
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>

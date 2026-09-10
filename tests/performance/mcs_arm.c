@@ -133,15 +133,19 @@ static double now(void) {
     return ts.tv_sec + 1e-9 * ts.tv_nsec;
 }
 
-/* Model j is "m<j>", zero padded to two digits so the names sort the way
+/* Model j is "m<j>", zero padded to four digits so the names sort the way
    the columns do and every name is the same width, which keeps the name
-   hash below from depending on how many models a case has. */
+   hash below from depending on how many models a case has. Four digits
+   because the size this header is being changed for is a thousand
+   models. */
 static void model_name(int j, char *out) {
-    assert(j >= 0 && j < 100 && "mcs_arm: model name is two digits wide");
+    assert(j >= 0 && j < 10000 && "mcs_arm: model name is four digits wide");
     out[0] = 'm';
-    out[1] = (char)('0' + j / 10);
-    out[2] = (char)('0' + j % 10);
-    out[3] = 0;
+    out[1] = (char)('0' + j / 1000);
+    out[2] = (char)('0' + (j / 100) % 10);
+    out[3] = (char)('0' + (j / 10) % 10);
+    out[4] = (char)('0' + j % 10);
+    out[5] = 0;
 }
 
 static DataFrame build_losses(const MCSArmCase *c, const double *losses) {
@@ -174,7 +178,7 @@ static long name_hash(const MCSResult *r) {
 
 void MCS_ARM_ENTRY(const MCSArmCase *c, const double *losses, MCSArmRun *out) {
     assert(out->exact_cap >= mcs_arm_exact_needed(c->m));
-    assert(out->real_cap >= mcs_arm_real_needed(c->stat_is_range, c->m));
+    assert(out->real_cap >= mcs_arm_real_needed(c->stat_is_range, c->m, c->light_fingerprint));
 
     DataFrame table = build_losses(c, losses);
 
@@ -202,12 +206,16 @@ void MCS_ARM_ENTRY(const MCSArmCase *c, const double *losses, MCSArmRun *out) {
     out->total_bytes = alloc_total - alloc_base_total;
     out->allocations = alloc_count - alloc_base_count;
 
-    int k_count = mcs_n_series(o.stat, c->m);
-    double *t = (double *)malloc((size_t)k_count * sizeof *t);
-    assert(t);
-    mcs_tstats(&table, o, t);
-    double statistic = mcs_statistic(&table, o);
-    int worst = mcs_worst(&table, o);
+    int k_count = c->light_fingerprint ? 0 : mcs_n_series(o.stat, c->m);
+    double *t = k_count ? (double *)malloc((size_t)k_count * sizeof *t) : NULL;
+    double statistic = 0;
+    int worst = -1;
+    if (!c->light_fingerprint) {
+        assert(t);
+        mcs_tstats(&table, o, t);
+        statistic = mcs_statistic(&table, o);
+        worst = mcs_worst(&table, o);
+    }
 
     char a[8], b[8];
     model_name(0, a);
@@ -228,8 +236,10 @@ void MCS_ARM_ENTRY(const MCSArmCase *c, const double *losses, MCSArmRun *out) {
     int v = 0;
     for (int j = 0; j < r.m0; j++) out->real[v++] = r.pvalue[j];
     out->real[v++] = r.final_pvalue;
-    out->real[v++] = statistic;
-    for (int k = 0; k < k_count; k++) out->real[v++] = t[k];
+    if (!c->light_fingerprint) {
+        out->real[v++] = statistic;
+        for (int k = 0; k < k_count; k++) out->real[v++] = t[k];
+    }
     out->real[v++] = dm.stat;
     out->real[v++] = dm.pvalue;
     out->real[v++] = dm.mean_diff;

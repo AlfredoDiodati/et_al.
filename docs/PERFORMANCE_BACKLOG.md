@@ -7,10 +7,10 @@ as items are picked up or re-measured - it is the single source of truth
 for this backlog, not any session's task list.
 
 Two entries are not of that shape and say so in place: item 12 is a harness
-that does not exist rather than a measured gap, and item 13 is a memory
-footprint rather than a speed one. Both are here because this is where an
-open performance question is looked for, and a second file would only split
-that search.
+that does not exist rather than a measured gap, and item 13 is closed, kept
+because what it records is the diagnosis and the mechanism rather than the
+number. Both are here because this is where an open performance question is
+looked for, and a second file would only split that search.
 
 Per the root `README.md`'s "Testing and benchmarking" policy, benchmarking
 exists to build a reusable record of what has already been tried and why it
@@ -1802,55 +1802,35 @@ core, which is exactly what a model-tier interface change breaks.
 
 **Status: not started.** No numbers, no harness, no baseline format chosen.
 
-## 13. `mcs()`'s bootstrap draw buffer at large `M` (`inference/mcs.h`)
+## 13. `mcs()` under `MCS_TR` at large `M` (`inference/mcs.h`) - fixed
 
-**Why it is large.** `MCSScratch.bmean` holds every resampled mean of every
-differential series at once — `8 * opt.bootstrap * mcs_n_series(stat, M)`
-bytes — and it dominates the procedure's footprint under `MCS_TR`, where
-`mcs_n_series` is `M(M-1)/2` and the buffer therefore grows quadratically in
-the model count. Measured with the exact allocation counter in
-`tests/performance/mcs_arm.c` (float32 build, default variance): 1651 KiB peak
-at `T = 200`, `M = 16`, 1500 draws, of which `bmean` is 1406 KiB (85%); 9372 KiB
-at `T = 120`, `M = 34`, 2000 draws, of which `bmean` is 8766 KiB (93%).
+**What it was.** `mcs_round`'s bootstrap-variance branch walked all `n`
+observations once per differential series per draw. Under `MCS_TR` the series
+are pairs, so that was `opt.bootstrap * n * C(m0+1, 3)` gathered additions over
+a whole run - `3.3e14` at a thousand models over a thousand observations with
+two thousand draws. `MCSScratch.bmean` held every pair's resampled mean for
+every draw (8.0 GiB there) and `MCSScratch.d` every pair's differential series
+(4.0 GiB).
 
-**Why it is there.** The draws are read twice. `mcs_round` fills `bmean` with
-each draw's mean deviation from `dbar[k]`, then makes one pass over `k` to turn
-those deviations into the bootstrap variance `v_k`, then a second pass over `b`
-to divide each stored deviation by `sqrt(v_k)` and reduce it to that draw's
-statistic. Under `MCS_VARIANCE_HAC_RESAMPLE` no such buffer exists at all,
-because each draw is divided by its own HAC and discarded as it is made — the
-34.5 KiB row of the table in `docs/MCS_DOCUMENTATION.md` against 112.7 KiB for
-the same shape under the default variance.
+**What fixed it.** A pair's resampled mean is the difference of the two models'
+resampled means, so one gather per model replaces one per pair. Taken relative
+to the active set's first model, which keeps it inside the existing API. And,
+found on review rather than by profiling, an `O(pairs * n)` pass per round that
+filled `dbar` from every series of `d` and was then overwritten - work nothing
+read, which turned into a heap buffer overflow the moment `d` was sized by the
+model count, and which was the larger of the two wins at large `M`.
 
-**Two ways out, neither measured yet.** Accumulate `sum_b e^2` online and keep
-only that, then draw the same blocks a second time from a re-seeded `Rng` to
-reduce each draw — trading `opt.bootstrap` extra block draws and a second gather
-pass for a buffer of `k_count` doubles instead of `bootstrap * k_count`.
-Or keep the draws but store one round's worth per series rather than all series
-per draw, which does not reduce the total and only helps if the reduction is
-restructured. The first is the real candidate; what it costs is the second
-gather over `opt.bootstrap * k_count * T` elements, which is the dominant cost
-of the procedure already, so the honest expectation is that it roughly doubles
-the time and should be an option rather than a replacement.
+**Measured**: 2.5x at 8 models, 4.6x at 16, 9.3x at 34, 42x at 50, 228x at 120,
+with 38% to 95% less memory; `MCS_TMAX` and both HAC variants bit-identical and
+unchanged in speed. `docs/MCS_PERFORMANCE_DOCUMENTATION.md` has the mechanism,
+the full table, the harness that gated it, and three things tried and rejected.
 
-**A second, separate term.** At long `T` and few models the draw buffer is not
-the largest block. `mcs()` holds two `T x M0` copies of the loss table, `all`
-and `active_losses`, and at `T = 1500`, `M = 12`, 1500 draws those are 281 of
-the 593 KiB peak against `bmean`'s 141. `active_losses` is rebuilt from `all`
-at the top of every round and read only by `mcs_build_diffs`; fusing the two so
-that the differentials are formed from `all` through `active[]` directly would
-remove one of the copies outright. That is a smaller win in absolute bytes and a
-much smaller change.
-
-**How to measure a candidate.** `make bench-mcs_candidates MCS_CANDIDATE=<header>`
-builds the candidate and the shipped header into one binary and compares them on
-agreement first and on time and allocated bytes second. See the "Benchmark
-results" section of `docs/MCS_DOCUMENTATION.md` for what it checks and why the
-memory is counted rather than read off resident set size, and
-`tests/correctness/mcs_primitives.c` for the correctness invariant a
-memory-reduction candidate is most likely to break: `mcs()` reuses one scratch
-allocation sized for the first round across every later round, and its answer
-must not depend on that.
-
-**Status: not started.** The harness exists and the footprint is measured. No
-candidate has been written.
+**What is left.** `MCS_TR` under the two HAC variants is still quadratic in `M`
+in time and memory: those variants estimate each series' standard error from
+that series, so a pair's number cannot be reached through its two models'.
+Separately, one set of draws shared across elimination rounds would collapse the
+remaining per-round `opt.bootstrap * pairs` work to a single pass over
+`C(m0, 2)`, since neither the per-model deviations nor the pair spreads depend
+on which models are still active; it changes every p-value from the second round
+on, so it is a decision about the acceptance gate before it is a change to the
+code.
