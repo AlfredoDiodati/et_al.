@@ -295,6 +295,17 @@ tests/correctness/mcs_primitives: tests/correctness/mcs_primitives.c inference/m
 tests/correctness/mcs_size_and_power: tests/correctness/mcs_size_and_power.c inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/mcs_size_and_power.c $(LDLIBS) -o tests/correctness/mcs_size_and_power
 
+# A map of which settings give a set worth reading, one factor at a time
+# from a common baseline, plus the two interactions that matter. A study
+# rather than a check: it writes out/mcs_settings_study.txt and asserts
+# nothing, the way qvarma_recovery_study.c does, and takes several
+# minutes, so it is deliberately outside `make test`.
+tests/correctness/mcs_settings_study: tests/correctness/mcs_settings_study.c inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/correctness/mcs_settings_study.c $(LDLIBS) -o tests/correctness/mcs_settings_study
+
+study-mcs_settings: tests/correctness/mcs_settings_study
+	./tests/correctness/mcs_settings_study
+
 tests/correctness/test_random: tests/correctness/test_random.c random/random.h stats.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_random.c $(LDLIBS) -o tests/correctness/test_random
 
@@ -929,4 +940,4 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: bench-mcs_candidates test-mcs-candidate test test-stress test-special test-npz-python test-lhs-r bench-lhs test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model
+.PHONY: study-mcs_settings bench-mcs_candidates test-mcs-candidate test test-stress test-special test-npz-python test-lhs-r bench-lhs test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model

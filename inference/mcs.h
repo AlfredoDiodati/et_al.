@@ -100,7 +100,14 @@
      distributions, so p-values agree in distribution but not draw for
      draw.
    - A p-value is a Monte Carlo estimate over opt.bootstrap draws, so it
-     is reproducible for a given (seed, stream) and only that.
+     is reproducible for a given (seed, stream) and only that. How far it
+     moves when the stream changes falls like one over the square root of
+     that count, about 0.02 at 1000 draws and 0.01 at 3000; how well the
+     procedure covers does not move with it at all. What coverage does
+     depend on is the sample length against the number of models, and it
+     wants roughly two hundred observations per model. See
+     docs/MCS_RELIABILITY_DOCUMENTATION.md before trusting a set over a
+     wide field.
    - One set of resamples serves every elimination round rather than a
      fresh set per round, which is what the paper and the common
      implementations do. The resampling is of observations, and an

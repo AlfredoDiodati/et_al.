@@ -36,6 +36,7 @@ tests/correctness/npz_python_interop
 tests/correctness/*_correctness
 tests/correctness/qvarma_identification
 tests/correctness/qvarma_recovery_study
+tests/correctness/mcs_settings_study
 tests/correctness/qvarma_analytic_agreement
 tests/correctness/qvarma_gaussian_limit
 tests/correctness/mcs_primitives
