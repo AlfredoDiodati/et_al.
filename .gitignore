@@ -40,6 +40,8 @@ tests/correctness/qvarma_analytic_agreement
 tests/correctness/qvarma_gaussian_limit
 tests/correctness/mcs_primitives
 tests/correctness/mcs_primitives_candidate
+tests/correctness/mcs_size_and_power
+tests/correctness/mcs_size_and_power_candidate
 tests/correctness/test_mcs_variance_candidate
 tests/performance/qvarma_*
 tests/performance/eig_sym_status

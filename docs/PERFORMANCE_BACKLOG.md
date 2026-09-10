@@ -1825,12 +1825,22 @@ with 38% to 95% less memory; `MCS_TMAX` and both HAC variants bit-identical and
 unchanged in speed. `docs/MCS_PERFORMANCE_DOCUMENTATION.md` has the mechanism,
 the full table, the harness that gated it, and three things tried and rejected.
 
+**A second change followed**: one set of resamples for the whole run instead of
+a fresh set per elimination round, which is what the paper and the common
+implementations do. Neither the per-model deviations nor the pair spreads depend
+on which models are still active, so both become one-off rather than per-round.
+A further 6.4x at 8 models, 16.3x at 16, and 15.8x at a thousand, where the run
+went from 613 seconds to 38.7. It moves p-values by whole bootstrap draws rather
+than by rounding, so it was gated statistically: no detectable shift in mean MCS
+p-value over 200 paired replications, the same confidence set more often than
+two runs of one scheme under different streams give, and coverage unchanged to
+three decimals in `tests/correctness/mcs_size_and_power.c`, a suite written for
+this change because a change that moves p-values cannot be judged by comparing
+p-values.
+
 **What is left.** `MCS_TR` under the two HAC variants is still quadratic in `M`
 in time and memory: those variants estimate each series' standard error from
-that series, so a pair's number cannot be reached through its two models'.
-Separately, one set of draws shared across elimination rounds would collapse the
-remaining per-round `opt.bootstrap * pairs` work to a single pass over
-`C(m0, 2)`, since neither the per-model deviations nor the pair spreads depend
-on which models are still active; it changes every p-value from the second round
-on, so it is a decision about the acceptance gate before it is a change to the
-code.
+that series, so a pair's number cannot be reached through its two models'. The
+one large term remaining under the bootstrap variance is the exceedance
+reduction, `opt.bootstrap * C(m0+1, 3)` pair visits over a run, which is closer
+to memory bound than compute bound.

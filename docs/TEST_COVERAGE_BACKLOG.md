@@ -241,6 +241,16 @@ loop summed the same quantity in a different order. `mcs_name_width` is still on
 through the report writer's column-alignment check in
 `tests/correctness/test_mcs.c`, which is where its contract actually lives.
 
+A fourth suite has since been added for a gap of a different kind.
+`tests/correctness/mcs_size_and_power.c` checks not a function's output against
+a definition but the procedure's coverage over repeated samples, which is the
+guarantee the Model Confidence Set exists to provide and which no per-function
+test can reach. It was written because a change to the resampling scheme moved
+every p-value, leaving nothing to compare against; it is the standing gate for
+any future change of that kind, and it is what established that the coverage
+shortfall it reports predates the change. See
+`docs/MCS_RELIABILITY_DOCUMENTATION.md`.
+
 One thing remains uncovered, and it is a decision rather than an oversight:
 
 - [ ] **`mcs_round` called with `keep_draws = 0` under a variance that needs the

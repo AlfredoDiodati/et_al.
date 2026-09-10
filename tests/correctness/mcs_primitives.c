@@ -353,14 +353,31 @@ static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt) {
     int m = m0, decided = 0;
     double best_p = 0;
 
+    /* MCS_TR under the bootstrap variance shares one set of draws across
+       every round, so its scratch carries the per-model resampled means
+       and the per-pair spreads from the first round to the last and has
+       to be allocated once. Every other combination redraws per round
+       and keeps allocating at that round's exact series count, which is
+       what pins mcs()'s reuse of one first-round allocation to the same
+       answer an exactly-sized one gives. */
+    int shared = opt.stat == MCS_TR && opt.variance == MCS_VARIANCE_BOOTSTRAP;
+    MCSScratch shared_sc;
+    if (shared) {
+        shared_sc = mcs_scratch_new(n, mcs_n_series(MCS_TR, m0), keep);
+        shared_sc.losses = all;
+        shared_sc.active = active;
+        shared_sc.m0 = m0;
+    }
+
     while (m >= 2) {
-        for (int t = 0; t < n; t++)
-            for (int i = 0; i < m; i++)
-                active_losses[(size_t)t * m + i] = all[(size_t)t * m0 + active[i]];
+        if (!shared)
+            for (int t = 0; t < n; t++)
+                for (int i = 0; i < m; i++)
+                    active_losses[(size_t)t * m + i] = all[(size_t)t * m0 + active[i]];
 
         int k_count = mcs_n_series(opt.stat, m);
-        MCSScratch sc = mcs_scratch_new(n, k_count, keep);
-        mcs_build_diffs(active_losses, n, m, opt.stat, sc.d);
+        MCSScratch sc = shared ? shared_sc : mcs_scratch_new(n, k_count, keep);
+        if (!shared) mcs_build_diffs(active_losses, n, m, opt.stat, sc.d);
         double t_emp;
         double p = mcs_round(n, k_count, opt, hac_lag, &rng, &sc, &t_emp);
         if (p > best_p) best_p = p;
@@ -380,8 +397,12 @@ static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt) {
         if (!decided) res.elimination_order[res.n_eliminated++] = active[worst];
         for (int i = worst; i < m - 1; i++) active[i] = active[i + 1];
         m--;
-        mcs_scratch_free(&sc);
+        /* The shared scratch carries state into the next round and is
+           freed once, after the loop. */
+        if (shared) shared_sc = sc;
+        else mcs_scratch_free(&sc);
     }
+    if (shared) mcs_scratch_free(&shared_sc);
 
     res.pvalue[active[0]] = 1;
     if (!decided) {
@@ -419,7 +440,7 @@ static void compare_to_manual(const DataFrame *losses, MCSOptions opt, const cha
 }
 
 static void test_manual_loop_matches_mcs(void) {
-    puts("an elimination loop over the primitives reproduces mcs(), with scratch sized per round");
+    puts("an elimination loop over the primitives reproduces mcs(), bit for bit");
     char names[24][8];
     struct { int m; int n; int tr; MCSVariance variance; const char *label; } panels[] = {
         /* Two models is one pair, the one shape where the model count

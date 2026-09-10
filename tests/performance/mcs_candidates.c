@@ -186,6 +186,98 @@ static double deviation(double a, double b) {
     return fabs(a - b) / scale;
 }
 
+/* Are the two arms the same procedure, when they are not the same
+   arithmetic?
+
+   A change that alters which resamples a round sees does not move a
+   p-value by a rounding error; it moves it by whole bootstrap draws, and
+   comparing the two runs on one dataset and one stream says nothing
+   about whether either is right. What can be asked instead is whether
+   they agree as estimators: over independent replications, does the
+   difference in MCS p-values have mean zero, and do the two return the
+   same confidence set?
+
+   Each replication draws its own dataset and its own bootstrap stream,
+   and both arms get the same ones, so the comparison is paired and the
+   test is a paired t on the per-replication mean difference. Paired
+   matters here: the two arms share their first round's draws by
+   construction, so their p-values are strongly correlated and an
+   unpaired comparison would be far less able to see a real shift.
+
+   What the test can and cannot say. It can reject "the two agree in
+   mean"; failing to reject is not proof they do, only that the shift is
+   under what R replications can resolve, which the reported standard
+   error states. The fraction of replications returning a different
+   surviving set is the more directly readable number, and it is a
+   property of the procedure rather than of this comparison: two valid
+   Monte Carlo estimates of the same p-value disagree about a borderline
+   model some of the time whatever the scheme. */
+static void equivalence_study(int replications, int stream_offset, int stress, FILE *f,
+                              long *exact_a, double *real_a, long *exact_b, double *real_b,
+                              int exact_cap, int real_cap, double *losses) {
+    fprintf(f, "\nstatistical equivalence over %d replications\n", replications);
+    fprintf(f, "  each replication is its own dataset and its own bootstrap stream\n");
+    fprintf(f, "  the two arms are given %s\n",
+            stream_offset ? "different streams: this is the Monte Carlo control, not a comparison of versions"
+                          : "the same stream, so the comparison is paired");
+    fprintf(f, "  %-18s %10s %10s %12s %10s %9s %9s\n",
+            "case", "mean p cur", "mean p cand", "mean diff", "std error", "t", "same set");
+
+    MCSArmRun run_a, run_b;
+    run_a.exact = exact_a; run_a.real = real_a;
+    run_b.exact = exact_b; run_b.real = real_b;
+    run_a.exact_cap = run_b.exact_cap = exact_cap;
+    run_a.real_cap = run_b.real_cap = real_cap;
+
+    for (int i = 0; i < N_CASES; i++) {
+        if (cases[i].stress_only && !stress) continue;
+        if (cases[i].candidate_only) continue;
+
+        double sum_a = 0, sum_b = 0, sum_delta = 0, sum_delta2 = 0;
+        int same_decision = 0;
+
+        for (int r = 0; r < replications; r++) {
+            MCSArmCase c = cases[i];
+            c.data_seed = cases[i].data_seed * 1000 + (unsigned long long)r;
+            c.stream = (unsigned long long)r;
+            simulate_losses(&c, losses);
+
+            mcs_arm_current(&c, losses, &run_a);
+            /* A nonzero offset gives the second arm a different bootstrap
+               stream on the same data. With both arms built from the same
+               header that measures how often two Monte Carlo estimates of
+               the same p-value disagree about the set at all, which is the
+               control the paired figure has to be read against. */
+            c.stream = (unsigned long long)(r + stream_offset);
+            mcs_arm_candidate(&c, losses, &run_b);
+
+            double mean_a = 0, mean_b = 0;
+            for (int j = 0; j < c.m; j++) { mean_a += run_a.real[j]; mean_b += run_b.real[j]; }
+            mean_a /= c.m;
+            mean_b /= c.m;
+            double delta = mean_a - mean_b;
+            sum_a += mean_a;
+            sum_b += mean_b;
+            sum_delta += delta;
+            sum_delta2 += delta * delta;
+
+            int identical = run_a.n_exact == run_b.n_exact;
+            for (int k = 0; identical && k < run_a.n_exact; k++)
+                if (run_a.exact[k] != run_b.exact[k]) identical = 0;
+            same_decision += identical;
+        }
+
+        double mean_delta = sum_delta / replications;
+        double variance = (sum_delta2 - replications * mean_delta * mean_delta) / (replications - 1);
+        if (variance < 0) variance = 0;
+        double std_error = sqrt(variance / replications);
+        double t = std_error > 0 ? mean_delta / std_error : 0;
+        fprintf(f, "  %-18s %10.4f %10.4f %12.5f %10.5f %9.2f %8.0f%%\n",
+                cases[i].name, sum_a / replications, sum_b / replications,
+                mean_delta, std_error, t, 100.0 * same_decision / replications);
+    }
+}
+
 int main(void) {
     int rounds = 4;
     const char *rounds_env = getenv("MCS_ROUNDS");
@@ -199,6 +291,14 @@ int main(void) {
        this for run at all", which is a question asked once, not on every
        measurement of a tweak. */
     int huge = getenv("MCS_HUGE") != NULL;
+    /* Replications for the paired equivalence study. Set it and the run
+       answers "are these the same procedure" instead of "which is
+       faster" - two different questions, and the timing protocol would
+       only cost time here. */
+    const char *equiv_env = getenv("MCS_EQUIV");
+    int equivalence = equiv_env ? atoi(equiv_env) : 0;
+    const char *offset_env = getenv("MCS_EQUIV_OFFSET");
+    int stream_offset = offset_env ? atoi(offset_env) : 0;
 
     int exact_cap = 0, real_cap = 0, loss_cap = 0;
     for (int i = 0; i < N_CASES; i++) {
@@ -233,12 +333,44 @@ int main(void) {
     run.exact_cap = exact_cap;
     run.real_cap = real_cap;
 
+    if (equivalence > 1) {
+        mkdir("out", 0777);
+        FILE *ef = fopen(REPORT_PATH, "w");
+        if (!ef) {
+            fprintf(stderr, "mcs_candidates: cannot open %s for writing\n", REPORT_PATH);
+            return 1;
+        }
+        fprintf(ef, "inference/mcs.h: candidate against current, equivalence in distribution\n\n");
+        fprintf(ef, "current arm   %s\n", MCS_ARM_CURRENT_HEADER);
+        fprintf(ef, "candidate arm %s\n", MCS_ARM_CANDIDATE_HEADER);
+        fprintf(ef, "build         %s elements\n",
+                sizeof(mreal) == sizeof(double) ? "float64" : "float32");
+        equivalence_study(equivalence, stream_offset, stress, ef, exact_buf, real_buf,
+                          candidate[0].exact, candidate[0].real, exact_cap, real_cap, losses);
+        fclose(ef);
+        printf("mcs equivalence study, %d replications, written to %s\n",
+               equivalence, REPORT_PATH);
+        for (int i = 0; i < N_CASES; i++) {
+            free(current[i].exact); free(current[i].real);
+            free(candidate[i].exact); free(candidate[i].real);
+        }
+        free(exact_buf); free(real_buf); free(losses);
+        free(current); free(candidate); free(pairing);
+        return 0;
+    }
+
     /* Round 0 is the warmup and is discarded: the first runs after an
        idle period are slow and would otherwise decide the answer. */
     for (int round = 0; round <= rounds; round++) {
         for (int i = 0; i < N_CASES; i++) {
             if (cases[i].stress_only && !stress) continue;
             if (cases[i].candidate_only && !huge) continue;
+            /* No warmup round for these. It exists so a cold first
+               measurement cannot decide the answer, and against a run of
+               several minutes the cold start is not a measurable share
+               of it - where against a six millisecond round it is the
+               whole of it. */
+            if (cases[i].candidate_only && round == 0) continue;
             simulate_losses(&cases[i], losses);
 
             if (cases[i].candidate_only) {
