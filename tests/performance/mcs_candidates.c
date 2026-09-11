@@ -98,16 +98,18 @@ static const MCSArmCase cases[] = {
     { "tr_m32_stress", 200, 32, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 43, 10, 22, 0.4, 0.02, 1, 0, 0 },
     { "tr_m34_stress", 120, 34, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 15, 0.4, 0.02, 1, 0, 0 },
     { "tmax_m60_stress", 500, 60, 2000, 20, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 9, 4, 16, 0.5, 0.01, 1, 0, 0 },
-    /* The two rungs that show where the pair count starts to hurt. The
-       second takes about half a minute per run under the shipped header,
-       so run the stress set with MCS_ROUNDS=1. */
+    /* The rungs that show where the pair count starts to hurt, and the
+       MCS_TMAX rung at the same size. */
     { "tr_m50_stress", 200, 50, 1000, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 17, 5, 17, 0.4, 0.015, 1, 0, 0 },
     { "tr_m120_stress", 200, 120, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 23, 6, 18, 0.4, 0.006, 1, 0, 0 },
+    { "tmax_m120_stress", 200, 120, 500, 15, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 47, 11, 23, 0.4, 0.006, 1, 0, 0 },
     /* Past here the shipped header is the thing that cannot be waited
        for, so only the candidate runs and only its cost is reported.
        Agreement is settled at the rungs above, where both arms fit. */
     { "tr_m250_candidate", 250, 250, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 29, 7, 19, 0.4, 0.003, 1, 1, 1 },
     { "tr_m1000_candidate", 1000, 1000, 2000, 20, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 31, 8, 20, 0.4, 0.001, 1, 1, 1 },
+    { "tmax_m250_candidate", 250, 250, 500, 15, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 29, 7, 19, 0.4, 0.003, 1, 1, 1 },
+    { "tmax_m1000_candidate", 1000, 1000, 2000, 20, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 31, 8, 20, 0.4, 0.001, 1, 1, 1 },
 };
 
 #define N_CASES ((int)(sizeof cases / sizeof cases[0]))
@@ -234,11 +236,19 @@ static double deviation(double a, double b) {
    What the test can and cannot say. It can reject "the two agree in
    mean"; failing to reject is not proof they do, only that the shift is
    under what R replications can resolve, which the reported standard
-   error states. The fraction of replications returning a different
-   surviving set is the more directly readable number, and it is a
-   property of the procedure rather than of this comparison: two valid
-   Monte Carlo estimates of the same p-value disagree about a borderline
-   model some of the time whatever the scheme. */
+   error states. How often the two return the same surviving set is the
+   more directly readable number, and it is a property of the procedure
+   rather than of this comparison: two valid Monte Carlo estimates of the
+   same p-value disagree about a borderline model some of the time
+   whatever the scheme.
+
+   Two rates, because agreeing about the set is less than agreeing about
+   the whole decision. same set compares the surviving models alone; same
+   decision also requires the models outside the set to have left in the
+   same order and the procedure to have stopped the same way. Neither
+   reads the rounds after the deciding one, which exist only to give the
+   survivors their p-values and which a different stream reorders even
+   when the set is the same. */
 static void equivalence_study(int replications, int stream_offset, int stress, FILE *f,
                               long *exact_a, double *real_a, long *exact_b, double *real_b,
                               int exact_cap, int real_cap, double *losses) {
@@ -247,8 +257,8 @@ static void equivalence_study(int replications, int stream_offset, int stress, F
     fprintf(f, "  the two arms are given %s\n",
             stream_offset ? "different streams: this is the Monte Carlo control, not a comparison of versions"
                           : "the same stream, so the comparison is paired");
-    fprintf(f, "  %-18s %10s %10s %12s %10s %9s %9s\n",
-            "case", "mean p cur", "mean p cand", "mean diff", "std error", "t", "same set");
+    fprintf(f, "  %-18s %10s %10s %12s %10s %9s %9s %9s\n",
+            "case", "mean p cur", "mean p cand", "mean diff", "std error", "t", "same set", "same dec.");
 
     MCSArmRun run_a, run_b;
     run_a.exact = exact_a; run_a.real = real_a;
@@ -261,7 +271,7 @@ static void equivalence_study(int replications, int stream_offset, int stress, F
         if (cases[i].candidate_only) continue;
 
         double sum_a = 0, sum_b = 0, sum_delta = 0, sum_delta2 = 0;
-        int same_decision = 0;
+        int same_set = 0, same_decision = 0;
 
         for (int r = 0; r < replications; r++) {
             MCSArmCase c = cases[i];
@@ -288,10 +298,18 @@ static void equivalence_study(int replications, int stream_offset, int stress, F
             sum_delta += delta;
             sum_delta2 += delta * delta;
 
-            int identical = run_a.n_exact == run_b.n_exact;
-            for (int k = 0; identical && k < run_a.n_exact; k++)
-                if (run_a.exact[k] != run_b.exact[k]) identical = 0;
-            same_decision += identical;
+            /* mcs_arm.c writes converged, n_surviving and n_eliminated
+               first, then the surviving models, then the elimination
+               order: m + 3 entries that are the decision, followed by
+               fields this comparison does not read. */
+            int set = run_a.exact[1] == run_b.exact[1];
+            for (int k = 0; set && k < run_a.exact[1]; k++)
+                if (run_a.exact[3 + k] != run_b.exact[3 + k]) set = 0;
+            int decision = set;
+            for (int k = 0; decision && k < 3 + c.m; k++)
+                if (run_a.exact[k] != run_b.exact[k]) decision = 0;
+            same_set += set;
+            same_decision += decision;
         }
 
         double mean_delta = sum_delta / replications;
@@ -299,9 +317,10 @@ static void equivalence_study(int replications, int stream_offset, int stress, F
         if (variance < 0) variance = 0;
         double std_error = sqrt(variance / replications);
         double t = std_error > 0 ? mean_delta / std_error : 0;
-        fprintf(f, "  %-18s %10.4f %10.4f %12.5f %10.5f %9.2f %8.0f%%\n",
+        fprintf(f, "  %-18s %10.4f %10.4f %12.5f %10.5f %9.2f %8.0f%% %8.0f%%\n",
                 cases[i].name, sum_a / replications, sum_b / replications,
-                mean_delta, std_error, t, 100.0 * same_decision / replications);
+                mean_delta, std_error, t, 100.0 * same_set / replications,
+                100.0 * same_decision / replications);
     }
 }
 

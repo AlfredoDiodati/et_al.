@@ -106,7 +106,9 @@ typedef struct {
 typedef struct {
     double coverage;     /* fraction of replications whose set contains M* */
     double mean_set;
-    double mean_first_p;
+    /* mean of final_pvalue: the p-value of the round that decided the
+       set, or of the last round when none did */
+    double mean_final_p;
     int never_converged;
 } Outcome;
 
@@ -143,7 +145,7 @@ static DataFrame simulate(const Design *design, uint64_t seed, char names[][8]) 
 static Outcome run_panel(const Design *design, MCSStat stat, uint64_t base_seed) {
     char names[N_MODELS][8];
     int covered = 0, never = 0;
-    double total_set = 0, total_first_p = 0;
+    double total_set = 0, total_final_p = 0;
 
     for (int r = 0; r < replications; r++) {
         DataFrame losses = simulate(design, base_seed + (uint64_t)r, names);
@@ -164,7 +166,7 @@ static Outcome run_panel(const Design *design, MCSStat stat, uint64_t base_seed)
         else covered += (res.n_surviving == N_MODELS);
 
         total_set += res.n_surviving;
-        total_first_p += res.final_pvalue;
+        total_final_p += res.final_pvalue;
         never += !res.converged;
 
         mcs_free(&res);
@@ -174,7 +176,7 @@ static Outcome run_panel(const Design *design, MCSStat stat, uint64_t base_seed)
     Outcome out;
     out.coverage = (double)covered / replications;
     out.mean_set = total_set / replications;
-    out.mean_first_p = total_first_p / replications;
+    out.mean_final_p = total_final_p / replications;
     out.never_converged = never;
     return out;
 }
@@ -207,14 +209,14 @@ int main(void) {
     fprintf(f, "  MCS's own finite-sample size distortion and not a property of how the\n");
     fprintf(f, "  resamples are drawn - drawing fresh ones every round gives the same rates\n\n");
     fprintf(f, "  %-50s %6s %9s %9s %11s\n",
-            "design", "stat", "coverage", "mean set", "mean first p");
+            "design", "stat", "coverage", "mean set", "mean final p");
 
     int failures = 0;
     for (int d = 0; d < 2; d++)
         for (int s = 0; s < 2; s++) {
             Outcome o = run_panel(&designs[d], stats[s], 4100 + (uint64_t)(10 * d + s));
             fprintf(f, "  %-50s %6s %9.3f %9.2f %11.3f\n",
-                    designs[d].name, stat_names[s], o.coverage, o.mean_set, o.mean_first_p);
+                    designs[d].name, stat_names[s], o.coverage, o.mean_set, o.mean_final_p);
 
             /* Theorem 1's guarantee is asymptotic, and at this sample
                size with this much serial correlation the procedure does

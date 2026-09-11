@@ -1,4 +1,4 @@
-test run: vr 11 sep 2026 11:43:53 CEST
+test run: vr 11 sep 2026 12:41:45 CEST
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -9,10 +9,10 @@ make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
 make: 'tests/correctness/test_lhs' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs.c -lm -lopenblas -o tests/correctness/test_mcs
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs_variance.c -lm -lopenblas -o tests/correctness/test_mcs_variance
+make: 'tests/correctness/test_mcs' is up to date.
+make: 'tests/correctness/test_mcs_variance' is up to date.
 make: 'tests/correctness/mcs_primitives' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/mcs_size_and_power.c -lm -lopenblas -o tests/correctness/mcs_size_and_power
+make: 'tests/correctness/mcs_size_and_power' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
 make: 'tests/correctness/test_student' is up to date.
@@ -258,6 +258,8 @@ mcs_worst_from_tstats: which model the elimination rule drops
 mcs_scratch_new: the keep_draws = 0 shape a HAC-only caller asks for
 an elimination loop over the primitives reproduces mcs(), bit for bit
   11 panels, both statistics, all three variances, exact agreement
+the general path: round one against mcs(), the whole run against itself
+  both statistics under the bootstrap variance, 5 and 9 models
 mcs_write_report: the same text mcs_fwrite_report puts on an open stream
 
 PASSED, 0 failures

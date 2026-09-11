@@ -831,10 +831,13 @@ static void test_mcs_pvalues(void) {
     }
 }
 
-/* The three variance estimates, on one dataset and one stream. Each
-   round draws its block indices the same number of times in the same
-   order whichever estimate is in force, so the resamples are identical
-   across the three and the comparison below is paired. */
+/* The three variance estimates, on one dataset and one stream. The first
+   round draws its blocks the same number of times in the same order
+   whichever estimate is in force, and under the null below the first
+   round decides, so the p-values compared are read off identical
+   resamples and the comparison is paired. From the second round on they
+   would not be: the bootstrap variance reuses the first round's draws
+   and the two HAC variants draw afresh. */
 static void test_mcs_variances(void) {
     puts("mcs: the three variance estimates, on shared draws");
 

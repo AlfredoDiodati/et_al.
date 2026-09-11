@@ -1802,7 +1802,7 @@ core, which is exactly what a model-tier interface change breaks.
 
 **Status: not started.** No numbers, no harness, no baseline format chosen.
 
-## 13. `mcs()` under `MCS_TR` at large `M` (`inference/mcs.h`) - fixed
+## 13. `mcs()` at large `M` (`inference/mcs.h`) - fixed
 
 **What it was.** `mcs_round`'s bootstrap-variance branch walked all `n`
 observations once per differential series per draw. Under `MCS_TR` the series
@@ -1822,7 +1822,7 @@ model count, and which was the larger of the two wins at large `M`.
 
 **Measured**: 2.5x at 8 models, 4.6x at 16, 9.3x at 34, 42x at 50, 228x at 120,
 with 38% to 95% less memory; `MCS_TMAX` and both HAC variants bit-identical and
-unchanged in speed. `docs/MCS_PERFORMANCE_DOCUMENTATION.md` has the mechanism,
+unchanged in speed by that change. `docs/MCS_PERFORMANCE_DOCUMENTATION.md` has the mechanism,
 the full table, the harness that gated it, and three things tried and rejected.
 
 **A second change followed**: one set of resamples for the whole run instead of
@@ -1848,9 +1848,30 @@ It costs more than it saves on short rows, so it is gated at 24 models, which
 is where the loss stops. 1.1x at 32 models, 2.4x at 120, 12.5x at a thousand,
 where the run went from 38.7 seconds to 3.09.
 
+**A fourth change** gave `MCS_TMAX` under the bootstrap variance, the library
+default, what the first three gave `MCS_TR`. It still redrew every round and
+gathered every model's series over every resample, serially. Its deviation
+against the mean of the others is `u_i(b) - (U(b) - u_i(b))/(m-1)`, with `U(b)`
+the sum of the surviving models' per-model deviations, so it reads the same
+shared table; only its spreads are rebuilt per round, from the table. The draws
+are now held as block starts rather than index lists, and the allocator leaves
+out buffers a path never reads. 4.9x at 5 models, 107x at 12 models over 1500
+observations, 137x at 60 models, with less memory on every harness case; a
+thousand models over a thousand observations with 2000 draws runs in 0.88 s and
+23.1 MiB. `MCS_TR` gained 1.01x to 1.55x and now runs that size in 2.96 s and
+103.0 MiB. Gated like the second: mean MCS p-value shift of 0.00005 and 0.00074
+against standard errors of 0.00046 and 0.00077 over 200 paired replications, the
+same set in 100% and 95% of them against 98% and 92% for the same code under
+another stream, and every coverage figure in
+`docs/MCS_RELIABILITY_DOCUMENTATION.md` unchanged when rerun.
+
 **What is left.** `MCS_TR` under the two HAC variants is still quadratic in `M`
 in time and memory: those variants estimate each series' standard error from
-that series, so a pair's number cannot be reached through its two models'.
-Under the bootstrap variance the profile has inverted - 45% one-off precompute,
-35% per-round table fill, 20% exceedance loop - so the largest per-round term
-is now one reciprocal square root per surviving pair per round.
+that series, so a pair's number cannot be reached through its two models'. The
+two HAC variants also run on one thread; the index buffer that made
+parallelising their gather cost memory is gone with the block starts, and it
+has not been measured again. Under `MCS_TR` with the bootstrap variance the
+profile measured after the third change was 45% one-off precompute, 35%
+per-round table fill, 20% exceedance loop, so the largest per-round term is one
+reciprocal square root per surviving pair per round. `MCS_TMAX` has not been
+profiled by phase.

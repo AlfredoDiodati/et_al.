@@ -260,6 +260,15 @@ any future change of that kind, and it is what established that the coverage
 shortfall it reports predates the change. See
 `docs/MCS_RELIABILITY_DOCUMENTATION.md`.
 
+Once both statistics shared their draws under the bootstrap variance, the
+general path under that variance - what a caller's own loop runs when it builds
+`d` and does not set `MCSScratch.losses` - was reached only by
+`test_mcs_variance.c`, one round at a time, and never across an elimination
+or against `mcs()`. `mcs_primitives.c`'s
+`test_general_path` now runs it on both statistics and checks round one against
+`mcs()` and the rest of the run against itself; see
+`docs/MCS_TESTING_DOCUMENTATION.md`.
+
 One thing remains uncovered, and it is a decision rather than an oversight:
 
 - [ ] **`mcs_round` called with `keep_draws = 0` under a variance that needs the

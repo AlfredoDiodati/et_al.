@@ -335,7 +335,7 @@ typedef struct {
     int decided_round;
 } ManualResult;
 
-static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt) {
+static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt, int allow_shared) {
     int n = losses->r, m0 = mcs_n_models(losses);
     int hac_lag = mcs_effective_hac_lag(losses, opt);
     int keep = opt.variance == MCS_VARIANCE_HAC_RESAMPLE ? 0 : opt.bootstrap;
@@ -359,17 +359,18 @@ static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt) {
     int m = m0, decided = 0;
     double best_p = 0;
 
-    /* MCS_TR under the bootstrap variance shares one set of draws across
-       every round, so its scratch carries the per-model resampled means
-       and the per-pair spreads from the first round to the last and has
-       to be allocated once. Every other combination redraws per round
-       and keeps allocating at that round's exact series count, which is
+    /* The bootstrap variance shares one set of draws across every round,
+       under either statistic, so its scratch carries the per-model
+       resampled means, and under MCS_TR the per-pair spreads, from the
+       first round to the last and has to be allocated once. The HAC
+       variants, and every combination when allow_shared is 0, redraw per
+       round and keep allocating at that round's exact series count, which is
        what pins mcs()'s reuse of one first-round allocation to the same
        answer an exactly-sized one gives. */
-    int shared = opt.stat == MCS_TR && opt.variance == MCS_VARIANCE_BOOTSTRAP;
+    int shared = allow_shared && opt.variance == MCS_VARIANCE_BOOTSTRAP;
     MCSScratch shared_sc;
     if (shared) {
-        shared_sc = mcs_scratch_new(n, mcs_n_series(MCS_TR, m0), keep);
+        shared_sc = mcs_scratch_new(n, mcs_n_series(opt.stat, m0), keep);
         shared_sc.losses = all;
         shared_sc.active = active;
         shared_sc.m0 = m0;
@@ -429,7 +430,7 @@ static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt) {
 
 static void compare_to_manual(const DataFrame *losses, MCSOptions opt, const char *label) {
     MCSResult got = mcs(losses, opt);
-    ManualResult want = manual_mcs(losses, opt);
+    ManualResult want = manual_mcs(losses, opt, 1);
 
     CHECK(got.converged == want.converged, "%s: converged", label);
     CHECK(got.n_surviving == want.n_surviving, "%s: %d survivors, want %d",
@@ -479,7 +480,7 @@ static void test_manual_loop_matches_mcs(void) {
     struct { int m; int n; int tr; MCSVariance variance; const char *label; } panels[] = {
         /* Two models is one pair, the one shape where the model count
            exceeds the pair count, so a scratch sized by pairs has fewer
-           per-draw slots in bmean than the shared MCS_TR path needs;
+           per-draw slots in bmean than the shared path needs;
            mcs_scratch_new widens it to two. These panels check that the
            shared tables fit there and that the loop still reproduces
            mcs(), and three models is the first shape with as many pairs
@@ -513,6 +514,84 @@ static void test_manual_loop_matches_mcs(void) {
         df_free(&L);
     }
     printf("  11 panels, both statistics, all three variances, exact agreement\n");
+}
+
+/* The general path under the bootstrap variance: what mcs_round runs
+   for a caller who has not set sc.losses, and what nothing else in this
+   file reaches, because mcs(), mcs_tstats and the loop above all set the
+   losses and take the shared path. test_mcs_variance.c reaches it one round
+   at a time, never across an elimination.
+
+   It cannot be checked against mcs() round for round. The general path
+   draws a fresh set of resamples every round; the shared path draws one
+   set on the first round and reuses it, so from round two on the two see
+   different resamples and their p-values differ by whole draws, which is
+   a difference in procedure rather than in rounding. Round one is where
+   they coincide: both draw opt.bootstrap blocks from a fresh stream in the
+   same order, so the round's statistic has to agree to rounding, its
+   p-value to within one draw that a rounding difference could move across
+   the observed statistic, and the model it drops exactly.
+
+   The rest of the run is checked against itself: the rounds and the model
+   left over are every model exactly once, each MCS p-value is the running
+   maximum of the round p-values up to its model's round, and the deciding
+   round is the first whose p-value reaches alpha. */
+static void test_general_path(void) {
+    puts("the general path: round one against mcs(), the whole run against itself");
+    char names[24][8];
+    struct { int m; int n; int tr; const char *label; } shapes[] = {
+        { 5, 200, 1, "TR, 5 models" },
+        { 9, 160, 1, "TR, 9 models" },
+        { 5, 200, 0, "Tmax, 5 models" },
+        { 9, 160, 0, "Tmax, 9 models" },
+    };
+    for (size_t c = 0; c < sizeof shapes / sizeof shapes[0]; c++) {
+        DataFrame L = simulate(shapes[c].n, shapes[c].m, 0.05, 0.5, (uint64_t)(6100 + c), names);
+        MCSOptions o = mcs_options_default();
+        o.bootstrap = 250;
+        o.block_length = 8;
+        o.stat = shapes[c].tr ? MCS_TR : MCS_TMAX;
+        o.variance = MCS_VARIANCE_BOOTSTRAP;
+        o.seed = 913 + c;
+        o.stream = c;
+        const char *label = shapes[c].label;
+
+        MCSResult r = mcs(&L, o);
+        ManualResult g = manual_mcs(&L, o, 0);
+        int m0 = r.m0, rounds = m0 - 1;
+
+        CHECK_CLOSE(g.round_statistic[0], r.round_statistic[0], 1e-12, label);
+        CHECK(fabs(g.round_pvalue[0] - r.round_pvalue[0]) <= 1.0 / o.bootstrap + 1e-12,
+              "%s: round one p-value %.4f on the general path, %.4f from mcs()",
+              label, g.round_pvalue[0], r.round_pvalue[0]);
+        CHECK(g.round_eliminated[0] == r.round_eliminated[0],
+              "%s: round one dropped model %d on the general path, %d from mcs()",
+              label, g.round_eliminated[0], r.round_eliminated[0]);
+
+        int left_over = 0, seen[64] = { 0 };
+        for (int j = 0; j < m0; j++) {
+            int round = g.elimination_round[j];
+            CHECK(round >= 0 && round <= rounds, "%s: model %d left in round %d", label, j, round);
+            if (round == 0) { left_over++; continue; }
+            CHECK(g.round_eliminated[round - 1] == j, "%s: round %d does not name model %d", label, round, j);
+            seen[round - 1]++;
+            double running = 0;
+            for (int k = 0; k < round; k++)
+                if (g.round_pvalue[k] > running) running = g.round_pvalue[k];
+            CHECK(g.pvalue[j] == running, "%s: model %d MCS p-value is not the running maximum", label, j);
+        }
+        CHECK(left_over == 1, "%s: %d models left over", label, left_over);
+        for (int k = 0; k < rounds; k++) CHECK(seen[k] == 1, "%s: round %d dropped %d models", label, k + 1, seen[k]);
+        int first_accepted = 0;
+        for (int k = 0; k < rounds && !first_accepted; k++)
+            if (g.round_pvalue[k] >= o.alpha) first_accepted = k + 1;
+        CHECK(g.decided_round == first_accepted, "%s: decided in round %d, first accepted round is %d",
+              label, g.decided_round, first_accepted);
+
+        mcs_free(&r);
+        df_free(&L);
+    }
+    printf("  both statistics under the bootstrap variance, 5 and 9 models\n");
 }
 
 static void test_write_report_matches_the_stream_writer(void) {
@@ -595,6 +674,7 @@ int main(void) {
     test_worst_from_tstats();
     test_scratch_without_draws();
     test_manual_loop_matches_mcs();
+    test_general_path();
     test_write_report_matches_the_stream_writer();
     test_manual_loop_stress();
     return check_report();

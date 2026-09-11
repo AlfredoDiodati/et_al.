@@ -50,12 +50,14 @@ Two panels. Under the **complete null** every model has the same expected loss, 
 
 At the default design — `T = 250`, 300 resamples, blocks of 10, `phi = 0.5`:
 
-| panel | statistic | coverage | mean set size | mean first-round p |
+| panel | statistic | coverage | mean set size | mean final p |
 |---|---|---|---|---|
-| complete null | `MCS_TMAX` | 0.920 | 4.92 of 5 | 0.463 |
+| complete null | `MCS_TMAX` | 0.920 | 4.92 of 5 | 0.464 |
 | complete null | `MCS_TR` | 0.890 | 4.85 of 5 | 0.438 |
-| one model better | `MCS_TMAX` | 1.000 | 3.24 of 5 | 0.087 |
+| one model better | `MCS_TMAX` | 1.000 | 3.18 of 5 | 0.086 |
 | one model better | `MCS_TR` | 1.000 | 1.17 of 5 | 0.012 |
+
+The last column is the mean of `MCSResult.final_pvalue`, the p-value of the round that decided the set, or of the last round in a replication where none did.
 
 Power is not in question: the better model is kept in every replication under both statistics, and `MCS_TR` narrows to essentially that model alone. Coverage under the complete null is what falls short — 0.920 and 0.890 against a nominal 0.95. The set is somewhat **too small**: it drops models it does not really have evidence against, more often than the stated 5%.
 
@@ -104,7 +106,7 @@ So this is a genuine approximation error that disappears with data rather than a
 ## What to do about it
 
 - **Read a small-sample confidence set as a lower bound on the set.** At a few hundred correlated observations it is too small rather than too large, so a model it excluded is less firmly excluded than `alpha` suggests. A model it *kept* is kept honestly.
-- **Choose between `MCS_TMAX` and `MCS_TR` on the size of the field, not on coverage alone.** `MCS_TMAX` is closer to nominal at every design measured here, because its maximum is over `M` contrasts rather than over `M(M-1)/2`. But it buys that by losing power as the field grows: at ten models it returns 9.4 of them under an alternative where one is clearly best, and at eighty it returns 79.5 — a set that covers because it eliminates almost nobody is not an answer. `MCS_TR` keeps real power there (1.5 of 10, 23.8 of 80) and pays for it in coverage. The model-count panel below has the trade-off measured across the field size; neither statistic is simply the better one.
+- **Choose between `MCS_TMAX` and `MCS_TR` on the size of the field, not on coverage alone.** `MCS_TMAX` is closer to nominal at every design measured here, because its maximum is over `M` contrasts rather than over `M(M-1)/2`. But it buys that by losing power as the field grows: at ten models it returns 9.3 of them under an alternative where one is clearly best, and at eighty it returns 79.55 — a set that covers because it eliminates almost nobody is not an answer. `MCS_TR` keeps real power there (1.5 of 10, 23.8 of 80) and pays for it in coverage. The model-count panel below has the trade-off measured across the field size; neither statistic is simply the better one.
 - **Raise `block_length` with `T`, not on its own.** The cube-root rule above is what the sweep supports; raising the block at a fixed `T` made coverage worse, not better.
 - **Do not raise `opt.bootstrap` expecting this to improve.** It will not. Raise it to reduce the Monte Carlo noise in a p-value, which is a different problem with a different symptom — a p-value that moves when you change `opt.stream`.
 
@@ -114,7 +116,7 @@ The study above carries assertions on one design. This one carries none and
 maps the space around it, one factor at a time from a common baseline of
 `T = 250`, 5 models, 300 resamples, blocks of 10, `phi = 0.5`, `alpha = 0.05`,
 400 replications per cell. It writes `out/mcs_settings_study.txt` and takes
-about half an hour, so it is outside `make test`:
+about 50 seconds on 16 cores, so it is outside `make test`:
 
 ```bash
 make study-mcs_settings
@@ -189,15 +191,15 @@ an alternative where model 0 is better by 0.6 noise standard deviations, at
 |---|---|---|---|---|---|---|
 | 2 | 1 | 400 | 0.900 | 0.900 | 1.03 | 1.03 |
 | 5 | 10 | 400 | 0.920 | 0.873 | 3.02 | 1.14 |
-| 10 | 45 | 400 | 0.850 | 0.787 | 9.40 | 1.54 |
+| 10 | 45 | 400 | 0.850 | 0.787 | 9.34 | 1.54 |
 | 20 | 190 | 400 | 0.802 | 0.650 | 19.64 | 3.06 |
-| 40 | 780 | 150 | 0.820 | 0.547 | 39.71 | 9.82 |
-| 80 | 3160 | 60 | 0.700 | 0.333 | 79.48 | 23.78 |
+| 40 | 780 | 150 | 0.820 | 0.547 | 39.69 | 9.82 |
+| 80 | 3160 | 60 | 0.700 | 0.333 | 79.55 | 23.78 |
 
 This is the sharpest result in the study and it cuts both ways. `MCS_TR`'s
 coverage collapses - at eighty models it eliminates a model it has no evidence
 against two times in three. `MCS_TMAX` holds coverage far better, but only by
-eliminating almost nobody: 79.5 of 80 returned when one model is genuinely
+eliminating almost nobody: 79.55 of 80 returned when one model is genuinely
 best is not an answer either. Neither statistic is the better one; they fail
 differently, and which failure is tolerable is the caller's question.
 
@@ -232,6 +234,6 @@ sample.
 
 ## What this is not
 
-**It is not caused by sharing the bootstrap draws across elimination rounds.** That change is described in `docs/MCS_PERFORMANCE_DOCUMENTATION.md`, and the version that drew fresh resamples every round was run through this same study: it returns 0.920 and 0.890 under the complete null and 1.000 and 1.000 under the alternative, identical to three decimals. Establishing that was the point of writing the study, since a change that moves p-values cannot be judged by comparing p-values.
+**It is not caused by sharing the bootstrap draws across elimination rounds.** That change is described in `docs/MCS_PERFORMANCE_DOCUMENTATION.md`, Fix 2 for `MCS_TR` and Fix 4 for `MCS_TMAX`, and the versions that drew fresh resamples every round were run through this same study: they return 0.920 and 0.890 under the complete null and 1.000 and 1.000 under the alternative, identical to three decimals. Establishing that was the point of writing the study, since a change that moves p-values cannot be judged by comparing p-values. Under the complete null this is expected rather than lucky: a replication covers only if the first round accepts, and the first round sees the same draws under either scheme. After Fix 4 every table in this file was rerun, and no coverage figure moved. What moved reads rounds after the first: `MCS_TMAX`'s mean set under the alternative, 3.24 to 3.18 at the default design and by at most 0.07 of a model in the model-count panel, and its mean final p-value by 0.001.
 
 **It is not a claim about any other design.** Five models, independent AR(1) losses of equal variance, one loss function, `alpha = 0.05`. Real loss series are correlated *across* models as well as across time, which this design deliberately does not have, and a confidence set over 200 models is a maximum over far more contrasts than over 5. Neither is measured here; both would be worth measuring before relying on a number from a run shaped like that.

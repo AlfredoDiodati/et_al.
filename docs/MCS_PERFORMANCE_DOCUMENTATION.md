@@ -1,6 +1,6 @@
 # `inference/mcs.h` performance: the candidate harness and what it has changed
 
-`docs/MCS_DOCUMENTATION.md` is the header's reference and is read while writing a call; `docs/MCS_TESTING_DOCUMENTATION.md` says what each of its suites checks. This file is read while changing the implementation, or while deciding whether a run of a given size is going to finish. It holds the harness that compares two versions of the header, the one change that has gone through it, and what was tried and rejected on the way.
+`docs/MCS_DOCUMENTATION.md` is the header's reference and is read while writing a call; `docs/MCS_TESTING_DOCUMENTATION.md` says what each of its suites checks. This file is read while changing the implementation, or while deciding whether a run of a given size is going to finish. It holds the harness that compares two versions of the header, the changes that have gone through it, and what was tried and rejected on the way.
 
 The split follows `README.md`'s documentation-structure policy, by when a reader needs the content rather than by size alone — the same ground on which `inference/unit_root.h`'s break tests and `sd/qvarma.h`'s reliability limits sit in files of their own.
 
@@ -27,11 +27,11 @@ The candidate belongs in `inference/` beside the header it would replace: it is 
 
 The same comparison checked outside the harness at a thousand models, 12 alternating pairs of two separately built binaries, gave a median ratio of 0.994 and a mean difference of -14 ms against a pair-to-pair standard deviation of 124 ms: at that size this machine's run-to-run spread is about 3%, and four pairs that happened to line up had first suggested a consistent 1%.
 
-**Past a few hundred models the rungs run the candidate alone**, behind `MCS_HUGE=1`; agreement is established at the rungs where both arms fit and only cost is carried upward. They were made candidate-only when the header being replaced took tens of minutes on one such case. That reason no longer holds for the shipped header, which runs the thousand-model rung in about three seconds, so a paired run there would now cost about twelve seconds a round rather than hours; the rungs have not been changed to paired. They also skip fingerprinting `mcs_tstats`/`mcs_statistic`/`mcs_worst`, which allocate their own scratch sized by the pair count and the draw count together — eight gigabytes at a thousand models, for a fingerprint nobody reads at that size.
+**Past a few hundred models the rungs run the candidate alone**, behind `MCS_HUGE=1`; agreement is established at the rungs where both arms fit and only cost is carried upward. They were made candidate-only when the header being replaced took tens of minutes on one such case. That reason no longer holds for the shipped header, which runs the thousand-model rungs in about three seconds under `MCS_TR` and under one under `MCS_TMAX`, so a paired run there would now cost seconds a round rather than hours; the rungs have not been changed to paired. They also skip fingerprinting `mcs_tstats`/`mcs_statistic`/`mcs_worst`, which allocate their own scratch sized by the pair count and the draw count together — eight gigabytes at a thousand models, for a fingerprint nobody reads at that size.
 
 **Running it with no `MCS_CANDIDATE` builds both arms from `inference/mcs.h`**, which is the harness checking itself: two objects from the same source against the same header must agree bit for bit on every case and time within noise. That it detects a difference was also checked directly, with a copy of the header whose bootstrap variance divided by `opt.bootstrap - 1` — one character. The four bootstrap-variance cases came back `DIFFERS` at deviations of `1/(2B)` at each case's draw count and the three HAC cases stayed identical. Worth noting what that run did *not* show: not one p-value moved and not one confidence set changed, because the observed statistic and every bootstrap statistic are scaled by the same factor. A harness comparing only which models survived would have called that candidate correct.
 
-**The modes it has.** By default it times and compares. `STRESS=1` adds the wider model counts; `MCS_HUGE=1` adds the candidate-only rungs; `MCS_ROUNDS` sets how many measured rounds follow the discarded warmup, which candidate-only cases skip because against a run of minutes a cold start is not a measurable share of it. `MCS_EQUIV=<replications>`, at two or more, replaces the whole timing run with the paired equivalence study described under **Fix 2**, and `MCS_EQUIV_OFFSET` gives the second arm a different bootstrap stream, which turns that study into its own control.
+**The modes it has.** By default it times and compares. `STRESS=1` adds the wider model counts; `MCS_HUGE=1` adds the candidate-only rungs; `MCS_ROUNDS` sets how many measured rounds follow the discarded warmup, which candidate-only cases skip because against a run of minutes a cold start is not a measurable share of it. `MCS_EQUIV=<replications>`, at two or more, replaces the whole timing run with the paired equivalence study described under **Fix 2**, and `MCS_EQUIV_OFFSET` gives the second arm a different bootstrap stream, which turns that study into its own control. The study reports two agreement rates per case. *Same set* counts the replications in which both arms return the same surviving models. *Same decision* also requires the same `converged` flag and the models outside the set to have left in the same order. Neither reads the rounds after the deciding one, which exist only to give the surviving models their p-values.
 
 **The correctness half.** `make test-mcs-candidate MCS_CANDIDATE=<header>` runs all four MCS suites against a candidate instead of the shipped header — `test_mcs`, `test_mcs_variance`, `mcs_primitives` and `mcs_size_and_power`, built beside the ordinary binaries with a `_candidate` suffix so a candidate run never leaves a stale binary where `make test` looks for one. That is the gate a candidate passes before its speed is worth reading, and for a change that moves p-values it is most of the gate there is.
 
@@ -64,23 +64,11 @@ Every `MCS_TMAX` case and both HAC variants are bit-identical. The five factored
 
 ## Fix 2: one set of resamples for the whole run
 
-**What it was.** `mcs_round` drew `opt.bootstrap` fresh block index sets every
-time it was called, and it is called once per elimination round, so a thousand
-models meant a thousand fresh sets. Everything built from those draws - the
-per-model resampled deviations and every pair's spread - therefore had to be
-rebuilt each round too, which is `opt.bootstrap * n * sum_m m` gathers and
-`opt.bootstrap * C(m0+1, 3)` squared deviations over a run.
+**What it was.** `mcs_round` drew `opt.bootstrap` fresh block index sets every time it was called, and it is called once per elimination round, so a thousand models meant a thousand fresh sets. Everything built from those draws - the per-model resampled deviations and every pair's spread - therefore had to be rebuilt each round too, which is `opt.bootstrap * n * sum_m m` gathers and `opt.bootstrap * C(m0+1, 3)` squared deviations over a run.
 
-**Why the replacement is faster.** The resampling is of observations, and an
-observation does not change when a model is eliminated. So with one set of
-draws for the whole run neither quantity depends on which models are still in
-the set: both are formed once, on the first round, and every later round is a
-scan over the surviving pairs with no gather in it at all. `MCSScratch.d` and
-the per-round copy of the surviving columns both stop being needed.
+**Why the replacement is faster.** The resampling is of observations, and an observation does not change when a model is eliminated. So with one set of draws for the whole run neither quantity depends on which models are still in the set: both are formed once, on the first round, and every later round is a scan over the surviving pairs with no gather in it at all. `MCSScratch.d` and the per-round copy of the surviving columns both stop being needed.
 
-This is also what the paper and the common implementations do, and it is the
-better choice on its own terms: redrawing per round injects variation into the
-sequence of p-values that has nothing to do with the data.
+This is also what the paper and the common implementations do, and it is the better choice on its own terms: redrawing per round injects variation into the sequence of p-values that has nothing to do with the data.
 
 **Measured.** Against the version that redrew, on the same cases:
 
@@ -91,84 +79,39 @@ sequence of p-values that has nothing to do with the data.
 | `tr_m250_candidate` | 250 | 250 | 500 | 6.4x | 6.5 MiB | 6.5 MiB |
 | `tr_m1000_candidate` | 1000 | 1000 | 2000 | 15.8x | 110.9 MiB | 103.2 MiB |
 
-`MCS_TMAX` and both HAC variants are bit-identical and unchanged in speed, as
-before: they still redraw per round, because neither factorisation applies to
-them.
+`MCS_TMAX` and both HAC variants were bit-identical and unchanged in speed under this change: they still redrew per round. For the two HAC variants the factorisation cannot apply, because each series is divided by a standard error estimated from that series. For `MCS_TMAX` it can, and **Fix 4** applies it.
 
-**What it costs, and how that was established.** This one does not agree with
-what it replaced, and cannot: it changes which resamples a round after the
-first sees, so p-values move by whole bootstrap draws rather than by rounding.
-On one dataset and one stream, 34 of 1000 draws and 54 of 1500 changed side.
-Comparing two such runs says nothing about whether either is right, so the
-gate for this change was a different one.
+**What it costs, and how that was established.** This one does not agree with what it replaced, and cannot: it changes which resamples a round after the first sees, so p-values move by whole bootstrap draws rather than by rounding. On one dataset and one stream, 34 of 1000 draws and 54 of 1500 changed side. Comparing two such runs says nothing about whether either is right, so the gate for this change was a different one.
 
-*Do they agree as estimators?* `MCS_EQUIV=200 make bench-mcs_candidates
-MCS_CANDIDATE=<the previous header>` runs 200 replications, each its own
-dataset and its own bootstrap stream, both arms given the same, and reports the
-paired difference in mean MCS p-value against its standard error. Paired
-matters: the two arms share their first round's draws by construction, so an
-unpaired comparison would be far less able to see a real shift.
+*Do they agree as estimators?* `MCS_EQUIV=200 make bench-mcs_candidates MCS_CANDIDATE=<the previous header>` runs 200 replications, each its own dataset and its own bootstrap stream, both arms given the same, and reports the paired difference in mean MCS p-value against its standard error. Paired matters: the two arms share their first round's draws by construction, so an unpaired comparison would be far less able to see a real shift.
 
-| case | mean p, shared | mean p, per-round | paired difference | std error | t | same set |
+| case | mean p, shared | mean p, per-round | paired difference | std error | t | same decision |
 |---|---|---|---|---|---|---|
 | `tr_bootstrap` | 0.3842 | 0.3839 | 0.00024 | 0.00070 | 0.34 | 82% |
 | `tr_wide` | 0.5405 | 0.5415 | -0.00103 | 0.00070 | -1.47 | 82% |
 
-*Is 82% low?* That is the wrong question without a control, and the harness
-provides one: `MCS_EQUIV_OFFSET` gives the second arm a different bootstrap
-stream, so with both arms built from the same header it measures how often two
-Monte Carlo estimates of the same p-value disagree about the set at all.
+The last column was labelled "same set" when it was measured. At that time the harness counted a replication as agreeing only when the whole discrete result matched: the surviving set, the elimination order up to the deciding round, the `converged` flag, and three values that could not differ between the arms - the model `mcs_worst` names, which reads only the first round's draws, the Diebold-Mariano status, which uses no draws, and a hash of the result's name copies, which follows from the set and the order. So the column is the same decision rate defined above. The looser same-set rate was not measured for this change.
 
-| case | same set, the change | same set, same code under a different stream |
+*Is 82% low?* That is the wrong question without a control, and the harness provides one: `MCS_EQUIV_OFFSET` gives the second arm a different bootstrap stream, so with both arms built from the same header it measures how often two Monte Carlo estimates of the same p-value disagree about the decision at all.
+
+| case | same decision, the change | same decision, same code under a different stream |
 |---|---|---|
 | `tr_bootstrap` | 82% | 78% |
 | `tr_wide` | 82% | 70% |
 
-Sharing the draws changes the answer *less* than rerunning the same code with a
-different seed does. The mean-difference column is indistinguishable from zero
-in both the comparison and the control, at `|t| <= 1.84` throughout.
+Sharing the draws changes the answer *less* than rerunning the same code with a different seed does. The mean-difference column is indistinguishable from zero in both the comparison and the control, at `|t| <= 1.84` throughout.
 
-*Is it still a valid confidence set?* `tests/correctness/mcs_size_and_power.c`
-is the standing gate rather than a one-off, and it was written for this change:
-a change that moves p-values cannot be judged by comparing p-values, so what it
-checks instead is Theorem 1's coverage guarantee by simulation. Coverage is
-unchanged to three decimals against the version that redrew - 0.920 for
-`MCS_TMAX` and 0.890 for `MCS_TR` under the complete null in both, against a
-nominal 0.95, and 1.000 for both under an alternative with one strictly best
-model. That shortfall is the MCS's own finite-sample approximation error rather
-than an artefact of either scheme, which is what running both versions through
-the same study established; `docs/MCS_RELIABILITY_DOCUMENTATION.md` traces it to
-the block bootstrap's handling of serial correlation and rules out the resample
-count.
+*Is it still a valid confidence set?* `tests/correctness/mcs_size_and_power.c` is the standing gate rather than a one-off, and it was written for this change: a change that moves p-values cannot be judged by comparing p-values, so what it checks instead is Theorem 1's coverage guarantee by simulation. Coverage is unchanged to three decimals against the version that redrew - 0.920 for `MCS_TMAX` and 0.890 for `MCS_TR` under the complete null in both, against a nominal 0.95, and 1.000 for both under an alternative with one strictly best model. That shortfall is the MCS's own finite-sample approximation error rather than an artefact of either scheme, which is what running both versions through the same study established; `docs/MCS_RELIABILITY_DOCUMENTATION.md` traces it to the block bootstrap's handling of serial correlation and rules out the resample count.
 
 ## Fix 3: skipping the rows of a draw that cannot exceed
 
-**Where the time was, measured rather than assumed.** With the draws shared,
-a phase clock around each of the three phases of the factored path at
-`T = 1000`, `M = 1000`, 2000 draws put the split at 3.4% in the one-off
-precompute, 5.6% in the per-round table fill and **91.1% in the exceedance
-loop** - 34.8 seconds of 38.7. Nothing else was worth looking at.
+**Where the time was, measured rather than assumed.** With the draws shared, a phase clock around each of the three phases of the factored path at `T = 1000`, `M = 1000`, 2000 draws put the split at 3.4% in the one-off precompute, 5.6% in the per-round table fill and **91.1% in the exceedance loop** - 34.8 seconds of 38.7. Nothing else was worth looking at.
 
-**What that loop was doing.** For each draw it walked the surviving pairs
-until one exceeded the observed statistic, which over a run is
-`opt.bootstrap * C(m0+1, 3)` pair visits - `3.3e11` at a thousand models. The
-early exit helps least where it is needed most: a round that rejects is one
-where few draws exceed, so few draws exit early and most scan every pair.
+**What that loop was doing.** For each draw it walked the surviving pairs until one exceeded the observed statistic, which over a run is `opt.bootstrap * C(m0+1, 3)` pair visits - `3.3e11` at a thousand models. The early exit helps least where it is needed most: a round that rejects is one where few draws exceed, so few draws exit early and most scan every pair.
 
-**Why the replacement is faster.** Model `i`'s largest possible deviation
-against any other surviving model is its distance to whichever extreme of the
-draw is further away, and every pair in its row divides by at least that row's
-smallest standard error. If that product still falls short of the observed
-statistic then no pair in the row can exceed it, and the row is skipped
-without being entered. The test is exact, not a heuristic: it skips only rows
-that provably contain nothing, so the exceedance count is the same count and
-every result is bit-for-bit what it was. It costs one comparison per row plus
-one pass over the draw to find its extremes, against the `m(m-1)/2` visits it
-replaces.
+**Why the replacement is faster.** Model `i`'s largest possible deviation against any other surviving model is its distance to whichever extreme of the draw is further away, and every pair in its row divides by at least that row's smallest standard error. If that product still falls short of the observed statistic then no pair in the row can exceed it, and the row is skipped without being entered. The test is exact, not a heuristic: it skips only rows that provably contain nothing, so the exceedance count is the same count and every result is bit-for-bit what it was. It costs one comparison per row plus one pass over the draw to find its extremes, against the `m(m-1)/2` visits it replaces.
 
-**It does not pay at every size**, and is gated on a measured threshold rather
-than applied always. Against the unpruned scan, `MCS_TR` under the bootstrap
-variance:
+**It does not pay at every size**, and is gated on a measured threshold rather than applied always. Against the unpruned scan, `MCS_TR` under the bootstrap variance:
 
 | models | speedup |
 |---|---|
@@ -179,11 +122,7 @@ variance:
 | 120 | 2.3x |
 | 1000 | 12.1x |
 
-Short rows do not repay the row test, so `MCS_ROW_PRUNE_MIN_MODELS` is 24 -
-where the loss stops, not where the gain becomes large. With the gate in
-place no case in the harness reads as slower: the one that measures below
-1.00x, `tr_wide` at 16 models, comes back at 0.958 under one ordering and
-1.015 under the other, which is the harness declining to call it a difference.
+Short rows do not repay the row test, so `MCS_ROW_PRUNE_MIN_MODELS` is 24 - where the loss stops, not where the gain becomes large. With the gate in place no case in the harness reads as slower: the one that measures below 1.00x, `tr_wide` at 16 models, comes back at 0.958 under one ordering and 1.015 under the other, which is the harness declining to call it a difference.
 
 **Measured**, with the gate, best of three rounds after a discarded warmup:
 
@@ -195,74 +134,124 @@ place no case in the harness reads as slower: the one that measures below
 | `tr_m120_stress` | 200 | 120 | 500 | 2.41x |
 | `tr_m1000_candidate` | 1000 | 1000 | 2000 | **12.5x** (38.7s to 3.09s) |
 
-All thirteen A/B cases come back `identical`, which is the gate this change
-had to pass and did: an exact prune changes no number anywhere.
+All thirteen A/B cases come back `identical`, which is the gate this change had to pass and did: an exact prune changes no number anywhere.
 
-**What the profile looks like now.** At a thousand models the exceedance loop
-is 0.585 seconds against 34.8, and the split has inverted - 45% precompute,
-35% per-round table fill, 20% exceedances. The next change to this path, if
-there is one, belongs in the per-round table fill, which is
-`O(m(m-1)/2)` reciprocal square roots per round and is now the largest
-per-round term.
+**What the profile looks like now.** At a thousand models the exceedance loop is 0.585 seconds against 34.8, and the split has inverted - 45% precompute, 35% per-round table fill, 20% exceedances. The next change to this path, if there is one, belongs in the per-round table fill, which is `O(m(m-1)/2)` reciprocal square roots per round and is now the largest per-round term.
+
+## Fix 4: `MCS_TMAX` on the shared path
+
+**What it was.** Fixes 1 to 3 applied only to `MCS_TR`. `MCS_TMAX` under the bootstrap variance, which is the library default, still took the general path: each round built the `m` differential series of the surviving models, drew `opt.bootstrap` fresh resamples, and gathered every series over every resample, serially. That is `opt.bootstrap * n * m` gathered additions per round and `opt.bootstrap * n * (C(m0+1, 2) - 1)` over a run.
+
+**Why the replacement is faster.** The per-model table Fix 2 builds serves this statistic too. Model `i`'s differential against the mean of the others is `d_i(t) = L(t,i) - (S(t) - L(t,i))/(m-1)`, with `S(t)` the sum over the surviving models, and a resampled mean is linear in the observations, so the null-imposed bootstrap deviation is
+
+```
+e_i(b) = u_i(b) - (U(b) - u_i(b)) / (m-1),    U(b) = sum of u_j(b) over the surviving models
+```
+
+with `u` the same per-model deviations `MCS_TR` reads. Unlike a pair's spread, `e` depends on who survives, through `m` and `U(b)`, so the variances are rebuilt every round - but from the table, at `opt.bootstrap * m` additions rather than `opt.bootstrap * m * n` gathers. The round then scans the draws for an exceedance, stopping at the first model that exceeds. `U(b)` is stored per draw while the variances are built and read back in the scan (`MCSScratch.draw_total`).
+
+**Two memory changes that came with it.** Sharing the draws means holding a chunk of draws before the parallel gather. As index lists that was `4 * 64 * n` bytes, 62.5 KiB at `tmax_bootstrap`'s 250 observations, and the first build that held them read that case at 52% more memory than production. The chunk now holds one block start per block, `4 * 64 * ceil(n / block_length)` bytes; a draw is expanded into its observations inside the gather. This is exact: every `MCS_TR` case stayed `identical` through it.
+
+The allocator also stopped allocating buffers for paths that never read them: the three per-observation buffers only exist alongside `d`, the shared tables only when the draw chunk does, the pair spreads and row bounds only under `MCS_TR`, and the per-draw totals only under `MCS_TMAX`. Against the same candidate with every buffer allocated, all 14 cases below came back `identical` at unchanged speed, with the allocation high-water mark 0.2% to 8.7% lower (`STRESS=1 MCS_ROUNDS=4`). Without it `tmax_bootstrap` was the one case using more memory than production, 115.9 KiB against 113.5.
+
+**Gate 1: the arithmetic alone.** Built with `-DMCS_CANDIDATE_TMAX_REDRAW`, a switch that existed only during the evaluation, the candidate discarded its table after every round and redrew, which is the resampling production does. Any difference from production is then rounding. `STRESS=1 MCS_ROUNDS=2`, all 14 cases: the four `MCS_TMAX` bootstrap cases were `equivalent`, at a largest relative deviation of `4.3e-15` (`tmax_bootstrap`), `1.2e-14` (`tmax_long`), `1.7e-14` (`tmax_m60_stress`) and `8.4e-15` (`tmax_m120_stress`), with zero p-value flips. The other ten were `identical`.
+
+**Gate 2: cost against production.** `STRESS=1 MCS_HUGE=1 MCS_ROUNDS=6`, both arms in one binary, `float32` element build, 16 cores, best of six rounds after a discarded warmup. Time covers the `mcs()` call only; memory is the exact allocation high-water mark. `alpha = 0.05` everywhere.
+
+| case | T | M | draws | block | variance | before | after | speedup | peak before | peak after |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `tmax_bootstrap` | 250 | 5 | 2000 | 10 | bootstrap | 6.29 ms | 1.28 ms | 4.90x | 113.5 KiB | 110.9 KiB |
+| `tmax_long` | 1500 | 12 | 1500 | 25 | bootstrap | 138.2 ms | 1.29 ms | 107x | 594.8 KiB | 310.8 KiB |
+| `tmax_m60_stress` | 500 | 60 | 2000 | 20 | bootstrap | 1328 ms | 9.67 ms | 137x | 1665.5 KiB | 1207.9 KiB |
+| `tmax_m120_stress` | 200 | 120 | 500 | 15 | bootstrap | 503.1 ms | 8.42 ms | 59.8x | 1065.4 KiB | 692.0 KiB |
+| `tr_bootstrap` | 300 | 8 | 1000 | 12 | bootstrap | 1.29 ms | 0.83 ms | 1.55x | 167.4 KiB | 92.8 KiB |
+| `tr_wide` | 200 | 16 | 1500 | 10 | bootstrap | 2.03 ms | 1.58 ms | 1.28x | 287.5 KiB | 238.6 KiB |
+| `tr_m24_stress` | 200 | 24 | 2000 | 12 | bootstrap | 2.81 ms | 2.15 ms | 1.31x | 513.8 KiB | 464.1 KiB |
+| `tr_m32_stress` | 200 | 32 | 2000 | 12 | bootstrap | 2.77 ms | 2.15 ms | 1.29x | 688.1 KiB | 638.4 KiB |
+| `tr_m34_stress` | 120 | 34 | 2000 | 12 | bootstrap | 3.24 ms | 2.59 ms | 1.25x | 690.5 KiB | 660.6 KiB |
+| `tr_m50_stress` | 200 | 50 | 1000 | 15 | bootstrap | 2.47 ms | 2.17 ms | 1.14x | 728.0 KiB | 677.6 KiB |
+| `tr_m120_stress` | 200 | 120 | 500 | 15 | bootstrap | 7.45 ms | 7.37 ms | 1.01x | 1892.1 KiB | 1841.7 KiB |
+| `tmax_hac` | 250 | 5 | 2000 | 10 | HAC | 6.29 ms | 6.29 ms | 1.00x | 113.5 KiB | 112.8 KiB |
+| `tmax_hac_resample` | 250 | 5 | 500 | 10 | HAC resample | 3.97 ms | 3.95 ms | 1.00x | 35.4 KiB | 34.6 KiB |
+| `tr_hac` | 300 | 8 | 1000 | 12 | HAC | 18.9 ms | 18.9 ms | 1.00x | 333.3 KiB | 328.9 KiB |
+
+Every case uses less memory. The timing order check - the median within-pair ratio under each ordering - read "candidate faster" on the four `MCS_TMAX` bootstrap cases and on five of the seven `MCS_TR` bootstrap cases, and "no difference this machine can measure" on `tr_m120_stress` and the three HAC cases. `tr_m24_stress` came back at 1.365 under one ordering and 1.092 under the other, faster in both but too far apart to quote. On the `MCS_TR` path the only changes are the gather reading block starts instead of one index per observation, and the allocation, which the A/B above measured at unchanged speed; the gain was not measured for the block starts in isolation.
+
+The four `MCS_TMAX` bootstrap cases are `DIFFERS` in this gate, as they must be: from the second round on they see different resamples. On one dataset and one stream 16, 357, 228 and 65 draws changed side, summed over all rounds of `tmax_bootstrap`, `tmax_long`, `tmax_m60_stress` and `tmax_m120_stress`. Every other case is `identical`.
+
+**Gate 3: the same procedure?** As for Fix 2, `MCS_EQUIV=200`: 200 replications, each its own dataset and bootstrap stream, both arms given the same, over the seven default cases.
+
+| case | mean p, production | mean p, shared | paired difference | std error | t | same set | same decision |
+|---|---|---|---|---|---|---|---|
+| `tmax_bootstrap` | 0.6180 | 0.6180 | 0.00005 | 0.00046 | 0.10 | 100% | 100% |
+| `tmax_long` | 0.4198 | 0.4191 | 0.00074 | 0.00077 | 0.96 | 95% | 92% |
+
+The other five cases were identical in every replication (difference 0, 100% and 100%). The control, the shared header against itself with the second arm's stream offset by 10000:
+
+| case | same set | same decision | paired difference | t |
+|---|---|---|---|---|
+| `tmax_bootstrap` | 98% | 98% | -0.00050 | -0.71 |
+| `tmax_long` | 92% | 84% | -0.00018 | -0.25 |
+| `tmax_hac` | 99% | 99% | -0.00079 | -1.52 |
+| `tmax_hac_resample` | 98% | 98% | -0.00034 | -0.33 |
+| `tr_bootstrap` | 86% | 78% | 0.00022 | 0.28 |
+| `tr_hac` | 90% | 90% | -0.00012 | -0.26 |
+| `tr_wide` | 82% | 73% | -0.00158 | -1.84 |
+
+As with `MCS_TR`, sharing the draws changes the answer less than rerunning the same code under another stream does: 95% and 92% on `tmax_long` against 92% and 84% in the control, and 100% against 98% on `tmax_bootstrap`. No mean difference is distinguishable from zero, in the comparison or the control.
+
+**Gate 4: coverage.** `tests/correctness/mcs_size_and_power.c` at its default design (300 replications, `T = 250`, 5 models, 300 resamples, blocks of 10, `phi = 0.5`), production then shared:
+
+| panel | statistic | coverage | mean set | mean final p |
+|---|---|---|---|---|
+| complete null | `MCS_TMAX` | 0.920 then 0.920 | 4.92 then 4.92 | 0.463 then 0.464 |
+| one model better | `MCS_TMAX` | 1.000 then 1.000 | 3.24 then 3.18 | 0.087 then 0.086 |
+
+The `MCS_TR` rows are unchanged. Every complete-null coverage figure in `docs/MCS_RELIABILITY_DOCUMENTATION.md` was rerun on the shared header and none moved. That is expected: under the complete null a replication covers only when round one accepts, and round one sees the same draws under both schemes. What can move is the set size under the alternative, which reads later rounds; the settings study moved it from 9.40 to 9.34 of 10 models, 39.71 to 39.69 of 40 and 79.48 to 79.55 of 80.
+
+**The rest of the gate.** The 62 suites of `./check.sh`; `test_mcs`, `test_mcs_variance`, `mcs_primitives` and `mcs_size_and_power` under `STRESS=1`, both as built and under `-fsanitize=address,undefined` with OpenMP on; the full result of `mcs()` - every round's statistic, p-value and dropped model, every MCS p-value - byte-identical at 1, 3 and 16 threads on `MCS_TMAX` and `MCS_TR` at 120 models over 200 observations and 300 models over 500; and the harness with both arms built from the adopted header, which read `identical` and "no difference" or noise on every default case. `mcs_primitives.c` gained a check of the general path across a whole elimination, which only `test_mcs_variance.c` otherwise reaches, one round at a time; changing its variance divisor to `opt.bootstrap - 1` fails all four of its shapes, and the same change in the `MCS_TMAX` shared path fails its two `MCS_TMAX` shapes.
 
 ## The size this was changed for
 
-`STRESS=1 MCS_HUGE=1 make bench-mcs_candidates` runs two rungs past where a
-paired A/B is affordable. They report the candidate's own cost and nothing
-else: there is no production arm because the version being replaced does not
-finish at these sizes.
+`STRESS=1 MCS_HUGE=1 make bench-mcs_candidates` runs four rungs past where a paired A/B was affordable when they were added. They report the candidate's own cost and nothing else.
 
-Setup: synthetic losses, model `j` with expected loss `3 + spread*j` plus an
-AR(1) noise term at `phi = 0.4` scaled to unit variance whatever `phi` is, 50
-burn-in draws discarded; `MCS_TR` under `MCS_VARIANCE_BOOTSTRAP`, `alpha =
-0.05`; `float32` element build, 16 cores; one measured pass with no warmup,
-since against a run of minutes a cold start is not a measurable share of it.
-Time covers the `mcs()` call alone, with the loss `DataFrame` built above the
-measured region; memory is the exact allocation high-water mark, not resident
-set size.
+Setup: synthetic losses, model `j` with expected loss `3 + spread*j` plus an AR(1) noise term at `phi = 0.4` scaled to unit variance whatever `phi` is, 50 burn-in draws discarded; `MCS_VARIANCE_BOOTSTRAP`, `alpha = 0.05`; `float32` element build, 16 cores; one measured pass with no warmup. Time covers the `mcs()` call alone, with the loss `DataFrame` built above the measured region; memory is the exact allocation high-water mark, not resident set size. Measured in the Fix 4 gate-2 run, on the header now shipped:
 
-| case | T | M | draws | block | seconds | peak |
-|---|---|---|---|---|---|---|
-| `tr_m250_candidate` | 250 | 250 | 500 | 15 | 0.045 | 6.5 MiB |
-| `tr_m1000_candidate` | 1000 | 1000 | 2000 | 20 | 3.09 | 103.2 MiB |
+| case | statistic | T | M | draws | block | seconds | peak |
+|---|---|---|---|---|---|---|---|
+| `tr_m250_candidate` | `MCS_TR` | 250 | 250 | 500 | 15 | 0.040 | 6.4 MiB |
+| `tr_m1000_candidate` | `MCS_TR` | 1000 | 1000 | 2000 | 20 | 2.96 | 103.0 MiB |
+| `tmax_m250_candidate` | `MCS_TMAX` | 250 | 250 | 500 | 15 | 0.031 | 1.5 MiB |
+| `tmax_m1000_candidate` | `MCS_TMAX` | 1000 | 1000 | 2000 | 20 | 0.88 | 23.1 MiB |
 
-**What that replaced, by arithmetic rather than by measurement.** At a thousand
-models the previous version allocated `8 * bootstrap * C(m0, 2)` for `bmean`
-and `8 * n * C(m0, 2)` for `d` - 8.0 GiB and 4.0 GiB, against the 103.2 MiB
-above. Its gather was `bootstrap * n * C(m0+1, 3)` = `3.3e14` additions, which
-at the roughly `1e9` per second per core this code sustains is days on sixteen
-cores. Neither figure was run, and neither is quoted as a speedup: a number
-nobody measured is not a measurement. What is measured is that the size runs,
-in three seconds and in a tenth of a gigabyte.
+After Fix 3 the two `MCS_TR` rungs measured 0.045 s at 6.5 MiB and 3.09 s at 103.2 MiB.
 
-**One pass carries about ten percent.** These are single measurements, enough
-to answer "does this size run, and in what order of time", not enough to quote
-to three digits.
+**What that replaced, by arithmetic rather than by measurement.** For `MCS_TMAX`, production before Fix 4 gathered `bootstrap * n * (C(m0+1, 2) - 1)` = `1.0e12` additions at a thousand models, serially. Production measured `7.3e8` of them in 0.503 s on `tmax_m120_stress`, so that is on the order of twelve minutes; it was not run. Its memory was not the problem: `bmean` and `d` are 16 MiB and 8 MiB there. For `MCS_TR`, at a thousand models the version before Fix 1 allocated `8 * bootstrap * C(m0, 2)` for `bmean` and `8 * n * C(m0, 2)` for `d` - 8.0 GiB and 4.0 GiB, against the 103.0 MiB above. Its gather was `bootstrap * n * C(m0+1, 3)` = `3.3e14` additions, which at the roughly `1e9` per second per core this code sustains is days on sixteen cores. Neither figure was run, and neither is quoted as a speedup: a number nobody measured is not a measurement. What is measured is that the size runs, in three seconds and in a tenth of a gigabyte.
 
-**Where the remaining time goes.** Measured with a phase clock at a thousand
-models: 45% in the one-off precompute, 35% in the per-round table fill, 20% in
-the exceedance loop. The row prune of Fix 3 moved the exceedance loop from
-being nine tenths of the run to a fifth of it, so the per-round table fill -
-one reciprocal square root per surviving pair per round - is now the largest
-per-round term and is where a further change would have to look.
+**One pass carries about ten percent.** These are single measurements, enough to answer "does this size run, and in what order of time", not enough to quote to three digits.
+
+**Where the remaining time goes.** Measured under `MCS_TR`, after Fix 3, with a phase clock at a thousand models: 45% in the one-off precompute, 35% in the per-round table fill, 20% in the exceedance loop. The row prune of Fix 3 moved the exceedance loop from being nine tenths of the run to a fifth of it, so the per-round table fill - one reciprocal square root per surviving pair per round - is now the largest per-round term and is where a further change would have to look. `MCS_TMAX` has not been profiled by phase.
 
 ## Threads
 
-The gather over draws and the spread accumulation carry `#ifdef _OPENMP` pragmas; `-fopenmp` is already on the compile line through openblas's own pkg-config metadata, so no dependency was added. `frame/sql.h`'s optional-OpenMP pattern is the precedent.
+The gather over draws, the spread accumulation and the exceedance scan carry `#ifdef _OPENMP` pragmas, under both statistics; `-fopenmp` is already on the compile line through openblas's own pkg-config metadata, so no dependency was added. `frame/sql.h`'s optional-OpenMP pattern is the precedent.
 
-**The answer does not depend on the core count, and that is a constraint the code is written around rather than a property it happens to have.** Each per-model resampled mean is summed over the same observations in the same order by one thread. Each pair's spread is accumulated in `MCS_VAR_PIECES` fixed pieces — fixed, not taken from the thread count — with each piece summed in order and the pieces added in order; below `MCS_PARALLEL_MIN_WORK` it is one piece, a single running sum, so a run too small for a thread team does no piecewise bookkeeping at all. The exceedance count is an integer sum and the round's maximum is order free.
+**The answer does not depend on the core count, and that is a constraint the code is written around rather than a property it happens to have.** Each per-model resampled mean is summed over the same observations in the same order by one thread. Each pair's spread under `MCS_TR`, and each surviving model's spread under `MCS_TMAX` together with the per-draw totals, is accumulated in `MCS_VAR_PIECES` fixed pieces — fixed, not taken from the thread count — with each piece summed in order and the pieces added in order; below `MCS_PARALLEL_MIN_WORK` it is one piece, a single running sum, so a run too small for a thread team does no piecewise bookkeeping at all. The exceedance count is an integer sum and the round's maximum is order free.
 
 The pragmas carry a work threshold rather than being unconditional. Starting and joining a thread team costs on the order of ten microseconds, more than a small round's whole gather: at five models over 250 observations a chunk is 80,000 additions, and spawning for that measured 30% slower than not spawning.
 
-Index blocks are drawn a chunk at a time, serially and in the order a one-block-at-a-time loop would have drawn them, so the stream is consumed identically; holding all `opt.bootstrap` of them at once would cost `4 * bootstrap * n` bytes, larger than everything else in the procedure at long samples.
+Block starts are drawn a chunk of 64 draws at a time, serially and in the order a one-block-at-a-time loop would have drawn them, so the stream is consumed identically; a chunk costs `4 * 64 * ceil(n / block_length)` bytes whatever the draw count and the model count. The general path, which the two HAC variants take, has no pragmas.
 
 ## Tried and rejected
 
-- **Parallelising the general (`MCS_TMAX` and HAC) gather.** It needs the round's index blocks buffered before the gather, and that buffer is larger than what `MCS_TMAX`'s own draw entries occupy. At 1500 observations of 12 models it measured 1.45x for 384 KiB against a 592 KiB working set — speed bought with more memory than the change was made to save. Reverted; that path is byte-identical to what it replaced.
-- **Capping the index-block chunk in bytes rather than in draws.** It fixed the memory but pushed the per-chunk work below the parallel threshold at long samples, taking `tmax_long` from 1.45x back to 1.00x and `tr_hac` from 1.80x to 1.37x. The two knobs fight; scoping the buffer to the path that needs it settles them instead.
-- **A per-draw span of `k_max + 1` in `bmean`**, so that a scratch sized by pairs could always hold the factored path's per-model entries. It cost 14% of the footprint on the small `MCS_TMAX` cases for the sake of one shape — two models against one pair — where the two paths compute the identical expression anyway. Falling through to the general path there costs nothing and is checked by a panel in `tests/correctness/mcs_primitives.c`.
+- **Parallelising the general gather with index lists buffered per chunk**, before Fix 4, when `MCS_TMAX` still took that path. At 1500 observations of 12 models it measured 1.45x for a 384 KiB index buffer against a 592 KiB working set. Reverted then; Fix 4 moved `MCS_TMAX` off that path and the block starts made the buffer small.
+- **Capping the index-block chunk in bytes rather than in draws.** It fixed the memory but pushed the per-chunk work below the parallel threshold at long samples, taking `tmax_long` from 1.45x back to 1.00x and `tr_hac` from 1.80x to 1.37x. Superseded by the block starts.
+- **A chunk of one draw when a full chunk cannot reach the parallel threshold**, tried during Fix 4 to hold the index buffer down on small cases. The per-draw parallel construct cost `tr_bootstrap` 0.79x and `tr_wide` 0.83x against production. A separate serial loop for those cases recovered the speed but kept a 384 KiB index buffer, +17.7% memory on `tmax_long`. Both were replaced by the block starts.
+- **Recomputing `U(b)` in the exceedance scan instead of storing it per draw.** It saves `8 * opt.bootstrap` bytes (100.3 against 115.9 KiB on `tmax_bootstrap`, all buffers still allocated) and measured 0.81x on `tmax_m60_stress` and 0.78x on `tmax_m120_stress`, with both orderings agreeing: the sum visits every model of every draw, where the scan stops at the first exceedance. The memory was recovered instead by not allocating buffers the path never reads.
+- **A per-draw span of `k_max + 1` in `bmean`**, so that a scratch sized by pairs could always hold the shared path's per-model entries. It cost 14% of the footprint on the small `MCS_TMAX` cases for the sake of one shape — two models against one pair. `mcs_scratch_new` widens that one shape to two instead, which a panel in `tests/correctness/mcs_primitives.c` checks.
 
 ## Still open
 
 - **`MCS_TR` under the two HAC variants** is untouched and remains quadratic in `M` in both time and memory: those variants estimate each series' standard error from that series, so a pair's number cannot be reached through its two models'.
+- **The two HAC variants run on one thread.** The objection recorded above was the size of an index buffer; with block starts the chunk is a few kilobytes, so parallelising the general gather is worth measuring again. Not done.
 - **No comparison against another library.** See `docs/MCS_DOCUMENTATION.md`'s limitations.
