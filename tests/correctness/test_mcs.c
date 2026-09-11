@@ -616,6 +616,59 @@ static void check_result_structure(const MCSResult *r, const DataFrame *losses) 
             assert(r->pvalue[r->surviving[i]] > r->pvalue[r->elimination_order[j]]);
     assert(r->n_surviving + r->n_eliminated == r->m0);
     assert(r->final_pvalue >= 0 && r->final_pvalue <= 1);
+
+    /* The rounds. There are m0 - 1 of them and each drops one model, so
+       the dropped models and the one left at the end are every model
+       exactly once, and elimination_round and round_eliminated are
+       inverse maps of each other. */
+    assert(r->n_rounds == r->m0 - 1);
+    int left_over = 0;
+    for (int j = 0; j < r->m0; j++) {
+        int round = r->elimination_round[j];
+        assert(round >= 0 && round <= r->n_rounds);
+        if (round == 0) left_over++;
+        else assert(r->round_eliminated[round - 1] == j);
+    }
+    assert(left_over == 1);
+    /* the models outside the set are the ones the rounds before the
+       deciding round dropped, in that order */
+    for (int i = 0; i < r->n_eliminated; i++) {
+        assert(r->round_eliminated[i] == r->elimination_order[i]);
+        assert(r->elimination_round[r->elimination_order[i]] == i + 1);
+    }
+    for (int k = 0; k < r->n_rounds; k++)
+        assert(r->round_pvalue[k] >= 0 && r->round_pvalue[k] <= 1);
+    /* Definition 4 read off the rounds: a dropped model's MCS p-value is
+       the largest round p-value up to and including its round, and the
+       model no round drops has 1. Exact equality, since both are the same
+       maximum over the same doubles. */
+    for (int j = 0; j < r->m0; j++) {
+        int round = r->elimination_round[j];
+        if (round == 0) { assert(r->pvalue[j] == 1); continue; }
+        double running = 0;
+        for (int k = 0; k < round; k++)
+            if (r->round_pvalue[k] > running) running = r->round_pvalue[k];
+        assert(r->pvalue[j] == running);
+    }
+    /* The deciding round is the first whose p-value reaches alpha, and
+       every earlier one fell short of it. */
+    double alpha = r->options.alpha;
+    assert(alpha > 0 && alpha < 1);
+    if (r->converged) {
+        assert(r->decided_round == r->n_eliminated + 1);
+        assert(r->round_pvalue[r->decided_round - 1] >= alpha);
+        assert(r->final_pvalue == r->round_pvalue[r->decided_round - 1]);
+        for (int k = 0; k < r->decided_round - 1; k++) assert(r->round_pvalue[k] < alpha);
+    } else {
+        assert(r->decided_round == 0);
+        for (int k = 0; k < r->n_rounds; k++) assert(r->round_pvalue[k] < alpha);
+        assert(r->final_pvalue == r->round_pvalue[r->n_rounds - 1]);
+    }
+    /* Theorem 4 exactly rather than its weaker consequence above, now
+       that a result carries the alpha it was decided at. */
+    for (int j = 0; j < r->m0; j++)
+        assert((r->pvalue[j] >= alpha) == (mcs_in_set(r, j) != 0));
+    assert(r->n_obs == losses->r);
 }
 
 static void test_mcs_structure(void) {
@@ -690,6 +743,15 @@ static void test_mcs_separates_models(void) {
         assert(strcmp(r.surviving_names[0], "m0") == 0);
         assert(strcmp(r.surviving_names[1], "m1") == 0);
         assert(r.converged);
+        /* m3 left in round 1, m2 in round 2, and round 3's test - the
+           first with only the two tied models in it - decided the set */
+        assert(r.elimination_round[3] == 1 && r.elimination_round[2] == 2);
+        assert(r.decided_round == 3);
+        assert(r.elimination_round[0] >= 3 || r.elimination_round[0] == 0);
+        assert(r.elimination_round[1] >= 3 || r.elimination_round[1] == 0);
+        /* a result says what it was run with and on */
+        assert(r.options.bootstrap == 300 && r.options.stat == stat && r.options.seed == 55);
+        assert(r.n_obs == 400);
         mcs_free(&r);
         df_free(&L);
     }
@@ -708,6 +770,17 @@ static void test_mcs_separates_models(void) {
         MCSResult r = mcs(&L, o);
         assert(mcs_worst(&L, o) == r.elimination_order[0]);
         assert(strcmp(mcs_model_name(&L, mcs_worst(&L, o)), "m3") == 0);
+        /* and the first round's recorded statistic is mcs_statistic's.
+           Not to the bit: the two are the same expression inlined into
+           different callers, and -ffast-math lets the compiler round them
+           differently - measured one unit in the last place apart under
+           both HAC variants. Relative 1e-12 is a thousand of those units
+           and nowhere near a different round. */
+        {
+            double recorded = r.round_statistic[0], primitive = mcs_statistic(&L, o);
+            assert(fabs(recorded - primitive) <= 1e-12 * fabs(primitive));
+        }
+        assert(r.round_eliminated[0] == mcs_worst(&L, o));
         mcs_free(&r);
         df_free(&L);
     }
@@ -1009,6 +1082,134 @@ static char *render_dm_report(const char *a, const char *b, const DieboldMariano
     return buf;
 }
 
+static char *render_mcs_rounds(const DataFrame *losses, const MCSResult *res) {
+    char *buf = NULL;
+    size_t len = 0;
+    FILE *f = open_memstream(&buf, &len);
+    assert(f);
+    mcs_fwrite_rounds(f, losses, res);
+    fclose(f);
+    return buf;
+}
+
+/* The round a model left in, the round's own evidence, and both ways of
+   writing it out. Five models whose mean losses step by more than one
+   noise standard deviation per observation, so every round has an
+   unambiguous worst model and the whole elimination order is known in
+   advance: round r drops the model with the r-th largest mean loss. */
+static void test_mcs_rounds(void) {
+    puts("mcs: the round each model left in, the rounds' own evidence, written two ways");
+
+    double base[5] = { 1.0, 1.4, 1.8, 2.2, 2.6 };
+    for (int s = 0; s < 2; s++) {
+        MCSStat stat = s == 0 ? MCS_TMAX : MCS_TR;
+        DataFrame L = make_losses(400, 5, base, 0.3, 0.3, (uint64_t)(3700 + s));
+
+        /* Converged at the default alpha. */
+        MCSOptions o = mcs_options_default();
+        o.bootstrap = 300;
+        o.stat = stat;
+        o.seed = 77;
+        MCSResult r = mcs(&L, o);
+        check_result_structure(&r, &L);
+        assert(r.n_rounds == 4);
+        for (int round = 1; round <= 4; round++) assert(r.round_eliminated[round - 1] == 5 - round);
+        assert(r.elimination_round[0] == 0);
+        for (int j = 1; j < 5; j++) assert(r.elimination_round[j] == 5 - j);
+
+        char *text = render_mcs_rounds(&L, &r);
+        assert(strstr(text, "round") == text + 2 && strstr(text, "dropped"));
+        int lines = 0, marked = 0;
+        for (const char *c = text; *c; c++) lines += *c == '\n';
+        assert(lines == 1 + r.n_rounds);
+        double running = 0;
+        for (int round = 1; round <= r.n_rounds; round++) {
+            /* find the line that begins with this round number */
+            char key[32];
+            snprintf(key, sizeof key, "\n  %5d %6d", round, r.m0 - round + 1);
+            const char *line = strstr(text, key);
+            assert(line);
+            const char *eol = strchr(line + 1, '\n');
+            char copy[256];
+            snprintf(copy, (size_t)(eol - line), "%s", line + 1);
+            if (r.round_pvalue[round - 1] > running) running = r.round_pvalue[round - 1];
+            char numbers[96];
+            snprintf(numbers, sizeof numbers, "%11.4f %9.3f %9.3f",
+                     r.round_statistic[round - 1], r.round_pvalue[round - 1], running);
+            assert(strstr(copy, numbers));
+            assert(strstr(copy, mcs_model_name(&L, r.round_eliminated[round - 1])));
+            int here = strstr(copy, "decided the set") != NULL;
+            assert(here == (round == r.decided_round));
+            marked += here;
+        }
+        assert(marked == r.converged);
+        free(text);
+
+        DataFrame rf = mcs_round_frame(&L, &r);
+        assert(rf.r == r.n_rounds && rf.n_cols == 7);
+        assert(df_col_type(&rf, "dropped") == COL_STRING);
+        Mat round_col = df_col_numeric(&rf, "round");
+        Mat models = df_col_numeric(&rf, "models");
+        Mat statistic = df_col_numeric(&rf, "statistic");
+        Mat pvalue = df_col_numeric(&rf, "pvalue");
+        Mat mcs_p = df_col_numeric(&rf, "mcs_pvalue");
+        Mat decided = df_col_numeric(&rf, "decided");
+        char **dropped = df_col_string(&rf, "dropped");
+        double decided_sum = 0;
+        for (int k = 0; k < r.n_rounds; k++) {
+            assert(AT(round_col, k, 0) == (mreal)(k + 1));
+            assert(AT(models, k, 0) == (mreal)(r.m0 - k));
+            assert(AT(statistic, k, 0) == (mreal)r.round_statistic[k]);
+            assert(AT(pvalue, k, 0) == (mreal)r.round_pvalue[k]);
+            /* the running maximum is the MCS p-value of that round's model */
+            assert(AT(mcs_p, k, 0) == (mreal)r.pvalue[r.round_eliminated[k]]);
+            if (k) assert(AT(mcs_p, k, 0) >= AT(mcs_p, k - 1, 0));
+            assert(strcmp(dropped[k], mcs_model_name(&L, r.round_eliminated[k])) == 0);
+            decided_sum += AT(decided, k, 0);
+            assert(AT(decided, k, 0) == (mreal)(k + 1 == r.decided_round));
+        }
+        assert(decided_sum == r.converged);
+
+        /* an owning copy on both sides: the frame outlives the loss table,
+           and the result outlives both */
+        MCSResult kept = r;
+        df_free(&L);
+        assert(strcmp(df_col_string(&rf, "dropped")[0], "m4") == 0);
+        df_free(&rf);
+        assert(kept.elimination_round[4] == 1);
+
+        /* Never converged: at alpha = 0.999 no round's p-value reaches it,
+           so the procedure eliminates down to one model by exhaustion, no
+           round decided anything, and both writers have to say so. */
+        L = make_losses(400, 5, base, 0.3, 0.3, (uint64_t)(3700 + s));
+        MCSOptions strict = o;
+        strict.alpha = 0.999;
+        MCSResult u = mcs(&L, strict);
+        check_result_structure(&u, &L);
+        assert(!u.converged && u.decided_round == 0);
+        assert(u.n_surviving == 1 && u.surviving[0] == 0 && u.elimination_round[0] == 0);
+        char *ut = render_mcs_report("never decided", &L, &u);
+        assert(strstr(ut, "no, every test rejected down to one model"));
+        assert(strstr(ut, "alpha = 0.999"));
+        assert(strstr(ut, "from round") == NULL);
+        free(ut);
+        char *ur = render_mcs_rounds(&L, &u);
+        assert(strstr(ur, "decided the set") == NULL);
+        free(ur);
+        DataFrame uf = mcs_round_frame(&L, &u);
+        CHECK(stats_mean(df_col_numeric(&uf, "decided")) * uf.r, 0);
+        df_free(&uf);
+
+        /* freeing twice is safe, as the header promises */
+        mcs_free(&u);
+        assert(u.round_pvalue == NULL && u.elimination_round == NULL && u.n_rounds == 0);
+        mcs_free(&u);
+        mcs_free(&kept);
+        df_free(&L);
+    }
+    printf("  both statistics: known elimination rounds, both writers, both termination cases\n");
+}
+
 static void test_in_set(void) {
     puts("mcs_in_set: agrees with the surviving array it summarizes");
     double base[4] = { 1.0, 1.0, 1.6, 2.4 };
@@ -1075,6 +1276,22 @@ static void test_mcs_report(void) {
         snprintf(copy, (size_t)(eol - line) + 1, "%s", line);
         assert(strstr(copy, row));
         assert((strstr(copy, "yes") != NULL) == (mcs_in_set(&r, j) != 0));
+        /* the round sits right after the p-value, a dash for the model no
+           round drops; matched together with the p-value so a digit inside
+           the mean loss cannot stand in for it */
+        char tail[64];
+        if (r.elimination_round[j]) snprintf(tail, sizeof tail, "%10.3f %6d", r.pvalue[j], r.elimination_round[j]);
+        else snprintf(tail, sizeof tail, "%10.3f %6s", r.pvalue[j], "-");
+        assert(strstr(copy, tail));
+    }
+    assert(strstr(text, "round"));
+    {
+        char decided[96];
+        snprintf(decided, sizeof decided, "yes, in round %d of %d", r.decided_round, r.n_rounds);
+        assert(r.converged && strstr(text, decided));
+        char legend[64];
+        snprintf(legend, sizeof legend, "from round %d on", r.decided_round);
+        assert(strstr(text, legend));
     }
 
     /* every data row is padded to the same width, so the mean-loss
@@ -1109,7 +1326,8 @@ static void test_mcs_report(void) {
     MCSResult stopped = mcs(&L, easy);
     char *t2 = render_mcs_report("early stop", &L, &stopped);
     assert(strstr(t2, stopped.converged ? "set decided by an accepted test: yes"
-                                        : "eliminated down to one model"));
+                                        : "every test rejected down to one model"));
+    assert((strstr(t2, "from round") != NULL) == (stopped.converged != 0));
     assert((strstr(t2, "worst first: none") != NULL) == (stopped.n_eliminated == 0));
     free(t2); mcs_free(&stopped); df_free(&L);
 
@@ -1246,19 +1464,21 @@ static void test_pvalue_frame(void) {
 
     DataFrame pv = mcs_pvalue_frame(&L, &r);
     assert(pv.r == r.m0);
-    assert(pv.n_cols == 4);
+    assert(pv.n_cols == 5);
     assert(df_col_type(&pv, "model") == COL_STRING);
 
     char **names = df_col_string(&pv, "model");
     Mat mean_loss = df_col_numeric(&pv, "mean_loss");
     Mat pvalue = df_col_numeric(&pv, "pvalue");
     Mat in_set = df_col_numeric(&pv, "in_set");
+    Mat round = df_col_numeric(&pv, "elimination_round");
     for (int j = 0; j < r.m0; j++) {
         /* row j is model j, in the loss table's own column order */
         assert(strcmp(names[j], mcs_model_name(&L, j)) == 0);
         CHECK(AT(mean_loss, j, 0), stats_mean(df_col_numeric(&L, names[j])));
         assert(AT(pvalue, j, 0) == (mreal)r.pvalue[j]);
         assert(AT(in_set, j, 0) == (mreal)mcs_in_set(&r, j));
+        assert(AT(round, j, 0) == (mreal)r.elimination_round[j]);
     }
     /* the in_set column sums to the size of the surviving set */
     CHECK(stats_mean(in_set) * r.m0, (mreal)r.n_surviving);
@@ -1434,6 +1654,7 @@ int main(void) {
     test_mcs_variances();
     test_mcs_reproducibility();
     test_mcs_adversarial();
+    test_mcs_rounds();
     test_in_set();
     test_mcs_report();
     test_effective_hac_lag();

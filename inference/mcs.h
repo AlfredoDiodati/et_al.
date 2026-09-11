@@ -948,8 +948,13 @@ static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
    of the data alone: its standard error comes from the resamples, so
    the block length, the draw count and the stream all enter it. They
    draw from rng_new(opt.seed, opt.stream) in the order mcs() does, so
-   with the same options they return mcs()'s first round exactly. Under
-   the two HAC variants no resampling happens here at all. */
+   with the same options they run mcs()'s first round on the same
+   resamples and name the same worst model. The t-statistics agree to
+   the last place or within one unit of it: they are the same expression
+   inlined into different callers, and -ffast-math lets the compiler
+   round the two copies differently, which under the two HAC variants
+   has been measured at one unit. Under those two variants no resampling
+   happens here at all. */
 static inline void mcs_tstats(const DataFrame *losses, MCSOptions opt, double *t_out) {
     int n = losses->r, m = mcs_n_models(losses);
     assert(n >= 2 && m >= 2);
@@ -966,8 +971,8 @@ static inline void mcs_tstats(const DataFrame *losses, MCSOptions opt, double *t
     mcs_gather(losses, buf);
     if (factored) {
         /* The same path mcs() takes on its first round, with every model
-           still active, which is what makes this reproduce that round
-           exactly rather than to within rounding. */
+           still active, so this runs mcs()'s arithmetic rather than the
+           per-pair form the factored path replaced. */
         for (int i = 0; i < m; i++) identity[i] = i;
         sc.losses = buf;
         sc.active = identity;
@@ -1078,7 +1083,35 @@ static inline int mcs_worst(const DataFrame *losses, MCSOptions opt) {
    was below alpha. When converged is 1, final_pvalue is the p-value of
    the round that decided the set. Elimination continues past that round
    either way, but only to fill in pvalue; the rounds after it change
-   nothing about surviving or elimination_order. */
+   nothing about surviving or elimination_order.
+
+   The procedure runs m0 - 1 rounds, numbered from 1, and drops one model
+   in each. n_rounds is that count, and three arrays hold one entry per
+   round at index round - 1: round_eliminated is the model the round
+   dropped, round_statistic the round's observed test statistic, and
+   round_pvalue the round's own bootstrap p-value. That last one is not
+   pvalue: an MCS p-value is the running maximum of the round p-values,
+   so the round p-values themselves cannot be recovered from pvalue once
+   one round has come out below an earlier one.
+
+   elimination_round is the same information read per model, in column
+   order: the round that dropped model j, and 0 for the one model left at
+   the end, which no round drops. It is set for the models in the set as
+   well as for the ones outside it. For a model outside the set it is the
+   round that removed it; for a model inside, it is the round that would
+   have removed it had the procedure not already stopped - the round
+   Definition 4 reads that model's p-value from, so pvalue[j] is the
+   largest round_pvalue up to and including round elimination_round[j].
+   decided_round is the round whose test was accepted and fixed the set,
+   and 0 when none was; the models outside the set are exactly those
+   dropped before it, so elimination_order[i] is round_eliminated[i].
+
+   options and n_obs are the settings the run was made with and the
+   sample it was made on, copied in so a result says what it is a result
+   of: which alpha the set is a confidence set at, how many resamples a
+   p-value is a fraction of, and how much data stood behind it, all of
+   which matter to how far a set should be believed and none of which the
+   set says on its own. */
 typedef struct {
     int m0;
     int n_surviving;
@@ -1090,6 +1123,14 @@ typedef struct {
     double *pvalue;
     double final_pvalue;
     int converged;
+    int *elimination_round;
+    int n_rounds;
+    int *round_eliminated;
+    double *round_statistic;
+    double *round_pvalue;
+    int decided_round;
+    int n_obs;
+    MCSOptions options;
 } MCSResult;
 
 static inline void mcs_free(MCSResult *res) {
@@ -1100,13 +1141,22 @@ static inline void mcs_free(MCSResult *res) {
     free(res->surviving);
     free(res->elimination_order);
     free(res->pvalue);
+    free(res->elimination_round);
+    free(res->round_eliminated);
+    free(res->round_statistic);
+    free(res->round_pvalue);
     res->surviving_names = NULL;
     res->elimination_names = NULL;
     res->surviving = NULL;
     res->elimination_order = NULL;
     res->pvalue = NULL;
+    res->elimination_round = NULL;
+    res->round_eliminated = NULL;
+    res->round_statistic = NULL;
+    res->round_pvalue = NULL;
     res->n_surviving = 0;
     res->n_eliminated = 0;
+    res->n_rounds = 0;
 }
 
 /* Whether model j survived the procedure. The surviving set is a short
@@ -1186,12 +1236,21 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
     res.surviving_names = (char **)malloc((size_t)m0 * sizeof(char *));
     res.elimination_names = (char **)malloc((size_t)m0 * sizeof(char *));
     res.pvalue = (double *)malloc((size_t)m0 * sizeof(double));
+    res.n_rounds = m0 - 1;
+    res.elimination_round = (int *)malloc((size_t)m0 * sizeof(int));
+    res.round_eliminated = (int *)malloc((size_t)res.n_rounds * sizeof(int));
+    res.round_statistic = (double *)malloc((size_t)res.n_rounds * sizeof(double));
+    res.round_pvalue = (double *)malloc((size_t)res.n_rounds * sizeof(double));
     assert(res.surviving && res.elimination_order && res.surviving_names
-           && res.elimination_names && res.pvalue);
+           && res.elimination_names && res.pvalue && res.elimination_round
+           && res.round_eliminated && res.round_statistic && res.round_pvalue);
     res.n_eliminated = 0;
     res.n_surviving = 0;
     res.converged = 0;
     res.final_pvalue = 0;
+    res.decided_round = 0;
+    res.n_obs = n;
+    res.options = opt;
 
     Rng rng = rng_new(opt.seed, opt.stream);
     int m = m0;
@@ -1219,6 +1278,9 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
         double t_emp;
         double p = mcs_round(n, k_count, opt, hac_lag, &rng, &sc, &t_emp);
         if (p > best_p) best_p = p;
+        int round = m0 - m + 1;
+        res.round_statistic[round - 1] = t_emp;
+        res.round_pvalue[round - 1] = p;
 
         /* Theorem 4 puts a model in the set exactly when its MCS
            p-value reaches alpha, so a round at alpha is accepted. */
@@ -1227,6 +1289,7 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
             if (p >= opt.alpha) {
                 decided = 1;
                 res.converged = 1;
+                res.decided_round = round;
                 res.n_surviving = m;
                 for (int i = 0; i < m; i++) {
                     res.surviving[i] = active[i];
@@ -1237,6 +1300,8 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
 
         int worst = mcs_worst_from_tstats(sc.t, m, opt.stat, rowmax);
         res.pvalue[active[worst]] = best_p;
+        res.round_eliminated[round - 1] = active[worst];
+        res.elimination_round[active[worst]] = round;
         if (!decided) {
             res.elimination_names[res.n_eliminated] = frame_strdup(mcs_model_name(losses, active[worst]));
             res.elimination_order[res.n_eliminated++] = active[worst];
@@ -1248,6 +1313,7 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
     /* The last model's null hypothesis is that it is as good as itself,
        so Definition 4 gives it a p-value of 1 by convention. */
     res.pvalue[active[0]] = 1;
+    res.elimination_round[active[0]] = 0;
     if (!decided) {
         res.n_surviving = 1;
         res.surviving[0] = active[0];
@@ -1271,8 +1337,9 @@ static inline int mcs_name_width(const DataFrame *losses) {
 }
 
 /* Write a finished MCS run to an open stream: every model's average
-   loss and MCS p-value, which of them survived, the order the rest left
-   in, and whether the procedure stopped on evidence. title may be NULL.
+   loss, MCS p-value and the round that dropped it, which of them
+   survived, the order the rest left in, and whether and in which round
+   the procedure stopped on evidence. title may be NULL.
 
    losses must be the same DataFrame the result was computed from - the
    average losses come from it, and the model names are checked against
@@ -1290,19 +1357,62 @@ static inline void mcs_fwrite_report(FILE *f, const char *title,
     assert(res->m0 == mcs_n_models(losses) && "mcs_fwrite_report: result is not from these losses");
     int w = mcs_name_width(losses);
     if (title) fprintf(f, "%s\n", title);
-    fprintf(f, "  %-*s %12s %10s  %s\n", w, "model", "mean loss", "MCS p", "in set");
+    fprintf(f, "  %-*s %12s %10s %6s  %s\n", w, "model", "mean loss", "MCS p", "round", "in set");
     for (int j = 0; j < res->m0; j++) {
         const char *name = mcs_model_name(losses, j);
-        fprintf(f, "  %-*s %12.5f %10.3f  %s\n", w, name,
-                (double)stats_mean(df_col_numeric(losses, name)),
-                res->pvalue[j], mcs_in_set(res, j) ? "yes" : "");
+        fprintf(f, "  %-*s %12.5f %10.3f ", w, name,
+                (double)stats_mean(df_col_numeric(losses, name)), res->pvalue[j]);
+        /* The model no round drops has no round to print. */
+        if (res->elimination_round[j]) fprintf(f, "%6d", res->elimination_round[j]);
+        else fprintf(f, "%6s", "-");
+        fprintf(f, "  %s\n", mcs_in_set(res, j) ? "yes" : "");
     }
     fprintf(f, "  eliminated, worst first:");
     if (res->n_eliminated == 0) fprintf(f, " none");
     for (int i = 0; i < res->n_eliminated; i++) fprintf(f, " %s", res->elimination_names[i]);
-    fprintf(f, "\n  set decided by an accepted test: %s (p = %.3f)\n",
-            res->converged ? "yes" : "no, every test rejected down to one model",
-            res->final_pvalue);
+    if (res->converged)
+        fprintf(f, "\n  set decided by an accepted test: yes, in round %d of %d (p = %.3f against alpha = %.3f)\n",
+                res->decided_round, res->n_rounds, res->final_pvalue, res->options.alpha);
+    else
+        fprintf(f, "\n  set decided by an accepted test: no, every test rejected down to one model"
+                   " (last p = %.3f against alpha = %.3f)\n",
+                res->final_pvalue, res->options.alpha);
+    /* A model in the set still has a round beside it, and without this
+       line that reads as the model having been eliminated. */
+    if (res->converged)
+        fprintf(f, "  from round %d on every model dropped is still in the set; those rounds run only to give it its MCS p-value\n",
+                res->decided_round);
+}
+
+/* Write the elimination one round per line: how many models the round
+   tested, its observed statistic, its own bootstrap p-value, the running
+   maximum that becomes the MCS p-value of the model it dropped, and
+   which model that was, with the round that decided the set marked.
+
+   A separate writer from mcs_fwrite_report because it is one line per
+   round rather than per model, and the round p-values are the part of a
+   run that pvalue does not keep: a running maximum hides every round
+   whose p-value came out below an earlier one. losses must be the
+   DataFrame the result came from, for the names. */
+static inline void mcs_fwrite_rounds(FILE *f, const DataFrame *losses, const MCSResult *res) {
+    assert(f && losses && res);
+    assert(res->m0 == mcs_n_models(losses) && "mcs_fwrite_rounds: result is not from these losses");
+    int w = mcs_name_width(losses);
+    fprintf(f, "  %5s %6s %11s %9s %9s  %s\n",
+            "round", "models", "statistic", "p-value", "MCS p", "dropped");
+    double running = 0;
+    for (int r = 1; r <= res->n_rounds; r++) {
+        double p = res->round_pvalue[r - 1];
+        if (p > running) running = p;
+        const char *name = mcs_model_name(losses, res->round_eliminated[r - 1]);
+        fprintf(f, "  %5d %6d %11.4f %9.3f %9.3f  %s",
+                r, res->m0 - r + 1, res->round_statistic[r - 1], p, running, name);
+        /* padded out to the widest name only where the marker follows, so
+           no other line carries trailing blanks */
+        if (r == res->decided_round)
+            fprintf(f, "%*s  decided the set", w - (int)strlen(name), "");
+        fputc('\n', f);
+    }
 }
 
 /* Write the configuration a run was made with. The truncation lag comes
@@ -1327,30 +1437,74 @@ static inline void mcs_fwrite_options(FILE *f, const DataFrame *losses, MCSOptio
 }
 
 /* The same result as data rather than as prose: one row per model with
-   its name, its average loss, its MCS p-value and whether it survived -
-   the columns mcs_fwrite_report puts in its table, for a caller who
-   wants to write a csv or query it instead of read it. Caller must
-   df_free(). */
+   its name, its average loss, its MCS p-value, whether it survived and
+   the round that dropped it (0 for the model no round drops) - the
+   columns mcs_fwrite_report puts in its table, for a caller who wants to
+   write a csv or query it instead of read it. Caller must df_free(). */
 static inline DataFrame mcs_pvalue_frame(const DataFrame *losses, const MCSResult *res) {
     assert(losses && res);
     assert(res->m0 == mcs_n_models(losses) && "mcs_pvalue_frame: result is not from these losses");
     int m = res->m0;
     DataFrame out = df_new(m);
     const char **names = (const char **)malloc((size_t)m * sizeof *names);
-    Vec mean_loss = vec_new(m), pvalue = vec_new(m), in_set = vec_new(m);
+    Vec mean_loss = vec_new(m), pvalue = vec_new(m), in_set = vec_new(m), round = vec_new(m);
     assert(names);
     for (int j = 0; j < m; j++) {
         names[j] = mcs_model_name(losses, j);
         AT(mean_loss, j, 0) = stats_mean(df_col_numeric(losses, names[j]));
         AT(pvalue, j, 0) = (mreal)res->pvalue[j];
         AT(in_set, j, 0) = (mreal)mcs_in_set(res, j);
+        AT(round, j, 0) = (mreal)res->elimination_round[j];
     }
     df_add_string_col(&out, "model", names);
     df_add_numeric_col(&out, "mean_loss", mean_loss);
     df_add_numeric_col(&out, "pvalue", pvalue);
     df_add_numeric_col(&out, "in_set", in_set);
+    df_add_numeric_col(&out, "elimination_round", round);
     free(names);
-    mat_free(mean_loss); mat_free(pvalue); mat_free(in_set);
+    mat_free(mean_loss); mat_free(pvalue); mat_free(in_set); mat_free(round);
+    return out;
+}
+
+/* The rounds as data: one row per round with its number, the number of
+   models it tested, its observed statistic, its own p-value, the running
+   maximum that is the MCS p-value of the model it dropped, whether it is
+   the round that decided the set, and the dropped model's name - the
+   columns mcs_fwrite_rounds writes. Caller must df_free().
+
+   The statistic and the two p-values narrow to mreal in DataFrame
+   storage; the result itself keeps them as doubles. */
+static inline DataFrame mcs_round_frame(const DataFrame *losses, const MCSResult *res) {
+    assert(losses && res);
+    assert(res->m0 == mcs_n_models(losses) && "mcs_round_frame: result is not from these losses");
+    int r_count = res->n_rounds;
+    DataFrame out = df_new(r_count);
+    const char **names = (const char **)malloc((size_t)r_count * sizeof *names);
+    Vec round = vec_new(r_count), models = vec_new(r_count), statistic = vec_new(r_count);
+    Vec pvalue = vec_new(r_count), mcs_p = vec_new(r_count), decided = vec_new(r_count);
+    assert(names);
+    double running = 0;
+    for (int r = 0; r < r_count; r++) {
+        double p = res->round_pvalue[r];
+        if (p > running) running = p;
+        AT(round, r, 0) = (mreal)(r + 1);
+        AT(models, r, 0) = (mreal)(res->m0 - r);
+        AT(statistic, r, 0) = (mreal)res->round_statistic[r];
+        AT(pvalue, r, 0) = (mreal)p;
+        AT(mcs_p, r, 0) = (mreal)running;
+        AT(decided, r, 0) = (mreal)(r + 1 == res->decided_round);
+        names[r] = mcs_model_name(losses, res->round_eliminated[r]);
+    }
+    df_add_numeric_col(&out, "round", round);
+    df_add_numeric_col(&out, "models", models);
+    df_add_numeric_col(&out, "statistic", statistic);
+    df_add_numeric_col(&out, "pvalue", pvalue);
+    df_add_numeric_col(&out, "mcs_pvalue", mcs_p);
+    df_add_numeric_col(&out, "decided", decided);
+    df_add_string_col(&out, "dropped", names);
+    free(names);
+    mat_free(round); mat_free(models); mat_free(statistic);
+    mat_free(pvalue); mat_free(mcs_p); mat_free(decided);
     return out;
 }
 

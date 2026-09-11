@@ -136,8 +136,10 @@ int main(void) {
     mcs_fwrite_options(f, &qlike, opt);
     fputc('\n', f);
     mcs_fwrite_report(f, "QLIKE loss", &qlike, &qlike_set);
+    mcs_fwrite_rounds(f, &qlike, &qlike_set);
     fputc('\n', f);
     mcs_fwrite_report(f, "squared error loss", &mse, &mse_set);
+    mcs_fwrite_rounds(f, &mse, &mse_set);
 
     /* A pairwise read on the two ends of the QLIKE ranking. Horizon 1,
        so dm_options_default gives the truncation lag of 0 that Diebold
@@ -157,10 +159,12 @@ int main(void) {
        reads this next. */
     DataFrame qlike_pv = mcs_pvalue_frame(&qlike, &qlike_set);
     DataFrame mse_pv = mcs_pvalue_frame(&mse, &mse_set);
+    DataFrame qlike_rounds = mcs_round_frame(&qlike, &qlike_set);
     df_write_csv(&qlike_pv, "examples/out/mcs_example_qlike.csv", csv_write_options_default());
     df_write_csv(&mse_pv, "examples/out/mcs_example_mse.csv", csv_write_options_default());
+    df_write_csv(&qlike_rounds, "examples/out/mcs_example_qlike_rounds.csv", csv_write_options_default());
 
-    df_free(&qlike_pv); df_free(&mse_pv);
+    df_free(&qlike_pv); df_free(&mse_pv); df_free(&qlike_rounds);
     mcs_free(&qlike_set); mcs_free(&mse_set);
     df_free(&qlike); df_free(&mse); df_free(&data); df_free(&etf);
     return 0;

@@ -456,8 +456,17 @@ static void test_mcs_through_a_view(const DataFrame *frame) {
         for (int i = 0; i < from_view.n_eliminated && i < from_copy.n_eliminated; i++)
             CHECK(from_view.elimination_order[i] == from_copy.elimination_order[i],
                   "%s: elimination %d", kind_names[k], i);
-        for (int j = 0; j < N_FORECASTS; j++)
+        for (int j = 0; j < N_FORECASTS; j++) {
             CHECK_CLOSE(from_view.pvalue[j], from_copy.pvalue[j], TOL, kind_names[k]);
+            CHECK(from_view.elimination_round[j] == from_copy.elimination_round[j],
+                  "%s: model %d left in round %d through the view, %d through the copy",
+                  kind_names[k], j, from_view.elimination_round[j], from_copy.elimination_round[j]);
+        }
+        CHECK(from_view.decided_round == from_copy.decided_round, "%s: deciding round", kind_names[k]);
+        for (int r = 0; r < from_view.n_rounds; r++) {
+            CHECK_CLOSE(from_view.round_statistic[r], from_copy.round_statistic[r], TOL, kind_names[k]);
+            CHECK_CLOSE(from_view.round_pvalue[r], from_copy.round_pvalue[r], TOL, kind_names[k]);
+        }
 
         /* The same two loss series at stride ten and at stride two. */
         DataFrame pair = pair_from_copies(&through_view, forecast_names[0], forecast_names[1]);

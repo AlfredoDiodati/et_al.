@@ -328,6 +328,11 @@ typedef struct {
     double pvalue[64];
     double final_pvalue;
     int converged;
+    int elimination_round[64];
+    int round_eliminated[64];
+    double round_statistic[64];
+    double round_pvalue[64];
+    int decided_round;
 } ManualResult;
 
 static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt) {
@@ -348,6 +353,7 @@ static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt) {
     res.n_eliminated = 0;
     res.converged = 0;
     res.final_pvalue = 0;
+    res.decided_round = 0;
 
     Rng rng = rng_new(opt.seed, opt.stream);
     int m = m0, decided = 0;
@@ -381,12 +387,16 @@ static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt) {
         double t_emp;
         double p = mcs_round(n, k_count, opt, hac_lag, &rng, &sc, &t_emp);
         if (p > best_p) best_p = p;
+        int round = m0 - m + 1;
+        res.round_statistic[round - 1] = t_emp;
+        res.round_pvalue[round - 1] = p;
 
         if (!decided) {
             res.final_pvalue = p;
             if (p >= opt.alpha) {
                 decided = 1;
                 res.converged = 1;
+                res.decided_round = round;
                 res.n_surviving = m;
                 for (int i = 0; i < m; i++) res.surviving[i] = active[i];
             }
@@ -394,6 +404,8 @@ static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt) {
 
         int worst = mcs_worst_from_tstats(sc.t, m, opt.stat, rowmax);
         res.pvalue[active[worst]] = best_p;
+        res.round_eliminated[round - 1] = active[worst];
+        res.elimination_round[active[worst]] = round;
         if (!decided) res.elimination_order[res.n_eliminated++] = active[worst];
         for (int i = worst; i < m - 1; i++) active[i] = active[i + 1];
         m--;
@@ -405,6 +417,7 @@ static ManualResult manual_mcs(const DataFrame *losses, MCSOptions opt) {
     if (shared) mcs_scratch_free(&shared_sc);
 
     res.pvalue[active[0]] = 1;
+    res.elimination_round[active[0]] = 0;
     if (!decided) {
         res.n_surviving = 1;
         res.surviving[0] = active[0];
@@ -436,6 +449,27 @@ static void compare_to_manual(const DataFrame *losses, MCSOptions opt, const cha
     for (int j = 0; j < got.m0; j++)
         CHECK(got.pvalue[j] == want.pvalue[j], "%s: p-value of model %d, %.17g vs %.17g",
               label, j, got.pvalue[j], want.pvalue[j]);
+
+    /* The rounds. Which model left, in which round, and a round's p-value
+       are indices and counts over the draws, so they match exactly. A
+       round's statistic is floating-point arithmetic inlined into a
+       different caller here than inside mcs(), which -ffast-math is free
+       to round differently in the last place, so it gets a tolerance a
+       thousand times that wide rather than bit equality. */
+    CHECK(got.n_rounds == got.m0 - 1, "%s: %d rounds for %d models", label, got.n_rounds, got.m0);
+    CHECK(got.decided_round == want.decided_round, "%s: decided in round %d, want %d",
+          label, got.decided_round, want.decided_round);
+    for (int j = 0; j < got.m0; j++)
+        CHECK(got.elimination_round[j] == want.elimination_round[j],
+              "%s: model %d left in round %d, want %d",
+              label, j, got.elimination_round[j], want.elimination_round[j]);
+    for (int k = 0; k < got.n_rounds; k++) {
+        CHECK(got.round_eliminated[k] == want.round_eliminated[k], "%s: round %d dropped %d, want %d",
+              label, k + 1, got.round_eliminated[k], want.round_eliminated[k]);
+        CHECK(got.round_pvalue[k] == want.round_pvalue[k], "%s: round %d p-value %.17g vs %.17g",
+              label, k + 1, got.round_pvalue[k], want.round_pvalue[k]);
+        CHECK_CLOSE(got.round_statistic[k], want.round_statistic[k], 1e-12, label);
+    }
     mcs_free(&got);
 }
 

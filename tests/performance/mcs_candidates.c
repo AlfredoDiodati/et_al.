@@ -153,11 +153,29 @@ typedef struct {
     int unstable_memory;
 } ArmRecord;
 
+/* Every within-pair ratio a case produced, one array per ordering, so
+   the summary can be a median. A mean was tried first and misread a
+   case: one slow run at the start of a quartet puts a single pair at a
+   ratio of three to five, and averaged in, that one pair decided the
+   reading for the whole case - measured as "candidate faster" on a case
+   whose best times agreed to 0.2% and which read "no difference" on the
+   next run. */
 typedef struct {
-    double sum_ratio_first;
-    double sum_ratio_second;
+    double *ratio_first;
+    double *ratio_second;
     int n_pairs;
 } Pairing;
+
+static int compare_doubles(const void *a, const void *b) {
+    double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+/* Sorts in place, which is fine here: the ratios are read once, for this. */
+static double median(double *values, int count) {
+    qsort(values, (size_t)count, sizeof *values, compare_doubles);
+    return count % 2 ? values[count / 2] : 0.5 * (values[count / 2 - 1] + values[count / 2]);
+}
 
 static void record_arm(ArmRecord *rec, const MCSArmRun *run, int first_round) {
     if (first_round) {
@@ -327,6 +345,8 @@ int main(void) {
         return 1;
     }
     for (int i = 0; i < N_CASES; i++) {
+        pairing[i].ratio_first = (double *)malloc((size_t)rounds * sizeof(double));
+        pairing[i].ratio_second = (double *)malloc((size_t)rounds * sizeof(double));
         current[i].exact = (long *)malloc((size_t)exact_cap * sizeof(long));
         current[i].real = (double *)malloc((size_t)real_cap * sizeof(double));
         candidate[i].exact = (long *)malloc((size_t)exact_cap * sizeof(long));
@@ -361,6 +381,7 @@ int main(void) {
             free(candidate[i].exact); free(candidate[i].real);
         }
         free(exact_buf); free(real_buf); free(losses);
+        for (int i = 0; i < N_CASES; i++) { free(pairing[i].ratio_first); free(pairing[i].ratio_second); }
         free(current); free(candidate); free(pairing);
         return 0;
     }
@@ -385,27 +406,41 @@ int main(void) {
                 continue;
             }
 
-            double first_a, first_b, second_b, second_a;
-
-            mcs_arm_current(&cases[i], losses, &run);
-            first_a = run.seconds;
-            if (round > 0) record_arm(&current[i], &run, round == 1);
-
-            mcs_arm_candidate(&cases[i], losses, &run);
-            first_b = run.seconds;
-            if (round > 0) record_arm(&candidate[i], &run, round == 1);
-
-            mcs_arm_candidate(&cases[i], losses, &run);
-            second_b = run.seconds;
-            if (round > 0) record_arm(&candidate[i], &run, 0);
-
-            mcs_arm_current(&cases[i], losses, &run);
-            second_a = run.seconds;
-            if (round > 0) record_arm(&current[i], &run, 0);
+            /* A B B A on odd rounds and B A A B on even ones. A quartet
+               in one fixed order is not symmetric: the arm in the middle
+               runs twice back to back and its second run starts warm,
+               while the arm on the outside never does. On a run of a few
+               milliseconds that was worth about 4%, and it followed the
+               position rather than the header - swapping which header
+               sat in which arm moved the slowdown with it. Alternating
+               gives each arm each position equally often. */
+            int current_outside = round % 2 == 1;
+            double t[4];
+            for (int slot = 0; slot < 4; slot++) {
+                int is_current = (slot == 0 || slot == 3) == current_outside;
+                if (is_current) mcs_arm_current(&cases[i], losses, &run);
+                else mcs_arm_candidate(&cases[i], losses, &run);
+                t[slot] = run.seconds;
+                /* each arm runs exactly once in slots 0 and 1 under either
+                   order, so those are its first records of round 1 */
+                if (round > 0)
+                    record_arm(is_current ? &current[i] : &candidate[i], &run, round == 1 && slot < 2);
+            }
 
             if (round > 0) {
-                pairing[i].sum_ratio_first += first_a / first_b;
-                pairing[i].sum_ratio_second += second_a / second_b;
+                /* ratio_first is the pair where the current arm ran first
+                   and ratio_second the pair where the candidate did,
+                   whichever slots those were this round */
+                double cur_then_cand, cand_then_cur;
+                if (current_outside) {
+                    cur_then_cand = t[0] / t[1];
+                    cand_then_cur = t[3] / t[2];
+                } else {
+                    cur_then_cand = t[2] / t[3];
+                    cand_then_cur = t[1] / t[0];
+                }
+                pairing[i].ratio_first[pairing[i].n_pairs] = cur_then_cand;
+                pairing[i].ratio_second[pairing[i].n_pairs] = cand_then_cur;
                 pairing[i].n_pairs++;
             }
         }
@@ -422,7 +457,7 @@ int main(void) {
     fprintf(f, "current arm   %s\n", MCS_ARM_CURRENT_HEADER);
     fprintf(f, "candidate arm %s\n", MCS_ARM_CANDIDATE_HEADER);
     fprintf(f, "build         %s elements\n", sizeof(mreal) == sizeof(double) ? "float64" : "float32");
-    fprintf(f, "protocol      %d measured rounds after one discarded warmup, arms alternated A B B A\n", rounds);
+    fprintf(f, "protocol      %d measured rounds after one discarded warmup, arms alternated A B B A and B A A B\n", rounds);
     fprintf(f, "agreement     discrete outputs must match exactly; real outputs to %g relative\n\n",
             AGREEMENT_TOL);
 
@@ -503,13 +538,13 @@ int main(void) {
                 current[i].total_bytes / 1024.0, candidate[i].total_bytes / 1024.0);
     }
 
-    fprintf(f, "\ntiming order check: the mean within-pair ratio under each ordering\n");
+    fprintf(f, "\ntiming order check: the median within-pair ratio under each ordering\n");
     fprintf(f, "  %-18s %14s %14s  %s\n", "case", "current first", "candidate first", "reading");
     for (int i = 0; i < N_CASES; i++) {
         if ((cases[i].stress_only && !stress) || cases[i].candidate_only) continue;
         if (pairing[i].n_pairs == 0) continue;
-        double first = pairing[i].sum_ratio_first / pairing[i].n_pairs;
-        double second = pairing[i].sum_ratio_second / pairing[i].n_pairs;
+        double first = median(pairing[i].ratio_first, pairing[i].n_pairs);
+        double second = median(pairing[i].ratio_second, pairing[i].n_pairs);
         double largest = fabs(first - 1.0) > fabs(second - 1.0) ? fabs(first - 1.0) : fabs(second - 1.0);
         double smaller = first < second ? first : second;
         double spread = fabs(first - second) / smaller;
@@ -559,6 +594,7 @@ int main(void) {
         free(candidate[i].exact); free(candidate[i].real);
     }
     free(exact_buf); free(real_buf); free(losses);
+    for (int i = 0; i < N_CASES; i++) { free(pairing[i].ratio_first); free(pairing[i].ratio_second); }
     free(current); free(candidate); free(pairing);
     return disagreements ? 1 : 0;
 }

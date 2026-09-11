@@ -102,15 +102,18 @@ static inline int mcs_arm_n_series(int stat_is_range, int m) {
 
 static inline int mcs_arm_exact_needed(int m) {
     /* converged, n_surviving, n_eliminated, the worst-model index, the
-       Diebold-Mariano status, the name hash, and one slot per model
-       across the surviving set and the elimination order together. */
-    return 6 + m;
+       Diebold-Mariano status, the name hash, one slot per model across
+       the surviving set and the elimination order together, then the
+       deciding round, the round count, the round each model left in and
+       the model each round dropped. */
+    return 6 + m + 2 + m + (m - 1);
 }
 
 static inline int mcs_arm_real_needed(int stat_is_range, int m, int light) {
-    /* one p-value per model, the final p-value, dm_test's four, and -
-       unless the fingerprint is the light one - the round statistic and
-       every t-statistic of the first round. */
-    if (light) return m + 1 + 4;
-    return m + 2 + mcs_arm_n_series(stat_is_range, m) + 4;
+    /* one p-value per model, the final p-value, dm_test's four, each
+       round's statistic and p-value, and - unless the fingerprint is the
+       light one - mcs_statistic and every t-statistic of the first round. */
+    int rounds = 2 * (m - 1);
+    if (light) return m + 1 + 4 + rounds;
+    return m + 2 + mcs_arm_n_series(stat_is_range, m) + 4 + rounds;
 }

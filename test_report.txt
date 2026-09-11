@@ -1,4 +1,4 @@
-test run: do 10 sep 2026 23:02:39 CEST
+test run: vr 11 sep 2026 11:07:00 CEST
 
 === build ===
 make: 'tests/correctness/test_mat' is up to date.
@@ -10,9 +10,9 @@ make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
 make: 'tests/correctness/test_lhs' is up to date.
 make: 'tests/correctness/test_mcs' is up to date.
-make: 'tests/correctness/test_mcs_variance' is up to date.
-make: 'tests/correctness/mcs_primitives' is up to date.
-make: 'tests/correctness/mcs_size_and_power' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs_variance.c -lm -lopenblas -o tests/correctness/test_mcs_variance
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/mcs_primitives.c -lm -lopenblas -o tests/correctness/mcs_primitives
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  tests/correctness/mcs_size_and_power.c -lm -lopenblas -o tests/correctness/mcs_size_and_power
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
 make: 'tests/correctness/test_student' is up to date.
@@ -55,12 +55,12 @@ make: 'tests/correctness/qvarma_correctness' is up to date.
 make: 'tests/correctness/qvarma_analytic_agreement' is up to date.
 make: 'tests/correctness/qvarma_gaussian_limit' is up to date.
 make: 'tests/correctness/qvarma_identification' is up to date.
-make: 'tests/integration/frame_to_model' is up to date.
-make: 'tests/integration/join_missing_values' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -lopenblas -o tests/integration/frame_to_model
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/join_missing_values.c -lm -lopenblas -o tests/integration/join_missing_values
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
-make: 'tests/integration/pipeline_ownership' is up to date.
-make: 'tests/integration/npz_to_statistics' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
 make: 'tests/integration/header_composition' is up to date.
 make: 'tests/integration/header_composition_f32' is up to date.
 make: Nothing to be done for 'examples'.
@@ -230,6 +230,8 @@ mcs: Definition 4 p-values, Theorem 4's membership rule
 mcs: the three variance estimates, on shared draws
 mcs: same (seed, stream) reproduces, different stream is an independent run
 mcs: adversarial options and degenerate inputs
+mcs: the round each model left in, the rounds' own evidence, written two ways
+  both statistics: known elimination rounds, both writers, both termination cases
 mcs_in_set: agrees with the surviving array it summarizes
 mcs_fwrite_report: contents, alignment, both termination cases
 mcs_effective_hac_lag: derived once, and the run agrees with it

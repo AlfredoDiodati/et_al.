@@ -231,6 +231,10 @@ void MCS_ARM_ENTRY(const MCSArmCase *c, const double *losses, MCSArmRun *out) {
     out->exact[e++] = worst;
     out->exact[e++] = (long)dm.status;
     out->exact[e++] = name_hash(&r);
+    out->exact[e++] = r.decided_round;
+    out->exact[e++] = r.n_rounds;
+    for (int j = 0; j < r.m0; j++) out->exact[e++] = r.elimination_round[j];
+    for (int k = 0; k < r.n_rounds; k++) out->exact[e++] = r.round_eliminated[k];
     out->n_exact = e;
 
     int v = 0;
@@ -244,6 +248,8 @@ void MCS_ARM_ENTRY(const MCSArmCase *c, const double *losses, MCSArmRun *out) {
     out->real[v++] = dm.pvalue;
     out->real[v++] = dm.mean_diff;
     out->real[v++] = dm.std_error;
+    for (int k = 0; k < r.n_rounds; k++) out->real[v++] = r.round_statistic[k];
+    for (int k = 0; k < r.n_rounds; k++) out->real[v++] = r.round_pvalue[k];
     out->n_real = v;
 
     free(t);
