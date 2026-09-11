@@ -23,11 +23,12 @@
    about MCSResult. What it knows is in tests/performance/mcs_arm.h.
 
    Timing protocol, from README.md's "Making existing code faster": the
-   two arms alternate within each round in the order A B B A, so a case's
-   two orderings are both measured and a machine warming up over the run
-   cannot be mistaken for one arm being faster. The first round is a
+   two arms alternate within each round, A B B A on odd rounds and B A A B
+   on even ones, so a case's two orderings are both measured, each arm
+   takes each position equally often, and a machine warming up over the
+   run cannot be mistaken for one arm being faster. The first round is a
    warmup and is discarded. A case reports the best time each arm reached
-   and, separately, the mean within-pair ratio under each ordering: if
+   and, separately, the median within-pair ratio under each ordering: if
    those two ratios fall on opposite sides of 1, the difference is noise
    and the report says so rather than quoting a speedup.
 
@@ -56,12 +57,14 @@
    reported separately as a flipped draw. */
 #define AGREEMENT_TOL 1e-12
 
-/* How far the mean within-pair timing ratio has to sit from 1 before the
-   report names a winner. Measured, not chosen: three runs of this
-   binary with both arms built from inference/mcs.h, seven cases each,
-   put the largest ratio between two copies of the same code at 1.032,
-   with the other twenty observations inside 1.5%. Anything under 5% is
-   this machine rather than the candidate. */
+/* How far the median within-pair timing ratio has to sit from 1 before
+   the report names a winner. Measured, not chosen: with both arms built
+   from inference/mcs.h, eight rounds, the seven default cases put the
+   two orderings' medians inside 2.7% of 1. The millisecond-scale stress
+   cases spread much wider - as far as 1.187 one way and 0.800 the other
+   on tr_m50_stress - which this floor alone would not absorb; what
+   absorbs them is the sign check, since two copies of the same code land
+   on opposite sides of 1 there. */
 #define TIMING_NOISE_FLOOR 0.05
 
 #define REPORT_PATH "out/mcs_candidates_report.txt"

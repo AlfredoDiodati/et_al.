@@ -129,9 +129,10 @@
      NaN afterwards, since it builds with -ffast-math (see the README
      pitfall on isnan), so the degenerate case is prevented instead of
      detected. The floored t-statistic is 0, and since the bootstrap
-     statistic is then also 0 and the comparison is strict, the p-value
-     of a set of identical models is 0 and every one of them is
-     eliminated. That is degenerate rather than sensible, and it is
+     statistic is then also 0 and the comparison is strict, every round
+     of a set of identical models has p-value 0, and every model but the
+     last is eliminated, that one surviving by exhaustion rather than by
+     an accepted test. That is degenerate rather than sensible, and it is
      what the reference implementation does too; a set of models that
      are literally the same is a question about the caller's data, not
      an answer this procedure can give.
@@ -460,20 +461,23 @@ typedef struct {
     double *scratch;
     double *resampled;
     int *idx;
-    /* One block of resample indices per draw. mcs_round fills it from
-       rng in the order and count the one-block-at-a-time version drew,
-       so the stream is consumed identically; holding all of them at once
-       is what lets the gather over draws be split across threads. */
+    /* Resample index blocks for draw_chunk draws at a time. mcs_round
+       fills a chunk from rng in the order and count a one-block-at-a-time
+       loop would have drawn them, so the stream is consumed identically;
+       holding a chunk's blocks at once is what lets that chunk's gathers
+       be split across threads. */
     int *draws;
     /* How many draws' index blocks sc->draws holds at once. */
     int draw_chunk;
-    /* One entry per model: the observed mean of each reference series
-       d_0j. Separate from scratch, which is n long, because the model
-       count can exceed the observation count. */
+    /* One entry per model: that model's mean loss over the sample,
+       formed once by the shared MCS_TR path. Separate from scratch, which
+       is n long, because the model count can exceed the observation
+       count. */
     double *ref;
     /* The whole loss matrix, n x m0 row-major, and the map from a
-       position in the active set to the model's original column. Set by
-       mcs(); left NULL by mcs_scratch_new. When present, MCS_TR under
+       position in the active set to the model's original column. Left
+       NULL by the allocator; mcs() and mcs_tstats set them, and so can a
+       caller running their own loop. When present, MCS_TR under
        the bootstrap variance forms its resampled means from the losses
        rather than from d, once for the whole run rather than once per
        round. active must be ascending, which mcs()'s compaction keeps.
@@ -484,9 +488,9 @@ typedef struct {
     const int *active;
     int m0;
     /* One spread per original model pair, in the (0,1), (0,2), ...
-       order mcs_n_series documents for m0 models, and one reciprocal
-       standard error per active pair. Neither depends on which models
-       are still in the set. */
+       order mcs_n_series documents for m0 models, formed once and fixed
+       for the run; and one reciprocal standard error per surviving pair,
+       read out of var_all again at the start of every round. */
     double *var_all;
     double *inv_se;
     /* Per active model, the largest reciprocal standard error among the
@@ -501,9 +505,10 @@ typedef struct {
     /* MCS_VAR_PIECES partial spread accumulators, one per piece of the
        draw index, k_max long each. */
     double *var_part;
-    /* How many doubles one draw's entry in bmean spans. Under MCS_TR
-       with the bootstrap variance that is the model count, not the pair
-       count - see mcs_round. */
+    /* How many doubles bmean holds per draw. The general path steps
+       through bmean by it; the shared MCS_TR path steps by m0 and only
+       checks that m0 fits. mcs() allocates it at the model count for that
+       path and at the pair count otherwise - see mcs_round. */
     int bmean_stride;
     /* How many series dbar, var, t, var_all and inv_se were sized for. */
     int k_max;
@@ -518,8 +523,10 @@ typedef struct {
    itself stays serial, so the stream is consumed in exactly the order
    one-block-at-a-time consumed it.
 
-   Only the factored path allocates it; every other path draws one block
-   at a time into idx as before. */
+   mcs() allocates the chunk only for the shared MCS_TR path, the one
+   that reads it. mcs_scratch_new always allocates it, because a caller's
+   own loop may take that path; the general path draws one block at a
+   time into idx and never reads it. */
 #define MCS_DRAW_CHUNK 64
 
 /* How many pieces the draw index is cut into when every pair's spread is
@@ -552,9 +559,9 @@ typedef struct {
 /* The allocator both mcs_scratch_new and mcs() reach, differing in how
    much of each buffer they need.
 
-   d_series is how many differential series d must hold and may be 0 for
-   a caller that fills d itself; m_max is how many doubles one draw
-   occupies in bmean. They are separate parameters because the factored
+   d_series is how many differential series d must hold, and 0 leaves d
+   unallocated for a caller that never reads it, which is the shared
+   MCS_TR path; m_max is how many doubles bmean holds per draw. They are separate parameters because the factored
    MCS_TR path below needs one entry per model where the general path
    needs one per pair, and at a thousand models those differ by a factor
    of five hundred. */
@@ -631,10 +638,13 @@ static inline int _mcs_models_from_series(MCSStat stat, int k_count) {
     return m;
 }
 
-/* One equivalence test on the k_count differential series already in
-   sc->d. Fills sc->dbar, sc->var and sc->t, writes the round's
-   statistic to stat_out and returns its bootstrap p-value, the fraction
-   of resampled statistics strictly above the observed one.
+/* One equivalence test on k_count differential series: the ones already
+   in sc->d, or - under MCS_TR with the bootstrap variance, when the
+   caller has set sc->losses, sc->m0 and sc->active - the pairs of the
+   surviving models, read from the loss matrix without d. Fills
+   sc->dbar, sc->var and sc->t, writes the round's statistic to stat_out
+   and returns its bootstrap p-value, the fraction of resampled
+   statistics strictly above the observed one.
 
    Where the round draws its own resamples it advances rng by
    opt.bootstrap block draws rather than reseeding, so a loop over rounds
@@ -651,7 +661,8 @@ static inline int _mcs_models_from_series(MCSStat stat, int k_count) {
    and discarded. Under the other two the draws are kept as deviations
    from dbar, which is both the null-imposed bootstrap statistic and,
    squared and averaged, the bootstrap variance - so sc->bmean must hold
-   opt.bootstrap * k_count doubles there. */
+   opt.bootstrap * k_count doubles there, or opt.bootstrap * m0 on the
+   shared MCS_TR path, which keeps one entry per model. */
 static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
                                Rng *rng, MCSScratch *sc, double *stat_out) {
     assert(n >= 2 && k_count >= 1 && opt.bootstrap >= 1);
@@ -717,8 +728,9 @@ static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
        observation does not change when a model is eliminated. So with
        one set of draws for the whole run both are formed once, on the
        first round, and every later round is a scan over the surviving
-       pairs with no gather in it at all. That is the difference between
-       ten minutes and one at a thousand models, and it is also what the
+       pairs with no gather in it at all. At a thousand models over a
+       thousand observations with two thousand draws that took a run from
+       613 seconds to 39, and it is also what the
        paper and the common implementations do - redrawing per round
        injects variation into the sequence of p-values that has nothing
        to do with the data.
@@ -847,8 +859,9 @@ static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
            every pair in its row divides by at least the row's smallest
            standard error; if that product still falls short of the
            observed statistic then no pair in the row can exceed it. So
-           the count is the same count, and skipping costs one comparison
-           per row against the m(m-1)/2 visits it replaces. Under a round
+           the count is the same count, and skipping costs one pass over
+           the draw to find its extremes and one comparison per row,
+           against the m(m-1)/2 visits it replaces. Under a round
            that rejects, most draws do not exceed and most rows are
            skipped, which is where the time went.
 
@@ -937,11 +950,11 @@ static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
    into t_out, which must hold mcs_n_series(opt.stat, M) doubles in the
    series order mcs_n_series documents.
 
-   This and the two functions below it are the procedure's structural
+   This, mcs_statistic and mcs_worst are the procedure's structural
    primitives, public so a caller can run their own elimination loop or
    check a single round by hand - mcs() is convenience built on top of
-   them, not a replacement for them. Unlike mcs() they allocate their
-   own scratch per call, which is why mcs() does not use them.
+   them, not a replacement for them. Unlike mcs() the three allocate
+   their own scratch per call, which is why mcs() does not use them.
 
    They take the whole MCSOptions rather than a statistic and a lag
    because under MCS_VARIANCE_BOOTSTRAP a t-statistic is not a function
@@ -1063,7 +1076,7 @@ static inline int mcs_worst(const DataFrame *losses, MCSOptions opt) {
    order, and is Definition 4's MCS p-value: the largest round p-value
    seen up to and including the round that dropped that model, with 1
    for the model left at the end, whose null hypothesis is that it is as
-   good as itself. It increases along elimination_order, as an MCS
+   good as itself. It never decreases along elimination_order, as an MCS
    p-value must, and it satisfies Theorem 4 - pvalue[j] >= alpha exactly
    for the models in surviving, and for no others. A model in the set
    therefore carries a real number, not a placeholder, and the same
@@ -1173,9 +1186,12 @@ static inline int mcs_in_set(const MCSResult *res, int j) {
 /* Run the Model Confidence Set on a loss DataFrame whose numeric
    columns are the competing models. Caller must mcs_free() the result.
 
-   Each round forms the loss differentials of the models still in the
-   set, computes the round's statistic and its bootstrap p-value, and
-   drops the model the elimination rule names. The first round whose
+   Each round computes the statistic of the models still in the set and
+   its bootstrap p-value, and drops the model the elimination rule names.
+   Under MCS_TR with the bootstrap variance that reads the loss matrix
+   through tables formed on the first round; every other combination
+   forms the surviving models' differentials each round and resamples
+   them. The first round whose
    p-value reaches alpha decides the surviving set; the rounds after it
    run anyway, because a surviving model's MCS p-value is the p-value of
    the round that would have dropped it and there is no other way to
@@ -1185,8 +1201,11 @@ static inline int mcs_in_set(const MCSResult *res, int j) {
 
    All scratch is allocated once, sized for the first round's M, and
    reused as the set shrinks - there is no allocation anywhere inside
-   the bootstrap loop, which runs opt.bootstrap times per round and is
-   where the entire cost of the procedure sits. */
+   the bootstrap loop. Where that loop resamples every round it is nearly
+   all the cost of the procedure; on the shared MCS_TR path the one-off
+   tables and the per-round scan share it, measured at 45% for the
+   tables, 35% for reading them out each round and 20% for the scan at a
+   thousand models. */
 static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
     int n = losses->r, m0 = mcs_n_models(losses);
     assert(n >= 2 && m0 >= 2);
@@ -1212,10 +1231,12 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
 
     int k_max = mcs_n_series(opt.stat, m0);
     int keep = opt.variance == MCS_VARIANCE_HAC_RESAMPLE ? 0 : opt.bootstrap;
-    /* MCS_TR under the bootstrap variance reads only the m-1 reference
-       series and holds one draw entry per model, so neither d nor bmean
-       is sized by the pair count there. At a thousand models and two
-       thousand draws that is sixty megabytes against twelve gigabytes. */
+    /* MCS_TR under the bootstrap variance reads the loss matrix directly
+       and holds one draw entry per model, so d is not allocated and bmean
+       is not sized by the pair count there. At a thousand models over a
+       thousand observations with two thousand draws the whole procedure
+       peaked at 103 MiB, against the twelve gigabytes those two buffers
+       alone would take sized by pairs. */
     int factored = opt.stat == MCS_TR && opt.variance == MCS_VARIANCE_BOOTSTRAP;
     MCSScratch sc = factored ? _mcs_scratch_alloc(n, k_max, m0, 0, keep, MCS_DRAW_CHUNK)
                              : _mcs_scratch_alloc(n, k_max, k_max, k_max, keep, 0);

@@ -478,11 +478,12 @@ static void test_manual_loop_matches_mcs(void) {
     char names[24][8];
     struct { int m; int n; int tr; MCSVariance variance; const char *label; } panels[] = {
         /* Two models is one pair, the one shape where the model count
-           exceeds the pair count. mcs() and a scratch sized by pairs
-           reach the round through different code there, and the two
-           forms are the same expression, so they have to agree to the
-           bit and not merely to a tolerance. Three models is the first
-           shape where they do not diverge. */
+           exceeds the pair count, so a scratch sized by pairs has fewer
+           per-draw slots in bmean than the shared MCS_TR path needs;
+           mcs_scratch_new widens it to two. These panels check that the
+           shared tables fit there and that the loop still reproduces
+           mcs(), and three models is the first shape with as many pairs
+           as models. */
         { 2, 150, 1, MCS_VARIANCE_BOOTSTRAP, "TR, bootstrap variance, 2 models" },
         { 3, 150, 1, MCS_VARIANCE_BOOTSTRAP, "TR, bootstrap variance, 3 models" },
         { 2, 150, 0, MCS_VARIANCE_BOOTSTRAP, "Tmax, bootstrap variance, 2 models" },

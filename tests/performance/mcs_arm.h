@@ -62,11 +62,12 @@ typedef struct {
 
    exact and real are two blocks because they are compared two different
    ways. exact holds the discrete answer - who survived, in what order,
-   whether the procedure stopped on evidence - and a discrete answer has
-   no floating tolerance: it either matches or the two implementations
-   disagree about the confidence set. real holds the p-values, the
-   t-statistics and the Diebold-Mariano numbers, where a reassociated
-   sum is allowed to move the last few bits.
+   whether and in which round the procedure stopped on evidence, and the
+   round each model left in - and a discrete answer has no floating
+   tolerance: it either matches or the two implementations disagree
+   about the confidence set. real holds the p-values, the t-statistics,
+   each round's statistic and p-value, and the Diebold-Mariano numbers,
+   where a reassociated sum is allowed to move the last few bits.
 
    The buffers are the caller's, sized once for the widest case;
    exact_cap and real_cap are what the arm asserts against. */

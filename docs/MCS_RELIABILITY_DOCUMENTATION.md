@@ -1,6 +1,6 @@
 # `inference/mcs.h` reliability: what the confidence set is worth at a given sample size
 
-`docs/MCS_DOCUMENTATION.md` is the header's reference, read while writing a call. `docs/MCS_PERFORMANCE_DOCUMENTATION.md` is read while changing the implementation. This file is read while deciding whether to believe an answer that has already come back, or while choosing how much data to bring to one.
+`docs/MCS_DOCUMENTATION.md` is the header's reference, read while writing a call. `docs/MCS_PERFORMANCE_DOCUMENTATION.md` is read while changing the implementation, and `docs/MCS_TESTING_DOCUMENTATION.md` when one of the suites fails. This file is read while deciding whether to believe an answer that has already come back, or while choosing how much data to bring to one.
 
 The split follows `README.md`'s documentation-structure policy, by when a reader needs the content — the same ground on which `sd/qvarma.h`'s measured reliability limits sit in a file of their own.
 

@@ -226,20 +226,29 @@ scalar type, 60-trial fuzz - only the logical-column gap above), and
 ### `inference/mcs.h`, re-audited 2026-09-10
 
 The entry above read "all 18 public functions" and was written when the header
-had 18. It has 31, the difference being the structural primitives
+had 18. It has 33. Most of the difference is the structural primitives
 (`mcs_gather`, `mcs_build_diffs`, `mcs_center`, `mcs_floor_var`,
 `mcs_hac_var_mean`, `mcs_tstat`, `mcs_reduce`, `mcs_worst_from_tstats`,
 `mcs_n_series`, `mcs_scratch_new`, `mcs_scratch_free`, `mcs_round`) the header
-exposes so a caller can run their own elimination loop. Eight of those had no
-direct call in any suite at the re-audit, and `mcs_write_report` had none
+exposes so a caller can run their own elimination loop. Eight of those twelve had
+no direct call in any suite at the re-audit, and `mcs_write_report` had none
 either. `tests/correctness/mcs_primitives.c` now covers all of them with
 hand-computed values, and checks that an elimination loop built out of them
-reproduces `mcs()` exactly. That last check has since earned its place twice:
-it is the gate a rewrite of this header's working memory has to pass, and its
-two- and three-model panels caught a version where `mcs()` and a caller's own
-loop summed the same quantity in a different order. `mcs_name_width` is still only reached indirectly,
-through the report writer's column-alignment check in
-`tests/correctness/test_mcs.c`, which is where its contract actually lives.
+reproduces `mcs()`: the same survivors, elimination order, rounds and p-values
+exactly, and each round's statistic to `1e-12` relative, since the same expression
+inlined into two callers can round differently under `-ffast-math`. That check
+has since earned its place twice: it is the gate a rewrite of this header's
+working memory has to pass, and its two- and three-model panels caught a version
+where `mcs()` and a caller's own loop summed the same quantity in a different
+order. `mcs_name_width` is still only reached indirectly, through the report
+writer's column-alignment check in `tests/correctness/test_mcs.c`, which is where
+its contract actually lives.
+
+The two most recent additions, `mcs_fwrite_rounds` and `mcs_round_frame`, write
+the per-round record `mcs()` keeps - which round dropped each model, and each
+round's own statistic and p-value. `tests/correctness/test_mcs.c`'s
+`test_mcs_rounds` covers both line by line and column by column, on a converged
+run and on one forced never to converge.
 
 A fourth suite has since been added for a gap of a different kind.
 `tests/correctness/mcs_size_and_power.c` checks not a function's output against

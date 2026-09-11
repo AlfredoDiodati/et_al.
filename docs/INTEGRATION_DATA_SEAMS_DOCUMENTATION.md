@@ -33,7 +33,8 @@ through `mat_copy` of that view, and requires agreement:
 - `qvarma`'s log-likelihood on a windowed (genuinely strided) `y`;
 - `mlp_fit` and `mlp_forecast` on a windowed design matrix, same seed;
 - `mcs_loss` under all three loss functions, then the confidence set, the
-  elimination order and the p-values that come out of it.
+  elimination order, the round each model left in, the deciding round, each
+  round's statistic and p-value, and the MCS p-values that come out of it.
 
 It also checks that a column-oriented series and a row-oriented one give the
 same statistic, which is the branch in `stats_series_at` that a frame drives
