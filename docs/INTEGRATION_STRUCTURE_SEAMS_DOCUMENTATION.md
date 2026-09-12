@@ -107,5 +107,12 @@ module, chosen to be the cheapest thing each header offers, so the linker has
 to resolve a symbol from every one of them rather than discarding the lot as
 unused. Built and run at both precisions.
 
-**Result: no collision found.** All 35 headers compose, in both orders, at
+**Result: no collision found.** All 36 headers compose, in both orders, at
 both precisions.
+
+`linalg/tensor.h` was the thirty-sixth and it was missing from this file for a
+while after it landed, which is the failure mode this test has that the others
+do not: it is the only suite whose coverage is a *list*, so a new header is
+outside it until somebody adds the line. Nothing fails when that line is
+absent. When adding a header, add it here in both orders and give it one call
+in `touch_every_module`.

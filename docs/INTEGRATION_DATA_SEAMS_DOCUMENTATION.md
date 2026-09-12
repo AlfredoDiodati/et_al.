@@ -74,6 +74,79 @@ plus a simulated Johansen critical value.
 **Result: no defect found.** Every consumer respects the stride. The value of
 the file is that this is now checked rather than true by luck.
 
+## `frame_to_tensor.c` — a loader's columns becoming a stack of matrices
+
+**The seam.** A caller has a `DataFrame` with one row per period and wants a
+`T x K x K` stack to work on all at once. Three conventions have to line up,
+and each can be wrong while both sides pass their own suites: `df_col_numeric`
+hands back a view whose stride is the frame's numeric column count rather than
+1; `frame/` is `T x K` where `dist/mv` and `sd/` are `K x T`; and
+`tensor_as_mat` gives `linalg/decomp.h` a slab of the stack with no copy, which
+only holds while that slab's last stride is 1.
+
+**What it checks.** One batched product against `T` products done one at a
+time, the same contraction written as an `einsum`, Cholesky of a slab through
+the view and through a contiguous copy, that permuting time off axis 0 is a
+view over the same buffer, and that the stack survives a `.npy` round trip
+exactly. The per-period path is the reference throughout, since that is what
+the correctness suites already cover.
+
+**Negative controls.** It asserts the frame view really is strided before
+comparing anything through it, and that the packed form of the permuted stack
+really differs from the original buffer — otherwise a permute that did nothing
+would pass.
+
+**Result: no defect in the library, one in the test.** The `einsum` comparison
+was written with an absolute tolerance of `1e-9`, which passed at `-O3` and
+failed under the sanitizer build at `-O1` by `1.19e-07`. Neither number was a
+bug: `einsum` classifies `t` as a free label of the first operand rather than
+as a batch axis, because the second operand has no `t`, so it contracts the
+whole thing as one `(T*K) x K` by `K x K` product where `tensor_matmul` issues
+`T` separate ones. Same arithmetic, different blocking inside BLAS. The data is
+outer products of macro series and runs to `1e8`, so `1.19e-07` is agreement to
+about `1e-15` relative and the absolute tolerance was asking for agreement
+below the last bit. The check is relative now.
+
+The general lesson is the one this directory keeps finding: a tolerance that
+holds at one optimization level is not a tolerance, and two paths that reach
+the same BLAS by different blockings agree to rounding, not to zero.
+
+## `tensor_to_optimizer.c` — a stack of matrices trained end to end
+
+**The seam.** `linalg/tensor.h`, `ad.h`'s tensor half and `solver/adam.h` were
+each tested alone. Their composition is what a model over matrix-valued
+observations is: build a stack, contract it against parameters, reduce to a
+scalar, ask the tape for a gradient, hand that to an optimizer, repeat. Three
+things can be wrong with all three modules passing: a gradient transposed
+relative to the parameter it updates is still the right size, so the optimizer
+runs and converges to the wrong place; a tensor node's value is freed through
+the same `val_pooled` path as a matrix node's, and a reshape node aliases its
+parent where a product node owns its value; and `tape_reset` has to clear a
+pooled gradient rather than accumulate into it, since a tape that accumulated
+would still descend, just along a running sum.
+
+**What it checks.** The same objective through `ad.h`'s tensor half and through
+its matrix half, one period at a time — one gradient, then sixty Adam steps,
+compared element by element. Then the `einsum` spelling of the same objective
+driving the same optimizer, a tape reused across all sixty steps against a
+fresh tape per step, and a leaf outliving the value it was built from.
+
+**Negative controls.** The same loop with the learning rate at zero must leave
+the parameters exactly untouched, and both arms must have moved a measurable
+distance before their agreement counts for anything.
+
+**Result: no defect in the library, one in the test — and it took the sanitizer
+to find it.** `mat_arm_step` passed `ad_leaf(t, mat_copy(slab))`. `ad_leaf`
+copies what it is given and the tape frees its own copy, so the `mat_copy` was
+a second copy nobody owned: 281 KB leaked over 2928 allocations, invisible in
+an ordinary run and reported immediately by `make test-integration-asan`. This
+is precisely the case that target exists for, and the first time it has caught
+something.
+
+Measured agreement, float64, 24 periods of 3x3, sixty Adam steps: gradients to
+`8.9e-16`, parameters to `1.3e-16` after moving `2.31`, the reused tape exactly
+identical to the fresh one.
+
 ## `join_missing_values.c` — what a hole in the data does to a statistic
 
 `frame/join.h` is the one place in this project that writes a real NaN into a

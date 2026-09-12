@@ -59,7 +59,7 @@ SUITES="test_mat test_tensor test_tensor_serial test_mat_special test_decomp tes
 # "is this module correct" but "does the hand-off between two of them hold".
 # Each of these binaries includes headers from at least two directories. See
 # README.md's "Testing and benchmarking" for the split.
-INTEGRATION="frame_to_model join_missing_values distributed_simulation optimizer_swap pipeline_ownership npz_to_statistics header_composition header_composition_f32"
+INTEGRATION="frame_to_model frame_to_tensor tensor_to_optimizer join_missing_values distributed_simulation optimizer_swap pipeline_ownership npz_to_statistics header_composition header_composition_f32"
 
 printf "building...\n"
 printf "=== build ===\n" >> "$REPORT"

@@ -297,6 +297,59 @@ static mreal obj_bridge(Tape *t, TensorNode **in, int n, Node **loss) {
     return l->val.d[0];
 }
 
+/* The metadata a node hands back has to be a complete Tensor, not one whose
+   unused axes are whatever was on the stack.
+
+   linalg/tensor.h's view operations - permute, select, squeeze, expand_dims -
+   start from a copy of their argument's whole struct and rewrite only the axes
+   they move. So an axis entry left unset by whoever built the tensor is copied
+   into everything derived from it, and stays invisible until some later
+   operation reads past the current rank. ad_tensor_val filled shape past ndim
+   and not stride, which nothing read and which -Wmaybe-uninitialized found
+   before anything did.
+
+   The check is that a node's view is field-for-field what tensor_new produces
+   for the same shape, including the axes past the rank.
+
+   This file is built with -ftrivial-auto-var-init=pattern (AUTO_INIT_CFLAGS in
+   the Makefile, probed for rather than assumed) so that an unset field holds a
+   fixed pattern instead of whatever the stack held. Without it this check
+   passed against the unfixed code, which is worse than not having it: the
+   stack happened to contain the right values. A test that fails only by luck
+   is not a test. */
+static void test_node_metadata_is_complete(void) {
+    puts("node views are complete tensors");
+    Tape *t = tape_new();
+    int shape[2] = { 3, 4 };
+    Tensor v = rand_tensor(2, shape);
+    TensorNode *a = ad_tensor_leaf(t, v);
+
+    Tensor reference = tensor_new(2, shape);
+    Tensor value = ad_tensor_val(a);
+    Tensor gradient = ad_tensor_grad(a);
+    assert(value.ndim == reference.ndim && gradient.ndim == reference.ndim);
+    for (int i = 0; i < TENSOR_MAX_NDIM; i++) {
+        assert(value.shape[i] == reference.shape[i]);
+        assert(value.stride[i] == reference.stride[i]);
+        assert(gradient.shape[i] == reference.shape[i]);
+        assert(gradient.stride[i] == reference.stride[i]);
+    }
+
+    /* and the same for a rank-1 node, where six of the eight axes are unused */
+    int one[1] = { 5 };
+    Tensor v1 = rand_tensor(1, one);
+    TensorNode *b = ad_tensor_leaf(t, v1);
+    Tensor ref1 = tensor_new(1, one);
+    Tensor got1 = ad_tensor_val(b);
+    for (int i = 0; i < TENSOR_MAX_NDIM; i++) {
+        assert(got1.shape[i] == ref1.shape[i]);
+        assert(got1.stride[i] == ref1.stride[i]);
+    }
+
+    tensor_free(v); tensor_free(v1); tensor_free(reference); tensor_free(ref1);
+    tape_free(t);
+}
+
 static void test_known_gradients(void) {
     puts("known-output gradients");
 
@@ -519,6 +572,7 @@ static void test_tape_reset(void) {
 
 int main(void) {
     srand(11);
+    test_node_metadata_is_complete();
     test_known_gradients();
     test_finite_differences();
     test_tape_reset();

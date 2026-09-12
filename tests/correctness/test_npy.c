@@ -360,6 +360,126 @@ static void test_random_write_read_roundtrip_stress(void) {
     printf("  100 random all-numeric DataFrames round-tripped ok\n");
 }
 
+/* n-dimensional .npy, the rank a DataFrame cannot hold.
+
+   Two checks, because they can fail independently. The round trip through
+   this file's own writer and reader would pass just as happily if both
+   agreed on a wrong format, so a real numpy file is embedded as bytes and
+   read as well - the same technique tests/correctness/test_npz.c uses, and
+   for the same reason: nothing in a Python-free suite can call numpy.save,
+   so the only way to check against the real format is to carry a file numpy
+   produced once.
+
+   The embedded file is float32, so the checks that read it are compiled only
+   in a float32 build; the dtype guard in frame_npy_check_descr would
+   (correctly) refuse it otherwise, and a test that asserts a refusal is a
+   different test from one that asserts a value. */
+#ifndef MAT_DOUBLE
+static const unsigned char numpy_3d_f32[] = {
+    0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 0x01, 0x00, 0x76, 0x00, 0x7b, 0x27,
+    0x64, 0x65, 0x73, 0x63, 0x72, 0x27, 0x3a, 0x20, 0x27, 0x3c, 0x66, 0x34,
+    0x27, 0x2c, 0x20, 0x27, 0x66, 0x6f, 0x72, 0x74, 0x72, 0x61, 0x6e, 0x5f,
+    0x6f, 0x72, 0x64, 0x65, 0x72, 0x27, 0x3a, 0x20, 0x46, 0x61, 0x6c, 0x73,
+    0x65, 0x2c, 0x20, 0x27, 0x73, 0x68, 0x61, 0x70, 0x65, 0x27, 0x3a, 0x20,
+    0x28, 0x32, 0x2c, 0x20, 0x33, 0x2c, 0x20, 0x32, 0x29, 0x2c, 0x20, 0x7d,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x0a, 0x00, 0x00, 0x80, 0x3e,
+    0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x40, 0x3f, 0x00, 0x00, 0x80, 0x3f,
+    0x00, 0x00, 0xa0, 0x3f, 0x00, 0x00, 0xc0, 0x3f, 0x00, 0x00, 0xe0, 0x3f,
+    0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x10, 0x40, 0x00, 0x00, 0x20, 0x40,
+    0x00, 0x00, 0x30, 0x40, 0x00, 0x00, 0x40, 0x40
+};
+
+static void test_tensor_reads_a_real_numpy_file(void) {
+    puts("a 3-D file numpy itself wrote");
+    const char *path = "test_npy_numpy_3d.npy";
+    FILE *f = fopen(path, "wb");
+    assert(f);
+    fwrite(numpy_3d_f32, 1, sizeof numpy_3d_f32, f);
+    fclose(f);
+
+    Tensor t = tensor_read_npy(path);
+    assert(t.ndim == 3);
+    assert(t.shape[0] == 2 && t.shape[1] == 3 && t.shape[2] == 2);
+    /* numpy stored (arange(12) + 1) / 4 in C order */
+    for (int i = 0; i < 12; i++)
+        assert(MABS(t.d[i] - (mreal)(i + 1) / (mreal)4) < 1e-6f);
+    /* and the elements land where the shape says, not merely in the buffer */
+    assert(MABS(TAT3(t, 1, 2, 1) - (mreal)3) < 1e-6f);
+    tensor_free(t);
+    remove(path);
+    printf("  rank 3, shape 2x3x2, values and indexing all match\n");
+}
+#endif
+
+static void test_tensor_npy_roundtrip(void) {
+    puts("n-dimensional .npy round trip");
+    const char *path = "test_npy_tensor_roundtrip.npy";
+
+    /* every rank from 1 to the cap, so the shape-tuple text is exercised at
+       the one-element form "(n, )" as well as the ordinary one */
+    for (int ndim = 1; ndim <= TENSOR_MAX_NDIM; ndim++) {
+        int shape[TENSOR_MAX_NDIM];
+        for (int i = 0; i < ndim; i++) shape[i] = 2 + (i % 3);
+        Tensor t = tensor_new(ndim, shape);
+        for (size_t i = 0; i < tensor_size(t); i++) t.d[i] = (mreal)(i % 97) / (mreal)7;
+        tensor_write_npy(t, path);
+
+        Tensor back = tensor_read_npy(path);
+        assert(back.ndim == ndim);
+        for (int i = 0; i < ndim; i++) assert(back.shape[i] == shape[i]);
+        assert(tensor_size(back) == tensor_size(t));
+        for (size_t i = 0; i < tensor_size(t); i++)
+            assert(MABS(back.d[i] - t.d[i]) < 1e-6f);
+        tensor_free(t);
+        tensor_free(back);
+    }
+
+    /* a non-contiguous source has to be packed into C order on the way out,
+       which is the one thing the writer does beyond handing over its buffer */
+    int shape[3] = { 4, 3, 2 };
+    Tensor t = tensor_new(3, shape);
+    for (size_t i = 0; i < tensor_size(t); i++) t.d[i] = (mreal)i;
+    int perm[3] = { 2, 0, 1 };
+    Tensor view = tensor_permute(t, perm);
+    tensor_write_npy(view, path);
+    Tensor back = tensor_read_npy(path);
+    assert(back.ndim == 3 && back.shape[0] == 2 && back.shape[1] == 4 && back.shape[2] == 3);
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < 4; j++)
+            for (int k = 0; k < 3; k++)
+                assert(MABS(TAT3(back, i, j, k) - TAT3(t, j, k, i)) < 1e-6f);
+    tensor_free(t);
+    tensor_free(back);
+    remove(path);
+    printf("  ranks 1 to %d, and a permuted view packed on the way out\n", TENSOR_MAX_NDIM);
+}
+
+/* A 2-D file still reads as a DataFrame, and a 3-D one still refuses to,
+   since a DataFrame has no rank to put the third axis in. The refusal is the
+   point: the n-dimensional reader was added beside that limit, not through
+   it. */
+static const char *g_rank3_path = "test_npy_rank3_for_df.npy";
+static void call_df_read_npy_rank3(void) {
+    DataFrame df = df_read_npy(g_rank3_path);
+    (void)df;
+}
+
+static void test_dataframe_still_refuses_rank_three(void) {
+    puts("a DataFrame still refuses rank 3");
+    int shape[3] = { 2, 2, 2 };
+    Tensor t = tensor_new(3, shape);
+    tensor_write_npy(t, g_rank3_path);
+    tensor_free(t);
+
+    expect_abort(call_df_read_npy_rank3);
+    remove(g_rank3_path);
+    printf("  df_read_npy aborts on a rank-3 file rather than reshaping it\n");
+}
+
 int main(void) {
     test_2d_roundtrip();
     test_genuine_1d_shape_string();
@@ -367,6 +487,11 @@ int main(void) {
     test_adversarial_single_element();
     test_malformed_npy_aborts();
     test_write_read_roundtrip();
+    test_tensor_npy_roundtrip();
+    test_dataframe_still_refuses_rank_three();
+#ifndef MAT_DOUBLE
+    test_tensor_reads_a_real_numpy_file();
+#endif
 
     if (getenv("STRESS")) test_random_write_read_roundtrip_stress();
 

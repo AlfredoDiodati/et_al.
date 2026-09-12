@@ -86,11 +86,22 @@ Two restrictions, both inherited from `tensor_einsum` rather than added here, so
 
 Every adjoint is checked against a central finite difference of the same graph: each traced input is perturbed one element at a time, the scalar objective re-evaluated on a freshly built tape, and the result compared against the single backward pass. What that compares is the whole backward pass against the forward pass it claims to differentiate, with no second derivation for either to agree with by mistake. The step is `1e-5` at float64 and `3e-3` at float32, and the tolerance is relative at `2e-2`, the same order `test_ad.c` uses for its own finite-difference checks.
 
+One check is not about a gradient at all. `test_node_metadata_is_complete`
+requires the `Tensor` a node hands back to be field-for-field what
+`tensor_new` produces for the same shape, *including the axes past the rank*.
+`ad_tensor_val` once filled `shape` there and not `stride`; nothing read those
+entries, but `linalg/tensor.h`'s view operations copy the whole struct and
+rewrite only the axes they move, so an unset entry travels into everything
+derived from that tensor. The file is built with
+`-ftrivial-auto-var-init=pattern` (`AUTO_INIT_CFLAGS` in the Makefile, probed
+for rather than assumed) because without it the check passed against the
+broken code - the stack happened to hold the right bytes.
+
 Where the derivative is known in closed form the test states it instead, because that is the only kind of check that catches an adjoint wrong in the same way its forward pass is: `sum(a .* b)` has `da = b` exactly, `sum(a)` has gradient one everywhere whatever the rank, and `sum(AB)` over a batch has `dA` equal to a row sum of `B` repeated.
 
 Two further checks earn their place. The einsum spelling of a batched product and `ad_tensor_matmul` must produce the same gradients to `1e-5`, which holds the two implementations of the same mathematics against each other rather than each against a tolerance. And a tape reused across three `tape_reset` cycles must give identical gradients each time, which is what says a tensor node's pooled gradient buffer is cleared on reset rather than accumulated into.
 
-Nineteen cases run in all. The ones that exist because of a specific way an implementation can be wrong: a broadcast operand and a broadcast batch axis (an adjoint of the wrong shape); fan-out (two contributions that must add rather than overwrite); a dropped label (a stretch rather than a contraction); a diagonal operand and a bare trace (the adjoint must land on the diagonal and nowhere else); implicit output mode (the labels are derived twice and must agree); and the three vector-promotion shapes.
+Eighteen finite-difference cases run in all. The ones that exist because of a specific way an implementation can be wrong: a broadcast operand and a broadcast batch axis (an adjoint of the wrong shape); fan-out (two contributions that must add rather than overwrite); a dropped label (a stretch rather than a contraction); a diagonal operand and a bare trace (the adjoint must land on the diagonal and nowhere else); implicit output mode (the labels are derived twice and must agree); and the three vector-promotion shapes.
 
 The objective in every finite-difference case is `sum(tanh(...))` rather than `sum(...)`: summing a product directly gives an adjoint that is constant in the inputs, which several wrong implementations also produce.
 

@@ -44,6 +44,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../linalg/solver.h"
 #include "../../linalg/decomp.h"
 #include "../../linalg/factor.h"
+#include "../../linalg/tensor.h"
 #include "../../linalg/mat.h"
 
 /* Called from header_composition.c's main so the linker cannot drop this unit,
@@ -55,6 +56,8 @@ int reverse_order_unit_compiles(void) {
     int problems = 0;
     Mat m = mat_eye(3);
     if (m.r != 3 || MABS(AT(m, 1, 1) - 1.f) > 1e-4f) problems++;
+    Tensor t = mat_as_tensor(m);
+    if (t.ndim != 2 || MABS(tensor_sum(t) - 3.f) > 1e-4f) problems++;
     mat_free(m);
     return problems;
 }

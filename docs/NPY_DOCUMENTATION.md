@@ -10,7 +10,7 @@
 
 Matching the same "no new dependency, actually simple" bar that ruled out Parquet/Arrow in the first place:
 
-- **Only 1D/2D arrays.** A 1D array (`shape == (n,)`) is treated as an `n x 1` column vector; anything higher-rank is a contract violation (`assert`) — `Mat` itself is 2D-only, so there is nowhere to put a 3D array.
+- **A `DataFrame` still takes only 1D/2D arrays.** A 1D array (`shape == (n,)`) is treated as an `n x 1` column vector; anything higher-rank is a contract violation (`assert`) for `df_read_npy`, because a `DataFrame` has no third axis to put it in. **Higher ranks are read as a `Tensor` instead**, up to `TENSOR_MAX_NDIM` — see the n-dimensional API below. That limit used to be the file's, justified as "matching `Mat`'s own 2D-only model"; since `linalg/tensor.h` exists the format's rank and the caller's are two separate questions, and the shape parser now states what the format allows while each reader states what it can hold.
 - **Only little-endian (`<f4`/`<f8`).** Every realistic target platform for this library (x86, ARM) already is little-endian; big-endian support would need byte-swapping this file has no reason to carry.
 - **Only C-contiguous (`fortran_order: False`).** This library is row-major only (see `docs/MATRIX_DOCUMENTATION.md`'s design principles) — a Fortran-order `.npy` is rejected, not silently transposed.
 - **Dtype must exactly match this build's `mreal`** — `<f4` for the default `float` build, `<f8` under `-DMAT_DOUBLE`. No silent narrowing/widening cast between the file's precision and the build's; re-save from Python with the matching dtype, or rebuild with/without `-DMAT_DOUBLE`, whichever is actually wrong.
@@ -22,7 +22,12 @@ All four are `assert`-enforced (this project's established "assert on contract v
 ```c
 DataFrame df_read_npy(const char *path);
 void df_write_npy(const DataFrame *df, const char *path);
+
+Tensor tensor_read_npy(const char *path);          /* any rank up to TENSOR_MAX_NDIM */
+void   tensor_write_npy(Tensor t, const char *path);
 ```
+
+**The n-dimensional pair is how a stack of matrices crosses to and from Python**, which is the case `linalg/tensor.h` exists for: `numpy.save` on one side, `tensor_read_npy` on the other, no conversion step and no reshaping, because the file records the rank. A 1-D file comes back as a rank-1 `Tensor` here rather than the `n x 1` column `df_read_npy` rounds it up to — a `Tensor` has a rank of its own to carry, so there is nothing to round up to. `tensor_write_npy` packs a non-contiguous input first, since the format stores elements in C order and a permuted or strided view is not in it; that is the only thing it does beyond handing its buffer to `fwrite`. The dtype rule is unchanged and enforced by the same `frame_npy_check_descr`, so a float64 file read by a float32 build is refused rather than reinterpreted.
 
 Five internals are shared with `frame/npz.h`, whose archive members are `.npy` images sitting in a buffer rather than files on disk: `frame_npy_header_text` (validate the preamble, return the header dict text and where the data starts), `frame_npy_data_matrix` (copy a validated image's data block into a `Mat`), `frame_npy_format_preamble` (build a v1.0 preamble for a given dtype and shape tuple, including numpy's 64-byte alignment padding), `frame_npy_descr` (extract a dtype string) and `frame_npy_mreal_descr` (this build's own). They are split out rather than duplicated because they are the parts most likely to drift: where a header ends, whether the declared data fits in the file, and the alignment convention real `numpy.load()` may assume — a second copy of that rule agreeing with this project's reader but not with numpy's is exactly the failure the split avoids. `frame_npy_descr` is separate from `frame_npy_check_descr` because `.npz` has to look at a dtype before deciding what kind of column it is, where a bare `.npy` read only has to require one.
 
@@ -49,6 +54,10 @@ df_free(&df);
 
 The shared-helper split described under API reference above moved the whole preamble-writing path out of `df_write_npy`, so it was checked for byte-identity rather than assumed: the pre-split writer and the current one were each built into a program writing the same five `DataFrame` shapes - `1x1`, `2x3`, `7x11`, `3x100`, `13x2`, chosen because the header dict's length differs in each and therefore so does the number of alignment spaces - at both precisions, and all ten resulting files compared with `cmp`. Identical, byte for byte. That is the check that matters for this refactor, since the alignment padding is exactly the part a second implementation gets subtly wrong while still satisfying this project's own reader.
 
+The n-dimensional pair is tested two ways, because they fail independently. `test_tensor_npy_roundtrip` writes and reads back every rank from 1 to `TENSOR_MAX_NDIM`, which exercises the shape-tuple text at the one-element `(n, )` form as well as the ordinary one, and writes a permuted view to check it is packed into C order on the way out rather than dumped in stride order. That round trip would pass just as happily if the writer and reader agreed on a wrong format, so `test_tensor_reads_a_real_numpy_file` carries a rank-3 file numpy produced once, embedded as bytes — the same technique `tests/correctness/test_npz.c` uses, and for the same reason: nothing in a Python-free suite can call `np.save`, so a file numpy wrote is the only way to check against the real format. It is a float32 file, so that check is compiled only in a float32 build. `test_dataframe_still_refuses_rank_three` pins the other half: `df_read_npy` aborts on a rank-3 file rather than reshaping it, which is what says the n-dimensional reader was added beside that limit rather than through it.
+
+Both directions were also checked against a live numpy during development at ranks 1, 3 and 4, including that a permuted write matches `np.ascontiguousarray(a.transpose(...))` element for element — the interop claim is what writing `.npy` is for, and this project's own reader cannot verify it.
+
 **Two defects found while building `frame/npz.h`, both fixed, both with a regression case in `test_malformed_npy_aborts`.** Neither was reachable from any test here before, because every one of them fed `df_read_npy` a file the same suite had just written — a reader is only tested against hostile input when something hands it hostile input.
 
 - A one-byte heap overread on a short v2.0 file. `df_read_npy` asserted `size >= 10`, the v1.0 preamble length, then read a 4-byte header-length field at bytes 8-11 when the version said 2.0; a 10-byte file passed the check and the read went one past the buffer. Reported by AddressSanitizer — an ordinary build aborts on one check or the other either way, so the regression case pins the length requirement rather than the symptom. The v2.0 branch now requires 12 bytes.
@@ -59,4 +68,5 @@ The shared-helper split described under API reference above moved the whole prea
 ## Known limitations and future work
 
 - No byte-swapping for big-endian files — see Scope above.
+- `frame/npz.h` is still 2D-only. An archive member of rank 3 asserts, because an `.npz` becomes a `DataFrame` and the rank question there is the `DataFrame`'s, not the format's. Reading one would mean deciding what a multi-rank archive is a frame *of*, which is a design question rather than a missing function.
 - Column names and string columns are not representable at all — that is `.npz`'s job, not a gap to close here. See `docs/NPZ_DOCUMENTATION.md`.

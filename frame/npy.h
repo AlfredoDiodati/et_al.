@@ -1,5 +1,6 @@
 #pragma once
 #include "frame.h"
+#include "../linalg/tensor.h"
 
 /* NumPy .npy loader for DataFrame: a simple, well-documented binary
    format (NEP 1) - a short ASCII header (dtype, shape, byte order) then
@@ -63,9 +64,46 @@ static inline void frame_npy_check_fortran_order(const char *header) {
            "frame: .npy fortran_order=True (column-major) is not supported - this library is row-major only");
 }
 
+/* Parses the 'shape' tuple of any rank, e.g. "(100,)", "(100, 5)" or
+   "(64, 3, 3)", into out and returns the rank. A rank above
+   TENSOR_MAX_NDIM is a file this library cannot represent and asserts.
+
+   The rank-limited callers below narrow this further: a DataFrame is two
+   dimensional whatever the file is, so df_read_npy still refuses anything
+   past rank 2. Splitting the two means the shape parser states what the
+   *format* allows and each caller states what it can hold, rather than the
+   parser enforcing one caller's limit on every other. */
+static inline int frame_npy_parse_shape_nd(const char *header, int *out) {
+    const char *p = strstr(header, "'shape':");
+    assert(p && "frame: .npy header missing 'shape'");
+    p = strchr(p, '(');
+    assert(p && "frame: .npy malformed 'shape' value");
+    p++;
+    int ndim = 0;
+    while (*p && *p != ')') {
+        while (*p == ' ') p++;
+        if (*p == ')') break;
+        char *end;
+        long v = strtol(p, &end, 10);
+        assert(end != p && "frame: .npy malformed shape");
+        assert(ndim < TENSOR_MAX_NDIM && "frame: .npy rank above TENSOR_MAX_NDIM");
+        /* A negative extent has to be rejected here rather than left to the
+           allocator: the byte count below is computed as a size_t, so a
+           negative dimension wraps to a huge value that passes the
+           truncation check and reaches a memset with a negative length. */
+        assert(v >= 0 && v <= 0x7FFFFFFFL && "frame: .npy shape dimension out of range");
+        out[ndim++] = (int)v;
+        p = end;
+        while (*p == ' ' || *p == ',') p++;
+    }
+    assert(ndim >= 1 && "frame: .npy shape must have at least 1 dimension");
+    return ndim;
+}
+
 /* Parses the 'shape' tuple, e.g. "(100, 5)" or "(100,)". A 1D shape is
    treated as an n x 1 column vector (out = {n, 1}); 2D as-is. Asserts on
-   0-d or >2-d shapes - not supported, matching Mat's own 2D-only model. */
+   0-d or >2-d shapes, which a DataFrame cannot hold - read those with
+   tensor_read_npy instead. */
 static inline void frame_npy_parse_shape(const char *header, int *out) {
     const char *p = strstr(header, "'shape':");
     assert(p && "frame: .npy header missing 'shape'");
@@ -222,6 +260,60 @@ static inline size_t frame_npy_format_preamble(unsigned char *out, size_t out_ca
    view - so no repacking is needed). Column names are not written; .npy
    has no header/name concept, matching how df_read_npy generates them on
    the way in. */
+/* Reads a .npy file of any rank up to TENSOR_MAX_NDIM into a Tensor, which
+   is the direction a stack of matrices produced in Python arrives from. The
+   dtype must match this build's mreal exactly, as for the DataFrame reader -
+   the same frame_npy_check_descr enforces it, so a float64 file read by a
+   float32 build is refused rather than silently reinterpreted.
+
+   A 1-D file comes back as a rank-1 tensor here, not as the n x 1 column the
+   DataFrame reader turns it into: the Tensor has a rank of its own to carry,
+   so there is nothing to round up to. Caller must tensor_free. */
+static inline Tensor tensor_read_npy(const char *path) {
+    long size;
+    unsigned char *buf = (unsigned char*)frame_read_file(path, &size);
+
+    size_t data_start;
+    char *header = frame_npy_header_text(buf, (size_t)size, &data_start);
+    frame_npy_check_descr(header);
+    frame_npy_check_fortran_order(header);
+    int shape[TENSOR_MAX_NDIM];
+    int ndim = frame_npy_parse_shape_nd(header, shape);
+    free(header);
+
+    Tensor t = tensor_new(ndim, shape);
+    size_t expected_bytes = tensor_size(t) * sizeof(mreal);
+    assert(data_start + expected_bytes <= (size_t)size &&
+           "frame: .npy file truncated (data shorter than header declares)");
+    memcpy(t.d, buf + data_start, expected_bytes);
+    free(buf);
+    return t;
+}
+
+/* Writes a Tensor as a .npy file of the same rank and shape. A non-contiguous
+   tensor is packed first, since the format stores elements in C order and a
+   permuted or strided view is not in it - which is the one place this differs
+   from handing the buffer straight to fwrite. */
+static inline void tensor_write_npy(Tensor t, const char *path) {
+    char shape[128];
+    int at = snprintf(shape, sizeof shape, "(");
+    for (int i = 0; i < t.ndim; i++)
+        at += snprintf(shape + at, sizeof shape - (size_t)at, "%d%s",
+                       t.shape[i], (i + 1 < t.ndim || t.ndim == 1) ? ", " : "");
+    snprintf(shape + at, sizeof shape - (size_t)at, ")");
+
+    unsigned char preamble[512];
+    size_t preamble_len = frame_npy_format_preamble(preamble, sizeof preamble,
+                                                     frame_npy_mreal_descr(), shape);
+    Tensor packed = tensor_is_contiguous(t) ? t : tensor_copy(t);
+    FILE *f = fopen(path, "wb");
+    assert(f && "frame: could not open file for writing");
+    fwrite(preamble, 1, preamble_len, f);
+    fwrite(packed.d, sizeof(mreal), tensor_size(packed), f);
+    fclose(f);
+    if (packed.d != t.d) tensor_free(packed);
+}
+
 static inline void df_write_npy(const DataFrame *df, const char *path) {
     assert(df->n_string == 0 &&
            "frame: df_write_npy requires an all-numeric DataFrame (.npy cannot represent string columns)");

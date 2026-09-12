@@ -16,6 +16,8 @@ The type is general in rank up to `TENSOR_MAX_NDIM` (8), not specialised to the 
 | `tests/performance/tensor_omp_threshold.c` | Where threading each kernel starts to pay; source of the four `TENSOR_OMP_MIN_*` constants |
 | `tests/performance/tensor_batch_threads.c` | Where threading a batch of matrix products pays and where it harms; source of `TENSOR_BATCH_THREAD_MIN`/`MAX` |
 | `tests/performance/tensor_reduce_tile.c` | A tiling that works in isolation and loses in place; the record of a rejected change |
+| `tests/integration/frame_to_tensor.c` | A loader's columns becoming a stack, and a slab of it reaching a factorization and a file |
+| `tests/integration/tensor_to_optimizer.c` | The stack, `ad.h` and `solver/adam.h` composed into one training loop |
 
 `ad.h` differentiates expressions over this type; see [`AD_TENSOR_DOCUMENTATION.md`](AD_TENSOR_DOCUMENTATION.md).
 
@@ -89,6 +91,8 @@ tensor_free(products);
 
 **Products** `tensor_matmul` (NumPy `@` semantics), `tensor_tensordot(a, b, axes_a, axes_b, naxes)`, `tensor_einsum(subs, nops, ops)`.
 
+**Files** `tensor_read_npy(path)` and `tensor_write_npy(t, path)` in `frame/npy.h` read and write a tensor of any rank as a NumPy `.npy` file, which is how a stack of matrices produced in Python arrives. See [`NPY_DOCUMENTATION.md`](NPY_DOCUMENTATION.md).
+
 **Other** `tensor_size`, `tensor_is_contiguous`, `tensor_offset`, `tensor_ptr`, `tensor_broadcast_shape`, `tensor_same_shape`, `tensor_print`, and the `TAT1`/`TAT2`/`TAT3`/`TAT4` element-access macros.
 
 ## matmul follows NumPy exactly
@@ -133,13 +137,20 @@ costs nothing and `tensor_copy` of a permuted view is where that is paid.
 
 ## Testing
 
-`tests/correctness/test_tensor.c`, run by `make test` at `-fopenmp` and without it.
+`tests/correctness/test_tensor.c`, run by `make test` twice: as `test_tensor`
+with the default flags, and as `test_tensor_serial` with `-fopenmp` filtered
+out. Those are different kernels, not the same kernel on one thread - the
+header tests `_OPENMP` and takes an odometer where the threaded build rebuilds
+each row's offsets by division, and the reductions and the batched product
+each have a serial form of their own. Both have to reach the same answers.
 
 Every kernel has a slow, obviously-correct counterpart in the test file that indexes one element at a time through `tensor_ptr` and never coalesces, broadcasts or dispatches to BLAS: `ref_binop`, `ref_sum_axis`, `ref_batched_matmul`. The agreement checks against a live NumPy live in `tests/performance/bench_tensor.py`, which verifies every operation before timing it - a faster wrong answer is not a result - and are outside `make test` because NumPy is a development-tier dependency the shipped suite may not require.
 
 What the suite attacks on purpose, found by reading the header for what its fast paths assume: the axis-coalescing test, which is wrong in both directions if an extent-1 or a stride-0 axis is merged when it should not be; the gemm-readiness test, pushed down both its paths by a transposed view and by a stepped slice on the same data; the reduction's separate inner loops for an innermost against an outer axis; einsum's classification of each label, where getting one wrong still produces a correctly-shaped answer full of wrong numbers; and a rank-4 batch in `tensor_matmul`, which is where a batch-offset computation that only handles one leading axis goes wrong.
 
 Fixed seeds (`srand(42)`, `srand(7)`), `STRESS=1` for the longer fuzz runs, and the suite is clean under `-fsanitize=address,undefined`.
+
+Two integration suites cover what this header does in composition rather than alone, and both are in `make test` and `make test-integration-asan`: `tests/integration/frame_to_tensor.c` for a loader's columns becoming a stack and a slab of it reaching a factorization and a file, and `tests/integration/tensor_to_optimizer.c` for the stack, `ad.h` and `solver/adam.h` composed into one training loop. `docs/INTEGRATION_DATA_SEAMS_DOCUMENTATION.md` has what each found. `tests/integration/header_composition.c` includes this header alongside the other thirty-five, in both orders, at both precisions.
 
 ## Known limitations
 

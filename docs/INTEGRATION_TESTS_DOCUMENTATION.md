@@ -63,6 +63,11 @@ header comment, so a change to it is a decision rather than a drift.
 
 **A negative control is not optional.** A check that two paths agree passes
 just as happily when both are broken the same way, or when neither ran. So
+`frame_to_tensor.c` asserts the frame view it reads is strided and that a
+permuted stack's packed form really differs from the original;
+`tensor_to_optimizer.c` runs its loop with the learning rate at zero and
+requires the parameters not to move at all, and requires both arms to have
+moved somewhere before it reports that they agree.
 `distributed_simulation.c` also runs a task that deliberately ignores its
 global index and requires the result to be detectably different;
 `frame_to_model.c` asserts the view under test really is strided before
@@ -72,7 +77,7 @@ momentum at zero and requires it to land somewhere else.
 ## Running them
 
 ```bash
-make test-integration        # build and run all eight binaries
+make test-integration        # build and run all ten binaries
 make test-integration-asan   # the same suite under AddressSanitizer + UndefinedBehaviorSanitizer
 ./check.sh                   # correctness suites, then these, then the examples build
 ```
@@ -111,6 +116,7 @@ arrived intact** — `docs/INTEGRATION_DATA_SEAMS_DOCUMENTATION.md`:
 | file | the seam | result |
 |---|---|---|
 | `frame_to_model.c` | a loaded column's stride reaching every consumer above `frame/` | no defect found |
+| `frame_to_tensor.c` | a loader's columns becoming a stack of matrices, and a slab of it reaching a factorization and a file | no library defect; one tolerance defect in the test itself |
 | `join_missing_values.c` | a missing value reaching a statistic or a verdict | **two real defects, both fixed** |
 | `npz_to_statistics.c` | a frame surviving a binary container | no defect found |
 | `pipeline_ownership.c` | what stays valid once the thing it came from is freed | no defect found |
@@ -123,7 +129,8 @@ holds** — `docs/INTEGRATION_STRUCTURE_SEAMS_DOCUMENTATION.md`:
 |---|---|---|
 | `distributed_simulation.c` | a Monte Carlo across machines against the serial answer | no defect found |
 | `optimizer_swap.c` | the `Optimizer` interface where a model uses it | no defect found |
-| `header_composition.c` / `_reverse.c` | all 35 headers in one translation unit, both orders | no collision found |
+| `tensor_to_optimizer.c` | `linalg/tensor.h` -> `ad.h` -> `solver/adam.h`, the composition a matrix-valued model is | no library defect; one leak in the test itself, found by the sanitizer target |
+| `header_composition.c` / `_reverse.c` | all 36 headers in one translation unit, both orders | no collision found |
 
 The split is by when a reader needs the content rather than by size alone, the
 same criterion `README.md`'s documentation-structure policy applies to

@@ -24,15 +24,21 @@ Measured on `128x64x32 + 64x1`, writing those cases out took the broadcast addit
 
 Once the inner loop is right, what is left in a traversal that could not be coalesced is the per-row address arithmetic, and it was the larger half of the remaining time. Rebuilding each row's offsets from its flat index costs one integer division and one modulus per axis per row. That exists so an OpenMP thread can start anywhere in the range; a serial pass does not need it and carries an odometer instead - one add per axis, and only on the axes that actually rolled over.
 
-Both forms are in the macro, chosen by whether the parallel region will engage at all. On the broadcast addition, which is serial because `TENSOR_OMP_MIN_CHEAP` is off, that took the kernel from 0.181 ms to 0.055 ms, 3.3x. The reductions, which are always serial, got the odometer unconditionally: `sum over axis 2` went 0.262 to 0.148 ms and `max over axis 1` 0.670 to 0.323 ms, both about 1.8x, on `128x128x64` float32.
+Both forms are in the macro, chosen by whether the parallel region will engage at all - which is decided by the element count *and* by `_OPENMP`, since without threads to divide the work the division is a pure loss. Measured when it landed, with the element-wise threshold still switched off so the broadcast addition took the serial path: 0.181 ms to 0.055 ms, 3.3x. The reductions, which were serial at that point, got the odometer unconditionally and kept it for the case that is still serial: `sum over axis 2` went 0.262 to 0.148 ms and `max over axis 1` 0.670 to 0.323 ms, both about 1.8x, on `128x128x64` float32.
+
+Both of those kernels are threaded now (see Threading below), so the odometer is what runs on one core and in a build without `-fopenmp`, not what runs by default. It is not superseded: the serial form is what a caller without the flag gets, and the threaded form still pays the divisions it was written to avoid.
 
 ### einsum hands back its result when the order already matches
 
 Every einsum used to end with a permute and a copy into a fresh buffer. The permutation is the identity whenever the output labels are written in the order the contraction produces them, which includes `"tij,tjk->tik"` and every expression with nothing to reorder, so that copy was pure overhead in the common case. It is now skipped when the permutation is the identity and the value is already an owner; a view still has to be copied, since the caller is owed something it can free. `"tii->t"` at 512 x 3x3 went from 0.0077 ms to 0.0023 ms and the batched product from 0.098 to 0.068 ms.
 
-### One thing that was tried and is not here
+### One thing that was tried and is not here, and what closed that gap instead
 
-Tiling a reduction over an outer axis, so the output slice stays in cache across every input row, is worth 1.21x on the kernel in isolation (`make bench-tensor_reduce_tile`). Inside `_TENSOR_REDUCE_BODY` it was worth 5 to 9 percent on the reduction it targets and cost 7 percent on reducing over the innermost axis, consistently, across five interleaved A/B rounds. The cost was not the tiled loop but the extra code in a macro every reduction expands, which changed what the compiler did with the loop that was already there. The innermost case is the more common one and the one already ahead of NumPy, so the tiling is not in the header. `docs/PERFORMANCE_BACKLOG.md` item 15 has the numbers.
+Tiling a reduction over an outer axis, so the output slice stays in cache across every input row, is worth 1.21x on the kernel in isolation (`make bench-tensor_reduce_tile`). Inside `_TENSOR_REDUCE_BODY` it was worth 5 to 9 percent on the reduction it targets and cost 7 percent on reducing over the innermost axis, consistently, across five interleaved A/B rounds. The cost was not the tiled loop but the extra code in a macro every reduction expands, which changed what the compiler did with the loop that was already there. The innermost case is the more common one and the one already ahead of NumPy, so the tiling is not in the header.
+
+What closed the gap was threading, and the shape of the fix is worth keeping: splitting the innermost range across threads is race-free by construction *and* hands each thread a slice small enough to stay in cache. The tiling's benefit arrived as a side effect of the parallelism rather than instead of it, and without the extra branch that made the tiling cost more than it saved. `sum over axis 0` went from 1.21x slower than NumPy to 2.24x faster. `docs/PERFORMANCE_BACKLOG.md` item 15 has both halves.
+
+The reusable part is the diagnosis, not the tile: an optimization added as another branch inside one of this header's macros is paid for by every other branch that macro expands. Prefer a separate entry point when the next one comes up.
 
 ### Threading
 
@@ -157,8 +163,8 @@ Where the wins come from, since several are not this header's doing:
 - **`stack`, 8.2x**, because NumPy's `np.stack` builds an intermediate list
   of arrays and this writes each slab straight into the destination.
 
-Five changes during development are worth recording, because all five
-generalise past this header:
+Six changes during development are worth recording, because all six generalise
+past this header:
 
 1. **Writing the inner loops out per stride case.** With one general loop the
    strides are runtime values and the compiler emits gathers. Splitting on
@@ -182,4 +188,14 @@ generalise past this header:
    kernels; correcting the benchmark moved four rows of this table from
    behind NumPy to 2.2x-2.9x ahead. The batched product went the other way -
    the obvious parallelism there is a fiftyfold loss at large sizes.
+6. **Filling a struct's unused tail.** `ad_tensor_val` set a node's `shape`
+   past its rank and not its `stride`. Nothing read those entries, so nothing
+   failed; `linalg/tensor.h`'s view operations copy the whole struct and
+   rewrite only the axes they move, so the unset entries would have travelled
+   into every tensor derived from one. Found by `-Wmaybe-uninitialized`, and
+   the first regression test written for it passed against the broken code
+   because the stack happened to hold the right bytes - which is why
+   `tests/correctness/ad_tensor_gradients.c` is built with
+   `-ftrivial-auto-var-init=pattern`. A test that fails only by luck is not a
+   test.
 

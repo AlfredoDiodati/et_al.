@@ -37,6 +37,7 @@ the lot as unused.
 /* Root headers, then every subdirectory, in the order README.md's "Directory
    structure" lists them. */
 #include "../../linalg/mat.h"
+#include "../../linalg/tensor.h"
 #include "../../linalg/factor.h"
 #include "../../linalg/decomp.h"
 #include "../../linalg/solver.h"
@@ -87,6 +88,15 @@ static int touch_every_module(void) {
     Mat identity = mat_eye(2);
     Mat product = mat_mul(a, identity);
     if (MABS(AT(product, 0, 0) - 4.f) > 1e-4f) problems++;
+
+    /* linalg/tensor.h: a rank-2 tensor is the same buffer as the Mat above,
+       so this also checks that the two headers agree about the layout rather
+       than only that both linked. */
+    Tensor ta = mat_as_tensor(a);
+    Tensor scaled = tensor_scale(ta, (mreal)2);
+    if (MABS(TAT2(scaled, 0, 0) - 8.f) > 1e-4f) problems++;
+    if (MABS(tensor_sum(ta) - 9.f) > 1e-4f) problems++;
+    tensor_free(scaled);
 
     Mat chol = mat_chol(a);
     if (chol.r != 2) problems++;

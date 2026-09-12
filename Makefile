@@ -12,6 +12,16 @@ BLAS_LIBS   := $(shell pkg-config --libs openblas 2>/dev/null || echo -lopenblas
 # Dependencies - and a build that removes this flag still compiles and still
 # passes, just on one thread.
 OPENMP_CFLAGS ?= -fopenmp
+
+# -ftrivial-auto-var-init=pattern fills every otherwise-uninitialized local
+# with a fixed byte pattern. One correctness binary is built with it, so that
+# a struct field left unset fails the same way on every run instead of
+# whenever the stack happens to hold the wrong bytes - which is how
+# ad_tensor_val's unset trailing strides passed a test written to catch them.
+# Probed rather than assumed: the flag is GCC 12 and later, and an older
+# compiler still has to build this project.
+AUTO_INIT_CFLAGS := $(shell $(CC) -ftrivial-auto-var-init=pattern -E -x c /dev/null >/dev/null 2>&1 \
+                       && echo -ftrivial-auto-var-init=pattern)
 CFLAGS  = -Wall -Wextra -O3 -march=native -ffast-math $(OPENMP_CFLAGS) $(BLAS_CFLAGS) $(if $(MAT_DOUBLE),-DMAT_DOUBLE)
 LDLIBS  = -lm $(BLAS_LIBS)
 
@@ -91,7 +101,7 @@ examples: $(EXAMPLES)
 examples/mat_example: examples/mat_example.c linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/mat_example.c $(LDLIBS) -o examples/mat_example
 
-examples/tensor_example: examples/tensor_example.c linalg/tensor.h linalg/mat.h
+examples/tensor_example: examples/tensor_example.c linalg/tensor.h linalg/mat.h frame/npy.h frame/frame.h
 	$(CC) $(CFLAGS) -I. examples/tensor_example.c $(LDLIBS) -o examples/tensor_example
 
 examples/mlp_example: examples/mlp_example.c nn/mlp.h json.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
@@ -285,12 +295,15 @@ tests/correctness/test_tensor: tests/correctness/test_tensor.c linalg/tensor.h l
 	$(CC) $(CFLAGS) tests/correctness/test_tensor.c $(LDLIBS) -o tests/correctness/test_tensor
 
 # The same suite with the threads taken away, which is a different set of
-# kernels: linalg/tensor.h tests the predefined _OPENMP macro and walks an
+# kernels. -Wno-unknown-pragmas because taking -fopenmp away is the point of
+# this target, and every omp pragma in the header is then a warning that says
+# only that the flag is absent - which is what was asked for.
+# Kernels: linalg/tensor.h tests the predefined _OPENMP macro and walks an
 # odometer where the threaded build rebuilds each row's offsets by division,
 # and the reductions and the batched product each have a serial form of their
 # own. Both have to reach the same answers, so both are built and both run.
 tests/correctness/test_tensor_serial: tests/correctness/test_tensor.c linalg/tensor.h linalg/mat.h
-	$(CC) $(filter-out -fopenmp,$(CFLAGS)) tests/correctness/test_tensor.c $(LDLIBS) -o tests/correctness/test_tensor_serial
+	$(CC) $(filter-out -fopenmp,$(CFLAGS)) -Wno-unknown-pragmas tests/correctness/test_tensor.c $(LDLIBS) -o tests/correctness/test_tensor_serial
 
 # Where the parallel region starts paying for itself, which is what
 # TENSOR_OMP_MIN in linalg/tensor.h records.
@@ -409,8 +422,11 @@ tests/correctness/test_matgauss_recovery: tests/correctness/test_matgauss_recove
 tests/correctness/test_ad: tests/correctness/test_ad.c ad.h linalg/tensor.h dist/gauss.h dist/student.h dist/mv/gauss.h dist/mv/student.h dist/broadcast.h special.h random/random.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_ad.c $(LDLIBS) -o tests/correctness/test_ad
 
+# Built with AUTO_INIT_CFLAGS (see above): this file's first check asserts that
+# a node hands back a fully populated Tensor, and without a deterministic fill
+# an unset field is whatever the stack held.
 tests/correctness/ad_tensor_gradients: tests/correctness/ad_tensor_gradients.c ad.h special.h linalg/solver.h linalg/decomp.h linalg/tensor.h linalg/mat.h
-	$(CC) $(CFLAGS) tests/correctness/ad_tensor_gradients.c $(LDLIBS) -o tests/correctness/ad_tensor_gradients
+	$(CC) $(CFLAGS) $(AUTO_INIT_CFLAGS) tests/correctness/ad_tensor_gradients.c $(LDLIBS) -o tests/correctness/ad_tensor_gradients
 
 tests/correctness/test_tape_reset: tests/correctness/test_tape_reset.c ad.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_tape_reset.c $(LDLIBS) -o tests/correctness/test_tape_reset
@@ -550,6 +566,18 @@ FRAME_TO_MODEL_DEPS := frame/csv.h frame/frame.h nn/mlp.h solver/adam.h \
 tests/integration/frame_to_model: tests/integration/frame_to_model.c $(FRAME_TO_MODEL_DEPS)
 	$(CC) $(STAT_CFLAGS) -I. tests/integration/frame_to_model.c $(LDLIBS) -o tests/integration/frame_to_model
 
+# frame/ -> linalg/tensor.h -> linalg/decomp.h, plus the .npy round trip. At
+# float64 like the other statistical binaries here, since it factorizes each
+# period's matrix and compares two paths to a tolerance.
+tests/integration/frame_to_tensor: tests/integration/frame_to_tensor.c tests/check.h frame/csv.h frame/npy.h frame/frame.h linalg/tensor.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
+	$(CC) $(STAT_CFLAGS) -I. tests/integration/frame_to_tensor.c $(LDLIBS) -o tests/integration/frame_to_tensor
+
+# linalg/tensor.h -> ad.h -> solver/adam.h: the composition a model over
+# matrix-valued observations is. float64, since it compares two optimizer
+# trajectories element by element after sixty steps.
+tests/integration/tensor_to_optimizer: tests/integration/tensor_to_optimizer.c tests/check.h ad.h linalg/tensor.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h solver/adam.h solver/optimizer.h random/random.h special.h
+	$(CC) $(STAT_CFLAGS) -I. tests/integration/tensor_to_optimizer.c $(LDLIBS) -o tests/integration/tensor_to_optimizer
+
 tests/integration/join_missing_values: tests/integration/join_missing_values.c frame/join.h frame/csv.h frame/frame.h inference/mcs.h nn/mlp.h solver/adam.h solver/optimizer.h $(UNIT_ROOT_DEPS)
 	$(CC) $(STAT_CFLAGS) -I. tests/integration/join_missing_values.c $(LDLIBS) -o tests/integration/join_missing_values
 
@@ -580,9 +608,11 @@ tests/integration/header_composition: $(HEADER_COMPOSITION_SRC) $(ALL_HEADERS)
 # A separate binary rather than a flag on the one above, since both precisions
 # have to compile and only one of them can be built at a time.
 tests/integration/header_composition_f32: $(HEADER_COMPOSITION_SRC) $(ALL_HEADERS)
-	$(CC) -Wall -Wextra -O3 -march=native -ffast-math $(BLAS_CFLAGS) -I. $(HEADER_COMPOSITION_SRC) $(LDLIBS) -o tests/integration/header_composition_f32
+	$(CC) -Wall -Wextra -O3 -march=native -ffast-math $(OPENMP_CFLAGS) $(BLAS_CFLAGS) -I. $(HEADER_COMPOSITION_SRC) $(LDLIBS) -o tests/integration/header_composition_f32
 
-INTEGRATION_TESTS := tests/integration/frame_to_model tests/integration/join_missing_values \
+INTEGRATION_TESTS := tests/integration/frame_to_model tests/integration/frame_to_tensor \
+                     tests/integration/tensor_to_optimizer \
+                     tests/integration/join_missing_values \
                      tests/integration/distributed_simulation tests/integration/optimizer_swap \
                      tests/integration/pipeline_ownership tests/integration/npz_to_statistics \
                      tests/integration/header_composition tests/integration/header_composition_f32
@@ -868,7 +898,7 @@ lapack-comparison: $(LAPACK_COMPARISON_TESTS)
 # their place as a separate gate rather than a nicety.
 lapack-comparison-asan:
 	for t in $(LAPACK_COMPARISON_TESTS); do \
-	  $(CC) -Wall -Wextra -O1 -g -fsanitize=address,undefined $(BLAS_CFLAGS) \
+	  $(CC) -Wall -Wextra -O1 -g -fsanitize=address,undefined $(OPENMP_CFLAGS) $(BLAS_CFLAGS) \
 	    $(if $(MAT_DOUBLE),-DMAT_DOUBLE) $$t.c $(LDLIBS) $(LAPACKE_LIBS) -o $$t.asan || exit 1; \
 	  STRESS=1 ./$$t.asan || exit 1; \
 	  rm -f $$t.asan; \
@@ -890,7 +920,7 @@ lapack-comparison-asan:
 AD_ASAN_TESTS := tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_mlp
 ad-asan:
 	for t in $(AD_ASAN_TESTS); do \
-	  $(CC) -Wall -Wextra -O1 -g -fsanitize=address,undefined $(BLAS_CFLAGS) \
+	  $(CC) -Wall -Wextra -O1 -g -fsanitize=address,undefined $(OPENMP_CFLAGS) $(BLAS_CFLAGS) \
 	    $(if $(MAT_DOUBLE),-DMAT_DOUBLE) $$t.c $(LDLIBS) -o $$t.asan || exit 1; \
 	  STRESS=1 ./$$t.asan || exit 1; \
 	  rm -f $$t.asan; \
@@ -917,7 +947,7 @@ test-stress: tests/correctness/test_mat tests/correctness/test_tensor tests/corr
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754
 tests/correctness/test_mat_special: tests/correctness/test_mat_special.c linalg/mat.h
-	$(CC) -Wall -Wextra -O1 -g $(BLAS_CFLAGS) $(if $(MAT_DOUBLE),-DMAT_DOUBLE) tests/correctness/test_mat_special.c $(LDLIBS) -o tests/correctness/test_mat_special
+	$(CC) -Wall -Wextra -O1 -g $(OPENMP_CFLAGS) $(BLAS_CFLAGS) $(if $(MAT_DOUBLE),-DMAT_DOUBLE) tests/correctness/test_mat_special.c $(LDLIBS) -o tests/correctness/test_mat_special
 
 test-special: tests/correctness/test_mat_special
 	./tests/correctness/test_mat_special

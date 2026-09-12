@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "linalg/tensor.h"
+#include "frame/npy.h"
 
 /* linalg/tensor.h from the case it was written for: a dependent variable that
    is a matrix at each time point, stacked along a time axis and then used.
@@ -92,6 +93,23 @@ int main(void) {
     printf("\nx_t' I x_t for each period:\n");
     tensor_print(q);
 
+    /* A stack crosses to and from Python as a .npy file, which is how these
+       matrices usually arrive in the first place: numpy.save on one side,
+       tensor_read_npy on the other, no conversion step and no reshaping. The
+       file records the rank, so what comes back is the same T x K x K tensor
+       rather than a flattened matrix. */
+    const char *path = "examples/out/tensor_example_stack.npy";
+    tensor_write_npy(Y, path);
+    Tensor reloaded = tensor_read_npy(path);
+    printf("\nreloaded from %s: rank %d, shape %d x %d x %d\n",
+           path, reloaded.ndim, reloaded.shape[0], reloaded.shape[1], reloaded.shape[2]);
+    mreal round_trip_error = 0;
+    for (size_t i = 0; i < tensor_size(Y); i++) {
+        mreal d = MABS(reloaded.d[i] - Y.d[i]);
+        if (d > round_trip_error) round_trip_error = d;
+    }
+    printf("largest difference after the round trip: %.3g\n", (double)round_trip_error);
+
     for (int t = 0; t < T; t++) mat_free(per_period[t]);
     mat_free(eye);
     tensor_free(Y);
@@ -102,5 +120,6 @@ int main(void) {
     tensor_free(centred);
     tensor_free(x);
     tensor_free(q);
+    tensor_free(reloaded);
     return 0;
 }

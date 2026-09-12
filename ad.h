@@ -1108,12 +1108,21 @@ typedef struct {
 
 /* The node's value and gradient read as tensors. Both are views over the
    node's own buffers, never owners, and both are contiguous by
-   construction. */
+   construction.
+
+   The axes past ndim are filled in as well, to extent 1 and stride 1. Every
+   constructor in linalg/tensor.h does that and this has to match them: the
+   view operations there start from a copy of their argument's whole struct
+   and rewrite only the axes they move, so an entry left unset here travels
+   into every tensor derived from this one. Nothing reads those entries
+   today, which is exactly why leaving them unset would keep working until
+   something did. */
 static inline Tensor ad_tensor_val(const TensorNode *n) {
     Tensor t;
     t.ndim = n->ndim;
     for (int i = 0; i < TENSOR_MAX_NDIM; i++) t.shape[i] = i < n->ndim ? n->shape[i] : 1;
     _tensor_c_strides(n->ndim, t.shape, t.stride);
+    for (int i = n->ndim; i < TENSOR_MAX_NDIM; i++) t.stride[i] = 1;
     t.d = n->base.val.d;
     return t;
 }
