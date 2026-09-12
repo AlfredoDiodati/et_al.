@@ -14,6 +14,13 @@ That paper's contribution - and the reason it's a good fit here - is deriving re
 
 ## Scope
 
+This file covers the scalar and matrix half of `ad.h`. The same header also
+differentiates expressions over `linalg/tensor.h`'s n-dimensional `Tensor`
+through a `TensorNode`, including a batched matrix product and `einsum`; that
+half is documented in [`AD_TENSOR_DOCUMENTATION.md`](AD_TENSOR_DOCUMENTATION.md),
+and everything below about the tape, creation order and `tape_backward` applies
+to it unchanged.
+
 Implemented: general dense arithmetic (`add`, `sub`, `scale` by a constant, `broadcast_mul` by a 1x1 node, elementwise `mul`/`div`, `exp`, `log`, `pow` by a constant exponent, `tanh`, `identity`, `swish`), the shape operations `slice` and `reshape`, `sum` and `dot` reductions, `matmul`, `squared_error`/`mean_squared_error`/`huber_error`/`logcosh_error` (all `Criterion`-shaped except `huber_error`, see below), and - the part that needed `linalg/decomp.h`/`linalg/solver.h` - `solve`, a Cholesky-factor solve, a one-sided triangular solve, `det`, and matrix `inv`.
 
 `Activation` (`Node *(*)(Tape*, Node*)`) and `Criterion` (`Node *(*)(Tape*, Node *pred, Node *target)`) are two function-pointer types declared here, not in their first consumer (`nn/mlp.h`). Both are plain Tape/Node-level concepts - any future model header needs them the same way `nn/mlp.h` does, and per README's "Model fitting API" policy, a model header must not have to include another, unrelated model header just to get a shared type. `ad_tanh`/`ad_identity`/`ad_swish` are the three concrete `Activation`s so far; `ad_squared_error`/`ad_mean_squared_error`/`ad_logcosh_error` are three concrete `Criterion`s (`ad_huber_error` takes an extra `delta` argument, so it does not literally match the `Criterion` type - see its own comment).

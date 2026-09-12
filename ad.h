@@ -1,5 +1,6 @@
 #pragma once
 #include "linalg/solver.h"
+#include "linalg/tensor.h"
 #include "special.h"
 
 /* Reverse-mode automatic differentiation (backpropagation), general-purpose:
@@ -1064,4 +1065,598 @@ static inline void tape_backward(Tape *t, Node *output) {
     output->grad.d[0] = 1;
     for (int i = t->n - 1; i >= 0; i--)
         if (t->nodes[i]->backward) t->nodes[i]->backward(t->nodes[i]);
+}
+
+
+/* Reverse mode over linalg/tensor.h's Tensor, on the same Tape as everything
+   above.
+
+   A TensorNode is a Node with a rank and a shape stapled to it. Node is its
+   first member, so the pointer to one is the pointer to the other, and the
+   tape stores, orders and frees tensor nodes exactly as it does scalar and
+   matrix ones - nothing in tape_alloc, tape_backward, tape_reset or
+   tape_free knows this type exists. A tensor node's value and gradient live
+   in the Node's own val/grad Mats, each shaped size x 1 and always
+   contiguous, with the rank and shape saying how to read that buffer as a
+   Tensor. Keeping the value contiguous is what lets an adjoint accumulate
+   into a parent with a flat loop rather than through two sets of strides.
+
+   Why here rather than in a file of its own: this is reverse-mode automatic
+   differentiation, which is what ad.h is, and README.md's "Adding files and
+   headers" says a header that duplicates an existing one's role merges into
+   it - the same call that put eigendecomposition in linalg/decomp.h. The
+   documentation is split instead, in docs/AD_TENSOR_DOCUMENTATION.md.
+
+   Every adjoint below is the matrix-level rule, not a scalar graph: the
+   batched product differentiates into two batched products, an einsum into
+   one einsum per operand. That is the same choice the matrix half of this
+   file makes, and for the same reason - a contraction of two rank-3 tensors
+   has a scalar computation tree the size of its own flop count, while its
+   adjoint needs no more storage than the operands.
+
+   The traced einsum accepts every expression the forward-only one does,
+   including a diagonal and implicit output mode, so the two cannot diverge
+   over what a caller is allowed to write. The two restrictions that remain
+   are tensor_einsum's own: no ellipsis, and no label repeated in the
+   output. */
+
+typedef struct {
+    Node base;
+    int ndim;
+    int shape[TENSOR_MAX_NDIM];
+} TensorNode;
+
+/* The node's value and gradient read as tensors. Both are views over the
+   node's own buffers, never owners, and both are contiguous by
+   construction. */
+static inline Tensor ad_tensor_val(const TensorNode *n) {
+    Tensor t;
+    t.ndim = n->ndim;
+    for (int i = 0; i < TENSOR_MAX_NDIM; i++) t.shape[i] = i < n->ndim ? n->shape[i] : 1;
+    _tensor_c_strides(n->ndim, t.shape, t.stride);
+    t.d = n->base.val.d;
+    return t;
+}
+static inline Tensor ad_tensor_grad(const TensorNode *n) {
+    Tensor t = ad_tensor_val(n);
+    t.d = n->base.grad.d;
+    return t;
+}
+
+/* Allocate a tensor node of `bytes` (at least sizeof(TensorNode), more when
+   an operation needs to remember something extra) carrying `value`.
+
+   owns says who frees the value buffer: 1 for a Tensor this call takes over
+   from tensor_add/tensor_matmul/... , which tape_free releases through the
+   ordinary val_pooled == 0 path, and 0 for a value that aliases another
+   node's buffer, which tape_free must leave alone. That is the same
+   distinction ad_node_new and ad_node_new_pooled already draw, reused rather
+   than restated. */
+static inline void *_ad_tensor_alloc(Tape *t, size_t bytes, Tensor value, int owns,
+                                     void (*backward)(Node*)) {
+    assert(bytes >= sizeof(TensorNode));
+    TensorNode *n = (TensorNode*)tape_alloc(t, bytes);
+    int count = (int)tensor_size(value);
+    n->ndim = value.ndim;
+    for (int i = 0; i < value.ndim; i++) n->shape[i] = value.shape[i];
+    n->base.val = (Mat){ count, 1, 1, value.d };
+    n->base.val_pooled = owns ? 0 : 1;
+    mreal *grad = (mreal*)tape_alloc(t, (size_t)count * sizeof(mreal));
+    for (int i = 0; i < count; i++) grad[i] = 0;
+    n->base.grad = (Mat){ count, 1, 1, grad };
+    n->base.n_parents = 0;
+    n->base.aux = 0;
+    n->base.aux_offset = 0;
+    n->base.backward = backward;
+    ad_tape_push(t, &n->base);
+    return n;
+}
+
+/* Sum a gradient back down to the shape it was broadcast from: leading axes
+   the operand never had are summed away, and an axis the operand carried at
+   extent 1 is summed with the axis kept. Returns 1 when *out is a new owner
+   the caller must free. */
+static inline int _ad_tensor_unbroadcast(Tensor g, int ndim, const int *shape, Tensor *out) {
+    int axes[TENSOR_MAX_NDIM], n = 0;
+    int lead = g.ndim - ndim;
+    for (int i = 0; i < lead; i++) axes[n++] = i;
+    Tensor cur = g;
+    int owned = 0;
+    if (n) { cur = tensor_sum_axes(g, axes, n, 0); owned = 1; }
+    n = 0;
+    for (int i = 0; i < ndim; i++)
+        if (shape[i] == 1 && cur.shape[i] != 1) axes[n++] = i;
+    if (n) {
+        Tensor r = tensor_sum_axes(cur, axes, n, 1);
+        if (owned) tensor_free(cur);
+        cur = r;
+        owned = 1;
+    }
+    *out = cur;
+    return owned;
+}
+
+/* dst += sign * src, elementwise, through both sets of strides.
+
+   dst is a region of some node's gradient and is not always contiguous: an
+   einsum operand carrying a repeated label is read along its own diagonal,
+   and the adjoint of that has to land back on that diagonal and nowhere
+   else. Writing through the diagonal view is what makes the off-diagonal
+   entries stay zero without anything having to say so. */
+static inline void _ad_tensor_accum_into(Tensor dst, Tensor src, mreal sign) {
+    Tensor b = tensor_broadcast_to(src, dst.ndim, dst.shape);
+    Tensor ops[2] = { dst, b };
+    TensorPlan p;
+    _tensor_plan_init(&p, dst.ndim, dst.shape, 2, ops);
+    mreal *restrict pd = dst.d;
+    const mreal *restrict ps = b.d;
+    if (p.flat) {
+        if (sign > 0) for (size_t i = 0; i < p.n; i++) pd[i] += ps[i];
+        else for (size_t i = 0; i < p.n; i++) pd[i] -= ps[i];
+        return;
+    }
+    int nd = p.ndim, inner = p.shape[nd - 1];
+    int sd = p.stride[0][nd - 1], ss = p.stride[1][nd - 1];
+    size_t nouter = p.n / (size_t)inner;
+    int ctr[TENSOR_MAX_NDIM] = {0};
+    ptrdiff_t od = 0, os = 0;
+    for (size_t k = 0; k < nouter; k++) {
+        for (int j = 0; j < inner; j++) {
+            mreal v = ps[os + (ptrdiff_t)j * ss];
+            pd[od + (ptrdiff_t)j * sd] += sign > 0 ? v : -v;
+        }
+        for (int ax = nd - 2; ax >= 0; ax--) {
+            od += p.stride[0][ax];
+            os += p.stride[1][ax];
+            if (++ctr[ax] < p.shape[ax]) break;
+            ctr[ax] = 0;
+            od -= (ptrdiff_t)p.stride[0][ax] * p.shape[ax];
+            os -= (ptrdiff_t)p.stride[1][ax] * p.shape[ax];
+        }
+    }
+}
+
+/* parent->grad += sign * g, with g reduced to the parent's shape first if it
+   arrived broadcast. */
+static inline void _ad_tensor_accum(TensorNode *parent, Tensor g, mreal sign) {
+    Tensor red;
+    int owned = _ad_tensor_unbroadcast(g, parent->ndim, parent->shape, &red);
+    _ad_tensor_accum_into(ad_tensor_grad(parent), red, sign);
+    if (owned) tensor_free(red);
+}
+
+/* A traced input. The value is copied, so the caller keeps ownership of
+   theirs and may free it while the tape is still alive. */
+static inline TensorNode *ad_tensor_leaf(Tape *t, Tensor value) {
+    return (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), tensor_copy(value), 1, NULL);
+}
+
+static inline void _ad_tensor_add_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    Tensor g = ad_tensor_grad(n);
+    _ad_tensor_accum((TensorNode*)self->parents[0], g, (mreal)1);
+    _ad_tensor_accum((TensorNode*)self->parents[1], g, (mreal)1);
+}
+static inline void _ad_tensor_sub_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    Tensor g = ad_tensor_grad(n);
+    _ad_tensor_accum((TensorNode*)self->parents[0], g, (mreal)1);
+    _ad_tensor_accum((TensorNode*)self->parents[1], g, (mreal)-1);
+}
+/* Both operands broadcast, so both adjoints pass through
+   _ad_tensor_unbroadcast on the way back - which is the whole content of the
+   rule for a sum, and half of it for a product. */
+static inline TensorNode *ad_tensor_add(Tape *t, TensorNode *a, TensorNode *b) {
+    Tensor v = tensor_add(ad_tensor_val(a), ad_tensor_val(b));
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 1,
+                                                  _ad_tensor_add_backward);
+    n->base.parents[0] = &a->base; n->base.parents[1] = &b->base; n->base.n_parents = 2;
+    return n;
+}
+static inline TensorNode *ad_tensor_sub(Tape *t, TensorNode *a, TensorNode *b) {
+    Tensor v = tensor_sub(ad_tensor_val(a), ad_tensor_val(b));
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 1,
+                                                  _ad_tensor_sub_backward);
+    n->base.parents[0] = &a->base; n->base.parents[1] = &b->base; n->base.n_parents = 2;
+    return n;
+}
+
+static inline void _ad_tensor_emul_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    TensorNode *a = (TensorNode*)self->parents[0], *b = (TensorNode*)self->parents[1];
+    Tensor g = ad_tensor_grad(n);
+    Tensor ga = tensor_emul(g, ad_tensor_val(b));
+    Tensor gb = tensor_emul(g, ad_tensor_val(a));
+    _ad_tensor_accum(a, ga, (mreal)1);
+    _ad_tensor_accum(b, gb, (mreal)1);
+    tensor_free(ga);
+    tensor_free(gb);
+}
+static inline TensorNode *ad_tensor_emul(Tape *t, TensorNode *a, TensorNode *b) {
+    Tensor v = tensor_emul(ad_tensor_val(a), ad_tensor_val(b));
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 1,
+                                                  _ad_tensor_emul_backward);
+    n->base.parents[0] = &a->base; n->base.parents[1] = &b->base; n->base.n_parents = 2;
+    return n;
+}
+
+static inline void _ad_tensor_scale_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    Tensor g = ad_tensor_grad(n);
+    Tensor gs = tensor_scale(g, self->aux);
+    _ad_tensor_accum((TensorNode*)self->parents[0], gs, (mreal)1);
+    tensor_free(gs);
+}
+static inline TensorNode *ad_tensor_scale(Tape *t, TensorNode *a, mreal s) {
+    Tensor v = tensor_scale(ad_tensor_val(a), s);
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 1,
+                                                  _ad_tensor_scale_backward);
+    n->base.parents[0] = &a->base; n->base.n_parents = 1;
+    n->base.aux = s;
+    return n;
+}
+
+/* Element-wise nonlinearities, each differentiated from the value it already
+   computed rather than from its input, which is what makes exp and tanh one
+   multiply per element on the way back. */
+static inline void _ad_tensor_exp_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    size_t count = tensor_size(ad_tensor_val(n));
+    const mreal *restrict v = self->val.d, *restrict g = self->grad.d;
+    mreal *restrict pg = self->parents[0]->grad.d;
+    for (size_t i = 0; i < count; i++) pg[i] += g[i] * v[i];
+}
+static inline TensorNode *ad_tensor_exp(Tape *t, TensorNode *a) {
+    Tensor v = tensor_exp(ad_tensor_val(a));
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 1,
+                                                  _ad_tensor_exp_backward);
+    n->base.parents[0] = &a->base; n->base.n_parents = 1;
+    return n;
+}
+static inline void _ad_tensor_log_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    size_t count = tensor_size(ad_tensor_val(n));
+    const mreal *restrict g = self->grad.d;
+    const mreal *restrict x = self->parents[0]->val.d;
+    mreal *restrict pg = self->parents[0]->grad.d;
+    for (size_t i = 0; i < count; i++) pg[i] += g[i] / x[i];
+}
+static inline TensorNode *ad_tensor_log(Tape *t, TensorNode *a) {
+    Tensor v = tensor_log(ad_tensor_val(a));
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 1,
+                                                  _ad_tensor_log_backward);
+    n->base.parents[0] = &a->base; n->base.n_parents = 1;
+    return n;
+}
+static inline void _ad_tensor_tanh_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    size_t count = tensor_size(ad_tensor_val(n));
+    const mreal *restrict v = self->val.d, *restrict g = self->grad.d;
+    mreal *restrict pg = self->parents[0]->grad.d;
+    for (size_t i = 0; i < count; i++) pg[i] += g[i] * ((mreal)1 - v[i] * v[i]);
+}
+static inline TensorNode *ad_tensor_tanh(Tape *t, TensorNode *a) {
+    Tensor v = tensor_tanh(ad_tensor_val(a));
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 1,
+                                                  _ad_tensor_tanh_backward);
+    n->base.parents[0] = &a->base; n->base.n_parents = 1;
+    return n;
+}
+
+/* A reshape is metadata, so the node aliases its parent's value buffer
+   instead of copying it, and the adjoint is one flat accumulation: the two
+   shapes describe the same elements in the same order. */
+static inline void _ad_tensor_reshape_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    size_t count = tensor_size(ad_tensor_val(n));
+    const mreal *restrict g = self->grad.d;
+    mreal *restrict pg = self->parents[0]->grad.d;
+    for (size_t i = 0; i < count; i++) pg[i] += g[i];
+}
+static inline TensorNode *ad_tensor_reshape(Tape *t, TensorNode *a, int ndim, const int *shape) {
+    Tensor v = tensor_reshape(ad_tensor_val(a), ndim, shape);
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 0,
+                                                  _ad_tensor_reshape_backward);
+    n->base.parents[0] = &a->base; n->base.n_parents = 1;
+    return n;
+}
+
+/* A permutation cannot alias, since the node's value is contiguous by
+   contract and a permuted view is not. The adjoint permutes the gradient
+   back with the inverse permutation, which is a view, and accumulates
+   through it. */
+static inline void _ad_tensor_permute_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    TensorNode *a = (TensorNode*)self->parents[0];
+    const int *perm = (const int*)(void*)(n + 1);
+    int inverse[TENSOR_MAX_NDIM];
+    for (int i = 0; i < n->ndim; i++) inverse[perm[i]] = i;
+    Tensor g = ad_tensor_grad(n);
+    Tensor back = tensor_permute(g, inverse);
+    _ad_tensor_accum(a, back, (mreal)1);
+}
+static inline TensorNode *ad_tensor_permute(Tape *t, TensorNode *a, const int *perm) {
+    Tensor view = tensor_permute(ad_tensor_val(a), perm);
+    Tensor v = tensor_copy(view);
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode) + sizeof(int) * TENSOR_MAX_NDIM,
+                                                  v, 1, _ad_tensor_permute_backward);
+    int *stored = (int*)(void*)(n + 1);
+    for (int i = 0; i < a->ndim; i++) stored[i] = perm[i];
+    n->base.parents[0] = &a->base; n->base.n_parents = 1;
+    return n;
+}
+
+/* C = A B for the last two axes of each operand, every earlier axis a batch
+   axis. The adjoints are the same two products the matrix case uses, each
+   run batched:
+
+     Abar += Cbar B^T,   Bbar += A^T Cbar
+
+   with the transpose taken on the last two axes only and expressed as a view
+   rather than a copy, and with a batch axis that was broadcast in the
+   forward pass summed away on the way back by _ad_tensor_accum. */
+static inline void _ad_tensor_matmul_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    TensorNode *a = (TensorNode*)self->parents[0], *b = (TensorNode*)self->parents[1];
+    Tensor g = ad_tensor_grad(n);
+    Tensor av = ad_tensor_val(a), bv = ad_tensor_val(b);
+    Tensor bt = tensor_swapaxes(bv, bv.ndim - 2, bv.ndim - 1);
+    Tensor at = tensor_swapaxes(av, av.ndim - 2, av.ndim - 1);
+    Tensor ga = tensor_matmul(g, bt);
+    Tensor gb = tensor_matmul(at, g);
+    _ad_tensor_accum(a, ga, (mreal)1);
+    _ad_tensor_accum(b, gb, (mreal)1);
+    tensor_free(ga);
+    tensor_free(gb);
+}
+static inline TensorNode *ad_tensor_matmul(Tape *t, TensorNode *a, TensorNode *b) {
+    /* A rank-1 operand is promoted the way tensor_matmul promotes it, but
+       here the promotion and its undoing are ordinary reshape nodes on the
+       tape rather than a shape rewrite at the end. That is what makes the
+       gradient unambiguous: the adjoint of a reshape is already defined and
+       already tested, so the vector cases need no rule of their own, and a
+       reshape of a contiguous value aliases its parent, so none of this
+       copies anything. */
+    int a_promoted = 0, b_promoted = 0;
+    if (a->ndim == 1) {
+        int shape[2] = { 1, a->shape[0] };
+        a = ad_tensor_reshape(t, a, 2, shape);
+        a_promoted = 1;
+    }
+    if (b->ndim == 1) {
+        int shape[2] = { b->shape[0], 1 };
+        b = ad_tensor_reshape(t, b, 2, shape);
+        b_promoted = 1;
+    }
+    assert(a->ndim >= 2 && b->ndim >= 2);
+    Tensor v = tensor_matmul(ad_tensor_val(a), ad_tensor_val(b));
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 1,
+                                                  _ad_tensor_matmul_backward);
+    n->base.parents[0] = &a->base; n->base.parents[1] = &b->base; n->base.n_parents = 2;
+    if (!a_promoted && !b_promoted) return n;
+
+    int shape[TENSOR_MAX_NDIM], nd = 0;
+    for (int i = 0; i < n->ndim; i++) {
+        if (b_promoted && i == n->ndim - 1) continue;
+        if (a_promoted && i == n->ndim - 2) continue;
+        shape[nd++] = n->shape[i];
+    }
+    return ad_tensor_reshape(t, n, nd, shape);
+}
+
+/* Sum over one axis; the adjoint copies the gradient back along it, which is
+   a stride-0 broadcast view and needs no arithmetic. */
+static inline void _ad_tensor_sum_axis_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    TensorNode *a = (TensorNode*)self->parents[0];
+    Tensor g = ad_tensor_grad(n);
+    Tensor keep = (g.ndim == a->ndim) ? g : tensor_expand_dims(g, self->aux_offset);
+    Tensor spread = tensor_broadcast_to(keep, a->ndim, a->shape);
+    _ad_tensor_accum(a, spread, (mreal)1);
+}
+static inline TensorNode *ad_tensor_sum_axis(Tape *t, TensorNode *a, int axis, int keepdims) {
+    Tensor v = tensor_sum_axis(ad_tensor_val(a), axis, keepdims);
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 1,
+                                                  _ad_tensor_sum_axis_backward);
+    n->base.parents[0] = &a->base; n->base.n_parents = 1;
+    n->base.aux_offset = axis;
+    return n;
+}
+
+/* The whole-tensor sum, and the one place a tensor subgraph meets the scalar
+   one: the result is an ordinary 1x1 Node, which is what tape_backward
+   requires of the value it is asked to differentiate. Everything above it in
+   a model's objective can then be plain ad_* arithmetic. */
+static inline void _ad_tensor_total_backward(Node *self) {
+    TensorNode *a = (TensorNode*)self->parents[0];
+    mreal g = self->grad.d[0];
+    size_t count = tensor_size(ad_tensor_val(a));
+    mreal *restrict pg = a->base.grad.d;
+    for (size_t i = 0; i < count; i++) pg[i] += g;
+}
+static inline Node *ad_tensor_sum(Tape *t, TensorNode *a) {
+    Node *n = ad_node_new_pooled(t, 1, 1, _ad_tensor_total_backward);
+    n->val.d[0] = tensor_sum(ad_tensor_val(a));
+    n->parents[0] = &a->base;
+    n->n_parents = 1;
+    return n;
+}
+
+/* Bridges to the matrix half of this file. Both copy: a Mat node's value is
+   an r x c Mat that may carry a stride, while a tensor node's is a flat
+   contiguous buffer, so the two cannot alias in general and a bridge that
+   aliased only sometimes would be worse than one that never does. */
+static inline void _ad_tensor_of_mat_backward(Node *self) {
+    TensorNode *n = (TensorNode*)self;
+    Mat pg = self->parents[0]->grad;
+    Tensor g = ad_tensor_grad(n);
+    Mat gm = { n->shape[0], n->shape[1], n->shape[1], g.d };
+    ad_accum(pg, gm);
+}
+static inline TensorNode *ad_tensor_of_mat(Tape *t, Node *m) {
+    Tensor v = tensor_copy(mat_as_tensor(m->val));
+    TensorNode *n = (TensorNode*)_ad_tensor_alloc(t, sizeof(TensorNode), v, 1,
+                                                  _ad_tensor_of_mat_backward);
+    n->base.parents[0] = m; n->base.n_parents = 1;
+    return n;
+}
+static inline void _ad_mat_of_tensor_backward(Node *self) {
+    TensorNode *a = (TensorNode*)self->parents[0];
+    size_t count = (size_t)self->grad.r * self->grad.c;
+    const mreal *restrict g = self->grad.d;
+    mreal *restrict pg = a->base.grad.d;
+    for (size_t i = 0; i < count; i++) pg[i] += g[i];
+}
+static inline Node *ad_mat_of_tensor(Tape *t, TensorNode *a) {
+    assert(a->ndim == 2);
+    Node *n = ad_node_new_pooled(t, a->shape[0], a->shape[1], _ad_mat_of_tensor_backward);
+    memcpy(n->val.d, a->base.val.d, tensor_size(ad_tensor_val(a)) * sizeof(mreal));
+    n->parents[0] = &a->base;
+    n->n_parents = 1;
+    return n;
+}
+
+/* einsum, differentiated by rewriting the expression rather than by
+   unrolling it.
+
+   For y = einsum("s0,s1,...->sout", x0, x1, ...), the adjoint of operand p is
+   the same contraction with p's subscripts and the output's swapped:
+
+     xp_bar = einsum("sout,<every s_q, q != p>-> sp", ybar, <every x_q>)
+
+   which is exact whenever every label of sp appears somewhere on that
+   right-hand side. A label of sp that appears nowhere else was summed inside
+   p alone, and its adjoint is constant along that axis - so it is dropped
+   from the rewritten output and the result is stretched back along it with a
+   stride-0 view, which costs nothing.
+
+   A label repeated inside one operand needs one further step and not a
+   different rule. The forward pass reads that operand along its diagonal,
+   which _einsum_diagonal expresses as a view whose stride is the sum of the
+   two axes' strides; the adjoint is written back through the same fold of
+   that operand's gradient. Its off-diagonal entries are then never touched
+   and stay zero, which is what they should be, since the forward pass never
+   read the elements they correspond to. Nothing detects the case or clears
+   anything afterwards.
+
+   The consequence worth knowing is that one backward pass over an n-operand
+   einsum is n einsums, each of which reaches mat_gemm by the same route the
+   forward one did. Nothing here walks an index space element by element. */
+typedef struct {
+    TensorNode base;
+    int nops;
+    TensorNode *ops[TENSOR_EINSUM_MAX_OPS];
+    char in_lab[TENSOR_EINSUM_MAX_OPS][TENSOR_MAX_NDIM + 1];
+    char out_lab[TENSOR_MAX_NDIM + 1];
+} TensorEinsumNode;
+
+static inline void _ad_tensor_einsum_backward(Node *self) {
+    TensorEinsumNode *e = (TensorEinsumNode*)self;
+    Tensor g = ad_tensor_grad(&e->base);
+    for (int p = 0; p < e->nops; p++) {
+        /* The operand's own gradient is written through the same fold its
+           value was read through, so a repeated label lands back on the
+           diagonal it came from and the rest of that gradient stays zero. */
+        char lp[TENSOR_MAX_NDIM + 1];
+        memcpy(lp, e->in_lab[p], strlen(e->in_lab[p]) + 1);
+        Tensor gp = _einsum_diagonal(ad_tensor_grad(e->ops[p]), lp);
+
+        char subs[TENSOR_EINSUM_MAX_OPS * (TENSOR_MAX_NDIM + 2) + TENSOR_MAX_NDIM + 4];
+        int at = 0;
+        for (int i = 0; e->out_lab[i]; i++) subs[at++] = e->out_lab[i];
+        Tensor operands[TENSOR_EINSUM_MAX_OPS];
+        char folded[TENSOR_EINSUM_MAX_OPS][TENSOR_MAX_NDIM + 1];
+        int nop = 0;
+        operands[nop++] = g;
+        for (int q = 0; q < e->nops; q++) {
+            if (q == p) continue;
+            memcpy(folded[q], e->in_lab[q], strlen(e->in_lab[q]) + 1);
+            operands[nop] = _einsum_diagonal(ad_tensor_val(e->ops[q]), folded[q]);
+            nop++;
+            subs[at++] = ',';
+            for (int i = 0; folded[q][i]; i++) subs[at++] = folded[q][i];
+        }
+        subs[at++] = '-';
+        subs[at++] = '>';
+        char kept[TENSOR_MAX_NDIM + 1];
+        int nkept = 0;
+        for (int i = 0; lp[i]; i++) {
+            char c = lp[i];
+            int elsewhere = strchr(e->out_lab, c) != NULL;
+            for (int q = 0; !elsewhere && q < e->nops; q++)
+                if (q != p && strchr(folded[q], c)) elsewhere = 1;
+            if (elsewhere) { subs[at++] = c; kept[nkept++] = c; }
+        }
+        kept[nkept] = 0;
+        subs[at] = 0;
+
+        Tensor r = tensor_einsum(subs, nop, operands);
+        if (nkept == gp.ndim) {
+            _ad_tensor_accum_into(gp, r, (mreal)1);
+        } else {
+            /* the labels summed inside this operand alone come back as a
+               stretch, not as arithmetic */
+            Tensor full;
+            full.ndim = gp.ndim;
+            full.d = r.d;
+            for (int i = 0; i < gp.ndim; i++) {
+                const char *hit = strchr(kept, lp[i]);
+                if (hit) {
+                    int pos = (int)(hit - kept);
+                    full.shape[i] = r.shape[pos];
+                    full.stride[i] = r.stride[pos];
+                } else {
+                    full.shape[i] = gp.shape[i];
+                    full.stride[i] = 0;
+                }
+            }
+            for (int i = gp.ndim; i < TENSOR_MAX_NDIM; i++) { full.shape[i] = 1; full.stride[i] = 1; }
+            _ad_tensor_accum_into(gp, full, (mreal)1);
+        }
+        tensor_free(r);
+    }
+}
+
+static inline TensorNode *ad_tensor_einsum(Tape *t, const char *subs, int nops,
+                                           TensorNode *const *ops) {
+    assert(nops >= 1 && nops <= TENSOR_EINSUM_MAX_OPS);
+    Tensor values[TENSOR_EINSUM_MAX_OPS];
+    for (int i = 0; i < nops; i++) values[i] = ad_tensor_val(ops[i]);
+    Tensor v = tensor_einsum(subs, nops, values);
+    TensorEinsumNode *e = (TensorEinsumNode*)_ad_tensor_alloc(t, sizeof(TensorEinsumNode), v, 1,
+                                                              _ad_tensor_einsum_backward);
+    e->nops = nops;
+    int op = 0, k = 0;
+    const char *p = subs;
+    int explicit_out = 0;
+    while (*p) {
+        if (*p == ' ') { p++; continue; }
+        if (*p == '.') { assert(0 && "ad_tensor_einsum does not support ellipsis"); }
+        if (*p == ',') { e->in_lab[op][k] = 0; op++; k = 0; p++; continue; }
+        if (*p == '-') { assert(p[1] == '>'); e->in_lab[op][k] = 0; explicit_out = 1; p += 2; break; }
+        e->in_lab[op][k++] = *p++;
+    }
+    if (!explicit_out) e->in_lab[op][k] = 0;
+    assert(op == nops - 1);
+    k = 0;
+    if (explicit_out) {
+        while (*p) {
+            if (*p != ' ') e->out_lab[k++] = *p;
+            p++;
+        }
+    } else {
+        /* Implicit mode: the output is every label appearing exactly once,
+           in ASCII order. Derived here by the same rule tensor_einsum uses
+           rather than read back from it, and the two are held together by
+           tests/correctness/ad_tensor_gradients.c checking an implicit
+           expression against the explicit spelling of the same thing. */
+        int count[128] = {0};
+        for (int i = 0; i < nops; i++)
+            for (int j = 0; e->in_lab[i][j]; j++) count[(int)e->in_lab[i][j]]++;
+        for (int c = 0; c < 128; c++) if (count[c] == 1) e->out_lab[k++] = (char)c;
+    }
+    e->out_lab[k] = 0;
+    for (int i = 0; i < nops; i++) e->ops[i] = ops[i];
+    e->base.base.n_parents = 0; /* the operands are held in ops, not in parents[2] */
+    return &e->base;
 }

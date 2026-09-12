@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <float.h>
 
 /* NaN detection by inspecting the IEEE754 fields directly. This file is
    built with -ffast-math like the rest of the default target, under which
@@ -335,17 +336,54 @@ static void test_lgamma_diff_against_exact_shift(void) {
     printf("  at x = 5e14 the subtraction gives %.10f, log(x) is %.10f\n", direct, log(x));
 }
 
-/* A half-integer shift has no elementary closed form, so it is pinned two
-   other ways: against the subtraction where that is still trustworthy, and
-   against the duplication-free consistency lgamma_diff(x, a) +
-   lgamma_diff(x + a, b) = lgamma_diff(x, a + b), which must hold to rounding
-   at every argument. */
+/* A half-integer shift has no elementary closed form, so it is pinned three
+   other ways: against two half-steps summing to the exact integer step, which
+   involves no Gamma function at all; against the subtraction, but only to the
+   accuracy the subtraction itself still has; and against the composition
+   lgamma_diff(x, a) + lgamma_diff(x + a, b) = lgamma_diff(x, a + b), which
+   must hold to rounding at every argument.
+
+   The tolerance on the subtraction is derived rather than chosen, and that
+   matters: lgamma(x + a) and lgamma(x) are both of size x log x while their
+   difference is of size a log x, so cancelling them costs about
+   eps * |lgamma(x)| in absolute terms however small the difference is. At
+   x = 1e4 that is 9e-12 against a difference of 4.6, so a fixed relative
+   bound of 1e-12 is one the reference cannot meet at that argument - and it
+   is the reference that misses it, not the function. Against a 60-digit
+   loggamma, special_lgamma_diff(1e4, 0.5) is right to 3.0e-17 relative and
+   lgamma(1e4 + 0.5) - lgamma(1e4) is wrong by 2.8e-12. A constant here was
+   therefore asserting that the collapsed subtraction stays accurate, which
+   is the opposite of what this function exists to record. */
 static void test_lgamma_diff_half_integer_and_composition(void) {
+    /* Two half-steps make one whole step, and a whole step is exactly
+       log(x). No Gamma function appears on the reference side, so this holds
+       to rounding at every argument rather than degrading with x. */
+    double worst_halves = 0;
+    for (double x = 0.5; x <= 1e15; x *= 1000) {
+        double halves = special_lgamma_diff(x, 0.5) + special_lgamma_diff(x + 0.5, 0.5);
+        double whole = log(x);
+        double scale = fabs(whole) > 1 ? fabs(whole) : 1;
+        double relative = fabs(halves - whole) / scale;
+        assert(relative <= 1e-14);
+        if (relative > worst_halves) worst_halves = relative;
+    }
+    printf("  two half-steps against the exact whole step: worst relative %.2e\n",
+           worst_halves);
+
+    double worst_ref = 0;
     for (double x = 1; x <= 1e4; x *= 10) {
         double got = special_lgamma_diff(x, 0.5);
         double want = lgamma(x + 0.5) - lgamma(x);
-        assert(fabs(got - want) <= 1e-12 * (fabs(want) > 1 ? fabs(want) : 1));
+        double bigger = fabs(lgamma(x + 0.5)) > fabs(lgamma(x))
+                      ? fabs(lgamma(x + 0.5)) : fabs(lgamma(x));
+        double cancellation = 8 * DBL_EPSILON * bigger;
+        double tol = cancellation > 1e-15 ? cancellation : 1e-15;
+        assert(fabs(got - want) <= tol);
+        double scale = fabs(want) > 1 ? fabs(want) : 1;
+        if (fabs(got - want) / scale > worst_ref) worst_ref = fabs(got - want) / scale;
     }
+    printf("  lgamma_diff vs the subtraction it replaces: worst relative %.2e, "
+           "which is the subtraction's own cancellation\n", worst_ref);
     double worst = 0;
     for (double x = 0.25; x <= 1e14; x *= 700) {
         double a = 0.5, b = 2.5;

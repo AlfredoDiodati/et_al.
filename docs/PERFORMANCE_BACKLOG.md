@@ -6,10 +6,13 @@ what it is, current numbers, what a fix would look like. Update this file
 as items are picked up or re-measured - it is the single source of truth
 for this backlog, not any session's task list.
 
-Two entries are not of that shape and say so in place: item 12 is a harness
-that does not exist rather than a measured gap, and item 13 is closed, kept
-because what it records is the diagnosis and the mechanism rather than the
-number. Both are here because this is where an open performance question is
+Several entries are not of that shape and say so in place: item 12 is a
+harness that does not exist rather than a measured gap, and items 13, 14, 15
+and 17 are closed, kept because what they record is the diagnosis and the
+mechanism rather than the number. Item 15 also carries an optimization that
+was measured and rejected, and item 17 a benchmark that was itself the bug -
+both for the same reason: the next person to reach for either should find out
+what it cost before writing it again. Both are here because this is where an open performance question is
 looked for, and a second file would only split that search.
 
 Per the root `README.md`'s "Testing and benchmarking" policy, benchmarking
@@ -1875,3 +1878,110 @@ profile measured after the third change was 45% one-off precompute, 35%
 per-round table fill, 20% exceedance loop, so the largest per-round term is one
 reciprocal square root per surviving pair per round. `MCS_TMAX` has not been
 profiled by phase.
+
+## 14. Broadcast element-wise operations (`linalg/tensor.h`) - fixed
+
+**What it was.** 1.30x slower than NumPy on `128x64x32 + 64x1`, float32. A
+broadcast operand's axis cannot be merged with its neighbour during axis
+coalescing (its stride is 0 where the neighbour's is not), so the traversal
+kept three axes where a same-shape addition collapses to one flat loop. Each
+of the 8192 output rows then rebuilt its three operand offsets from the flat
+row index, which is one integer division and one modulus per axis per row.
+
+**What fixed it.** The divisions exist so that an OpenMP thread can start
+anywhere in the range. A serial pass does not need that, so it carries an
+odometer instead: one add per axis per row, and only on the axes that
+actually rolled over. Both forms are in `_TENSOR_BINOP_BODY`, chosen by
+whether the parallel region will engage at all, so the threaded path keeps
+its random access and the serial path stops paying for it.
+
+**Measured**: the kernel went from 0.181 ms to 0.055 ms, 3.3x, on
+`128x64x32 + 64x1` float32 (best of 40, output allocation included). Against
+NumPy through `tests/performance/bench_tensor.py` the same shape went from
+1.30x slower to 2.42x faster. See `docs/TENSOR_DOCUMENTATION.md`.
+
+## 15. Reducing over an outer axis (`linalg/tensor.h`) - fixed
+
+**What it was.** 1.20x slower than NumPy on `sum(axis=0)` of `128x128x64`,
+float32. Reducing over the outermost axis makes the output 8192 elements
+read, added to and written back once per input row, 128 times - a
+read-modify-write over a buffer larger than L1.
+
+**What did not fix it, and is worth knowing.** Tiling, so the output slice
+stays in cache across every row, is worth 1.21x on the kernel in isolation
+(`make bench-tensor_reduce_tile`). Put inside `_TENSOR_REDUCE_BODY` it was
+worth 5 to 9 percent on the reduction it targets and cost 7 percent on
+reducing over the innermost axis, consistently across five interleaved A/B
+rounds. The cost was not the tiled loop but the extra code in a macro every
+reduction expands, which changed what the compiler did with the loop that
+was already there. That is the reusable part: an optimization added as
+another branch inside one of this header's macros is paid for by every other
+branch.
+
+**What fixed it.** Threads, once a split was found under which no two of
+them write the same output element. Reducing over an outer axis keeps the
+innermost axis in the output, so the innermost range can be split: a thread
+owning output columns `[j0, j1)` walks every row and touches only those
+columns, which is race-free by construction and gives each thread a slice
+small enough to stay in cache - the tiling's benefit, arriving as a side
+effect of the parallelism rather than instead of it.
+
+**Measured**: 1.21x slower than NumPy before, **2.24x faster** after
+(`tests/performance/bench_tensor.py`, float32, 4 cores). The same split
+moved `sum` over an inner axis to 5.81x and `max` over a middle axis to
+2.63x. See `docs/TENSOR_PERFORMANCE_DOCUMENTATION.md`.
+
+**Why it was not done first.** The constant that governs it was set to
+never, on the strength of a benchmark that timed hand-written copies of the
+kernels rather than the kernels themselves. See item 17.
+
+## 16. `tensor_einsum` on an expression with no contraction (`linalg/tensor.h`)
+
+**Where it stands.** 1.50x slower than `np.einsum("tii->t", a)` at 512 x 3x3,
+float32, down from 2.62x. Still open, and small: seven microseconds of work
+against four and a half.
+
+**What it was.** The expression has no product in it at all - it is a
+diagonal fold and a sum over one axis - but the result went through the
+final permute-and-copy every einsum ended with, which for 512 rows of 3
+elements was most of the run time.
+
+**What has been fixed.** That copy only reorders axes, so when the
+contraction already produced them in the order the output asks for - which
+is any expression whose output labels are written in the order they come
+out, `"tij,tjk->tik"` among them - the owner is handed back directly. A view
+still has to be copied, since the caller is owed something it can free.
+Measured: `"tii->t"` at 512 x 3x3 went from 0.0077 ms to 0.0023 ms on the
+kernel, 3.3x, and the batched `"tij,tjk->tik"` at 2048 x 5x5 from 0.098 ms
+to 0.068 ms, 1.4x. The second was not the target and is the larger absolute
+win: against NumPy with `optimize=True` it moved that comparison from 1.01x
+behind to 1.12x ahead.
+
+**What is left.** A one-operand einsum still goes through the permute,
+reshape and contiguity check that a two-operand contraction needs, and this
+expression needs none of them. The remaining fix is to dispatch a
+one-operand einsum whose output labels are a subsequence of its input
+labels straight to `tensor_sum_axes` over the dropped labels followed by a
+permute, with no packing at all. Bounded work; not done because no caller
+has a one-operand einsum in a hot loop, and because the case that does
+matter for a model - the batched contraction - is already ahead.
+
+## 17. Thresholds derived from a copy of a kernel rather than the kernel - fixed
+
+**What it was.** `tests/performance/tensor_omp_threshold.c` originally timed
+hand-written loops that matched `linalg/tensor.h`'s inner loops at the time
+it was written. It reported that threading an element-wise add was worth at
+most 1.3x and became a loss at four million elements, and
+`TENSOR_OMP_MIN_CHEAP` was set to never on that basis - which also left
+`tensor_copy`, and therefore every permuted copy and every einsum and
+tensordot packing step, on one thread.
+
+**What fixed it.** Timing the library functions. `tensor_add` at 65536
+elements is 4.33x, `tensor_copy` of a permuted view 3.2x-3.7x at every size
+above 4096, and the axis reductions 2.3x-3.5x. The copies had stopped
+matching the kernels after the odometer and the uninitialised-output changes,
+and nothing in the benchmark could notice.
+
+**Measured**: four rows of the NumPy comparison moved from behind to 2.2x-2.9x
+ahead. The lesson is the general one - benchmark the entry point a caller
+reaches, because a copy of a loop is a claim about the copy.

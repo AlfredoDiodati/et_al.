@@ -15,6 +15,7 @@ A pure C (C11), single-header matrix library targeting econometrics research, bu
 | File | Purpose |
 |---|---|
 | `linalg/mat.h` | Full library - structs, macros, and all functions as static inline |
+| `linalg/tensor.h` | The n-dimensional case of this memory model - one stride per axis instead of one for rows; a Mat is its rank-2 case and converts both ways with no copy. Includes linalg/mat.h; see docs/TENSOR_DOCUMENTATION.md |
 | `linalg/factor.h` | Dense factorization kernels written against CBLAS alone - replaced every LAPACKE routine this library used, includes linalg/mat.h |
 | `linalg/decomp.h` | Decompositions (Cholesky, LU, QR, eig, SVD) - calls linalg/factor.h, includes linalg/mat.h |
 | `linalg/solver.h` | Solvers (Ax=b, least squares) - calls linalg/factor.h, includes linalg/decomp.h |

@@ -40,6 +40,7 @@ tests/correctness/mcs_settings_study
 tests/correctness/qvarma_analytic_agreement
 tests/correctness/qvarma_gaussian_limit
 tests/correctness/mcs_primitives
+tests/correctness/ad_tensor_gradients
 tests/correctness/mcs_primitives_candidate
 tests/correctness/mcs_size_and_power
 tests/correctness/mcs_size_and_power_candidate
@@ -52,6 +53,9 @@ tests/performance/lbfgs_direction_threshold
 tests/performance/lbfgs_largest_threshold
 tests/performance/lbfgs_copy_threshold
 tests/performance/mcs_candidates
+tests/performance/tensor_omp_threshold
+tests/performance/tensor_reduce_tile
+tests/performance/tensor_batch_threads
 
 # compiled benchmark binaries, one per tests/performance/bench_<subject>.c,
 # and the float64 twin every numeric benchmark gets built with. Both are
@@ -60,6 +64,8 @@ tests/performance/mcs_candidates
 tests/performance/bench_*
 tests/performance/small_blas_threshold*
 !tests/performance/*.c
+!tests/performance/*.py
+!tests/performance/*.R
 
 # compiled integration binaries. Every file in tests/integration/ is a test,
 # and none of them shares a prefix or a suffix with another - each is named
