@@ -47,6 +47,8 @@ the lot as unused.
 #include "../../stats.h"
 #include "../../json.h"
 #include "../../frame/gzip.h"
+#include "../../basis/poly.h"
+#include "../../basis/spline.h"
 #include "../../inference/mcs.h"
 #include "../../inference/unit_root.h"
 #include "../../inference/cointegration.h"
@@ -163,6 +165,17 @@ static int touch_every_module(void) {
     if (adf_max_lags(100) < 1) problems++;
     if (kpss_bandwidth(100) < 1) problems++;
     if (mcs_options_default().bootstrap < 1) problems++;
+
+    /* basis/: a design matrix from each of the two headers, both of which
+       must agree with linalg/ about rows being observations. */
+    Mat sample = mat_lit(1, 5, 1.f, 2.f, 3.f, 4.f, 5.f);
+    PolyBasis polynomial = poly_basis(sample, 2);
+    if (polynomial.basis.r != 5 || polynomial.basis.c != 2) problems++;
+    poly_free(&polynomial);
+    BsBasis bs_of_sample = bs_basis(sample, (BsOptions){ .degree = 1 });
+    if (bs_of_sample.basis.c != 1) problems++;
+    bs_free(&bs_of_sample);
+    mat_free(sample);
 
     QlrCriticalValues qlr = qlr_critical_values_lookup(0, (mreal)0.99, 1);
     (void)qlr;

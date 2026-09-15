@@ -288,3 +288,33 @@ index, not spot checks, so a partially-corrupted frame cannot pass.
 
 **Result: no defect found**, in an ordinary run and under
 `make test-integration-asan`.
+
+
+## basis_to_regression.c - a design matrix crossing four modules
+
+`basis/poly.h` and `basis/spline.h` exist to be handed to something else, and
+four different modules are on the other side of that hand-off. None of the
+per-header suites can reach any of them, because each of those suites builds
+its input with `mat_new` and consumes its output itself.
+
+| from | to | what is required |
+|---|---|---|
+| `frame/csv.h` | `basis/` | a basis built from `df_col_numeric`'s stride-10 view is the basis built from a contiguous copy of that column, for all three of `poly_basis`, `bs_basis` and `ns_basis` |
+| `basis/` | `linalg/solver.h` | a basis is a design matrix `mat_lstsq` accepts, with the same coefficients through the view and through the copy, and the natural spline basis - which spans the linear functions - fits at least as well as the straight line it contains |
+| `basis/` | `json.h` | a `BsSpec` written out and read back rebuilds the basis it came from, entry for entry |
+| `basis/` | `inference/mcs.h` | four bases' out-of-sample squared errors assembled into a `DataFrame` give a non-empty confidence set that excludes a deliberate straw man |
+| `basis/` | allocator | a `BsBasis` and its spec still rebuild their basis after the frame the sample came from is freed |
+
+Each section carries its own negative control, since a check that two paths
+agree passes just as happily when both are broken or when neither ran. The
+stride of a loaded column is asserted before anything is compared through it; a
+basis built from the neighbouring column has to come out detectably different,
+which is what a stride bug would produce; the spline fit has to be strictly
+better than the line and not merely no worse; one interior knot is moved after
+the JSON round trip and the basis has to move with it; and the straw man - the
+regressor reversed, so it keeps the right marginal distribution and none of the
+relationship - has to be thrown out of the confidence set rather than merely
+ranked last.
+
+**Result: no defect found**, in an ordinary run and under
+`make test-integration-asan`.

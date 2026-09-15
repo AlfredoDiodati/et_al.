@@ -1985,3 +1985,45 @@ and nothing in the benchmark could notice.
 **Measured**: four rows of the NumPy comparison moved from behind to 2.2x-2.9x
 ahead. The lesson is the general one - benchmark the entry point a caller
 reaches, because a copy of a loop is a claim about the copy.
+
+## 18. `interp_spline` solves a banded system densely (`basis/spline.h`)
+
+**What it is.** `interp_spline` builds the natural cubic spline through n
+points by solving the (n+2) x (n+2) collocation system through `vec_solve`,
+which is an LU factorization at O(n^3) and O(n^2) memory. That system is
+banded with bandwidth `ord`: row i is the ord non-zero B-splines at x_i, and a
+B-spline of order ord is non-zero over ord+1 consecutive knots, so nothing
+sits more than ord columns off the diagonal. A banded LU is O(n * ord^2) and
+O(n * ord) memory.
+
+**Why it is not fixed here.** `linalg/solver.h` has no banded factorization,
+and a banded solve is a general linear algebra primitive rather than a spline
+concern - per the root README's "do not duplicate a lower layer" pitfall, it
+belongs in `linalg/` and would be reached by `basis/spline.h` the way
+`vec_solve` is now. Writing a private copy inside `basis/spline.h` would be
+the wrong place for it and would have no other caller.
+
+**Current numbers** (`make bench-basis`, Intel i5-7400, R 4.3.3 against
+float64, best of three one-second rounds): this is the one subject in that
+benchmark whose margin over R *narrows* with n rather than widening, because
+by then both sides are inside the same dense factorization and only the fixed
+R-level overhead is being removed.
+
+| points | R ms    | kernel ms | speedup |
+|--------|---------|-----------|---------|
+| 50     | 0.7628  | 0.0285    | 26.7x   |
+| 200    | 1.4925  | 0.5937    | 2.5x    |
+| 800    | 19.1321 | 9.9710    | 1.9x    |
+
+R has the same problem and solved it differently: `interpSpline(*, sparse =
+TRUE)` hands the system to the Matrix package, and R's own
+`splines/tests/sparse-tst.R` records that as an order of magnitude at n ~ 1000
+and a small loss below n ~ 200. A banded solve would beat both, since the
+bandwidth is known at construction rather than discovered.
+
+**Next step.** `_gbtrf`/`_gbtrs` in `linalg/factor.h` against CBLAS, following
+?gbtrf's band storage, with `vec_band_solve` in `linalg/solver.h` over them;
+`basis/spline.h` then passes the bandwidth it already knows (`ord`) instead of
+a square `Mat`. The correctness check is free: the existing suites compare the
+result against R and against interpolation exactness, so the new path has a
+reference the moment it exists.

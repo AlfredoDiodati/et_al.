@@ -56,6 +56,8 @@ STAT_CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math $(OPENMP_CFLAGS) $(BLA
 # from the optimum.
 MODEL_CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math $(OPENMP_CFLAGS) $(BLAS_CFLAGS)
 
+BASIS_DEPS := basis/poly.h basis/spline.h stats.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
+
 UNIT_ROOT_DEPS := inference/unit_root.h stats.h random/random.h linalg/solver.h linalg/decomp.h linalg/mat.h tests/check.h
 COINTEGRATION_DEPS := inference/cointegration.h $(UNIT_ROOT_DEPS)
 SDLOC_DEPS := sd/score_driven_location.h solver/lbfgs.h ad.h json.h special.h random/random.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
@@ -79,7 +81,7 @@ INCDIR  := $(PREFIX)/include/et_al.
 PKGCONFIGDIR := $(PREFIX)/lib/pkgconfig
 
 CORE_HEADERS := ad.h json.h special.h stats.h
-CORE_SUBDIRS := linalg random dist dist/mv solver frame cluster inference
+CORE_SUBDIRS := linalg random dist dist/mv solver frame cluster inference basis
 MODEL_SUBDIRS := nn sd
 
 # --- examples ---
@@ -97,6 +99,12 @@ MODEL_SUBDIRS := nn sd
 EXAMPLES := $(patsubst %.c,%,$(wildcard examples/*.c))
 
 examples: $(EXAMPLES)
+
+# float64 (STAT_CFLAGS): its first section regresses on 1, x, x^2, x^3 with x
+# in the thousands, so the design's condition number is 8e13 and at float32 the
+# SVD behind mat_cond does not converge on it. The example says so itself.
+examples/basis_example: examples/basis_example.c $(BASIS_DEPS) frame/csv.h frame/frame.h
+	$(CC) $(STAT_CFLAGS) -I. examples/basis_example.c $(LDLIBS) -o examples/basis_example
 
 examples/mat_example: examples/mat_example.c linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/mat_example.c $(LDLIBS) -o examples/mat_example
@@ -378,6 +386,23 @@ tests/correctness/test_random: tests/correctness/test_random.c random/random.h s
 tests/correctness/test_lhs: tests/correctness/test_lhs.c random/lhs.h random/random.h special.h linalg/mat.h tests/check.h
 	$(CC) $(CFLAGS) tests/correctness/test_lhs.c $(LDLIBS) -o tests/correctness/test_lhs
 
+# The four basis/ suites. Built at the default precision rather than at
+# float64, unlike the statistical binaries below: each one passes at both, and
+# `make MAT_DOUBLE=1 test` is what covers the other half. Where a check needs a
+# different tolerance at float32 it derives one from sizeof(mreal) rather than
+# the suite being built one way.
+tests/correctness/poly_correctness: tests/correctness/poly_correctness.c $(BASIS_DEPS) tests/check.h
+	$(CC) $(CFLAGS) tests/correctness/poly_correctness.c $(LDLIBS) -o tests/correctness/poly_correctness
+
+tests/correctness/spline_design_correctness: tests/correctness/spline_design_correctness.c $(BASIS_DEPS) tests/check.h
+	$(CC) $(CFLAGS) tests/correctness/spline_design_correctness.c $(LDLIBS) -o tests/correctness/spline_design_correctness
+
+tests/correctness/spline_basis_correctness: tests/correctness/spline_basis_correctness.c $(BASIS_DEPS) tests/check.h
+	$(CC) $(CFLAGS) tests/correctness/spline_basis_correctness.c $(LDLIBS) -o tests/correctness/spline_basis_correctness
+
+tests/correctness/spline_objects_correctness: tests/correctness/spline_objects_correctness.c $(BASIS_DEPS) tests/check.h
+	$(CC) $(CFLAGS) tests/correctness/spline_objects_correctness.c $(LDLIBS) -o tests/correctness/spline_objects_correctness
+
 # random/lhs.h against a live R and its lhs package, the only way to check that
 # the two produce the same distribution of designs. R is a development-tier
 # dependency (see README's Installation tiers), so this stays out of `test`
@@ -388,6 +413,29 @@ liblhsagreement.so: tests/correctness/lhs_r_agreement.c random/lhs.h random/rand
 
 test-lhs-r: liblhsagreement.so
 	Rscript tests/correctness/lhs_r_agreement.R
+
+# basis/poly.h and basis/spline.h against a live R and its splines package.
+# Both sides compute the same deterministic functions, so this compares
+# numbers element by element rather than distributions, which is what the lhs
+# comparison next to it cannot do. R is a development-tier dependency (see
+# README's Installation tiers), so this stays out of `test` and `check.sh`.
+# Built at the precision MAT_DOUBLE selects rather than pinned to float64, so
+# both halves of the claim can be checked: the R side reads sizeof(mreal) back
+# out of the object and sets its tolerance from it.
+libbasisagreement.so: tests/correctness/basis_r_agreement.c $(BASIS_DEPS)
+	$(CC) $(CFLAGS) -shared -fPIC tests/correctness/basis_r_agreement.c $(LDLIBS) -o libbasisagreement.so
+
+test-basis-r: libbasisagreement.so
+	Rscript tests/correctness/basis_r_agreement.R
+
+# basis/poly.h and basis/spline.h against R's stats and splines packages for
+# speed, over the same entry points. Not part of bench.sh, which drives the
+# Python comparison suites.
+libbasisbench.so: tests/performance/bench_basis.c $(BASIS_DEPS)
+	$(CC) $(STAT_CFLAGS) -shared -fPIC tests/performance/bench_basis.c $(LDLIBS) -o libbasisbench.so
+
+bench-basis: libbasisbench.so
+	Rscript tests/performance/bench_basis.R
 
 # random/lhs.h against R's lhs package for speed, same two entry points the
 # agreement test drives. Not part of bench.sh, which drives the Python
@@ -599,7 +647,7 @@ tests/integration/npz_to_statistics: tests/integration/npz_to_statistics.c $(FRA
 # together; the second includes them in the reverse order and links against the
 # first, which is what would catch a duplicate external symbol.
 HEADER_COMPOSITION_SRC := tests/integration/header_composition.c tests/integration/header_composition_reverse.c
-ALL_HEADERS := $(CORE_HEADERS) $(wildcard linalg/*.h random/*.h dist/*.h dist/mv/*.h solver/*.h frame/*.h cluster/*.h nn/*.h sd/*.h)
+ALL_HEADERS := $(CORE_HEADERS) $(wildcard linalg/*.h random/*.h dist/*.h dist/mv/*.h solver/*.h frame/*.h cluster/*.h inference/*.h basis/*.h nn/*.h sd/*.h)
 
 tests/integration/header_composition: $(HEADER_COMPOSITION_SRC) $(ALL_HEADERS)
 	$(CC) $(STAT_CFLAGS) -I. $(HEADER_COMPOSITION_SRC) $(LDLIBS) -o tests/integration/header_composition
@@ -610,12 +658,19 @@ tests/integration/header_composition: $(HEADER_COMPOSITION_SRC) $(ALL_HEADERS)
 tests/integration/header_composition_f32: $(HEADER_COMPOSITION_SRC) $(ALL_HEADERS)
 	$(CC) -Wall -Wextra -O3 -march=native -ffast-math $(OPENMP_CFLAGS) $(BLAS_CFLAGS) -I. $(HEADER_COMPOSITION_SRC) $(LDLIBS) -o tests/integration/header_composition_f32
 
+# Built at float64 like every other statistical binary here: it runs a
+# least-squares fit on a design matrix built from levels data, and a model
+# confidence set on the residuals of one.
+tests/integration/basis_to_regression: tests/integration/basis_to_regression.c $(BASIS_DEPS) frame/csv.h frame/frame.h json.h inference/mcs.h tests/check.h
+	$(CC) $(STAT_CFLAGS) -I. tests/integration/basis_to_regression.c $(LDLIBS) -o tests/integration/basis_to_regression
+
 INTEGRATION_TESTS := tests/integration/frame_to_model tests/integration/frame_to_tensor \
                      tests/integration/tensor_to_optimizer \
                      tests/integration/join_missing_values \
                      tests/integration/distributed_simulation tests/integration/optimizer_swap \
                      tests/integration/pipeline_ownership tests/integration/npz_to_statistics \
-                     tests/integration/header_composition tests/integration/header_composition_f32
+                     tests/integration/header_composition tests/integration/header_composition_f32 \
+                     tests/integration/basis_to_regression
 
 test-integration: $(INTEGRATION_TESTS)
 	for t in $(INTEGRATION_TESTS); do ./$$t || exit 1; done
@@ -939,11 +994,11 @@ ad-asan:
 lapack-comparison-bench: $(LAPACK_COMPARISON_BENCH)
 	for b in $(LAPACK_COMPARISON_BENCH); do OPENBLAS_NUM_THREADS=1 ./$$b || exit 1; done
 
-test: tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification $(INTEGRATION_TESTS)
-	./tests/correctness/test_mat && ./tests/correctness/test_tensor && ./tests/correctness/test_tensor_serial && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_special && ./tests/correctness/test_stats && ./tests/correctness/test_random && ./tests/correctness/test_lhs && ./tests/correctness/test_mcs && ./tests/correctness/test_mcs_variance && ./tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power && ./tests/correctness/test_broadcast && ./tests/correctness/test_gauss && ./tests/correctness/test_student && ./tests/correctness/test_mvgauss && ./tests/correctness/test_mvstudent && ./tests/correctness/test_matgauss && ./tests/correctness/test_matgauss_recovery && ./tests/correctness/test_ad && ./tests/correctness/ad_tensor_gradients && ./tests/correctness/test_tape_reset && ./tests/correctness/test_adam && ./tests/correctness/test_optimizer && ./tests/correctness/test_cluster && ./tests/correctness/test_mlp && ./tests/correctness/test_frame && ./tests/correctness/test_csv && ./tests/correctness/test_txt && ./tests/correctness/test_npy && ./tests/correctness/test_npz && ./tests/correctness/test_json && ./tests/correctness/test_sql && ./tests/correctness/test_join && ./tests/correctness/gzip_inflate && ./tests/correctness/gzip_deflate && ./tests/correctness/rdata_array_read && ./tests/correctness/adf_correctness && ./tests/correctness/kpss_correctness && ./tests/correctness/dfgls_correctness && ./tests/correctness/otto_correctness && ./tests/correctness/hlt_union_correctness && ./tests/correctness/hlt_break_correctness && ./tests/correctness/hhlt_correctness && ./tests/correctness/zivot_andrews_correctness && ./tests/correctness/johansen_correctness && ./tests/correctness/engle_granger_correctness && ./tests/correctness/maki_correctness && ./tests/correctness/qlr_test_correctness && ./tests/correctness/lbfgs_correctness && ./tests/correctness/score_driven_location_correctness && ./tests/correctness/qvarma_correctness && ./tests/correctness/qvarma_analytic_agreement && ./tests/correctness/qvarma_gaussian_limit && ./tests/correctness/qvarma_identification && for t in $(INTEGRATION_TESTS); do ./$$t || exit 1; done
+test: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification $(INTEGRATION_TESTS)
+	./tests/correctness/poly_correctness && ./tests/correctness/spline_design_correctness && ./tests/correctness/spline_basis_correctness && ./tests/correctness/spline_objects_correctness && ./tests/correctness/test_mat && ./tests/correctness/test_tensor && ./tests/correctness/test_tensor_serial && ./tests/correctness/test_decomp && ./tests/correctness/test_solver && ./tests/correctness/test_special && ./tests/correctness/test_stats && ./tests/correctness/test_random && ./tests/correctness/test_lhs && ./tests/correctness/test_mcs && ./tests/correctness/test_mcs_variance && ./tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power && ./tests/correctness/test_broadcast && ./tests/correctness/test_gauss && ./tests/correctness/test_student && ./tests/correctness/test_mvgauss && ./tests/correctness/test_mvstudent && ./tests/correctness/test_matgauss && ./tests/correctness/test_matgauss_recovery && ./tests/correctness/test_ad && ./tests/correctness/ad_tensor_gradients && ./tests/correctness/test_tape_reset && ./tests/correctness/test_adam && ./tests/correctness/test_optimizer && ./tests/correctness/test_cluster && ./tests/correctness/test_mlp && ./tests/correctness/test_frame && ./tests/correctness/test_csv && ./tests/correctness/test_txt && ./tests/correctness/test_npy && ./tests/correctness/test_npz && ./tests/correctness/test_json && ./tests/correctness/test_sql && ./tests/correctness/test_join && ./tests/correctness/gzip_inflate && ./tests/correctness/gzip_deflate && ./tests/correctness/rdata_array_read && ./tests/correctness/adf_correctness && ./tests/correctness/kpss_correctness && ./tests/correctness/dfgls_correctness && ./tests/correctness/otto_correctness && ./tests/correctness/hlt_union_correctness && ./tests/correctness/hlt_break_correctness && ./tests/correctness/hhlt_correctness && ./tests/correctness/zivot_andrews_correctness && ./tests/correctness/johansen_correctness && ./tests/correctness/engle_granger_correctness && ./tests/correctness/maki_correctness && ./tests/correctness/qlr_test_correctness && ./tests/correctness/lbfgs_correctness && ./tests/correctness/score_driven_location_correctness && ./tests/correctness/qvarma_correctness && ./tests/correctness/qvarma_analytic_agreement && ./tests/correctness/qvarma_gaussian_limit && ./tests/correctness/qvarma_identification && for t in $(INTEGRATION_TESTS); do ./$$t || exit 1; done
 
-test-stress: tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification $(INTEGRATION_TESTS)
-	STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_tensor && STRESS=1 ./tests/correctness/test_tensor_serial && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_special && STRESS=1 ./tests/correctness/test_stats && STRESS=1 ./tests/correctness/test_random && STRESS=1 ./tests/correctness/test_lhs && STRESS=1 ./tests/correctness/test_mcs && STRESS=1 ./tests/correctness/test_mcs_variance && STRESS=1 ./tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power && STRESS=1 ./tests/correctness/test_broadcast && STRESS=1 ./tests/correctness/test_gauss && STRESS=1 ./tests/correctness/test_student && STRESS=1 ./tests/correctness/test_mvgauss && STRESS=1 ./tests/correctness/test_mvstudent && STRESS=1 ./tests/correctness/test_matgauss && STRESS=1 ./tests/correctness/test_matgauss_recovery && STRESS=1 ./tests/correctness/test_ad && STRESS=1 ./tests/correctness/ad_tensor_gradients && STRESS=1 ./tests/correctness/test_tape_reset && STRESS=1 ./tests/correctness/test_adam && STRESS=1 ./tests/correctness/test_optimizer && STRESS=1 ./tests/correctness/test_cluster && STRESS=1 ./tests/correctness/test_mlp && STRESS=1 ./tests/correctness/test_frame && STRESS=1 ./tests/correctness/test_csv && STRESS=1 ./tests/correctness/test_txt && STRESS=1 ./tests/correctness/test_npy && STRESS=1 ./tests/correctness/test_npz && STRESS=1 ./tests/correctness/test_json && STRESS=1 ./tests/correctness/test_sql && STRESS=1 ./tests/correctness/test_join && STRESS=1 ./tests/correctness/gzip_inflate && STRESS=1 ./tests/correctness/gzip_deflate && STRESS=1 ./tests/correctness/rdata_array_read && STRESS=1 ./tests/correctness/adf_correctness && STRESS=1 ./tests/correctness/kpss_correctness && STRESS=1 ./tests/correctness/dfgls_correctness && STRESS=1 ./tests/correctness/otto_correctness && STRESS=1 ./tests/correctness/hlt_union_correctness && STRESS=1 ./tests/correctness/hlt_break_correctness && STRESS=1 ./tests/correctness/hhlt_correctness && STRESS=1 ./tests/correctness/zivot_andrews_correctness && STRESS=1 ./tests/correctness/johansen_correctness && STRESS=1 ./tests/correctness/engle_granger_correctness && STRESS=1 ./tests/correctness/maki_correctness && STRESS=1 ./tests/correctness/qlr_test_correctness && STRESS=1 ./tests/correctness/lbfgs_correctness && STRESS=1 ./tests/correctness/score_driven_location_correctness && STRESS=1 ./tests/correctness/qvarma_correctness && STRESS=1 ./tests/correctness/qvarma_analytic_agreement && STRESS=1 ./tests/correctness/qvarma_gaussian_limit && STRESS=1 ./tests/correctness/qvarma_identification && for t in $(INTEGRATION_TESTS); do STRESS=1 ./$$t || exit 1; done
+test-stress: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification $(INTEGRATION_TESTS)
+	STRESS=1 ./tests/correctness/poly_correctness && STRESS=1 ./tests/correctness/spline_design_correctness && STRESS=1 ./tests/correctness/spline_basis_correctness && STRESS=1 ./tests/correctness/spline_objects_correctness && STRESS=1 ./tests/correctness/test_mat && STRESS=1 ./tests/correctness/test_tensor && STRESS=1 ./tests/correctness/test_tensor_serial && STRESS=1 ./tests/correctness/test_decomp && STRESS=1 ./tests/correctness/test_solver && STRESS=1 ./tests/correctness/test_special && STRESS=1 ./tests/correctness/test_stats && STRESS=1 ./tests/correctness/test_random && STRESS=1 ./tests/correctness/test_lhs && STRESS=1 ./tests/correctness/test_mcs && STRESS=1 ./tests/correctness/test_mcs_variance && STRESS=1 ./tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power && STRESS=1 ./tests/correctness/test_broadcast && STRESS=1 ./tests/correctness/test_gauss && STRESS=1 ./tests/correctness/test_student && STRESS=1 ./tests/correctness/test_mvgauss && STRESS=1 ./tests/correctness/test_mvstudent && STRESS=1 ./tests/correctness/test_matgauss && STRESS=1 ./tests/correctness/test_matgauss_recovery && STRESS=1 ./tests/correctness/test_ad && STRESS=1 ./tests/correctness/ad_tensor_gradients && STRESS=1 ./tests/correctness/test_tape_reset && STRESS=1 ./tests/correctness/test_adam && STRESS=1 ./tests/correctness/test_optimizer && STRESS=1 ./tests/correctness/test_cluster && STRESS=1 ./tests/correctness/test_mlp && STRESS=1 ./tests/correctness/test_frame && STRESS=1 ./tests/correctness/test_csv && STRESS=1 ./tests/correctness/test_txt && STRESS=1 ./tests/correctness/test_npy && STRESS=1 ./tests/correctness/test_npz && STRESS=1 ./tests/correctness/test_json && STRESS=1 ./tests/correctness/test_sql && STRESS=1 ./tests/correctness/test_join && STRESS=1 ./tests/correctness/gzip_inflate && STRESS=1 ./tests/correctness/gzip_deflate && STRESS=1 ./tests/correctness/rdata_array_read && STRESS=1 ./tests/correctness/adf_correctness && STRESS=1 ./tests/correctness/kpss_correctness && STRESS=1 ./tests/correctness/dfgls_correctness && STRESS=1 ./tests/correctness/otto_correctness && STRESS=1 ./tests/correctness/hlt_union_correctness && STRESS=1 ./tests/correctness/hlt_break_correctness && STRESS=1 ./tests/correctness/hhlt_correctness && STRESS=1 ./tests/correctness/zivot_andrews_correctness && STRESS=1 ./tests/correctness/johansen_correctness && STRESS=1 ./tests/correctness/engle_granger_correctness && STRESS=1 ./tests/correctness/maki_correctness && STRESS=1 ./tests/correctness/qlr_test_correctness && STRESS=1 ./tests/correctness/lbfgs_correctness && STRESS=1 ./tests/correctness/score_driven_location_correctness && STRESS=1 ./tests/correctness/qvarma_correctness && STRESS=1 ./tests/correctness/qvarma_analytic_agreement && STRESS=1 ./tests/correctness/qvarma_gaussian_limit && STRESS=1 ./tests/correctness/qvarma_identification && for t in $(INTEGRATION_TESTS); do STRESS=1 ./$$t || exit 1; done
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754
 tests/correctness/test_mat_special: tests/correctness/test_mat_special.c linalg/mat.h
@@ -1027,4 +1082,4 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates test-mcs-candidate test test-stress test-special test-npz-python test-lhs-r bench-lhs test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model
+.PHONY: bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates test-mcs-candidate test test-stress test-special test-npz-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model

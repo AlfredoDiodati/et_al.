@@ -120,6 +120,7 @@ arrived intact** — `docs/INTEGRATION_DATA_SEAMS_DOCUMENTATION.md`:
 | `join_missing_values.c` | a missing value reaching a statistic or a verdict | **two real defects, both fixed** |
 | `npz_to_statistics.c` | a frame surviving a binary container | no defect found |
 | `pipeline_ownership.c` | what stays valid once the thing it came from is freed | no defect found |
+| `basis_to_regression.c` | a design matrix built from a loaded column, fitted, written down and chosen between | no defect found |
 
 **You are changing an interface, adding a header, or running something across
 machines, and you want to know whether the library's own structure still
@@ -130,7 +131,7 @@ holds** — `docs/INTEGRATION_STRUCTURE_SEAMS_DOCUMENTATION.md`:
 | `distributed_simulation.c` | a Monte Carlo across machines against the serial answer | no defect found |
 | `optimizer_swap.c` | the `Optimizer` interface where a model uses it | no defect found |
 | `tensor_to_optimizer.c` | `linalg/tensor.h` -> `ad.h` -> `solver/adam.h`, the composition a matrix-valued model is | no library defect; one leak in the test itself, found by the sanitizer target |
-| `header_composition.c` / `_reverse.c` | all 36 headers in one translation unit, both orders | no collision found |
+| `header_composition.c` / `_reverse.c` | every header in one translation unit, both orders | no collision found |
 
 The split is by when a reader needs the content rather than by size alone, the
 same criterion `README.md`'s documentation-structure policy applies to

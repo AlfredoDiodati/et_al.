@@ -32,6 +32,8 @@ carries no checks of its own beyond compiling and linking.
 #include "../../dist/gauss.h"
 #include "../../dist/broadcast.h"
 #include "../../inference/qlr_test.h"
+#include "../../basis/spline.h"
+#include "../../basis/poly.h"
 #include "../../inference/cointegration.h"
 #include "../../inference/unit_root.h"
 #include "../../inference/mcs.h"
