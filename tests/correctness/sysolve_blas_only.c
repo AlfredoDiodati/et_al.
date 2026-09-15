@@ -110,8 +110,8 @@ static void check_sysv(const char *label, Mat a, Mat b, int lda) {
 
     mreal *am = padded_copy(a, lda), *at = padded_copy(a, lda);
     mreal *bm = padded_copy(b, nrhs), *bt = padded_copy(b, nrhs);
-    lapack_int *pm = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
-    lapack_int *pt = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+    MatPivot *pm = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
+    MatPivot *pt = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
 
     int info = _sysv(n, nrhs, am, lda, pm, bm, nrhs);
     int li = (int)MLAPACK(sysv)(LAPACK_ROW_MAJOR, 'L', n, nrhs,
@@ -155,7 +155,7 @@ static void test_known(void) {
         Mat a = mat_lit(2, 2, 0,1, 1,0);
         Mat b = mat_lit(2, 1, 1,1);
         mreal *am = padded_copy(a, 2), *bm = padded_copy(b, 1);
-        lapack_int piv[2];
+        MatPivot piv[2];
         if (_sysv(2, 1, am, 2, piv, bm, 1) != 0) fail("antidiagonal: reported singular");
         check_close("antidiagonal x[0]", bm[0], 1.f, TOL);
         check_close("antidiagonal x[1]", bm[1], 1.f, TOL);
@@ -169,7 +169,7 @@ static void test_known(void) {
         Mat a = mat_eye(4);
         Mat b = mat_lit(4, 1, 1,2,3,4);
         mreal *am = padded_copy(a, 4), *bm = padded_copy(b, 1);
-        lapack_int piv[4];
+        MatPivot piv[4];
         if (_sysv(4, 1, am, 4, piv, bm, 1) != 0) fail("identity: reported singular");
         for (int i = 0; i < 4; i++) {
             char what[64];
@@ -187,7 +187,7 @@ static void test_known(void) {
         Mat a = mat_lit(2, 2, 4,1, 1,3);
         Mat b = mat_lit(2, 1, 1,2);
         mreal *am = padded_copy(a, 2), *bm = padded_copy(b, 1);
-        lapack_int piv[2];
+        MatPivot piv[2];
         if (_sysv(2, 1, am, 2, piv, bm, 1) != 0) fail("spd 2x2: reported singular");
         /* solves to (1/11, 7/11) */
         check_close("spd 2x2 x[0]", bm[0], 1.f / 11.f, TOL);
@@ -201,7 +201,7 @@ static void test_known(void) {
         Mat a = mat_lit(1, 1, 5.0f);
         Mat b = mat_lit(1, 1, 10.0f);
         mreal *am = padded_copy(a, 1), *bm = padded_copy(b, 1);
-        lapack_int piv[1];
+        MatPivot piv[1];
         if (_sysv(1, 1, am, 1, piv, bm, 1) != 0) fail("1x1: reported singular");
         check_close("1x1 x[0]", bm[0], 2.f, TOL);
         free(am); free(bm);
@@ -225,7 +225,7 @@ static void test_upper_triangle_ignored(void) {
 
     mreal *a1 = padded_copy(a, n), *b1 = padded_copy(b, 1);
     mreal *a2 = padded_copy(poisoned, n), *b2 = padded_copy(b, 1);
-    lapack_int p1[8], p2[8];
+    MatPivot p1[8], p2[8];
 
     int i1 = _sysv(n, 1, a1, n, p1, b1, 1);
     int i2 = _sysv(n, 1, a2, n, p2, b2, 1);
@@ -254,7 +254,7 @@ static void test_all_two_by_two(void) {
 
         /* and confirm the factorization really did take 2x2 blocks */
         mreal *am = padded_copy(a, n), *bm = padded_copy(b, 1);
-        lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+        MatPivot *piv = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
         if (_sysv(n, 1, am, n, piv, bm, 1) == 0 && piv[0] >= 0) {
             snprintf(label, sizeof label, "zero diagonal %d: expected a 2x2 first pivot", n);
             fail(label);
@@ -310,7 +310,7 @@ static void test_singular(void) {
         Mat a = mat_new(4, 4);
         Mat b = rand_mat(4, 1);
         mreal *am = padded_copy(a, 4), *bm = padded_copy(b, 1);
-        lapack_int piv[4];
+        MatPivot piv[4];
         if (_sysv(4, 1, am, 4, piv, bm, 1) == 0)
             fail("zero matrix: expected a nonzero info");
         free(am); free(bm);
@@ -324,7 +324,7 @@ static void test_singular(void) {
         Mat b = rand_mat(n, 1);
         mreal *am = padded_copy(a, n), *at = padded_copy(a, n);
         mreal *bm = padded_copy(b, 1), *bt = padded_copy(b, 1);
-        lapack_int pm[4], pt[4];
+        MatPivot pm[4], pt[4];
         int info = _sysv(n, 1, am, n, pm, bm, 1);
         int li = (int)MLAPACK(sysv)(LAPACK_ROW_MAJOR, 'L', n, 1, at, n, pt, bt, 1);
         if ((info == 0) != (li == 0)) fail("duplicated row: info disagrees with ?sysv");

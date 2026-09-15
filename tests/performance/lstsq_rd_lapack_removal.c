@@ -93,7 +93,7 @@ static void run_mine(const Job *j) {
 }
 
 static void run_lapack(const Job *j) {
-    lapack_int rank;
+    MatPivot rank;
     restore(j);
     sink = (int)MLAPACK(gelsd)(LAPACK_ROW_MAJOR, j->m, j->n, j->nrhs,
                                j->awork, j->n, j->bwork, j->nrhs, j->s,

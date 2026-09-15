@@ -70,7 +70,7 @@ static mreal *padded_copy(Mat a, int lda) {
 
 /* Replay the interchanges onto the identity's row order, giving the row
    permutation P that ipiv actually encodes. */
-static void permutation_from_ipiv(const lapack_int *ipiv, int k, int m, int *perm) {
+static void permutation_from_ipiv(const MatPivot *ipiv, int k, int m, int *perm) {
     for (int i = 0; i < m; i++) perm[i] = i;
     for (int i = 0; i < k; i++) {
         int p = (int)ipiv[i] - 1;
@@ -81,7 +81,7 @@ static void permutation_from_ipiv(const lapack_int *ipiv, int k, int m, int *per
 /* P*A == L*U, with L unit lower triangular and U upper, both read out of
    the packed result. */
 static void check_reconstructs(const char *label, Mat a, const mreal *f,
-                               int lda, const lapack_int *ipiv) {
+                               int lda, const MatPivot *ipiv) {
     char what[200];
     int m = a.r, n = a.c;
     int k = m < n ? m : n;
@@ -123,7 +123,7 @@ static void check_reconstructs_only(const char *label, Mat a, int expect_info) {
     int m = a.r, n = a.c;
     int k = m < n ? m : n;
     mreal *f = padded_copy(a, n);
-    lapack_int *piv = (lapack_int*)malloc((size_t)k * sizeof(lapack_int));
+    MatPivot *piv = (MatPivot*)malloc((size_t)k * sizeof(MatPivot));
 
     int info = _getrf(f, m, n, n, piv);
     if (expect_info >= 0 && info != expect_info) {
@@ -142,8 +142,8 @@ static void check_against_getrf(const char *label, Mat a, int lda) {
 
     mreal *mine = padded_copy(a, lda);
     mreal *theirs = padded_copy(a, lda);
-    lapack_int *pm = (lapack_int*)malloc((size_t)k * sizeof(lapack_int));
-    lapack_int *pt = (lapack_int*)malloc((size_t)k * sizeof(lapack_int));
+    MatPivot *pm = (MatPivot*)malloc((size_t)k * sizeof(MatPivot));
+    MatPivot *pt = (MatPivot*)malloc((size_t)k * sizeof(MatPivot));
 
     int info = _getrf(mine, m, n, lda, pm);
     int li = (int)MLAPACK(getrf)(LAPACK_ROW_MAJOR, m, n, theirs, lda, pt);
@@ -189,7 +189,7 @@ static void test_known(void) {
     {
         Mat a = mat_lit(2, 2, 0,1, 1,0);
         mreal *f = padded_copy(a, 2);
-        lapack_int piv[2];
+        MatPivot piv[2];
         if (_getrf(f, 2, 2, 2, piv) != 0) fail("swap 2x2: reported singular");
         if ((int)piv[0] != 2) fail("swap 2x2: ipiv[0] should select row 2");
         check_close("swap 2x2 U[0][0]", f[0], 1.f, TOL);
@@ -203,7 +203,7 @@ static void test_known(void) {
     {
         Mat a = mat_lit(2, 2, 4,3, 2,1);
         mreal *f = padded_copy(a, 2);
-        lapack_int piv[2];
+        MatPivot piv[2];
         if (_getrf(f, 2, 2, 2, piv) != 0) fail("no-pivot 2x2: reported singular");
         if ((int)piv[0] != 1) fail("no-pivot 2x2: should not have swapped");
         check_close("no-pivot L[1][0]", f[2], 0.5f, TOL);
@@ -216,7 +216,7 @@ static void test_known(void) {
     {
         Mat a = mat_lit(2, 2, 1,2, -8,3);
         mreal *f = padded_copy(a, 2);
-        lapack_int piv[2];
+        MatPivot piv[2];
         _getrf(f, 2, 2, 2, piv);
         if ((int)piv[0] != 2) fail("largest-magnitude pivot not chosen");
         check_close("magnitude pivot U[0][0]", f[0], -8.f, TOL);
@@ -228,7 +228,7 @@ static void test_known(void) {
     {
         Mat a = mat_eye(4);
         mreal *f = padded_copy(a, 4);
-        lapack_int piv[4];
+        MatPivot piv[4];
         if (_getrf(f, 4, 4, 4, piv) != 0) fail("identity: reported singular");
         for (int i = 0; i < 4; i++)
             if ((int)piv[i] != i + 1) fail("identity: unexpected interchange");
@@ -286,8 +286,8 @@ static void test_blocked_matches_unblocked(void) {
             for (int k = 0; k < n; k++)
                 plain[(size_t)k * n + i] = AT(a, i, k);
 
-        lapack_int *pb = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
-        lapack_int *pu = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+        MatPivot *pb = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
+        MatPivot *pu = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
 
         int ib = _getrf(blocked, n, n, n, pb);
         int iu = _getf2(plain, n, n, n, pu);
@@ -352,7 +352,7 @@ static void test_singular(void) {
         Mat a = mat_lit(3, 3, 0,1,2, 0,3,4, 0,5,6);
         check_against_getrf("zero first column", a, 3);
         mreal *f = padded_copy(a, 3);
-        lapack_int piv[3];
+        MatPivot piv[3];
         if (_getrf(f, 3, 3, 3, piv) != 1) fail("zero first column: expected info 1");
         free(f); mat_free(a);
     }
@@ -363,7 +363,7 @@ static void test_singular(void) {
     {
         Mat a = mat_lit(3, 3, 1,2,3, 4,5,6, 1,2,3);
         mreal *f = padded_copy(a, 3);
-        lapack_int piv[3];
+        MatPivot piv[3];
         if (_getrf(f, 3, 3, 3, piv) == 0)
             fail("duplicate rows: expected a zero pivot");
         check_reconstructs("duplicate rows", a, f, 3, piv);
@@ -391,7 +391,7 @@ static void test_singular(void) {
         Mat a = mat_new(4, 4);
         check_against_getrf("all zero", a, 4);
         mreal *f = padded_copy(a, 4);
-        lapack_int piv[4];
+        MatPivot piv[4];
         for (int i = 0; i < 4; i++) piv[i] = -12345;
         if (_getrf(f, 4, 4, 4, piv) != 1) fail("all zero: expected info 1");
         for (int i = 0; i < 4; i++)

@@ -16,7 +16,7 @@ A kernel's `info` output being nonzero (matrix not positive-definite for `potrf`
 
 ```c
 Mat   mat_chol(Mat a)
-Mat   mat_lu(Mat a, lapack_int **piv)
+Mat   mat_lu(Mat a, MatPivot **piv)
 void  mat_bandwidth(Mat a, int *kl_out, int *ku_out)
 Mat   mat_band_pack(Mat a, int kl, int ku)
 void  mat_qr(Mat a, Mat *q_out, Mat *r_out)
@@ -39,7 +39,7 @@ Computed by `linalg/factor.h`'s `_potrf`, which reaches no further than CBLAS. I
 
 Factors square `a` via partial-pivoted LU. The result is LAPACK's packed layout in a single `Mat`: strictly-lower entries are `L` with an implicit unit diagonal (not stored), the diagonal and upper entries are `U`. `*piv` receives a newly allocated pivot array of length `a.r`, in LAPACK's sequential-swap encoding: row `i` of the factored matrix was interchanged with row `piv[i]-1` during elimination (1-indexed, and the swaps are meant to be replayed in order `i = 0..n-1`, not read as a final permutation directly - see `apply_pivots` in `tests/correctness/test_decomp.c` for the standard reconstruction).
 
-Caller must `mat_free()` the returned `Mat` and separately `free()` `*piv` - `piv` is a plain `malloc`'d `lapack_int` array, not a `Mat`, so `mat_free` does not apply to it.
+Caller must `mat_free()` the returned `Mat` and separately `free()` `*piv` - `piv` is a plain `malloc`'d `MatPivot` array, not a `Mat`, so `mat_free` does not apply to it.
 
 ### `mat_qr`
 

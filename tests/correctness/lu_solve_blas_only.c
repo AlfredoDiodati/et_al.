@@ -116,7 +116,7 @@ static void check_getrs(const char *label, int n, int nrhs, char trans, int ldb)
     Mat b = rand_mat(n, nrhs);
 
     Mat lu = mat_copy(a);
-    lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+    MatPivot *piv = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
     if (_getrf(lu.d, n, n, lu.stride, piv) != 0) {
         fail("check_getrs: factorization reported singular");
         goto done;
@@ -177,7 +177,7 @@ static void test_transpose_pivot_order(void) {
     Mat b = mat_lit(3, 1, 1, 2, 3);
 
     Mat lu = mat_copy(a);
-    lapack_int piv[3];
+    MatPivot piv[3];
     if (_getrf(lu.d, 3, 3, lu.stride, piv) != 0) fail("transposed: singular");
     if ((int)piv[0] == 1) fail("transposed: test matrix did not force an interchange");
 
@@ -203,8 +203,8 @@ static void check_gesv(const char *label, int n, int nrhs) {
 
     mreal *am = padded_copy(a, n), *at = padded_copy(a, n);
     mreal *bm = padded_copy(b, nrhs), *bt = padded_copy(b, nrhs);
-    lapack_int *pm = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
-    lapack_int *pt = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+    MatPivot *pm = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
+    MatPivot *pt = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
 
     int info = _gesv(n, nrhs, am, n, pm, bm, nrhs);
     int li = (int)MLAPACK(gesv)(LAPACK_ROW_MAJOR, n, nrhs, at, n, pt, bt, nrhs);
@@ -242,7 +242,7 @@ static void test_gesv(void) {
         Mat b = mat_lit(3, 1, 1, 2, 3);
         mreal *am = padded_copy(a, 3), *bm = padded_copy(b, 1);
         mreal *at = padded_copy(a, 3), *bt = padded_copy(b, 1);
-        lapack_int pm[3], pt[3];
+        MatPivot pm[3], pt[3];
         int info = _gesv(3, 1, am, 3, pm, bm, 1);
         int li = (int)MLAPACK(gesv)(LAPACK_ROW_MAJOR, 3, 1, at, 3, pt, bt, 1);
         if (info == 0) fail("singular gesv: expected a nonzero info");
@@ -262,8 +262,8 @@ static void check_getri(const char *label, int n, int lda) {
 
     mreal *mine = padded_copy(a, lda);
     mreal *theirs = padded_copy(a, lda);
-    lapack_int *pm = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
-    lapack_int *pt = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+    MatPivot *pm = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
+    MatPivot *pt = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
 
     if (_getrf(mine, n, n, lda, pm) != 0) { fail("check_getri: singular"); goto done; }
     if ((int)MLAPACK(getrf)(LAPACK_ROW_MAJOR, n, n, theirs, lda, pt) != 0) {
@@ -317,7 +317,7 @@ static void test_getri(void) {
         Mat a = mat_new(3, 3);
         AT(a,0,0) = 2; AT(a,1,1) = 4; AT(a,2,2) = 10;
         mreal *f = padded_copy(a, 3);
-        lapack_int piv[3];
+        MatPivot piv[3];
         if (_getrf(f, 3, 3, 3, piv) != 0) fail("getri diagonal: singular");
         if (_getri(f, 3, 3, piv) != 0) fail("getri diagonal: reported failure");
         check_close("getri diagonal inv[0][0]", f[0], 0.5f, TOL);

@@ -20,7 +20,7 @@ static inline Vec vec_solve(Mat a, Vec b) {
     int n = a.r;
     Mat lu = mat_copy(a);
     Vec x = mat_copy(b);
-    lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+    MatPivot *piv = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
 
     int info = _gesv(n, 1, lu.d, lu.stride, piv, x.d, x.stride);
     assert(info == 0); /* a is singular */
@@ -63,7 +63,7 @@ static inline Vec vec_band_solve(Mat band, int kl, int ku, Vec b) {
 
     int ldab = 2 * kl + ku + 1;
     mreal *ab = (mreal*)calloc((size_t)n * ldab, sizeof(mreal));
-    lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+    MatPivot *piv = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
     assert(ab && piv);
     for (int j = 0; j < n; j++)
         memcpy(&ab[(size_t)j * ldab + kl], &AT(band, j, 0),
@@ -98,7 +98,7 @@ static inline Vec vec_solve_sym(Mat a, Vec b) {
     int n = a.r;
     Mat af = mat_copy(a);
     Vec x = mat_copy(b);
-    lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+    MatPivot *piv = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
 
     int info = _sysv(n, 1, af.d, af.stride, piv, x.d, x.stride);
     assert(info == 0); /* a is singular */
@@ -118,7 +118,7 @@ static inline Vec vec_solve_sym(Mat a, Vec b) {
    factorization without re-checking it against any original a. b is a
    single right-hand-side column vector with b.r == lu.r. Returns a new
    owner; lu and b are not modified. */
-static inline Vec vec_lu_solve(Mat lu, lapack_int *piv, Vec b) {
+static inline Vec vec_lu_solve(Mat lu, MatPivot *piv, Vec b) {
     assert(lu.r == lu.c && b.r == lu.r && b.c == 1);
     Vec x = mat_copy(b);
     int info = _getrs('N', lu.r, 1, lu.d, lu.stride, piv, x.d, x.stride); /* 'N': solve a*x=b, not the transposed system a^T*x=b */

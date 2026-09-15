@@ -45,7 +45,7 @@ static double now(void) {
    linalg/factor.h's _getf2. The cutoff decides how much of a panel stays
    BLAS-2: below it the plain column-by-column loop runs, above it the
    columns are split and most of the arithmetic becomes ?gemm. */
-static int getf2_base_sweep(mreal *t, int m, int n, int ldt, lapack_int *ipiv,
+static int getf2_base_sweep(mreal *t, int m, int n, int ldt, MatPivot *ipiv,
                             int base) {
     if (n <= base || m <= 1) return _getf2_base(t, m, n, ldt, ipiv);
 
@@ -65,13 +65,13 @@ static int getf2_base_sweep(mreal *t, int m, int n, int ldt, lapack_int *ipiv,
         int info2 = getf2_base_sweep(&t[(size_t)n1 * ldt + n1], m - n1, n2, ldt,
                                      &ipiv[n1], base);
         if (info2 && !info) info = info2 + n1;
-        for (int i = n1; i < mn; i++) ipiv[i] += (lapack_int)n1;
+        for (int i = n1; i < mn; i++) ipiv[i] += (MatPivot)n1;
         _laswp_cm(t, ldt, 0, n1, n1, mn - 1, ipiv);
     }
     return info;
 }
 
-static int getrf_panel_base(mreal *a, int m, int n, int lda, lapack_int *ipiv,
+static int getrf_panel_base(mreal *a, int m, int n, int lda, MatPivot *ipiv,
                             int base) {
     mreal *t = (mreal*)malloc((size_t)m * n * sizeof(mreal));
     _to_colmajor(a, m, n, lda, t);
@@ -83,7 +83,7 @@ static int getrf_panel_base(mreal *a, int m, int n, int lda, lapack_int *ipiv,
 
 /* The production blocking, with both the panel width and the recursion
    cutoff opened up. */
-static int getrf_nb_base(mreal *a, int m, int n, int lda, lapack_int *ipiv,
+static int getrf_nb_base(mreal *a, int m, int n, int lda, MatPivot *ipiv,
                          int nb, int base) {
     int mn = m < n ? m : n;
     if (nb <= 0 || mn <= nb) return getrf_panel_base(a, m, n, lda, ipiv, base);
@@ -94,7 +94,7 @@ static int getrf_nb_base(mreal *a, int m, int n, int lda, lapack_int *ipiv,
         int pinfo = getrf_panel_base(&a[(size_t)j * lda + j], m - j, jb, lda,
                                      &ipiv[j], base);
         if (pinfo && !info) info = pinfo + j;
-        for (int i = j; i < j + jb; i++) ipiv[i] += (lapack_int)j;
+        for (int i = j; i < j + jb; i++) ipiv[i] += (MatPivot)j;
         if (j > 0) _laswp_rm(a, lda, j, j, j + jb - 1, ipiv);
         if (j + jb < n) {
             _laswp_rm(&a[j + jb], lda, n - j - jb, j, j + jb - 1, ipiv);
@@ -113,7 +113,7 @@ static int getrf_nb_base(mreal *a, int m, int n, int lda, lapack_int *ipiv,
     return info;
 }
 
-static int getrf_nb(mreal *a, int m, int n, int lda, lapack_int *ipiv, int nb) {
+static int getrf_nb(mreal *a, int m, int n, int lda, MatPivot *ipiv, int nb) {
     int mn = m < n ? m : n;
     if (nb <= 0 || mn <= nb) return _getrf_panel(a, m, n, lda, ipiv);
 
@@ -122,7 +122,7 @@ static int getrf_nb(mreal *a, int m, int n, int lda, lapack_int *ipiv, int nb) {
         int jb = mn - j < nb ? mn - j : nb;
         int pinfo = _getrf_panel(&a[(size_t)j * lda + j], m - j, jb, lda, &ipiv[j]);
         if (pinfo && !info) info = pinfo + j;
-        for (int i = j; i < j + jb; i++) ipiv[i] += (lapack_int)j;
+        for (int i = j; i < j + jb; i++) ipiv[i] += (MatPivot)j;
         if (j > 0) _laswp_rm(a, lda, j, j, j + jb - 1, ipiv);
         if (j + jb < n) {
             _laswp_rm(&a[j + jb], lda, n - j - jb, j, j + jb - 1, ipiv);
@@ -177,7 +177,7 @@ static int sweep_base = 8;
 
 /* One call of whichever arm nb selects, input restored first since the
    factorization destroys it. */
-static void run_arm(Mat a, int nb, mreal *scratch, lapack_int *piv, size_t bytes) {
+static void run_arm(Mat a, int nb, mreal *scratch, MatPivot *piv, size_t bytes) {
     int m = a.r, n = a.c;
     int mn = m < n ? m : n;
     memcpy(scratch, a.d, bytes);
@@ -189,8 +189,8 @@ static void run_arm(Mat a, int nb, mreal *scratch, lapack_int *piv, size_t bytes
         sink = getrf_nb(scratch, m, n, n, piv, nb);
 }
 
-static double run_one(Mat a, int nb, mreal *scratch, lapack_int *piv,
-                      lapack_int *lpiv, size_t bytes) {
+static double run_one(Mat a, int nb, mreal *scratch, MatPivot *piv,
+                      MatPivot *lpiv, size_t bytes) {
     double t0 = now();
     long runs = 0;
     while (now() - t0 < BLOCK) {
@@ -226,8 +226,8 @@ typedef struct { double lapack, mine, ratio; } Result;
    up, and are only meaningful next to the other arm in the same row. The
    ratio is the number to read. The drift check at the end of the report
    says how much the machine moved while all this was measured. */
-static Result time_pair(Mat a, int nb, mreal *scratch, lapack_int *piv,
-                        lapack_int *lpiv) {
+static Result time_pair(Mat a, int nb, mreal *scratch, MatPivot *piv,
+                        MatPivot *lpiv) {
     size_t bytes = (size_t)a.r * a.c * sizeof(mreal);
     Result r = { 0, 0, 0 };
     double ta = 0, tb = 0;
@@ -323,8 +323,8 @@ int main(void) {
     {
         Mat a = rand_mat(256, 256);
         mreal *scratch = (mreal*)malloc((size_t)256 * 256 * sizeof(mreal));
-        lapack_int *piv = (lapack_int*)malloc(256 * sizeof(lapack_int));
-        lapack_int *lpiv = (lapack_int*)malloc(256 * sizeof(lapack_int));
+        MatPivot *piv = (MatPivot*)malloc(256 * sizeof(MatPivot));
+        MatPivot *lpiv = (MatPivot*)malloc(256 * sizeof(MatPivot));
         drift_before = time_pair(a, ARM_PRODUCTION, scratch, piv, lpiv).lapack;
         free(scratch); free(piv); free(lpiv); mat_free(a);
     }
@@ -337,8 +337,8 @@ int main(void) {
         Mat a = rand_mat(m, n);
         int k = m < n ? m : n;
         mreal *scratch = (mreal*)malloc((size_t)m * n * sizeof(mreal));
-        lapack_int *piv = (lapack_int*)malloc((size_t)k * sizeof(lapack_int));
-        lapack_int *lpiv = (lapack_int*)malloc((size_t)k * sizeof(lapack_int));
+        MatPivot *piv = (MatPivot*)malloc((size_t)k * sizeof(MatPivot));
+        MatPivot *lpiv = (MatPivot*)malloc((size_t)k * sizeof(MatPivot));
 
         Result r = time_pair(a, ARM_PRODUCTION, scratch, piv, lpiv);
         char shape[32];
@@ -372,8 +372,8 @@ int main(void) {
         Mat a = rand_mat(m, n);
         int k = m < n ? m : n;
         mreal *scratch = (mreal*)malloc((size_t)m * n * sizeof(mreal));
-        lapack_int *piv = (lapack_int*)malloc((size_t)k * sizeof(lapack_int));
-        lapack_int *lpiv = (lapack_int*)malloc((size_t)k * sizeof(lapack_int));
+        MatPivot *piv = (MatPivot*)malloc((size_t)k * sizeof(MatPivot));
+        MatPivot *lpiv = (MatPivot*)malloc((size_t)k * sizeof(MatPivot));
 
         char shape[32];
         snprintf(shape, sizeof shape, "%dx%d", m, n);
@@ -395,8 +395,8 @@ int main(void) {
         Mat a = rand_mat(m, n);
         int k = m < n ? m : n;
         mreal *scratch = (mreal*)malloc((size_t)m * n * sizeof(mreal));
-        lapack_int *piv = (lapack_int*)malloc((size_t)k * sizeof(lapack_int));
-        lapack_int *lpiv = (lapack_int*)malloc((size_t)k * sizeof(lapack_int));
+        MatPivot *piv = (MatPivot*)malloc((size_t)k * sizeof(MatPivot));
+        MatPivot *lpiv = (MatPivot*)malloc((size_t)k * sizeof(MatPivot));
         char shape[32];
         snprintf(shape, sizeof shape, "%dx%d", m, n);
         fprintf(f, "%12s %14.3f", shape, time_pair(a, 0, scratch, piv, lpiv).lapack * 1e6);
@@ -412,8 +412,8 @@ int main(void) {
     {
         Mat a = rand_mat(256, 256);
         mreal *scratch = (mreal*)malloc((size_t)256 * 256 * sizeof(mreal));
-        lapack_int *piv = (lapack_int*)malloc(256 * sizeof(lapack_int));
-        lapack_int *lpiv = (lapack_int*)malloc(256 * sizeof(lapack_int));
+        MatPivot *piv = (MatPivot*)malloc(256 * sizeof(MatPivot));
+        MatPivot *lpiv = (MatPivot*)malloc(256 * sizeof(MatPivot));
         drift_after = time_pair(a, ARM_PRODUCTION, scratch, piv, lpiv).lapack;
         free(scratch); free(piv); free(lpiv); mat_free(a);
     }

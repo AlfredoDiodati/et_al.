@@ -45,13 +45,13 @@ static inline Mat mat_chol(Mat a) {
 
    factor.h's _getrf computes this against CBLAS alone; it replaced a
    LAPACKE ?getrf call and is 1.10x to 2.89x faster across the shapes in
-   tests/performance/lu_lapack_removal.c. lapack_int keeps its meaning and
+   tests/performance/lu_lapack_removal.c. MatPivot keeps its meaning and
    its width - factor.h defines it identically when lapacke.h is absent -
    so this signature is unchanged. */
-static inline Mat mat_lu(Mat a, lapack_int **piv) {
+static inline Mat mat_lu(Mat a, MatPivot **piv) {
     assert(a.r == a.c);
     Mat lu = mat_copy(a);
-    *piv = (lapack_int*)malloc((size_t)a.r * sizeof(lapack_int));
+    *piv = (MatPivot*)malloc((size_t)a.r * sizeof(MatPivot));
     int info = _getrf(lu.d, a.r, a.c, lu.stride, *piv);
     assert(info == 0); /* a is singular */
     return lu;
@@ -228,7 +228,7 @@ static inline void mat_svd(Mat a, Mat *u_out, Vec *s_out, Mat *vt_out) {
 static inline mreal mat_det(Mat a) {
     assert(a.r == a.c);
     int n = a.r;
-    lapack_int *piv;
+    MatPivot *piv;
     Mat lu = mat_lu(a, &piv);
 
     /* det(A) = det(P)*det(L)*det(U). L has unit diagonal (det L == 1);
@@ -263,7 +263,7 @@ static inline Mat mat_inv(Mat a) {
     assert(a.r == a.c);
     int n = a.r;
     Mat inv = mat_copy(a);
-    lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+    MatPivot *piv = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
 
     /* _getrf factors in place (inv.d becomes the packed LU, same layout
        mat_lu produces); _getri then consumes that same buffer and

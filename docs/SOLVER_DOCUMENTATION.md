@@ -15,7 +15,7 @@ Same contract as `linalg/decomp.h`: inputs are copied first and never mutated, a
 ```c
 Vec vec_solve(Mat a, Vec b)
 Vec vec_solve_sym(Mat a, Vec b)
-Vec vec_lu_solve(Mat lu, lapack_int *piv, Vec b)
+Vec vec_lu_solve(Mat lu, MatPivot *piv, Vec b)
 Vec vec_chol_solve(Mat l, Vec b)
 Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char diag)
 Vec vec_band_solve(Mat band, int kl, int ku, Vec b)

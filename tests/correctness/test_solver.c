@@ -201,7 +201,7 @@ static void test_reuse_solve(void) {
        against the same factorization */
     {
         Mat a = mat_lit(2, 2, 2,1, 1,3);
-        lapack_int *piv;
+        MatPivot *piv;
         Mat lu = mat_lu(a, &piv);
 
         Vec b1 = mat_lit(2, 1, 5,10);
@@ -238,7 +238,7 @@ static void test_reuse_solve(void) {
         Mat parent = mat_lit(3, 3, 5,1,0, 1,5,1, 0,1,5);
         Mat a = mat_slice(parent, 0, 2, 0, 2); /* [[5,1],[1,5]] */
         assert(a.stride != a.c);
-        lapack_int *piv;
+        MatPivot *piv;
         Mat lu = mat_lu(a, &piv);
         Vec b = mat_lit(2, 1, 6,6);
         Vec x = vec_lu_solve(lu, piv, b);
@@ -250,7 +250,7 @@ static void test_reuse_solve(void) {
     /* adversarial: single element, both factorizations */
     {
         Mat a = mat_lit(1, 1, 4.0f);
-        lapack_int *piv;
+        MatPivot *piv;
         Mat lu = mat_lu(a, &piv);
         Vec b = mat_lit(1, 1, 8.0f);
         Vec x = vec_lu_solve(lu, piv, b);
@@ -271,7 +271,7 @@ static void test_reuse_solve(void) {
         srand(42);
         for (int n = 2; n <= 20; n++) {
             Mat a = rand_diag_dominant(n);
-            lapack_int *piv;
+            MatPivot *piv;
             Mat lu = mat_lu(a, &piv);
             for (int trial = 0; trial < 5; trial++) {
                 Vec b = rand_mat(n, 1);

@@ -17,7 +17,7 @@ void c_chol(int n, mreal *a, mreal *out) {
 
 void c_lu(int n, mreal *a, mreal *out) {
     Mat ma = { n, n, n, a };
-    lapack_int *piv;
+    MatPivot *piv;
     Mat lu = mat_lu(ma, &piv);
     memcpy(out, lu.d, (size_t)n * n * sizeof(mreal));
     mat_free(lu);
@@ -137,7 +137,7 @@ void c_solve_repeat(int n, mreal *a, mreal *b, int n_solves, mreal *out) {
 
 void c_lu_solve_repeat(int n, mreal *a, mreal *b, int n_solves, mreal *out) {
     Mat ma = { n, n, n, a };
-    lapack_int *piv;
+    MatPivot *piv;
     Mat lu = mat_lu(ma, &piv);
     Vec vb = { n, 1, 1, b };
     Vec x = { 0, 0, 0, NULL };

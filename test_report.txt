@@ -1,4 +1,4 @@
-test run: Tue Sep 15 03:10:29 PM CEST 2026
+test run: Tue Sep 15 04:08:51 PM CEST 2026
 
 === build ===
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/poly_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/poly_correctness
@@ -9,8 +9,29 @@ make: 'tests/correctness/test_mat' is up to date.
 make: 'tests/correctness/test_tensor' is up to date.
 make: 'tests/correctness/test_tensor_serial' is up to date.
 make: 'tests/correctness/test_mat_special' is up to date.
-make: 'tests/correctness/test_decomp' is up to date.
-make: 'tests/correctness/test_solver' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_decomp.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_decomp
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_solver.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_solver
+In file included from tests/correctness/../../linalg/decomp.h:3,
+                 from tests/correctness/../../linalg/solver.h:2,
+                 from tests/correctness/test_solver.c:1:
+In function ‘_gels’,
+    inlined from ‘mat_lstsq.isra’ at tests/correctness/../../linalg/solver.h:177:16:
+tests/correctness/../../linalg/factor.h:1302:9: warning: ‘buf’ may be used uninitialized [-Wmaybe-uninitialized]
+ 1302 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+tests/correctness/../../linalg/factor.h: In function ‘mat_lstsq.isra’:
+tests/correctness/../../linalg/factor.h:1220:20: note: by argument 5 of type ‘const mreal *’ {aka ‘const float *’} to ‘_ormqr_cm’ declared here
+ 1220 | static inline void _ormqr_cm(char trans, int m, int n, int k,
+      |                    ^~~~~~~~~
+In function ‘_gels’,
+    inlined from ‘mat_lstsq.isra’ at tests/correctness/../../linalg/solver.h:177:16:
+tests/correctness/../../linalg/factor.h:1302:9: warning: ‘tau’ may be used uninitialized [-Wmaybe-uninitialized]
+ 1302 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+tests/correctness/../../linalg/factor.h: In function ‘mat_lstsq.isra’:
+tests/correctness/../../linalg/factor.h:1220:20: note: by argument 7 of type ‘const mreal *’ {aka ‘const float *’} to ‘_ormqr_cm’ declared here
+ 1220 | static inline void _ormqr_cm(char trans, int m, int n, int k,
+      |                    ^~~~~~~~~
 make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
@@ -77,22 +98,22 @@ In file included from tests/correctness/../../inference/../linalg/decomp.h:3,
 In function ‘_gels’,
     inlined from ‘mat_lstsq’ at tests/correctness/../../inference/../linalg/solver.h:177:16,
     inlined from ‘_residualize.isra’ at tests/correctness/../../inference/cointegration.h:65:24:
-tests/correctness/../../inference/../linalg/factor.h:1306:9: warning: ‘buf’ may be used uninitialized [-Wmaybe-uninitialized]
- 1306 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
+tests/correctness/../../inference/../linalg/factor.h:1302:9: warning: ‘buf’ may be used uninitialized [-Wmaybe-uninitialized]
+ 1302 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
       |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 tests/correctness/../../inference/../linalg/factor.h: In function ‘_residualize.isra’:
-tests/correctness/../../inference/../linalg/factor.h:1224:20: note: by argument 5 of type ‘const mreal *’ {aka ‘const double *’} to ‘_ormqr_cm’ declared here
- 1224 | static inline void _ormqr_cm(char trans, int m, int n, int k,
+tests/correctness/../../inference/../linalg/factor.h:1220:20: note: by argument 5 of type ‘const mreal *’ {aka ‘const double *’} to ‘_ormqr_cm’ declared here
+ 1220 | static inline void _ormqr_cm(char trans, int m, int n, int k,
       |                    ^~~~~~~~~
 In function ‘_gels’,
     inlined from ‘mat_lstsq’ at tests/correctness/../../inference/../linalg/solver.h:177:16,
     inlined from ‘_residualize.isra’ at tests/correctness/../../inference/cointegration.h:65:24:
-tests/correctness/../../inference/../linalg/factor.h:1306:9: warning: ‘tau’ may be used uninitialized [-Wmaybe-uninitialized]
- 1306 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
+tests/correctness/../../inference/../linalg/factor.h:1302:9: warning: ‘tau’ may be used uninitialized [-Wmaybe-uninitialized]
+ 1302 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
       |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 tests/correctness/../../inference/../linalg/factor.h: In function ‘_residualize.isra’:
-tests/correctness/../../inference/../linalg/factor.h:1224:20: note: by argument 7 of type ‘const mreal *’ {aka ‘const double *’} to ‘_ormqr_cm’ declared here
- 1224 | static inline void _ormqr_cm(char trans, int m, int n, int k,
+tests/correctness/../../inference/../linalg/factor.h:1220:20: note: by argument 7 of type ‘const mreal *’ {aka ‘const double *’} to ‘_ormqr_cm’ declared here
+ 1220 | static inline void _ormqr_cm(char trans, int m, int n, int k,
       |                    ^~~~~~~~~
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/engle_granger_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/engle_granger_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/maki_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/maki_correctness
@@ -102,99 +123,99 @@ In file included from tests/correctness/../../inference/../linalg/decomp.h:3,
                  from tests/correctness/../../inference/cointegration.h:2,
                  from tests/correctness/maki_correctness.c:17:
 In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1580:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1602:20,
+    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1576:13,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1514:47: warning: array subscript -1 is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1514 |             for (int i = 0; i < m; i++) s += x[i] * col[i];
+tests/correctness/../../inference/../linalg/factor.h:1510:47: warning: array subscript -1 is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
+ 1510 |             for (int i = 0; i < m; i++) s += x[i] * col[i];
       |                                              ~^~~
 In function ‘_sysv’,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1595:25: note: at offset -8 into object of size 32 allocated by ‘malloc’
- 1595 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
+tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset -8 into object of size 32 allocated by ‘malloc’
+ 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
       |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1580:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1602:20,
+    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1576:13,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1515:14: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1515 |             b[row + (size_t)q * ldb] -= s;
+tests/correctness/../../inference/../linalg/factor.h:1511:14: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
+ 1511 |             b[row + (size_t)q * ldb] -= s;
       |             ~^~~~~~~~~~~~~~~~~~~~~~~
 In function ‘_sysv’,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1596:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1596 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
+tests/correctness/../../inference/../linalg/factor.h:1592:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
+ 1592 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
       |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1580:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1602:20,
+    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1576:13,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1515:38: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1515 |             b[row + (size_t)q * ldb] -= s;
+tests/correctness/../../inference/../linalg/factor.h:1511:38: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
+ 1511 |             b[row + (size_t)q * ldb] -= s;
       |             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~
 In function ‘_sysv’,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1596:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1596 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
+tests/correctness/../../inference/../linalg/factor.h:1592:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
+ 1592 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
       |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 In function ‘_sy_sub_outer’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1540:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1602:20,
+    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1536:13,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1496:19: warning: array subscript [-2147483645, -1] is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1496 |             mreal f = b[row + (size_t)q * ldb];
+tests/correctness/../../inference/../linalg/factor.h:1492:19: warning: array subscript [-2147483645, -1] is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
+ 1492 |             mreal f = b[row + (size_t)q * ldb];
       |                   ^
 In function ‘_sysv’,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1596:25: note: at offset [-17179869160, -8] into object of size 16 allocated by ‘malloc’
- 1596 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
+tests/correctness/../../inference/../linalg/factor.h:1592:25: note: at offset [-17179869160, -8] into object of size 16 allocated by ‘malloc’
+ 1592 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
       |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1601:16,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1597:16,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1435:42: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1435 |                 mreal wk = d21 * (d11 * a[(size_t)k * lda + j]
+tests/correctness/../../inference/../linalg/factor.h:1431:42: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
+ 1431 |                 mreal wk = d21 * (d11 * a[(size_t)k * lda + j]
       |                                         ~^~~~~~~~~~~~~~~~~~~~~
 In function ‘_sysv’,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1595:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1595 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
+tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
+ 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
       |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1601:16,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1597:16,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1442:40: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1442 |                 a[(size_t)k * lda + j] = wk;
+tests/correctness/../../inference/../linalg/factor.h:1438:40: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
+ 1438 |                 a[(size_t)k * lda + j] = wk;
       |                 ~~~~~~~~~~~~~~~~~~~~~~~^~~~
 In function ‘_sysv’,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1595:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1595 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
+tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
+ 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
       |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1601:16,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1597:16,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1440:48: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1440 |                     a[(size_t)j * lda + i] -= a[(size_t)k * lda + i] * wk
+tests/correctness/../../inference/../linalg/factor.h:1436:48: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
+ 1436 |                     a[(size_t)j * lda + i] -= a[(size_t)k * lda + i] * wk
       |                                               ~^~~~~~~~~~~~~~~~~~~~~
 In function ‘_sysv’,
     inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
     inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1595:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1595 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
+tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
+ 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
       |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 make: 'tests/correctness/qlr_test_correctness' is up to date.
 make: 'tests/correctness/lbfgs_correctness' is up to date.

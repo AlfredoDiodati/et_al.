@@ -82,7 +82,7 @@ typedef struct {
     int n, nrhs;
     const mreal *a_pristine, *b_pristine;
     mreal *awork, *bwork;
-    lapack_int *piv;
+    MatPivot *piv;
     size_t abytes, bbytes;
 } Job;
 
@@ -172,7 +172,7 @@ int main(void) {
                 Mat b = rand_mat(n, nrhs);
                 mreal *awork = (mreal*)malloc((size_t)n * n * sizeof(mreal));
                 mreal *bwork = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-                lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+                MatPivot *piv = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
 
                 Job j = { n, nrhs, a.d, b.d, awork, bwork, piv,
                           (size_t)n * n * sizeof(mreal),

@@ -28,21 +28,17 @@
    tuned kernels do the work and only the small diagonal blocks run through
    the unblocked code here. */
 
-/* Row interchanges are arrays of lapack_int, in ?getrf's own encoding: row
-   i was swapped with row ipiv[i]-1 during elimination, 1-indexed, and the
+/* Row interchanges are arrays of MatPivot, in ?getrf's own encoding: row i
+   was swapped with row piv[i]-1 during elimination, one-indexed, and the
    swaps are replayed in order i = 0, 1, 2, ... rather than read as a
-   finished permutation.
+   finished permutation. Every routine here that pivots - the LU family and
+   the banded and symmetric-indefinite factorizations - produces and
+   consumes that encoding, so a pivot array from one is readable by the
+   others.
 
-   lapacke.h spells lapack_int as a macro behind an #ifndef guard, so
-   defining it here gives mat_lu's public signature the same type it always
-   had without pulling lapacke.h in to name it. A translation unit that
-   includes both headers in either order ends up with one definition, this
-   one. The value matches lapacke.h's own default; a LAPACKE built for
-   ILP64 would want int64_t, which is not a configuration this library
-   offers. */
-#ifndef lapack_int
-#define lapack_int int32_t
-#endif
+   int32_t rather than int, so a pivot array has the same width on every
+   platform this builds on. */
+typedef int32_t MatPivot;
 
 /* Cholesky of the lower triangle of an n x n block, in place: on return
    the lower triangle holds L with a == L * L^T. The upper triangle is
@@ -326,7 +322,7 @@ static inline int _potri(mreal *a, int n, int lda) {
    Used to carry a panel's interchanges into the columns on either side of
    it, which the panel factorization itself never saw. */
 static inline void _laswp_cm(mreal *t, int ldt, int col0, int col1,
-                             int k1, int k2, const lapack_int *ipiv) {
+                             int k1, int k2, const MatPivot *ipiv) {
     for (int i = k1; i <= k2; i++) {
         int p = (int)ipiv[i] - 1;
         if (p == i) continue;
@@ -340,7 +336,7 @@ static inline void _laswp_cm(mreal *t, int ldt, int col0, int col1,
 }
 
 static inline void _laswp_rm(mreal *a, int lda, int ncols,
-                             int k1, int k2, const lapack_int *ipiv) {
+                             int k1, int k2, const MatPivot *ipiv) {
     for (int i = k1; i <= k2; i++) {
         int p = (int)ipiv[i] - 1;
         if (p == i) continue;
@@ -374,7 +370,7 @@ static inline void _laswp_rm(mreal *a, int lda, int ncols,
    well-defined, and it is the caller that decides whether to care. The
    pivot search runs even when the column is all zeros, so ipiv is always
    fully written. */
-static inline int _getf2_base(mreal *t, int m, int n, int ldt, lapack_int *ipiv) {
+static inline int _getf2_base(mreal *t, int m, int n, int ldt, MatPivot *ipiv) {
     int mn = m < n ? m : n;
     int info = 0;
 
@@ -387,7 +383,7 @@ static inline int _getf2_base(mreal *t, int m, int n, int ldt, lapack_int *ipiv)
             mreal v = MABS(cj[i]);
             if (v > best) { best = v; p = i; }
         }
-        ipiv[j] = (lapack_int)(p + 1);
+        ipiv[j] = (MatPivot)(p + 1);
 
         if (cj[p] != 0) {
             if (p != j) _laswp_cm(t, ldt, 0, n, j, j, ipiv);
@@ -431,7 +427,7 @@ static inline int _getf2_base(mreal *t, int m, int n, int ldt, lapack_int *ipiv)
    The recursion never changes which row is chosen as a pivot: each half
    still sees every remaining row of its own columns, so the search is
    over the same candidates in the same order as the unblocked kernel. */
-static inline int _getf2(mreal *t, int m, int n, int ldt, lapack_int *ipiv) {
+static inline int _getf2(mreal *t, int m, int n, int ldt, MatPivot *ipiv) {
     if (n <= GETF2_BASE || m <= 1) return _getf2_base(t, m, n, ldt, ipiv);
 
     int n1 = n / 2, n2 = n - n1;
@@ -461,7 +457,7 @@ static inline int _getf2(mreal *t, int m, int n, int ldt, lapack_int *ipiv) {
 
         int info2 = _getf2(&t[(size_t)n1 * ldt + n1], m - n1, n2, ldt, &ipiv[n1]);
         if (info2 && !info) info = info2 + n1;
-        for (int i = n1; i < mn; i++) ipiv[i] += (lapack_int)n1;
+        for (int i = n1; i < mn; i++) ipiv[i] += (MatPivot)n1;
         _laswp_cm(t, ldt, 0, n1, n1, mn - 1, ipiv);
     }
     return info;
@@ -522,7 +518,7 @@ static inline void _from_colmajor(const mreal *t, int m, int n, mreal *a, int ld
    the trailing updates then run against a strided buffer instead of the
    packed one the caller already has. */
 static inline int _getrf_panel(mreal *a, int m, int n, int lda,
-                               lapack_int *ipiv) {
+                               MatPivot *ipiv) {
     mreal *t = (mreal*)malloc((size_t)m * n * sizeof(mreal));
     _to_colmajor(a, m, n, lda, t);
     int info = _getf2(t, m, n, m, ipiv);
@@ -548,7 +544,7 @@ static inline int _getrf_nb_for(int mn) {
    the trailing submatrix with one ?trsm and one ?gemm. Because the panel
    spans all remaining rows, the pivot search sees whole columns and the
    factorization stays numerically identical to the unblocked one. */
-static inline int _getrf(mreal *a, int m, int n, int lda, lapack_int *ipiv) {
+static inline int _getrf(mreal *a, int m, int n, int lda, MatPivot *ipiv) {
     int mn = m < n ? m : n;
     int nb = _getrf_nb_for(mn);
     if (nb <= 0 || mn <= nb) return _getrf_panel(a, m, n, lda, ipiv);
@@ -561,7 +557,7 @@ static inline int _getrf(mreal *a, int m, int n, int lda, lapack_int *ipiv) {
         if (pinfo && !info) info = pinfo + j;
 
         /* the panel numbered its rows from its own top, not the block's */
-        for (int i = j; i < j + jb; i++) ipiv[i] += (lapack_int)j;
+        for (int i = j; i < j + jb; i++) ipiv[i] += (MatPivot)j;
 
         if (j > 0) _laswp_rm(a, lda, j, j, j + jb - 1, ipiv);
 
@@ -630,7 +626,7 @@ static inline void _getrs_small(int n, int nrhs, const mreal *lu, int ldlu,
 }
 
 static inline int _getrs(char trans, int n, int nrhs, const mreal *lu, int ldlu,
-                         const lapack_int *ipiv, mreal *b, int ldb) {
+                         const MatPivot *ipiv, mreal *b, int ldb) {
     if (trans == 'T' || trans == 't' || trans == 'C' || trans == 'c') {
         MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasUpper, CblasTrans,
                     CblasNonUnit, n, nrhs, 1, lu, ldlu, b, ldb);
@@ -667,7 +663,7 @@ static inline int _getrs(char trans, int n, int nrhs, const mreal *lu, int ldlu,
    its packed LU factors, ipiv with the interchanges, B with the solution.
    Returns 0, or the 1-based index of the first zero pivot, following
    ?gesv - in which case B is left alone rather than divided by zero. */
-static inline int _gesv(int n, int nrhs, mreal *a, int lda, lapack_int *ipiv,
+static inline int _gesv(int n, int nrhs, mreal *a, int lda, MatPivot *ipiv,
                         mreal *b, int ldb) {
     int info = _getrf(a, n, n, lda, ipiv);
     if (info) return info;
@@ -687,7 +683,7 @@ static inline int _gesv(int n, int nrhs, mreal *a, int lda, lapack_int *ipiv,
 
    The scratch identity comes off the stack while it fits, for the reason
    given at _potri: at small n the allocation is the dominant cost. */
-static inline int _getri(mreal *a, int n, int lda, const lapack_int *ipiv) {
+static inline int _getri(mreal *a, int n, int lda, const MatPivot *ipiv) {
     for (int i = 0; i < n; i++)
         if (a[(size_t)i * lda + i] == 0) return i + 1;
 
@@ -739,7 +735,7 @@ static inline int _getri(mreal *a, int n, int lda, const lapack_int *ipiv) {
    encoding _getrf uses and this file states at the top. Returns 0, or the
    one-based index of the first exactly-zero pivot, matching ?getrf's info. */
 static inline int _gbtf2(mreal *ab, int n, int kl, int ku, int ldab,
-                         lapack_int *piv) {
+                         MatPivot *piv) {
     int kv = ku + kl;
     int info = 0;
 
@@ -766,7 +762,7 @@ static inline int _gbtf2(mreal *ab, int n, int kl, int ku, int ldab,
             mreal v = MABS(column[kv + i]);
             if (v > best) { best = v; pivot = i; }
         }
-        piv[j] = (lapack_int)(pivot + j + 1);
+        piv[j] = (MatPivot)(pivot + j + 1);
 
         if (column[kv + pivot] == 0) {
             if (info == 0) info = j + 1;
@@ -804,7 +800,7 @@ static inline int _gbtf2(mreal *ab, int n, int kl, int ku, int ldab,
 /* Solve a*x = b for one right-hand side over the factorization _gbtf2
    left in ab. b is overwritten with the solution. */
 static inline void _gbtrs(const mreal *ab, int n, int kl, int ku, int ldab,
-                          const lapack_int *piv, mreal *b) {
+                          const MatPivot *piv, mreal *b) {
     int kv = ku + kl;
 
     /* Forward: apply the interchanges and the multipliers, which are the
@@ -834,7 +830,7 @@ static inline void _gbtrs(const mreal *ab, int n, int kl, int ku, int ldab,
 /* Factor and solve in one call, the banded counterpart of _gesv. ab is
    overwritten with the factorization and b with the solution. */
 static inline int _gbsv(mreal *ab, int n, int kl, int ku, int ldab,
-                        lapack_int *piv, mreal *b) {
+                        MatPivot *piv, mreal *b) {
     int info = _gbtf2(ab, n, kl, ku, ldab, piv);
     if (info) return info;
     _gbtrs(ab, n, kl, ku, ldab, piv, b);
@@ -1336,7 +1332,7 @@ static inline int _gels(int m, int n, int nrhs, mreal *a, int lda,
    ALPHA is the Bunch-Kaufman threshold, (1 + sqrt(17)) / 8. It is the
    value that minimises the bound on element growth, and it is what
    decides between a 1x1 and a 2x2 pivot. */
-static inline int _sytf2(mreal *a, int n, int lda, lapack_int *ipiv) {
+static inline int _sytf2(mreal *a, int n, int lda, MatPivot *ipiv) {
     const mreal alpha = (mreal)((1.0 + 4.1231056256176605) / 8.0);
     int info = 0;
     int k = 0;
@@ -1445,10 +1441,10 @@ static inline int _sytf2(mreal *a, int n, int lda, lapack_int *ipiv) {
         }
 
         if (kstep == 1) {
-            ipiv[k] = (lapack_int)(kp + 1);
+            ipiv[k] = (MatPivot)(kp + 1);
         } else {
-            ipiv[k] = (lapack_int)(-(kp + 1));
-            ipiv[k + 1] = (lapack_int)(-(kp + 1));
+            ipiv[k] = (MatPivot)(-(kp + 1));
+            ipiv[k + 1] = (MatPivot)(-(kp + 1));
         }
         k += kstep;
     }
@@ -1527,7 +1523,7 @@ static inline void _sy_sub_dot(int m, int nrhs, const mreal *x,
    blocks solved directly), then L^T*X = Z backwards. The interchanges are
    replayed forwards in the first pass and undone in the last. */
 static inline int _sytrs(int n, int nrhs, const mreal *a, int lda,
-                         const lapack_int *ipiv, mreal *b, int ldb) {
+                         const MatPivot *ipiv, mreal *b, int ldb) {
     int k = 0;
     while (k < n) {
         if (ipiv[k] > 0) {
@@ -1590,7 +1586,7 @@ static inline int _sytrs(int n, int nrhs, const mreal *a, int lda,
    overwritten with its L*D*L^T factorization, ipiv with the block
    structure, B with the solution. Only the lower triangle of a is read.
    Returns 0, or the 1-based index of the first zero block of D. */
-static inline int _sysv(int n, int nrhs, mreal *a, int lda, lapack_int *ipiv,
+static inline int _sysv(int n, int nrhs, mreal *a, int lda, MatPivot *ipiv,
                         mreal *b, int ldb) {
     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));

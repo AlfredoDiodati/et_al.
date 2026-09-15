@@ -96,7 +96,7 @@ static void check_gelsd(const char *what, const mreal *a, int m, int n,
     mreal *s1 = (mreal*)malloc((size_t)n * sizeof(mreal));
     mreal *s2 = (mreal*)malloc((size_t)n * sizeof(mreal));
     int rank1 = -1;
-    lapack_int rank2 = -1;
+    MatPivot rank2 = -1;
 
     int info = _gelsd(a1, m, n, n, b1, nrhs, nrhs, RCOND, s1, &rank1);
     if (info != 0) fail(what);

@@ -46,7 +46,7 @@ static Mat rand_diag_dominant(int n) {
 
 /* Reconstruct P*a from a's rows and LAPACK's sequential ipiv encoding:
    row i was swapped with row piv[i]-1 during factorization (1-indexed). */
-static Mat apply_pivots(Mat a, lapack_int *piv) {
+static Mat apply_pivots(Mat a, MatPivot *piv) {
     int n = a.r;
     int *perm = (int*)malloc((size_t)n * sizeof(int));
     for (int i = 0; i < n; i++) perm[i] = i;
@@ -77,7 +77,7 @@ static void extract_lu(Mat packed, Mat *l_out, Mat *u_out) {
 }
 
 static void check_lu(Mat a) {
-    lapack_int *piv;
+    MatPivot *piv;
     Mat lu = mat_lu(a, &piv);
     Mat l, u;
     extract_lu(lu, &l, &u);
@@ -266,7 +266,7 @@ static void test_lu(void) {
     /* adversarial: single element */
     {
         Mat a = mat_lit(1, 1, 6.0f);
-        lapack_int *piv;
+        MatPivot *piv;
         Mat lu = mat_lu(a, &piv);
         CHECK(AT(lu,0,0), 6.0f);
         assert(piv[0] == 1);

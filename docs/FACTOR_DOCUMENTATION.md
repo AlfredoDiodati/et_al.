@@ -461,8 +461,8 @@ isolates the thing being compared.
 ## `_getrf` — LU with partial pivoting
 
 ```c
-int _getrf(mreal *a, int m, int n, int lda, lapack_int *ipiv);   /* row-major */
-int _getf2(mreal *t, int m, int n, int ldt, lapack_int *ipiv);   /* column-major */
+int _getrf(mreal *a, int m, int n, int lda, MatPivot *ipiv);   /* row-major */
+int _getf2(mreal *t, int m, int n, int ldt, MatPivot *ipiv);   /* column-major */
 ```
 
 Factors an `m x n` block in place: `a == P * L * U`, with `L` unit lower
@@ -471,10 +471,7 @@ into the one array the way `?getrf` packs them. `ipiv` receives `min(m,n)`
 interchanges in `?getrf`'s encoding. Returns `0`, or the 1-based index of
 the first exactly-zero pivot.
 
-`lapack_int` keeps its meaning and its width. `lapacke.h` spells it as a
-macro behind an `#ifndef` guard, so `factor.h` supplies the identical
-definition and `mat_lu`'s public signature is unchanged whether or not
-`lapacke.h` is in the translation unit.
+`MatPivot` is the type a pivot array is made of: `int32_t`, defined in `linalg/factor.h`, in `?getrf`'s one-indexed encoding. Every pivoting routine in this file produces and consumes it, so an array from one is readable by the others. It used to be called `lapack_int` and to be a `#define` behind an `#ifndef`, so that a translation unit including `lapacke.h` as well would end up with one definition; the comparison arms are the only such translation units, they declare the shared buffer `MatPivot`, and `tests/lapacke_dispatch.h` records why handing it to both implementations is sound.
 
 ### Structure
 

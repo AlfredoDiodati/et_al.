@@ -88,11 +88,11 @@ typedef struct {
     int n, nrhs;
     const mreal *lu;        /* factors, for getrs/getri */
     int ldlu;
-    const lapack_int *piv;
+    const MatPivot *piv;
     const mreal *a_pristine; /* unfactored matrix, for gesv */
     const mreal *b_pristine;
     mreal *awork, *bwork;
-    lapack_int *pwork;
+    MatPivot *pwork;
     size_t abytes, bbytes;
 } Job;
 
@@ -199,7 +199,7 @@ int main(void) {
             Mat a = rand_nonsingular(n);
             Mat b = rand_mat(n, nrhs);
             Mat lu = mat_copy(a);
-            lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+            MatPivot *piv = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
             if (_getrf(lu.d, n, n, lu.stride, piv) != 0) { mat_free(a); mat_free(b); mat_free(lu); free(piv); continue; }
             mreal *bwork = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
 
@@ -221,7 +221,7 @@ int main(void) {
         Mat b = rand_mat(n, 1);
         mreal *awork = (mreal*)malloc((size_t)n * n * sizeof(mreal));
         mreal *bwork = (mreal*)malloc((size_t)n * sizeof(mreal));
-        lapack_int *pwork = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+        MatPivot *pwork = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
 
         Job j = { OP_GESV, n, 1, NULL, 0, NULL, a.d, b.d, awork, bwork, pwork,
                   (size_t)n * n * sizeof(mreal), (size_t)n * sizeof(mreal) };
@@ -238,7 +238,7 @@ int main(void) {
         int n = sizes[s];
         Mat a = rand_nonsingular(n);
         Mat lu = mat_copy(a);
-        lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+        MatPivot *piv = (MatPivot*)malloc((size_t)n * sizeof(MatPivot));
         if (_getrf(lu.d, n, n, lu.stride, piv) != 0) { mat_free(a); mat_free(lu); free(piv); continue; }
         mreal *awork = (mreal*)malloc((size_t)n * n * sizeof(mreal));
 
