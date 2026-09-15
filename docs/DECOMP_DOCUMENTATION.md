@@ -17,6 +17,8 @@ A kernel's `info` output being nonzero (matrix not positive-definite for `potrf`
 ```c
 Mat   mat_chol(Mat a)
 Mat   mat_lu(Mat a, lapack_int **piv)
+void  mat_bandwidth(Mat a, int *kl_out, int *ku_out)
+Mat   mat_band_pack(Mat a, int kl, int ku)
 void  mat_qr(Mat a, Mat *q_out, Mat *r_out)
 void  mat_eig_sym(Mat a, Vec *eigvals_out, Mat *eigvecs_out)
 void  mat_svd(Mat a, Mat *u_out, Vec *s_out, Mat *vt_out)
@@ -90,6 +92,14 @@ Numerical rank of `a` via `mat_svd`'s singular values, using the same default to
 ### `mat_eig`
 
 Eigenvalues of square `a`, possibly non-symmetric, via `linalg/factor.h`'s `_geev`. Eigenvectors are **not** computed: a real non-symmetric matrix can have complex eigenvectors, and this library has no complex type to hold them (`mreal` is real-only) - see Known limitations below. `*wr_out`/`*wi_out` receive new `n`x`1` `Vec`s holding the real and imaginary parts of each eigenvalue. A real eigenvalue has its `wi` entry `== 0`. Complex eigenvalues always occur in conjugate pairs at adjacent indices, per LAPACK convention: `(wr[j], wi[j])` and `(wr[j+1], -wi[j+1])` with `wi[j] > 0`. Caller must `mat_free()` both. This exists mainly for time-series stability analysis (e.g. checking the eigenvalues of a VAR companion matrix lie inside the unit circle), which only needs eigenvalues, not eigenvectors - hence the narrower scope compared to `mat_eig_sym`.
+
+### `mat_bandwidth` / `mat_band_pack`
+
+The pair that turns a square matrix into the band storage `vec_band_solve` reads. `mat_bandwidth` measures the narrowest band holding every non-zero of `a`: a diagonal matrix gives `0` and `0`, a dense one `n-1` and `n-1`. `mat_band_pack` writes `a` into an `n x (kl + ku + 1)` owner whose row `j` holds column `j` of `a`, with `a(i, j)` at `AT(band, j, ku + i - j)`; entries outside the band are not read, so naming a band narrower than the matrix has drops them silently, which is what `mat_bandwidth` exists to prevent.
+
+Why measure rather than assert: a caller who *knows* the band from the construction should not pay a pass over the matrix, and one who does not know it cannot be asked to guess. `basis/spline.h`'s `interp_spline` is the first kind - it reads the bandwidth off the column offsets its basis evaluator already reports and never forms the square matrix at all - and anyone holding a dense matrix is the second.
+
+Both are in this file rather than in `linalg/solver.h` for the same reason `mat_lu` is: they are a representation of the matrix, not a solve. See `vec_band_solve` in `docs/SOLVER_DOCUMENTATION.md` for what consumes them, and `docs/FACTOR_DOCUMENTATION.md`'s `_gbtf2` section for why the factorization needs `2*kl + ku + 1` rows where the packed form has `kl + ku + 1`.
 
 ## Memory ownership
 

@@ -30,6 +30,53 @@ static inline Vec vec_solve(Mat a, Vec b) {
     return x;
 }
 
+/* Solve a*x = b for x where a is banded, held in band storage rather than
+   as a square matrix: band is n x (kl + ku + 1), row j holding column j of
+   a, with a(i, j) at AT(band, j, ku + i - j). mat_band_pack builds that
+   from a dense matrix and mat_bandwidth measures kl and ku; a caller that
+   knows the band from the construction - an interpolating spline does -
+   builds it directly and never forms the square matrix at all. b is a
+   single right-hand-side column vector with b.r == n. Returns a new owner;
+   band and b are not modified.
+
+   This is the banded counterpart of vec_solve and has the same contract: a
+   singular a is a contract violation (assert), not an error path.
+
+   Why it is worth having. A dense LU is O(n^3) time and O(n^2) memory
+   whatever the matrix looks like. Banded LU with partial pivoting - the
+   ?gbtf2/?gbtrs pair, which is also LINPACK's dgbfa/dgbsl - is
+   O(n * kl * (kl + ku)) and O(n * (kl + ku)). For a collocation system
+   whose bandwidth is fixed by the order of the spline and does not grow
+   with n, that is linear against cubic. basis/spline.h's interp_spline is
+   the first caller.
+
+   The working copy is n x (2*kl + ku + 1), not n x (kl + ku + 1): partial
+   pivoting moves rows up to kl places, so U has kl more superdiagonals
+   than a did, and the extra rows are scratch the factorization fills in.
+   That is why the packed input needs only kl + ku + 1 and this allocates
+   more. */
+static inline Vec vec_band_solve(Mat band, int kl, int ku, Vec b) {
+    int n = band.r;
+    assert(kl >= 0 && ku >= 0 && n >= 1);
+    assert(band.c == kl + ku + 1 && "band storage must be n x (kl + ku + 1)");
+    assert(b.r == n && b.c == 1);
+
+    int ldab = 2 * kl + ku + 1;
+    mreal *ab = (mreal*)calloc((size_t)n * ldab, sizeof(mreal));
+    lapack_int *piv = (lapack_int*)malloc((size_t)n * sizeof(lapack_int));
+    assert(ab && piv);
+    for (int j = 0; j < n; j++)
+        memcpy(&ab[(size_t)j * ldab + kl], &AT(band, j, 0),
+               (size_t)(kl + ku + 1) * sizeof(mreal));
+
+    Vec x = mat_copy(b);
+    int info = _gbsv(ab, n, kl, ku, ldab, piv, x.d);
+    assert(info == 0); /* a is singular */
+
+    free(piv); free(ab);
+    return x;
+}
+
 /* Solve a*x = b for x via symmetric indefinite factorization
    (Bunch-Kaufman), for symmetric a that is not necessarily positive-definite -
    e.g. a sample covariance matrix perturbed to indefiniteness by

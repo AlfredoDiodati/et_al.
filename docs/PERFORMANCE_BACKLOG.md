@@ -7,8 +7,8 @@ as items are picked up or re-measured - it is the single source of truth
 for this backlog, not any session's task list.
 
 Several entries are not of that shape and say so in place: item 12 is a
-harness that does not exist rather than a measured gap, and items 13, 14, 15
-and 17 are closed, kept because what they record is the diagnosis and the
+harness that does not exist rather than a measured gap, and items 13, 14, 15,
+17 and 18 are closed, kept because what they record is the diagnosis and the
 mechanism rather than the number. Item 15 also carries an optimization that
 was measured and rejected, and item 17 a benchmark that was itself the bug -
 both for the same reason: the next person to reach for either should find out
@@ -1986,44 +1986,65 @@ and nothing in the benchmark could notice.
 ahead. The lesson is the general one - benchmark the entry point a caller
 reaches, because a copy of a loop is a claim about the copy.
 
-## 18. `interp_spline` solves a banded system densely (`basis/spline.h`)
+## 18. `interp_spline` solved a banded system densely (`basis/spline.h`) - fixed
 
-**What it is.** `interp_spline` builds the natural cubic spline through n
+**What it was.** `interp_spline` built the natural cubic spline through n
 points by solving the (n+2) x (n+2) collocation system through `vec_solve`,
-which is an LU factorization at O(n^3) and O(n^2) memory. That system is
-banded with bandwidth `ord`: row i is the ord non-zero B-splines at x_i, and a
-B-spline of order ord is non-zero over ord+1 consecutive knots, so nothing
-sits more than ord columns off the diagonal. A banded LU is O(n * ord^2) and
-O(n * ord) memory.
+an LU factorization at O(n^3) time and O(n^2) memory. That system is banded
+with bandwidth `ord`: row i is the `ord` non-zero B-splines at x_i, and a
+B-spline of order `ord` is non-zero over `ord + 1` consecutive knots, so
+nothing sits more than `ord - 2` columns off the diagonal. For the natural
+cubic that is 2 subdiagonals and 2 superdiagonals whatever n is.
 
-**Why it is not fixed here.** `linalg/solver.h` has no banded factorization,
-and a banded solve is a general linear algebra primitive rather than a spline
-concern - per the root README's "do not duplicate a lower layer" pitfall, it
-belongs in `linalg/` and would be reached by `basis/spline.h` the way
-`vec_solve` is now. Writing a private copy inside `basis/spline.h` would be
-the wrong place for it and would have no other caller.
+**Why it stayed that way for a while.** `linalg/solver.h` had no banded
+factorization, and a banded solve is a general linear algebra primitive
+rather than a spline concern - per the root README's "do not duplicate a
+lower layer" pitfall it belongs in `linalg/`, and a private copy inside
+`basis/spline.h` would have been the wrong place for it with no other caller.
 
-**Current numbers** (`make bench-basis`, Intel i5-7400, R 4.3.3 against
-float64, best of three one-second rounds): this is the one subject in that
-benchmark whose margin over R *narrows* with n rather than widening, because
-by then both sides are inside the same dense factorization and only the fixed
-R-level overhead is being removed.
+**What fixed it.** Three pieces, in dependency order.
 
-| points | R ms    | kernel ms | speedup |
-|--------|---------|-----------|---------|
-| 50     | 0.7628  | 0.0285    | 26.7x   |
-| 200    | 1.4925  | 0.5937    | 2.5x    |
-| 800    | 19.1321 | 9.9710    | 1.9x    |
+1. `linalg/factor.h` gained `_gbtf2`, `_gbtrs` and `_gbsv`: banded LU with
+   partial pivoting and the solve over it, the same algorithm and the same
+   band storage as LINPACK's `dgbfa`/`dgbsl` - which is what R's own
+   `splines` package names in the commented-out banded branch of
+   `interpSpline`, under the comment "the required LINPACK routines are not
+   loaded as part of S". Plain C, no new BLAS symbol: the trailing update is
+   a rank-one update of at most `kl` by `kl + ku` entries, bounded by the
+   bandwidth rather than by n, so at a spline's bandwidth of 2 a `?ger` call
+   would cost more than the eight multiplications inside it.
+2. `linalg/decomp.h` gained `mat_bandwidth` and `mat_band_pack`, and
+   `linalg/solver.h` gained `vec_band_solve`, for callers holding a dense
+   matrix.
+3. `interp_spline` does not use any of the three: it writes the band
+   directly from the column offsets `_spline_basis_block` already reports,
+   so the square matrix is never formed at all, and reads the bandwidth off
+   those offsets rather than assuming it.
 
-R has the same problem and solved it differently: `interpSpline(*, sparse =
-TRUE)` hands the system to the Matrix package, and R's own
-`splines/tests/sparse-tst.R` records that as an order of magnitude at n ~ 1000
-and a small loss below n ~ 200. A banded solve would beat both, since the
-bandwidth is known at construction rather than discovered.
+**Why it is faster** is the complexity, not a constant: O(n * kl * (kl + ku))
+time and O(n * (kl + ku)) memory against O(n^3) and O(n^2), with the
+bandwidth fixed by the order of the spline.
 
-**Next step.** `_gbtrf`/`_gbtrs` in `linalg/factor.h` against CBLAS, following
-?gbtrf's band storage, with `vec_band_solve` in `linalg/solver.h` over them;
-`basis/spline.h` then passes the bandwidth it already knows (`ord`) instead of
-a square `Mat`. The correctness check is free: the existing suites compare the
-result against R and against interpolation exactness, so the new path has a
-reference the moment it exists.
+**Measured** (`make bench-basis`, Intel i5-7400, R 4.3.3 against float64,
+best of three one-second rounds). `R dense` is R's default `interpSpline`,
+`R sparse` its `sparse = TRUE` path through the Matrix package:
+
+| points | R dense ms | R sparse ms | before ms | after ms |
+|--------|------------|-------------|-----------|----------|
+| 50     | 0.6988     | 1.3550      | 0.0285    | 0.0142   |
+| 200    | 1.3922     | 1.5519      | 0.5937    | 0.0687   |
+| 800    | 16.9831    | 2.9155      | 9.9710    | 0.3087   |
+| 3200   | 721.00     | 19.500      | -         | 1.2956   |
+| 12800  | 12726.0    | 257.50      | -         | 5.4599   |
+
+The two largest sizes were not benchmarked before, because the dense arm was
+taking 12.7 seconds per call. The row that matters is the shape of the last
+column: for sizes going up fourfold each time it grows 4.8x, 4.5x, 4.2x,
+4.2x, which is linear. The speedup against R's dense solve goes from 1.9x at
+800 points to 2330x at 12800 precisely because the two are no longer the same
+algorithm.
+
+**What did not change.** `periodic_spline`'s system is not banded - folding
+the last `degree` columns onto the first `degree` puts entries in the
+opposite corner - so it stays a dense solve, which costs nothing at the
+handful of knots a seasonal pattern uses.

@@ -113,15 +113,15 @@ natural one extrapolates linearly, a periodic one wraps.
   [-2, 2], R's inverse is wrong by up to 0.07 in `x` and does not compute the
   last two points at all. Invert `-y` and negate the argument instead.
 
-## The one primitive this file wants and does not have
+## Where the work goes
 
-`interp_spline` solves a dense `(n + 2) x (n + 2)` collocation system through
-`vec_solve`, which is an LU factorization at O(n^3). **That system is banded
-with bandwidth `ord`**, and `linalg/solver.h` has no banded factorization. A
-banded solve belongs there rather than here, and it is the reason the
-interpolation benchmark below is the one case where the margin over R narrows
-with `n` instead of widening: R's own `sparse = TRUE` path exists for exactly
-this, and its own test file records it as an order of magnitude at n ~ 1000.
+Two of this header's design decisions are measurements rather than
+preferences, and both live in `docs/BASIS_PERFORMANCE_DOCUMENTATION.md`
+alongside the speed comparison against R: why `interp_spline` solves its
+collocation system in band storage instead of densely, and what the whole
+module costs against R's `stats` and `splines` at every shape the benchmark
+covers. That file is what to read before changing a kernel here; this one is
+what to read before writing a call.
 
 ## Precision
 
@@ -133,71 +133,13 @@ both builds; where a check needs a different tolerance at float32 it derives
 one from `sizeof(mreal)` rather than the suite being built one way.
 
 The exception is `interp_spline` and everything downstream of it, which solves
-a dense `(n+2) x (n+2)` system: that is the one place here where the answer's
-accuracy depends on `n`, and it is why the R comparison gives the interpolating
-splines a tolerance that grows with the derivative order at float32 and does
-not at float64.
-
-## Benchmark results
-
-**Setup.** Intel Core i5-7400 at 3.00 GHz, 4 cores, one thread each. R 4.3.3
-against this library built at float64 (`STAT_CFLAGS`). Each case is timed for
-at least one second and the best of three such rounds reported, so a scheduling
-hiccup in one round cannot inflate it. `ours` is the whole `.C()` call,
-including R allocating the result vector and copying the answer back across the
-interface - what a caller in R would see; `kernel` runs the identical
-computation in a loop inside C and returns only the elapsed time, so the
-difference between the two is the boundary cost rather than the algorithm's.
-Regenerate with `make bench-basis`, which writes `out/bench_basis_report.txt`
-and exits nonzero if any case is slower than R on the kernel timing.
-
-| subject             | shape          | R ms    | ours ms | kernel ms | speedup | kernel |
-|---------------------|----------------|---------|---------|-----------|---------|--------|
-| poly                | 1000, deg 3    | 0.4100  | 0.0747  | 0.0581    | 5.5x    | 7.1x   |
-| poly                | 1000, deg 10   | 1.0204  | 0.2210  | 0.2086    | 4.6x    | 4.9x   |
-| poly                | 100000, deg 3  | 45.5455 | 13.5405 | 13.1431   | 3.4x    | 3.5x   |
-| poly                | 100000, deg 10 | 136.375 | 52.0000 | 52.7417   | 2.6x    | 2.6x   |
-| splineDesign        | 1000, ord 4    | 0.2245  | 0.0817  | 0.0350    | 2.7x    | 6.4x   |
-| splineDesign        | 1000, ord 6    | 0.2967  | 0.1059  | 0.0537    | 2.8x    | 5.5x   |
-| splineDesign        | 100000, ord 4  | 21.9783 | 21.6170 | 4.7472    | 1.0x    | 4.6x   |
-| splineDesign        | 100000, ord 6  | 31.3125 | 25.8750 | 7.1997    | 1.2x    | 4.3x   |
-| bs                  | 1000, df 7     | 0.4112  | 0.0775  | 0.0537    | 5.3x    | 7.7x   |
-| ns                  | 1000, df 7     | 0.6460  | 0.1990  | 0.1376    | 3.2x    | 4.7x   |
-| bs                  | 1000, df 20    | 0.4869  | 0.1441  | 0.1005    | 3.4x    | 4.8x   |
-| ns                  | 1000, df 20    | 0.9033  | 0.2783  | 0.2330    | 3.2x    | 3.9x   |
-| bs                  | 100000, df 7   | 22.6444 | 11.7093 | 6.1965    | 1.9x    | 3.7x   |
-| ns                  | 100000, df 7   | 45.5652 | 14.6957 | 13.2811   | 3.1x    | 3.4x   |
-| bs                  | 100000, df 20  | 35.7500 | 31.6563 | 12.8653   | 1.1x    | 2.8x   |
-| ns                  | 100000, df 20  | 87.0833 | 43.8261 | 22.7426   | 2.0x    | 3.8x   |
-| interpSpline        | 50 points      | 0.7628  | 0.0423  | 0.0285    | 18.0x   | 26.7x  |
-| interpSpline        | 200 points     | 1.4925  | 0.5479  | 0.5937    | 2.7x    | 2.5x   |
-| interpSpline        | 800 points     | 19.1321 | 10.5579 | 9.9710    | 1.8x    | 1.9x   |
-| predict(polySpline) | 1000 points    | 0.4866  | 0.6200  | 0.0328    | 0.8x    | 14.8x  |
-| predict(polySpline) | 100000 points  | 10.4687 | 3.6400  | 1.4897    | 2.9x    | 7.0x   |
-
-**What the numbers are of.** The comparison is not C against R-the-language:
-`splineDesign` calls compiled C for the recursion and `poly` calls compiled
-LINPACK for its QR. What is left in R around those calls is what is being
-removed - the index-matrix scatter for `splineDesign`, a `quantile()` and
-several copying subsets for `bs`, a full `qr.qty()` against the complete
-orthogonal factor for `ns`. That is why the kernel margin is largest at small
-`n`, where the fixed R-level work dominates, and narrows as `n` grows and the
-recursion itself takes over: 6.4x at 1000 points against 4.6x at 100,000 for
-`splineDesign`.
-
-**Where the `.C()` boundary dominates.** At 100,000 points `splineDesign`'s
-result is 2.3 million doubles, and R allocating and copying that vector costs
-about as much as either implementation's arithmetic: the kernel is 4.6x faster
-and the round trip is 1.0x. `predict(polySpline)` at 1000 points is the one
-case slower than R through the interface at all, at 0.8x, for the same reason -
-its kernel is 14.8x faster and the call is dominated by marshalling a
-thousand-element vector each way. Neither is a property of the implementation;
-a caller in C pays neither.
-
-**interpSpline is the one that narrows with `n`**, from 26.7x at 50 points to
-1.9x at 800, because both sides are spending their time in an O(n^3) dense
-factorization by then and the R-level overhead this reimplementation removes is
-a fixed cost. The banded solve above is what would change it.
+an `(n+2) x (n+2)` linear system: that is the one place here where the answer's
+accuracy depends on `n` at all, and it is why the R comparison gives the
+interpolating splines a tolerance that grows with the derivative order at
+float32 and does not at float64. The solve is banded rather than dense, which
+changes what it costs and not what it is worth - a banded LU with partial
+pivoting does the same eliminations in the same order as the dense one over
+the entries the band holds, and the entries it skips were zero.
 
 ## Contracts
 
@@ -216,8 +158,12 @@ a fixed cost. The banded solve above is what would change it.
 
 ## Known limitations
 
-- No sparse design matrix, and therefore no banded solve behind
-  `interp_spline` - see above.
+- No sparse design matrix. `spline_design` returns a dense `nx x (nk - ord)`
+  `Mat` of which at most `ord` entries per row are non-zero, which is what R's
+  `sparse = TRUE` exists to avoid; this project has no sparse storage. The
+  interpolating spline does not pay that, since it builds its system in band
+  storage and never forms the matrix - see above - but a regression basis at a
+  large `df` does.
 - `periodic_spline_knots` does not check the rank of the system its given knots
   produce; `periodic_spline` does, through the even-order requirement.
 - An interpolating spline of an order other than 4 is not available, matching R.

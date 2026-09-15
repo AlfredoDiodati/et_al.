@@ -183,5 +183,5 @@ has nothing to work with. The fit asserts there.
   built from a loader's strided column, fitted, serialized through `json.h` and
   compared against other bases with `inference/mcs.h`.
 - `tests/performance/bench_basis.R` (`make bench-basis`): against R's
-  `stats::poly`. See `docs/SPLINE_BASIS_DOCUMENTATION.md`'s benchmark section,
-  which holds the table for both files.
+  `stats::poly`. `docs/BASIS_PERFORMANCE_DOCUMENTATION.md` holds the table
+  for both basis headers.

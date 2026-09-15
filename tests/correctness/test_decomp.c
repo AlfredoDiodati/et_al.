@@ -710,7 +710,69 @@ static void test_eig(void) {
     }
 }
 
+/*
+Band storage. mat_bandwidth measures the narrowest band that holds every
+non-zero, and mat_band_pack writes the matrix into it; the pair has to be
+exact rather than conservative, since vec_band_solve reads nothing outside the
+band it is told about and a bandwidth that is one too small silently drops a
+diagonal.
+*/
+static void test_band_storage(void) {
+    /* known layout, small enough to write out: a 5x5 with one subdiagonal and
+       two superdiagonals, packed into 5 rows of 4 */
+    Mat a = mat_new(5, 5);
+    for (int i = 0; i < 5; i++)
+        for (int j = 0; j < 5; j++)
+            if (i - j <= 1 && j - i <= 2) AT(a, i, j) = (mreal)(10 * (i + 1) + j + 1);
+
+    int kl, ku;
+    mat_bandwidth(a, &kl, &ku);
+    assert(kl == 1 && ku == 2);
+
+    Mat band = mat_band_pack(a, kl, ku);
+    assert(band.r == 5 && band.c == 4);
+    for (int j = 0; j < 5; j++)
+        for (int i = 0; i < 5; i++) {
+            if (i - j > kl || j - i > ku) continue;
+            CHECK(AT(band, j, ku + i - j), AT(a, i, j));
+        }
+    /* the corners of the packed block, which no matrix entry maps to, stay
+       zero rather than holding whatever mat_new left */
+    CHECK(AT(band, 0, 0), 0.0f);
+    CHECK(AT(band, 0, 1), 0.0f);
+    CHECK(AT(band, 4, 3), 0.0f);
+
+    /* the two ends of the scale: diagonal and dense */
+    Mat diagonal = mat_eye(6);
+    mat_bandwidth(diagonal, &kl, &ku);
+    assert(kl == 0 && ku == 0);
+    Mat diagonal_band = mat_band_pack(diagonal, 0, 0);
+    assert(diagonal_band.r == 6 && diagonal_band.c == 1);
+    for (int j = 0; j < 6; j++) CHECK(AT(diagonal_band, j, 0), 1.0f);
+
+    Mat dense = rand_mat(6, 6);
+    for (int i = 0; i < 6; i++)
+        for (int j = 0; j < 6; j++)
+            if (AT(dense, i, j) == 0) AT(dense, i, j) = 1;  /* no accidental zeros */
+    mat_bandwidth(dense, &kl, &ku);
+    assert(kl == 5 && ku == 5);
+
+    /* a single element, and a matrix whose only non-zero is a far corner */
+    Mat one = mat_lit(1, 1, 3.0f);
+    mat_bandwidth(one, &kl, &ku);
+    assert(kl == 0 && ku == 0);
+
+    Mat corner = mat_new(4, 4);
+    AT(corner, 3, 0) = 1;
+    mat_bandwidth(corner, &kl, &ku);
+    assert(kl == 3 && ku == 0);
+
+    mat_free(corner); mat_free(one); mat_free(dense);
+    mat_free(diagonal_band); mat_free(diagonal); mat_free(band); mat_free(a);
+}
+
 int main(void) {
+    test_band_storage();
     test_chol();
     test_lu();
     test_qr();

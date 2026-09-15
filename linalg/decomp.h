@@ -95,6 +95,46 @@ static inline void mat_qr(Mat a, Mat *q_out, Mat *r_out) {
     *r_out = r;
 }
 
+/* The narrowest band that holds every non-zero of square a: *kl_out
+   receives the number of subdiagonals, *ku_out the number of
+   superdiagonals. A diagonal matrix gives 0 and 0, a dense one n-1 and
+   n-1, and a matrix a caller believes is banded gives the numbers
+   vec_band_solve should be told - measuring it rather than asserting it
+   is what keeps a solve from quietly dropping entries it was not told
+   about. Reads a in full, so it costs one pass. */
+static inline void mat_bandwidth(Mat a, int *kl_out, int *ku_out) {
+    assert(a.r == a.c && a.r >= 1);
+    int n = a.r, kl = 0, ku = 0;
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++) {
+            if (AT(a, i, j) == 0) continue;
+            if (i - j > kl) kl = i - j;
+            if (j - i > ku) ku = j - i;
+        }
+    *kl_out = kl;
+    *ku_out = ku;
+}
+
+/* Pack square a into the band storage vec_band_solve reads: an
+   n x (kl + ku + 1) owner whose row j holds column j of a, with a(i, j)
+   at AT(band, j, ku + i - j) for every i within the band and nothing
+   stored outside it. Entries of a outside the band are not read, so a
+   caller who names a band narrower than the matrix has is dropping them
+   on purpose - mat_bandwidth is how to find out what the matrix actually
+   has. Caller must mat_free(). */
+static inline Mat mat_band_pack(Mat a, int kl, int ku) {
+    assert(a.r == a.c && a.r >= 1);
+    assert(kl >= 0 && ku >= 0 && kl < a.r && ku < a.r);
+    int n = a.r;
+    Mat band = mat_new(n, kl + ku + 1);
+    for (int j = 0; j < n; j++) {
+        int first = j - ku < 0 ? 0 : j - ku;
+        int last = j + kl > n - 1 ? n - 1 : j + kl;
+        for (int i = first; i <= last; i++) AT(band, j, ku + i - j) = AT(a, i, j);
+    }
+    return band;
+}
+
 /* Eigendecomposition of symmetric a: a == v * diag(w) * v^T. Only the
    lower triangle of a is read. *eigvals_out receives a new n x 1 Vec
    (ascending order, LAPACK's convention); *eigvecs_out receives a new

@@ -77,12 +77,15 @@
      the warning (interior knots that coincide with a boundary knot are
      shoved inside, as in bs()) or an assert where R stops.
 
-   interp_spline solves a dense (n + 2) x (n + 2) collocation system
-   through vec_solve. That system is banded with bandwidth ord, and
-   linalg/solver.h has no banded factorization, which is the one primitive
-   this file wants and does not have; a banded solve belongs in
-   linalg/solver.h rather than here. What it costs is stated in
-   docs/SPLINE_BASIS_DOCUMENTATION.md.
+   interp_spline solves its collocation system through
+   linalg/solver.h's vec_band_solve, in band storage it builds directly
+   from the basis evaluator's own column offsets, so the square matrix is
+   never formed. The system has 2 subdiagonals and 2 superdiagonals for the
+   natural cubic, which makes the solve linear in the number of points
+   rather than cubic; R reaches the same algorithm through Matrix when
+   asked for sparse = TRUE, and names it in the commented-out banded branch
+   of its own interpSpline. What it is worth is measured in
+   docs/BASIS_PERFORMANCE_DOCUMENTATION.md.
 
    Arithmetic is in mreal throughout, unlike basis/poly.h next to it.
    Nothing here accumulates over the sample: every recurrence runs over
@@ -1040,17 +1043,41 @@ static inline BSpline interp_spline(Mat x_in, Mat y_in) {
     for (int i = 0; i < n; i++) { sites[1 + i] = pairs[i].x; derivs[1 + i] = 0; }
     sites[n + 1] = pairs[n - 1].x; derivs[n + 1] = 2;
 
-    Mat design = _spline_design_raw(knots.d, nk, sites, rows, ord, derivs, rows, 0);
-    assert(design.c == rows);
+    /* The system is banded and is built that way rather than built dense
+       and then packed: row r of the collocation matrix has exactly ord
+       non-zero entries, starting at the column the basis evaluator already
+       reports, so the square matrix is never formed. The bandwidth is
+       measured from those offsets rather than assumed - it comes out at
+       ord - 2 on each side for the natural cubic, which is 2 and 2, and
+       reading it off the offsets is what keeps that from being a claim. */
+    mreal *values = (mreal*)malloc((size_t)rows * ord * sizeof(mreal));
+    int *offsets = (int*)malloc((size_t)rows * sizeof(int));
+    assert(values && offsets);
+    _spline_basis_block(knots.d, nk, ord, sites, rows, derivs, rows, values, offsets);
+
+    int kl = 0, ku = 0;
+    for (int r = 0; r < rows; r++) {
+        assert(offsets[r] >= 0 && offsets[r] + ord - 1 < rows);
+        if (r - offsets[r] > kl) kl = r - offsets[r];
+        if (offsets[r] + ord - 1 - r > ku) ku = offsets[r] + ord - 1 - r;
+    }
+
+    Mat band = mat_new(rows, kl + ku + 1);
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < ord; c++) {
+            int column = offsets[r] + c;
+            AT(band, column, ku + r - column) = values[(size_t)r * ord + c];
+        }
+
     Mat rhs = mat_new(rows, 1);
     for (int i = 0; i < n; i++) rhs.d[1 + i] = pairs[i].y;
 
-    Vec solved = vec_solve(design, rhs);
+    Vec solved = vec_band_solve(band, kl, ku, rhs);
     Mat coefficients = mat_new(1, rows);
     memcpy(coefficients.d, solved.d, (size_t)rows * sizeof(mreal));
 
-    mat_free(design); mat_free(rhs); mat_free(solved);
-    free(sites); free(derivs); free(pairs);
+    mat_free(band); mat_free(rhs); mat_free(solved);
+    free(values); free(offsets); free(sites); free(derivs); free(pairs);
     return (BSpline){ knots, coefficients, ord, SPLINE_NATURAL, 0 };
 }
 

@@ -18,6 +18,7 @@ Vec vec_solve_sym(Mat a, Vec b)
 Vec vec_lu_solve(Mat lu, lapack_int *piv, Vec b)
 Vec vec_chol_solve(Mat l, Vec b)
 Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char diag)
+Vec vec_band_solve(Mat band, int kl, int ku, Vec b)
 Mat mat_lstsq(Mat a, Mat b)
 Mat mat_lstsq_rd(Mat a, Mat b, int *rank_out)
 ```
@@ -33,6 +34,17 @@ Solves `a*x = b` via symmetric indefinite factorization (`?sysv`) instead of gen
 ### `vec_lu_solve` / `vec_chol_solve`
 
 Solve `a*x = b` reusing an LU (`vec_lu_solve`, via `?getrs`) or Cholesky (`vec_chol_solve`, via `?potrs`) factorization already computed by `mat_lu`/`mat_chol`, instead of factoring `a` again - for reusing one factorization across many right-hand sides (Newton iterations, Kalman filter covariance updates, anything that solves against the same matrix repeatedly). `lu`/`piv` must be exactly what `mat_lu(a, &piv)` returned (`l` exactly what `mat_chol(a)` returned) for the `a` being solved against - passing a factorization for a different matrix silently produces the wrong answer, since `?getrs`/`?potrs` trust the factorization without re-checking it against any original `a`. `b` is a single right-hand-side column vector; returns a new owner, does not modify its arguments.
+
+### `vec_band_solve`
+
+Solves `a*x = b` where `a` is banded with `kl` subdiagonals and `ku` superdiagonals, given in band storage rather than as a square matrix: `band` is `n x (kl + ku + 1)`, row `j` holding column `j` of `a`, with `a(i, j)` at `AT(band, j, ku + i - j)`. `mat_band_pack` builds that from a dense matrix and `mat_bandwidth` measures `kl` and `ku`; a caller that knows the band from the construction builds it directly and never forms the square matrix. `b` is a single right-hand-side column vector with `b.r == n`. Returns a new owner; neither argument is modified. Same contract as `vec_solve`: a singular `a` is a contract violation, not an error path.
+
+**What it is for.** `vec_solve` is `O(n^3)` time and `O(n^2)` memory whatever the matrix looks like. This is `O(n * kl * (kl + ku))` and `O(n * (kl + ku))`, through `linalg/factor.h`'s `_gbtf2`/`_gbtrs` - banded LU with partial pivoting, the same algorithm and storage as LINPACK's `dgbfa`/`dgbsl`. When the bandwidth is fixed by the construction and does not grow with `n`, that is linear against cubic, and the difference is not marginal: on `basis/spline.h`'s natural cubic interpolating spline, which has 2 subdiagonals and 2 superdiagonals, 12800 points took 12726 ms through R's dense solve, 257 ms through R's own sparse path, and 5.5 ms here (`make bench-basis`, Intel i5-7400, float64, best of three one-second rounds).
+
+**When not to use it.** When the matrix is not banded, or when the bandwidth is a large fraction of `n`: the working array is `n x (2*kl + ku + 1)`, so at `kl = ku = n-1` it is three times the dense matrix and the factorization does the dense work anyway. `mat_bandwidth` is how to find out which case you are in.
+
+Not provided: a transposed solve, multiple right-hand sides, and a reusable factored form of the kind `mat_lu`/`vec_lu_solve` are for one another. Each is a small addition when a caller needs one; none has one today. See `docs/FACTOR_DOCUMENTATION.md`'s `_gbtf2` section for the kernel and
+`docs/BASIS_PERFORMANCE_DOCUMENTATION.md` for the caller it was written for.
 
 ### `vec_triangular_solve`
 

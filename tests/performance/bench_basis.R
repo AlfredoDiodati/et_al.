@@ -143,19 +143,27 @@ for (n in c(1000L, 100000L)) for (df in c(7L, 20L)) {
 }
 
 # --- splines::interpSpline
-# The collocation system is dense here and banded in truth, so this is the
-# one case where the gap narrows with n rather than widening: R's own
-# sparse = TRUE path exists for exactly that reason. See
+# The collocation system is banded, and both sides know it: R's sparse =
+# TRUE hands it to the Matrix package, and interp_spline builds it in band
+# storage and solves it with vec_band_solve. R's default is the dense
+# solve, which is what the dense column below is, so the two R columns are
+# the same computation done two ways and the margin over the dense one is
+# expected to grow with n rather than shrink. See
 # docs/SPLINE_BASIS_DOCUMENTATION.md.
-for (n in c(50L, 200L, 800L)) {
+for (n in c(50L, 200L, 800L, 3200L, 12800L)) {
     x <- as.double(seq_len(n))
     y <- sin(x / 7) + x / 40
     theirs <- best_milliseconds(function() interpSpline(x, y))
+    sparse <- if (requireNamespace("Matrix", quietly = TRUE))
+        best_milliseconds(function() interpSpline(x, y, sparse = TRUE)) else NA_real_
     ours <- best_milliseconds(function()
         .C("c_interp_spline", n, x, y, knots = double(n),
            coefficients = double(as.double(n) * 4))$coefficients)
     kernel <- kernel_milliseconds("kernel_interp_spline", list(n, x, y), ours)
     record("interpSpline", sprintf("%d points", n), theirs, ours, kernel)
+    if (is.finite(sparse))
+        say("%-26s %12s %10.4f %10s %10s %8s %8.1fx", "  vs R sparse = TRUE",
+            sprintf("%d points", n), sparse, "", "", "", sparse / kernel)
 }
 
 # --- evaluating a fitted spline

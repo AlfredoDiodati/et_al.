@@ -708,6 +708,139 @@ static inline int _getri(mreal *a, int n, int lda, const lapack_int *ipiv) {
     return 0;
 }
 
+/* Banded LU with partial pivoting, and the solve over it: the pair
+   ?gbtf2/?gbtrs, and the same algorithm and the same storage as LINPACK's
+   dgbfa/dgbsl, which is what R's splines package names in the commented-out
+   banded branch of interpSpline.
+
+   Band storage, which is the whole point. A matrix with kl subdiagonals and
+   ku superdiagonals has at most kl + ku + 1 non-zero entries per column and
+   they are consecutive, so storing one column per row of a
+   n x (kl + ku + 1) block holds all of it: a(i, j) sits at
+   ab[j * ldab + kv + i - j] with kv = kl + ku. Cost goes from O(n^3) time
+   and O(n^2) memory to O(n * kl * (kl + ku)) and O(n * (kl + ku)).
+
+   ldab must be at least 2*kl + ku + 1 rather than kl + ku + 1. Partial
+   pivoting moves rows up to kl places, which pushes entries up to kl
+   further above the diagonal than the matrix itself has, so U has kl + ku
+   superdiagonals where A had ku. Those kl extra rows sit at the top of each
+   stored column, are zeroed here rather than by the caller, and are why a
+   caller packs into kl + ku + 1 rows and this factors in 2*kl + ku + 1.
+
+   The trailing update is a rank-one update of at most kl by kl + ku
+   entries, whatever n is, so it is written out rather than issued as a
+   ?ger: the dimensions are bounded by the bandwidth, and at the bandwidth
+   of 2 a cubic spline produces the call would cost more than the eight
+   multiplications inside it. _getf2_base writes out its inner loops for
+   the same reason. */
+
+/* Factor in place. ab is n columns of the band, each ldab entries; piv[j]
+   receives the row interchanged into position j, in the same one-based
+   encoding _getrf uses and this file states at the top. Returns 0, or the
+   one-based index of the first exactly-zero pivot, matching ?getrf's info. */
+static inline int _gbtf2(mreal *ab, int n, int kl, int ku, int ldab,
+                         lapack_int *piv) {
+    int kv = ku + kl;
+    int info = 0;
+
+    /* The fill-in rows of the first columns are never written by the loop
+       below, which only clears the column kv ahead of the one it is on. */
+    int last = kv < n ? kv : n;
+    for (int j = ku + 1; j < last; j++)
+        for (int i = kv - j; i < kl; i++) ab[(size_t)j * ldab + i] = 0;
+
+    /* The last column any interchange so far can have reached. Everything
+       right of it is still untouched, so the row swaps and the trailing
+       update both stop there instead of running to n. */
+    int reach = 0;
+    for (int j = 0; j < n; j++) {
+        if (j + kv < n)
+            for (int i = 0; i < kl; i++) ab[(size_t)(j + kv) * ldab + i] = 0;
+
+        mreal *restrict column = &ab[(size_t)j * ldab];
+        int below = n - 1 - j < kl ? n - 1 - j : kl;
+
+        int pivot = 0;
+        mreal best = MABS(column[kv]);
+        for (int i = 1; i <= below; i++) {
+            mreal v = MABS(column[kv + i]);
+            if (v > best) { best = v; pivot = i; }
+        }
+        piv[j] = (lapack_int)(pivot + j + 1);
+
+        if (column[kv + pivot] == 0) {
+            if (info == 0) info = j + 1;
+            continue;
+        }
+
+        int touched = j + ku + pivot;
+        if (touched > n - 1) touched = n - 1;
+        if (touched > reach) reach = touched;
+
+        /* A row of the matrix runs along the band a step of ldab - 1 at a
+           time: one column right and one band row up is the same row. */
+        if (pivot != 0)
+            for (int c = 0; c <= reach - j; c++) {
+                size_t at = (size_t)j * ldab + (size_t)c * (ldab - 1);
+                mreal swap = ab[at + kv];
+                ab[at + kv] = ab[at + kv + pivot];
+                ab[at + kv + pivot] = swap;
+            }
+
+        if (below > 0) {
+            mreal inverse = 1 / column[kv];
+            for (int i = 1; i <= below; i++) column[kv + i] *= inverse;
+            for (int c = 1; c <= reach - j; c++) {
+                mreal *restrict target = &ab[(size_t)(j + c) * ldab + kv - c];
+                mreal factor = target[0];
+                if (factor == 0) continue;
+                for (int i = 1; i <= below; i++) target[i] -= factor * column[kv + i];
+            }
+        }
+    }
+    return info;
+}
+
+/* Solve a*x = b for one right-hand side over the factorization _gbtf2
+   left in ab. b is overwritten with the solution. */
+static inline void _gbtrs(const mreal *ab, int n, int kl, int ku, int ldab,
+                          const lapack_int *piv, mreal *b) {
+    int kv = ku + kl;
+
+    /* Forward: apply the interchanges and the multipliers, which are the
+       kl entries below each diagonal. */
+    if (kl > 0)
+        for (int j = 0; j < n - 1; j++) {
+            int below = n - 1 - j < kl ? n - 1 - j : kl;
+            int row = (int)piv[j] - 1;
+            if (row != j) { mreal swap = b[row]; b[row] = b[j]; b[j] = swap; }
+            const mreal *restrict column = &ab[(size_t)j * ldab];
+            mreal head = b[j];
+            if (head == 0) continue;
+            for (int i = 1; i <= below; i++) b[j + i] -= head * column[kv + i];
+        }
+
+    /* Backward: U has kv superdiagonals, so each step reaches kv columns
+       back and no further. */
+    for (int j = n - 1; j >= 0; j--) {
+        const mreal *restrict column = &ab[(size_t)j * ldab];
+        b[j] /= column[kv];
+        mreal head = b[j];
+        int first = j - kv < 0 ? 0 : j - kv;
+        for (int i = j - 1; i >= first; i--) b[i] -= head * column[kv + i - j];
+    }
+}
+
+/* Factor and solve in one call, the banded counterpart of _gesv. ab is
+   overwritten with the factorization and b with the solution. */
+static inline int _gbsv(mreal *ab, int n, int kl, int ku, int ldab,
+                        lapack_int *piv, mreal *b) {
+    int info = _gbtf2(ab, n, kl, ku, ldab, piv);
+    if (info) return info;
+    _gbtrs(ab, n, kl, ku, ldab, piv, b);
+    return 0;
+}
+
 /* sqrt(x^2 + y^2) without forming either square, which is what ?lapy2
    exists for. Squaring loses the answer at both ends of the range: two
    values around 1e-17 square to about 1e-34 each, and in float their sum

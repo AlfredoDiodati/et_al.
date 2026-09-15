@@ -434,7 +434,194 @@ static void test_lstsq_rd(void) {
     }
 }
 
+/*
+The banded solve, against the dense one on the same matrix.
+
+vec_solve is the reference here and it is a real one: the two share no code
+below linalg/mat.h - a dense LU over the full square against a banded LU over
+kl + ku + 1 diagonals - so agreement between them is agreement about the
+answer rather than about an implementation.
+
+The cases that matter are the ones where partial pivoting has to move a row.
+A banded factorization is where that is easy to get wrong, because a row
+interchange in band storage is a walk with stride ldab - 1 rather than a
+contiguous copy, and because the interchange pushes fill-in kl rows further
+above the diagonal than the matrix itself reaches. So the random matrices here
+get no diagonal boost: the pivot is rarely already in place.
+*/
+static void test_band_solve(void) {
+    /* a tridiagonal system with a known answer: the second-difference matrix
+       with x = (1, 1, ..., 1) has b = (1, 0, ..., 0, 1) */
+    int n = 8;
+    Mat tri = mat_new(n, n);
+    for (int i = 0; i < n; i++) {
+        AT(tri, i, i) = 2;
+        if (i > 0) AT(tri, i, i - 1) = -1;
+        if (i < n - 1) AT(tri, i, i + 1) = -1;
+    }
+    Mat rhs = mat_new(n, 1);
+    AT(rhs, 0, 0) = 1; AT(rhs, n - 1, 0) = 1;
+    Mat band = mat_band_pack(tri, 1, 1);
+    Vec x = vec_band_solve(band, 1, 1, rhs);
+    for (int i = 0; i < n; i++) CHECK(AT(x, i, 0), 1.0f);
+    check_residual(tri, rhs, x, TOL_MUL);
+    mat_free(x); mat_free(band); mat_free(rhs); mat_free(tri);
+
+    /* the degenerate ends: one element, and a diagonal matrix, where the
+       band has no off-diagonal entries at all and the factorization does
+       nothing but divide */
+    Mat one = mat_lit(1, 1, 4.0f), one_rhs = mat_lit(1, 1, 8.0f);
+    Mat one_band = mat_band_pack(one, 0, 0);
+    Vec one_x = vec_band_solve(one_band, 0, 0, one_rhs);
+    CHECK(AT(one_x, 0, 0), 2.0f);
+    mat_free(one_x); mat_free(one_band); mat_free(one_rhs); mat_free(one);
+
+    Mat diagonal = mat_new(5, 5);
+    Mat diagonal_rhs = mat_new(5, 1);
+    for (int i = 0; i < 5; i++) {
+        AT(diagonal, i, i) = (mreal)(i + 2);
+        AT(diagonal_rhs, i, 0) = (mreal)((i + 2) * 3);
+    }
+    Mat diagonal_band = mat_band_pack(diagonal, 0, 0);
+    Vec diagonal_x = vec_band_solve(diagonal_band, 0, 0, diagonal_rhs);
+    for (int i = 0; i < 5; i++) CHECK(AT(diagonal_x, i, 0), 3.0f);
+    mat_free(diagonal_x); mat_free(diagonal_band);
+    mat_free(diagonal_rhs); mat_free(diagonal);
+
+    /* a band wider than the matrix is square, which is the dense case
+       reached through the banded path */
+    srand(4242);
+    Mat dense = rand_diag_dominant(6);
+    Mat dense_rhs = rand_mat(6, 1);
+    Mat dense_band = mat_band_pack(dense, 5, 5);
+    Vec through_band = vec_band_solve(dense_band, 5, 5, dense_rhs);
+    Vec through_dense = vec_solve(dense, dense_rhs);
+    check_eq(through_band, through_dense, TOL_MUL);
+    mat_free(through_band); mat_free(through_dense);
+    mat_free(dense_band); mat_free(dense_rhs); mat_free(dense);
+
+    /* Randomized, over every combination of bandwidths up to 3, with no
+       diagonal boost so the pivot moves.
+
+       Both comparisons are scaled by the size of the answer rather than
+       absolute. Without a dominant diagonal a random band matrix is
+       occasionally close to singular, and there the solution is large and
+       every method's error is large with it; an absolute tolerance would
+       be rejecting the conditioning of the draw rather than the
+       factorization, and would do it at float32 and not at float64. */
+    for (int trial = 0; trial < 300; trial++) {
+        int size = 2 + rand() % 24;
+        int kl = rand() % 4, ku = rand() % 4;
+        if (kl > size - 1) kl = size - 1;
+        if (ku > size - 1) ku = size - 1;
+        Mat a = mat_new(size, size);
+        for (int i = 0; i < size; i++)
+            for (int j = 0; j < size; j++)
+                if (i - j <= kl && j - i <= ku)
+                    AT(a, i, j) = (mreal)(rand() % 2000 - 1000) / 1000.0f;
+        /* keep the diagonal off zero so the system is solvable, without
+           making it dominant - the pivot is still usually off-diagonal */
+        for (int i = 0; i < size; i++)
+            if (MABS(AT(a, i, i)) < 0.05f) AT(a, i, i) += 0.5f;
+
+        int measured_kl, measured_ku;
+        mat_bandwidth(a, &measured_kl, &measured_ku);
+        assert(measured_kl <= kl && measured_ku <= ku);
+
+        Mat b = rand_mat(size, 1);
+        Mat packed = mat_band_pack(a, kl, ku);
+        Vec banded = vec_band_solve(packed, kl, ku, b);
+
+        mreal scale = vec_norm(banded);
+        if (scale < 1) scale = 1;
+
+        /* The residual against the original square matrix, and only that.
+           Comparing the two solvers' answers here would be wrong: a random
+           band matrix with no dominant diagonal is occasionally close to
+           singular, and there the solution itself is not determined to the
+           precision either method works in - both answers have a small
+           residual and they differ. The well-conditioned loop below is
+           where the two are required to agree. */
+        Mat product = mat_mul(a, banded);
+        Mat residual = mat_sub(product, b);
+        assert(vec_norm(residual) < TOL_MUL * scale);
+
+        mat_free(residual); mat_free(product);
+        mat_free(banded); mat_free(packed); mat_free(b); mat_free(a);
+    }
+
+    /* Diagonally dominant, so the system is well conditioned and the two
+       solvers have to reach the same answer rather than only two answers
+       with small residuals. */
+    for (int trial = 0; trial < 200; trial++) {
+        int size = 2 + rand() % 24;
+        int kl = rand() % 4, ku = rand() % 4;
+        if (kl > size - 1) kl = size - 1;
+        if (ku > size - 1) ku = size - 1;
+        Mat a = mat_new(size, size);
+        for (int i = 0; i < size; i++) {
+            mreal off_diagonal = 0;
+            for (int j = 0; j < size; j++) {
+                if (i == j || i - j > kl || j - i > ku) continue;
+                mreal v = (mreal)(rand() % 200 - 100) / 100.0f;
+                AT(a, i, j) = v;
+                off_diagonal += MABS(v);
+            }
+            AT(a, i, i) = off_diagonal + 1;
+        }
+        Mat b = rand_mat(size, 1);
+        Mat packed = mat_band_pack(a, kl, ku);
+        Vec banded = vec_band_solve(packed, kl, ku, b);
+        Vec plain = vec_solve(a, b);
+        check_eq(banded, plain, TOL_MUL);
+        check_residual(a, b, banded, TOL_MUL);
+        mat_free(plain); mat_free(banded); mat_free(packed); mat_free(b); mat_free(a);
+    }
+
+    /* A pivot that has to move, written out rather than hoped for: the
+       leading entry is zero, so the factorization must interchange rows
+       before it can divide. Nothing in the randomized loops above can
+       guarantee this case turns up. */
+    {
+        Mat needs_pivot = mat_lit(4, 4,
+            0.f, 2.f, 0.f, 0.f,
+            1.f, 3.f, 1.f, 0.f,
+            0.f, 1.f, 4.f, 2.f,
+            0.f, 0.f, 1.f, 5.f);
+        Mat pivot_rhs = mat_lit(4, 1, 2.f, 5.f, 7.f, 6.f);
+        int kl, ku;
+        mat_bandwidth(needs_pivot, &kl, &ku);
+        assert(kl == 1 && ku == 1);
+        Mat pivot_band = mat_band_pack(needs_pivot, kl, ku);
+        Vec pivoted = vec_band_solve(pivot_band, kl, ku, pivot_rhs);
+        Vec reference = vec_solve(needs_pivot, pivot_rhs);
+        check_eq(pivoted, reference, TOL_MUL);
+        check_residual(needs_pivot, pivot_rhs, pivoted, TOL_MUL);
+        mat_free(reference); mat_free(pivoted); mat_free(pivot_band);
+        mat_free(pivot_rhs); mat_free(needs_pivot);
+    }
+
+    /* the inputs are not modified, which every solve in this file promises */
+    Mat keep = mat_new(4, 4);
+    for (int i = 0; i < 4; i++) {
+        AT(keep, i, i) = 3;
+        if (i > 0) AT(keep, i, i - 1) = 1;
+    }
+    Mat keep_band = mat_band_pack(keep, 1, 0);
+    Mat keep_copy = mat_copy(keep_band);
+    Mat keep_rhs = rand_mat(4, 1);
+    Mat keep_rhs_copy = mat_copy(keep_rhs);
+    Vec ignored = vec_band_solve(keep_band, 1, 0, keep_rhs);
+    check_eq(keep_band, keep_copy, TOL);
+    check_eq(keep_rhs, keep_rhs_copy, TOL);
+    mat_free(ignored); mat_free(keep_rhs_copy); mat_free(keep_rhs);
+    mat_free(keep_copy); mat_free(keep_band); mat_free(keep);
+
+    puts("band solve");
+}
+
 int main(void) {
+    test_band_solve();
     test_vec_solve();
     test_vec_solve_sym();
     test_reuse_solve();

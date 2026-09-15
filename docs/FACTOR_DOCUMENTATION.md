@@ -70,7 +70,18 @@ of the public surface.
 | `_latrd`, `_sytrd`, `_sytd2`, `_ormtr`, `_steqr`, `_laed4`, `_stedc_merge`, `_stedc`, `_syevd` | `LAPACKE_?syevd` | `mat_eig_sym` |
 | `_gebd2`, `_labrd`, `_gebrd`, `_orgbr_p`, `_ormbr_p`, `_lartg`, `_rot2`, `_bdsqr`, `_lasd4`, `_bd_square`, `_bdsvd_small`, `_lasd0`, `_gesdd` | `LAPACKE_?gesdd` | `mat_svd`, and `mat_cond` and `mat_rank` through it |
 | `_gelsd` | `LAPACKE_?gelsd` | `mat_lstsq_rd` |
+| `_gbtf2`, `_gbtrs`, `_gbsv` | nothing — new, see below | `vec_band_solve` |
 | `_gebal`, `_lahr2`, `_gehrd`, `_gehd2`, `_lanv2`, `_laexc11`, `_trexc_up`, `_laqr3`, `_lahqr`, `_geev` | `LAPACKE_?geev` | `mat_eig` |
+
+The band row of that table is the one entry that did not replace anything.
+Nothing in this project ever called a LAPACKE band routine, so there was no
+dependency to remove; `_gbtf2`/`_gbtrs` were written because
+`basis/spline.h`'s interpolating spline has a banded system and had no way to
+say so. They are not a rewrite of a routine that was here before, and the
+"Results" table below — which is about what the LAPACKE removal cost or saved
+— has no row for them. Their own numbers are in
+`docs/BASIS_PERFORMANCE_DOCUMENTATION.md`, against the caller that needed
+them.
 
 `mat_norm`'s `'1'`/`'I'`/`'M'` reductions also came off `?lange`, but they
 are plain reductions rather than factorizations and live in
@@ -1311,3 +1322,90 @@ where aggressive early deflation is active.
 `tests/performance/eig_lapack_removal.c` — writes
 `out/eig_lapack_removal_report.txt` and exits nonzero if the replacement is
 slower at any shape.
+
+
+## `_gbtf2`, `_gbtrs`, `_gbsv` — banded LU and its solve
+
+The one group here that replaces nothing. It exists because
+`basis/spline.h`'s `interp_spline` solves an `(n+2) x (n+2)` collocation
+system that is banded with bandwidth `ord`, and until this was written the
+only way to solve it was `vec_solve`, which is a dense LU at `O(n^3)` time
+and `O(n^2)` memory whatever the matrix looks like.
+
+The algorithm is `?gbtf2` and `?gbtrs`: Gaussian elimination with partial
+pivoting over band storage, and the forward-and-back substitution over the
+result. It is the same algorithm and the same storage as LINPACK's
+`dgbfa`/`dgbsl`, which is what R's `splines` package names in the
+commented-out banded branch of its own `interpSpline` — the branch whose
+comment reads "the required LINPACK routines are not loaded as part of S".
+
+### Band storage
+
+A matrix with `kl` subdiagonals and `ku` superdiagonals has at most
+`kl + ku + 1` non-zero entries in any column, and they are consecutive, so
+one column fits in one row of an `n x (kl + ku + 1)` block:
+
+    a(i, j)  is at  ab[j * ldab + kv + i - j]      with kv = kl + ku
+
+Two consequences drive the whole implementation.
+
+**A matrix row is a strided walk.** Going one column right and one band row
+up lands on the same matrix row, so a row of the matrix runs through the
+band with stride `ldab - 1`. That is why the row interchange is written as a
+loop with that stride rather than a `memcpy`, and it is the single place
+this kernel is easiest to get wrong.
+
+**The factored band is wider than the matrix band.** Partial pivoting moves
+a row up to `kl` places, which pushes entries up to `kl` further above the
+diagonal than `A` itself reaches: `U` has `kl + ku` superdiagonals where `A`
+had `ku`. So the working array is `n x (2*kl + ku + 1)`, with `kl` scratch
+rows at the top of each stored column that the factorization zeroes and
+fills. A caller packs into `kl + ku + 1` and `vec_band_solve` allocates the
+wider one, which is why `mat_band_pack`'s output is narrower than what the
+factorization needs and the two are not interchangeable.
+
+### Why the inner loops are written out rather than issued as BLAS
+
+The trailing update at each step is a rank-one update of at most `kl` by
+`kl + ku` entries, and both dimensions are bounded by the bandwidth rather
+than by `n`. At the bandwidth of 2 a natural cubic spline produces, that is
+an eight-multiplication update; a `cblas_?ger` call around it would cost
+more than the arithmetic inside it. `_getf2_base` writes out its inner loops
+for the same reason, and design principle 3 in the root `README.md` is the
+policy: OpenBLAS gets the operations it has kernels for *at a size worth
+calling it at*. No new BLAS symbol enters the dependency audit through this
+group — the kernels are plain C.
+
+### Verification
+
+`tests/correctness/test_solver.c`'s `test_band_solve`, at both precisions
+and under `make CFLAGS="-fsanitize=address,undefined -g -O1" test`:
+
+- a tridiagonal second-difference system with a hand-computed answer;
+- the degenerate ends — one element, and a diagonal matrix, where the
+  factorization does nothing but divide;
+- a band declared wider than the matrix is square, which is the dense case
+  reached through the banded path;
+- 300 random band matrices with no dominant diagonal, checked on the
+  residual `||A x - b||` against the *original square matrix* rather than
+  against the other solver, because there the solution itself is not
+  determined to the precision either method works in;
+- 200 diagonally dominant ones, where the two solvers are required to agree
+  with each other;
+- a matrix whose leading entry is zero, so the factorization must interchange
+  rows before it can divide — written out rather than hoped for, since
+  nothing in the randomized loops guarantees that case turns up.
+
+`tests/correctness/test_decomp.c`'s `test_band_storage` covers
+`mat_bandwidth` and `mat_band_pack` separately: a known 5x5 layout written
+out, the diagonal and dense extremes, a single element, and a matrix whose
+only non-zero is a far corner.
+
+### Not implemented
+
+No blocked band factorization (`?gbtrf` proper), no transposed solve, no
+multiple right-hand sides, and no reusable factored form of the kind
+`mat_lu`/`vec_lu_solve` are for one another. The blocked variant pays only
+at a bandwidth large enough for its block updates to reach BLAS-3, which is
+far above anything a spline produces; the other three have no caller. Each
+is a small addition to this group when one arrives.
