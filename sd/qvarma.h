@@ -153,6 +153,98 @@ static inline int qvarma_n_theta(const QvarmaParams *m) {
     return n;
 }
 
+/*
+The rows of the layout table above, by name, so a caller can address a block of
+theta without computing its offset. Omega_inv covers its diagonal and the
+entries below it together. beta covers only its free entries; the leading R
+columns fixed by the Johansen normalization are not coordinates of theta.
+Psi_dag is not a block, because it is alpha times beta rather than a coordinate.
+alpha and beta are empty when K == K_star.
+*/
+typedef enum {
+    QVARMA_BLOCK_C,
+    QVARMA_BLOCK_PHI_STAR,
+    QVARMA_BLOCK_PSI_STAR,
+    QVARMA_BLOCK_OMEGA_INV,
+    QVARMA_BLOCK_NU,
+    QVARMA_BLOCK_ALPHA,
+    QVARMA_BLOCK_BETA
+} QvarmaBlock;
+
+#define QVARMA_N_BLOCKS 7
+
+static inline void qvarma_block_range(const QvarmaParams *m, QvarmaBlock block,
+                                      int *offset, int *count) {
+    qvarma_check_params(m);
+    assert((int)block >= 0 && (int)block < QVARMA_N_BLOCKS);
+    int K = m->K, K_dag = K - m->K_star, has_dag = K > m->K_star;
+    int sizes[QVARMA_N_BLOCKS] = {
+        K,
+        m->p,
+        m->q * qvarma_psi_star_rows(m) * K,
+        K + K * (K - 1) / 2,
+        1,
+        has_dag ? m->r * K_dag * m->R : 0,
+        has_dag ? qvarma_n_beta_matrices(m) * m->R * (K_dag - m->R) : 0
+    };
+    int at = 0;
+    for (int b = 0; b < (int)block; b++) at += sizes[b];
+    *offset = at;
+    *count = sizes[block];
+}
+
+/*
+Which coordinates of theta a fit holds where the initial guess put them.
+
+Every coordinate of theta moves exactly one estimated parameter through a
+scalar link, so holding a coordinate holds exactly one parameter on the paper's
+scale and leaves every other one free. Fitting with the degrees of freedom
+chosen by hand is therefore: set nu in the initial guess, fix QVARMA_BLOCK_NU,
+and call qvarma_fit_with_fixed.
+
+is_fixed has one flag per coordinate of theta, in the layout of qvarma_n_theta,
+so a single entry can be held as well as a whole block, for instance one
+off-diagonal entry of Psi_star held at zero.
+*/
+typedef struct {
+    int n_theta;
+    int *is_fixed; /* n_theta flags, nonzero where the coordinate is held */
+} QvarmaFixedParams;
+
+/* Nothing fixed, at the shape of m. Free with qvarma_fixed_params_free. */
+static inline QvarmaFixedParams qvarma_fixed_params_new(const QvarmaParams *m) {
+    QvarmaFixedParams fixed;
+    fixed.n_theta = qvarma_n_theta(m);
+    fixed.is_fixed = (int*)calloc((size_t)fixed.n_theta, sizeof(int));
+    assert(fixed.is_fixed);
+    return fixed;
+}
+
+static inline void qvarma_fixed_params_free(QvarmaFixedParams *fixed) {
+    free(fixed->is_fixed);
+    fixed->is_fixed = NULL;
+    fixed->n_theta = 0;
+}
+
+static inline void qvarma_fix_coordinate(QvarmaFixedParams *fixed, int index) {
+    assert(index >= 0 && index < fixed->n_theta);
+    fixed->is_fixed[index] = 1;
+}
+
+static inline void qvarma_fix_block(QvarmaFixedParams *fixed, const QvarmaParams *m,
+                                    QvarmaBlock block) {
+    assert(fixed->n_theta == qvarma_n_theta(m) && "fixed set built for a different shape");
+    int offset, count;
+    qvarma_block_range(m, block, &offset, &count);
+    for (int i = 0; i < count; i++) fixed->is_fixed[offset + i] = 1;
+}
+
+static inline int qvarma_n_free(const QvarmaFixedParams *fixed) {
+    int n = 0;
+    for (int i = 0; i < fixed->n_theta; i++) n += fixed->is_fixed[i] == 0;
+    return n;
+}
+
 static inline Mat *qvarma_new_mat_array(int count, int rows, int cols) {
     if (count == 0) return NULL;
     Mat *a = (Mat*)malloc((size_t)count * sizeof(Mat));
@@ -1579,21 +1671,48 @@ static inline mreal qvarma_negative_log_likelihood(Vec theta, Vec gradient, void
 }
 
 /*
-Maximum likelihood by (10), starting from initial_guess, which is not
-modified. Returns the fitted model with its diagnostics; free with
-qvarma_fit_result_free.
-
-One iteration is one search direction and the line search along it, so it costs
-one gradient and a few values, each of them a pass over the whole series: the
-likelihood is a single joint function of the series through the recursion, so
-there are no independent samples to step over.
-
-Everything reported describes the parameters returned, because the solver keeps
-the best point it saw together with the value and gradient there, rather than
-whatever the last step happened to produce.
+The objective restricted to the free coordinates. theta is the full vector with
+the fixed coordinates already at their held values; each evaluation writes the
+free ones into it and reads their gradient back out, so nothing is allocated
+per evaluation.
 */
-static inline QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_guess,
-                                         QvarmaFitOptions options) {
+typedef struct {
+    QvarmaFitContext model;
+    Vec theta; /* n_theta x 1 */
+    Vec gradient; /* n_theta x 1 */
+    int *free_index; /* n_free positions into theta */
+    int n_free;
+} QvarmaFixedFitContext;
+
+static inline mreal _qvarma_fixed_negative_log_likelihood(Vec free_theta, Vec free_gradient,
+                                                          void *context) {
+    QvarmaFixedFitContext *fixed_context = (QvarmaFixedFitContext*)context;
+    for (int i = 0; i < fixed_context->n_free; i++)
+        fixed_context->theta.d[fixed_context->free_index[i]] = free_theta.d[i];
+    Vec no_gradient = { 0, 0, 0, NULL };
+    Vec gradient = free_gradient.d ? fixed_context->gradient : no_gradient;
+    mreal value = qvarma_negative_log_likelihood(fixed_context->theta, gradient,
+                                                 &fixed_context->model);
+    if (free_gradient.d)
+        for (int i = 0; i < fixed_context->n_free; i++)
+            free_gradient.d[i] = fixed_context->gradient.d[fixed_context->free_index[i]];
+    return value;
+}
+
+/*
+Maximum likelihood by (10) over the coordinates fixed does not hold, the rest
+staying where initial_guess put them. fixed NULL steps every coordinate, and is
+what qvarma_fit is.
+
+The solver only ever sees the free coordinates, so gradient_norm is the norm of
+the gradient over those alone: the gradient along a held coordinate is not zero
+at a restricted maximum and says nothing about whether the fit converged. The
+information criteria count the free coordinates only, since a held value is not
+estimated.
+*/
+static inline QvarmaFitResult _qvarma_fit_holding(Mat y, const QvarmaParams *initial_guess,
+                                                  const QvarmaFixedParams *fixed,
+                                                  QvarmaFitOptions options) {
     qvarma_check_params(initial_guess);
     assert(y.r == initial_guess->K && y.c > 0);
     assert(options.max_iterations > 0);
@@ -1616,7 +1735,45 @@ static inline QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_gues
     solver.memory = options.memory;
     solver.initial_step = options.initial_step;
     solver.log_stream = options.trace;
-    LbfgsResult solved = lbfgs(qvarma_negative_log_likelihood, &context, start, solver);
+
+    LbfgsResult solved;
+    int n_estimated = n;
+    if (!fixed) {
+        solved = lbfgs(qvarma_negative_log_likelihood, &context, start, solver);
+    } else {
+        assert(fixed->n_theta == n && "fixed set built for a different shape");
+        n_estimated = qvarma_n_free(fixed);
+        assert(n_estimated > 0 && "every coordinate is fixed, so there is nothing to fit");
+
+        QvarmaFixedFitContext fixed_context;
+        fixed_context.model = context;
+        fixed_context.theta = mat_copy(start);
+        fixed_context.gradient = mat_new(n, 1);
+        fixed_context.free_index = (int*)malloc((size_t)n_estimated * sizeof(int));
+        fixed_context.n_free = n_estimated;
+        Vec free_start = mat_new(n_estimated, 1);
+        for (int i = 0, slot = 0; i < n; i++)
+            if (!fixed->is_fixed[i]) {
+                fixed_context.free_index[slot] = i;
+                free_start.d[slot++] = start.d[i];
+            }
+
+        LbfgsResult free_solved = lbfgs(_qvarma_fixed_negative_log_likelihood, &fixed_context,
+                                        free_start, solver);
+        /* The solver reports its best point, which need not be the last one
+           written into fixed_context.theta, so the full vector is rebuilt from
+           the held values and the returned free ones. */
+        solved = free_solved;
+        solved.theta = mat_copy(start);
+        for (int i = 0; i < n_estimated; i++)
+            solved.theta.d[fixed_context.free_index[i]] = free_solved.theta.d[i];
+
+        mat_free(free_solved.theta);
+        mat_free(free_start);
+        mat_free(fixed_context.theta);
+        mat_free(fixed_context.gradient);
+        free(fixed_context.free_index);
+    }
 
     QvarmaFitResult result;
     result.params = qvarma_params_new(shape.K, shape.K_star, shape.p, shape.q, shape.r, shape.R,
@@ -1634,7 +1791,7 @@ static inline QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_gues
     result.status_is_known = 1;
     result.run_status = _qvarma_run_status_extend(NULL, 0, solved.status);
 
-    mreal k = (mreal)n, periods = (mreal)T, mean = result.log_likelihood / periods;
+    mreal k = (mreal)n_estimated, periods = (mreal)T, mean = result.log_likelihood / periods;
     result.aic = 2 * k / periods - 2 * mean;
     result.bic = k * (mreal)log((double)periods) / periods - 2 * mean;
     result.hannan_quinn = 2 * k * (mreal)log(log((double)periods)) / periods - 2 * mean;
@@ -1643,6 +1800,46 @@ static inline QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_gues
     mat_free(start);
     mat_free(solved.theta);
     return result;
+}
+
+/*
+Maximum likelihood by (10), starting from initial_guess, which is not
+modified. Returns the fitted model with its diagnostics; free with
+qvarma_fit_result_free.
+
+One iteration is one search direction and the line search along it, so it costs
+one gradient and a few values, each of them a pass over the whole series: the
+likelihood is a single joint function of the series through the recursion, so
+there are no independent samples to step over.
+
+Everything reported describes the parameters returned, because the solver keeps
+the best point it saw together with the value and gradient there, rather than
+whatever the last step happened to produce.
+*/
+static inline QvarmaFitResult qvarma_fit(Mat y, const QvarmaParams *initial_guess,
+                                         QvarmaFitOptions options) {
+    return _qvarma_fit_holding(y, initial_guess, NULL, options);
+}
+
+/*
+The same fit with the coordinates fixed marks held at the values initial_guess
+carries, and every other coordinate estimated. The returned parameters carry
+the held values unchanged, up to the round trip through the link.
+
+The result is the maximum of the likelihood conditional on the held values, so
+twice the difference between an unrestricted fit's log-likelihood and this one
+is the likelihood ratio statistic for the restriction. Start the unrestricted
+fit from this one's parameters, so that it cannot land below it.
+
+qvarma_standard_errors and qvarma_write_report do not know which coordinates
+were held: they difference the likelihood in every direction, including the
+held ones, where a restricted maximum is not a maximum.
+*/
+static inline QvarmaFitResult qvarma_fit_with_fixed(Mat y, const QvarmaParams *initial_guess,
+                                                    const QvarmaFixedParams *fixed,
+                                                    QvarmaFitOptions options) {
+    assert(fixed && fixed->is_fixed);
+    return _qvarma_fit_holding(y, initial_guess, fixed, options);
 }
 
 /*

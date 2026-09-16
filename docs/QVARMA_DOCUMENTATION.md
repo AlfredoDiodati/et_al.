@@ -289,6 +289,63 @@ QvarmaFitResult qvarma_fit_result_new(const QvarmaParams *shape);
 void      qvarma_fit_result_free(QvarmaFitResult *result);
 ```
 
+Fitting with some parameters held:
+
+```c
+typedef enum { QVARMA_BLOCK_C, QVARMA_BLOCK_PHI_STAR, QVARMA_BLOCK_PSI_STAR,
+               QVARMA_BLOCK_OMEGA_INV, QVARMA_BLOCK_NU, QVARMA_BLOCK_ALPHA,
+               QVARMA_BLOCK_BETA } QvarmaBlock;
+void              qvarma_block_range(const QvarmaParams *m, QvarmaBlock block, int *offset, int *count);
+QvarmaFixedParams qvarma_fixed_params_new(const QvarmaParams *m);   /* nothing fixed */
+void              qvarma_fixed_params_free(QvarmaFixedParams *fixed);
+void              qvarma_fix_block(QvarmaFixedParams *fixed, const QvarmaParams *m, QvarmaBlock block);
+void              qvarma_fix_coordinate(QvarmaFixedParams *fixed, int index);
+int               qvarma_n_free(const QvarmaFixedParams *fixed);
+QvarmaFitResult   qvarma_fit_with_fixed(Mat y, const QvarmaParams *initial_guess,
+                                        const QvarmaFixedParams *fixed, QvarmaFitOptions options);
+```
+
+A held coordinate stays at the value `initial_guess` carries, and every other
+coordinate is estimated. Choosing the degrees of freedom by hand is:
+
+```c
+guess.nu = 5;
+QvarmaFixedParams fixed = qvarma_fixed_params_new(&guess);
+qvarma_fix_block(&fixed, &guess, QVARMA_BLOCK_NU);
+QvarmaFitResult result = qvarma_fit_with_fixed(y, &guess, &fixed, qvarma_default_fit_options());
+```
+
+`QvarmaFixedParams` is one flag per coordinate of `theta`, so a single entry
+can be held as well as a block: `qvarma_block_range` gives a block's offset,
+and `Psi_star` entries are row-major inside it, `q` matrices of
+`qvarma_psi_star_rows` by `K`. Holding a coordinate holds exactly one parameter,
+because every coordinate moves exactly one estimated parameter through a scalar
+link. `QVARMA_BLOCK_OMEGA_INV` covers the diagonal and the entries below it
+together, `QVARMA_BLOCK_BETA` only the free entries left by the Johansen
+normalization, and `Psi_dag` has no block because it is `alpha` times `beta`
+rather than a coordinate: hold it by holding both.
+
+`qvarma_fit` and `qvarma_fit_with_fixed` are one function, `_qvarma_fit_holding`,
+with no fixed set and with one. The restricted path hands the solver only the
+free coordinates, through an objective that writes them into a preallocated full
+`theta` and reads their gradient back, so nothing is allocated per evaluation.
+Three things in the result change meaning with it: `gradient_norm` is the norm
+over the free coordinates, since the gradient along a held one is not zero at a
+restricted maximum; the information criteria count the free coordinates only;
+and `log_likelihood` is the maximum conditional on the held values, so twice the
+gap to an unrestricted fit is the likelihood ratio statistic for the
+restriction. Start that unrestricted fit from the restricted estimate, so the
+solver, which returns the best point it saw, cannot end below it.
+
+What does not know about held coordinates, as things stand:
+`qvarma_standard_errors` and `qvarma_write_report` difference the likelihood in
+every direction, held ones included, where a restricted maximum is not a
+maximum, so their errors are not the errors conditional on the held values;
+and `qvarma_save_fit`/`qvarma_fit_cached` store no fixed set, so a restricted
+fit written to a cache and resumed there would be resumed unrestricted.
+Fixing every coordinate is programmer error and asserts;
+`qvarma_log_likelihood_at` is the call for evaluating at a point.
+
 The analytic-gradient evaluator, whose gradient is the hand-derived one rather
 than the tape's, and which is what the two above run on:
 
@@ -622,6 +679,8 @@ stops changing.
     make tests/correctness/qvarma_correctness       does it compute what it claims
     make tests/correctness/qvarma_identification    which parameters the data can pin down
     make examples/qvarma_example                    a tour of the API
+    make tests/correctness/qvarma_fixed_parameter_fit   fitting with parameters held
+    make examples/qvarma_fixed_parameters_example   nu chosen by hand, a profile over it
     make study-qvarma_recovery                      the Monte Carlo recovery study
     make tests/performance/qvarma_performance       timings, never part of make test
     make bench-qvarma_precision                     both precisions side by side
@@ -635,8 +694,9 @@ there, so the Makefile builds a script that only estimates, forecasts or times
 the model with `MODEL_CFLAGS` (`float32`) and one whose result depends on the
 curvature of the likelihood with `STAT_CFLAGS` (`float64`). Each target says
 which it uses and why. As things stand `qvarma_identification` and
-`qvarma_performance` are `float32`; `qvarma_correctness`, the recovery study and
-the example are `float64`.
+`qvarma_performance` are `float32`; `qvarma_correctness`,
+`qvarma_fixed_parameter_fit`, the recovery study and both examples are
+`float64`.
 
 What `float32` costs, and what it saves. The timings are
 `tests/performance/qvarma_precision.c`, run through `make bench-qvarma_precision`,
@@ -843,6 +903,58 @@ a statement about the expected information; the smallest eigenvalue of one
 sample's Hessian changes sign from draw to draw even where the block is well
 identified, and three draws of it reported `c` as flat and `Phi_star` as
 unidentified at parameter values where neither is true.
+
+### `tests/correctness/qvarma_fixed_parameter_fit.c`
+
+Does `qvarma_fit_with_fixed` hold what it is told to and estimate the rest. In
+`make test`; about 2 s by default, 9 s under `STRESS=1`.
+
+Deterministic checks:
+
+- every block's range, perturbed one coordinate at a time through
+  `qvarma_params_from_theta`, moves that block's parameter and no other, and the
+  ranges tile `theta` in order, over five shapes (with and without each of the
+  I(0) and I(1) blocks, per-lag `beta`, rank two, restricted `Psi_star`)
+- an empty fixed set reaches what `qvarma_fit` reaches
+- held coordinates do not move, and some free one does, for `nu`, `Omega_inv`
+  with `nu`, a single `Psi_star` entry, and `beta` with `nu` on the paper's
+  Table 3 shape
+- `gradient_norm` equals the full gradient's norm over the free coordinates,
+  and the gradient along the held `nu` is at least a hundred times larger, so the
+  check can tell the two apart; the likelihood and the three criteria describe
+  the returned parameters and the free count
+- holding `nu` at an unrestricted estimate and starting everything else 0.2 per
+  coordinate away climbs back to the same maximum
+
+Monte Carlo, the likelihood ratio `2 (L_unrestricted - L_restricted)`. Setup:
+`K = 2`, `K_star = 2`, `p = q = 1`, `c = (0.5, -0.3)`, `Phi_star = 0.6`,
+`Psi_star = diag(0.30, 0.20)`, `Omega_inv` lower triangle `(0.60; 0.15, 0.50)`,
+`nu = 8`, `T = 1000`, default fit options. Restricted start: truth plus
+`N(0, 0.1^2)` per free coordinate of `theta`; unrestricted start: the
+restricted estimate. A replication counts when both fits converge. Seeds 5101,
+5102, 5103. Written to `out/qvarma_fixed_parameter_fit_monte_carlo.txt`.
+
+| held | df | replications | used | mean statistic | rejected at 5% |
+|---|---|---|---|---|---|
+| `nu` at the true 8 | 1 | 400 | 400 | 1.068 | 0.0625 |
+| `Psi_star[0,1]`, `Psi_star[1,0]` at the true 0 | 2 | 400 | 400 | 2.096 | 0.0550 |
+| `nu` at a false 3 | 1 | 400 | 400 | 71.48 | 1.000 |
+
+What is asserted: for a true restriction the mean within four Monte Carlo
+standard errors of `df` and the rejection rate within four binomial standard
+errors of 0.05; for the false one a rejection rate of at least 0.9; in all three
+at least 90% of replications used and no held coordinate moved. The default
+run uses 100 replications per scenario, where the size bound is loose (plus or
+minus 0.087) and the mean and the held-coordinate checks carry the weight.
+
+Checked against two broken versions of the header: one that ignores the fixed
+set and one that holds the coordinate after each marked one. The first fails
+the held-coordinate, gradient-norm and criteria checks; the second fails 16
+checks, including a mean statistic of 32.7 for `nu` held at the truth.
+
+Not covered: shapes with an I(1) block in the Monte Carlo, where the
+unrestricted fits are the unreliable part (see Known gaps), and any sample other
+than `T = 1000`.
 
 ### `tests/correctness/lbfgs_correctness.c`
 
@@ -1354,6 +1466,11 @@ the setup stated per number.
   defect, but it has not been checked at other sample sizes or shapes.
 - Nothing has been tested above K = 5, T = 2000, p or q above 3, or R above 2.
 - The model has never been fitted to real data.
+- **A fit with held parameters has no standard errors and no cache of its own.**
+  `qvarma_standard_errors` differences every coordinate, held ones included,
+  and `qvarma_fit_cached` would resume a restricted fit unrestricted. What
+  conditional errors need is the Hessian restricted to the free coordinates,
+  which `_qvarma_hessian` already computes in full.
 
 ## General primitives still hand-rolled here
 

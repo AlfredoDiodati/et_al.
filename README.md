@@ -128,6 +128,9 @@ make examples/cluster_example   # a batch of independent fits split across machi
 make examples/qvarma_example    # simulate from a t-QVARMA, forget the parameters, fit them back
 ./examples/qvarma_example
 
+make examples/qvarma_fixed_parameters_example   # hold nu at chosen values and fit the rest
+./examples/qvarma_fixed_parameters_example      # writes examples/out/qvarma_fixed_parameters_example_report.txt
+
 make examples/unit_root_example # unit root, break and co-integration tests on US quarterly data
 ./examples/unit_root_example    # writes examples/out/unit_root_example_report.txt
 
