@@ -1,37 +1,21 @@
-test run: Tue Sep 15 04:08:51 PM CEST 2026
+test run: do 24 sep 2026 13:43:07 CEST
+
+=== tracked_build_output: PASS ===
+no build output is tracked
 
 === build ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/poly_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/poly_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/spline_design_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/spline_design_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/spline_basis_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/spline_basis_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/spline_objects_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/spline_objects_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/poly_correctness.c -lm -lopenblas -o tests/correctness/poly_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_design_correctness.c -lm -lopenblas -o tests/correctness/spline_design_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_basis_correctness.c -lm -lopenblas -o tests/correctness/spline_basis_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_objects_correctness.c -lm -lopenblas -o tests/correctness/spline_objects_correctness
 make: 'tests/correctness/test_mat' is up to date.
 make: 'tests/correctness/test_tensor' is up to date.
 make: 'tests/correctness/test_tensor_serial' is up to date.
 make: 'tests/correctness/test_mat_special' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_decomp.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_decomp
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_solver.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_solver
-In file included from tests/correctness/../../linalg/decomp.h:3,
-                 from tests/correctness/../../linalg/solver.h:2,
-                 from tests/correctness/test_solver.c:1:
-In function ‘_gels’,
-    inlined from ‘mat_lstsq.isra’ at tests/correctness/../../linalg/solver.h:177:16:
-tests/correctness/../../linalg/factor.h:1302:9: warning: ‘buf’ may be used uninitialized [-Wmaybe-uninitialized]
- 1302 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tests/correctness/../../linalg/factor.h: In function ‘mat_lstsq.isra’:
-tests/correctness/../../linalg/factor.h:1220:20: note: by argument 5 of type ‘const mreal *’ {aka ‘const float *’} to ‘_ormqr_cm’ declared here
- 1220 | static inline void _ormqr_cm(char trans, int m, int n, int k,
-      |                    ^~~~~~~~~
-In function ‘_gels’,
-    inlined from ‘mat_lstsq.isra’ at tests/correctness/../../linalg/solver.h:177:16:
-tests/correctness/../../linalg/factor.h:1302:9: warning: ‘tau’ may be used uninitialized [-Wmaybe-uninitialized]
- 1302 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tests/correctness/../../linalg/factor.h: In function ‘mat_lstsq.isra’:
-tests/correctness/../../linalg/factor.h:1220:20: note: by argument 7 of type ‘const mreal *’ {aka ‘const float *’} to ‘_ormqr_cm’ declared here
- 1220 | static inline void _ormqr_cm(char trans, int m, int n, int k,
-      |                    ^~~~~~~~~
+make: 'tests/correctness/test_decomp' is up to date.
+make: 'tests/correctness/test_solver' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/lstsq_rank_deficiency.c -lm -lopenblas -o tests/correctness/lstsq_rank_deficiency
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/chol_singularity.c -lm -lopenblas -o tests/correctness/chol_singularity
 make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
@@ -43,33 +27,18 @@ make: 'tests/correctness/mcs_size_and_power' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
 make: 'tests/correctness/test_student' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_mvgauss.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_mvgauss
-tests/correctness/test_mvgauss.c: In function ‘expect_abort’:
-tests/correctness/test_mvgauss.c:365:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  365 |         freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_mvstudent.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_mvstudent
-tests/correctness/test_mvstudent.c: In function ‘expect_abort’:
-tests/correctness/test_mvstudent.c:358:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  358 |         freopen("/dev/null", "w", stderr);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_matgauss.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_matgauss
-tests/correctness/test_matgauss.c: In function ‘expect_abort’:
-tests/correctness/test_matgauss.c:610:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  610 |         freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_matgauss_recovery.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_matgauss_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_ad.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_ad
-tests/correctness/test_ad.c: In function ‘expect_abort’:
-tests/correctness/test_ad.c:1178:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
- 1178 |         freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -ftrivial-auto-var-init=pattern tests/correctness/ad_tensor_gradients.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/ad_tensor_gradients
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_tape_reset.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_tape_reset
+make: 'tests/correctness/test_mvgauss' is up to date.
+make: 'tests/correctness/test_mvstudent' is up to date.
+make: 'tests/correctness/test_matgauss' is up to date.
+make: 'tests/correctness/test_matgauss_recovery' is up to date.
+make: 'tests/correctness/mv_density_dispatch' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_ad.c -lm -lopenblas -o tests/correctness/test_ad
+make: 'tests/correctness/ad_tensor_gradients' is up to date.
+make: 'tests/correctness/test_tape_reset' is up to date.
 make: 'tests/correctness/test_adam' is up to date.
 make: 'tests/correctness/test_optimizer' is up to date.
 make: 'tests/correctness/test_cluster' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_mlp.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_mlp
+make: 'tests/correctness/test_mlp' is up to date.
 make: 'tests/correctness/test_frame' is up to date.
 make: 'tests/correctness/test_csv' is up to date.
 make: 'tests/correctness/test_txt' is up to date.
@@ -81,173 +50,45 @@ make: 'tests/correctness/test_join' is up to date.
 make: 'tests/correctness/gzip_inflate' is up to date.
 make: 'tests/correctness/gzip_deflate' is up to date.
 make: 'tests/correctness/rdata_array_read' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/adf_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/adf_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/kpss_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/kpss_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/dfgls_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/dfgls_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/otto_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/otto_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hlt_union_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hlt_union_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hlt_break_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hlt_break_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hhlt_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hhlt_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/zivot_andrews_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/zivot_andrews_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/johansen_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/johansen_correctness
-In file included from tests/correctness/../../inference/../linalg/decomp.h:3,
-                 from tests/correctness/../../inference/../linalg/solver.h:2,
-                 from tests/correctness/../../inference/unit_root.h:2,
-                 from tests/correctness/../../inference/cointegration.h:2,
-                 from tests/correctness/johansen_correctness.c:15:
-In function ‘_gels’,
-    inlined from ‘mat_lstsq’ at tests/correctness/../../inference/../linalg/solver.h:177:16,
-    inlined from ‘_residualize.isra’ at tests/correctness/../../inference/cointegration.h:65:24:
-tests/correctness/../../inference/../linalg/factor.h:1302:9: warning: ‘buf’ may be used uninitialized [-Wmaybe-uninitialized]
- 1302 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tests/correctness/../../inference/../linalg/factor.h: In function ‘_residualize.isra’:
-tests/correctness/../../inference/../linalg/factor.h:1220:20: note: by argument 5 of type ‘const mreal *’ {aka ‘const double *’} to ‘_ormqr_cm’ declared here
- 1220 | static inline void _ormqr_cm(char trans, int m, int n, int k,
-      |                    ^~~~~~~~~
-In function ‘_gels’,
-    inlined from ‘mat_lstsq’ at tests/correctness/../../inference/../linalg/solver.h:177:16,
-    inlined from ‘_residualize.isra’ at tests/correctness/../../inference/cointegration.h:65:24:
-tests/correctness/../../inference/../linalg/factor.h:1302:9: warning: ‘tau’ may be used uninitialized [-Wmaybe-uninitialized]
- 1302 |         _ormqr_cm('T', m, nrhs, n, av, m, tau, bv, m, tmat, wbuf);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tests/correctness/../../inference/../linalg/factor.h: In function ‘_residualize.isra’:
-tests/correctness/../../inference/../linalg/factor.h:1220:20: note: by argument 7 of type ‘const mreal *’ {aka ‘const double *’} to ‘_ormqr_cm’ declared here
- 1220 | static inline void _ormqr_cm(char trans, int m, int n, int k,
-      |                    ^~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/engle_granger_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/engle_granger_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/maki_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/maki_correctness
-In file included from tests/correctness/../../inference/../linalg/decomp.h:3,
-                 from tests/correctness/../../inference/../linalg/solver.h:2,
-                 from tests/correctness/../../inference/unit_root.h:2,
-                 from tests/correctness/../../inference/cointegration.h:2,
-                 from tests/correctness/maki_correctness.c:17:
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1576:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1510:47: warning: array subscript -1 is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1510 |             for (int i = 0; i < m; i++) s += x[i] * col[i];
-      |                                              ~^~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset -8 into object of size 32 allocated by ‘malloc’
- 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1576:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1511:14: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1511 |             b[row + (size_t)q * ldb] -= s;
-      |             ~^~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1592:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1592 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1576:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1511:38: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1511 |             b[row + (size_t)q * ldb] -= s;
-      |             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1592:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1592 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_outer’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1536:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1492:19: warning: array subscript [-2147483645, -1] is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1492 |             mreal f = b[row + (size_t)q * ldb];
-      |                   ^
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1592:25: note: at offset [-17179869160, -8] into object of size 16 allocated by ‘malloc’
- 1592 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1597:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1431:42: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1431 |                 mreal wk = d21 * (d11 * a[(size_t)k * lda + j]
-      |                                         ~^~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1597:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1438:40: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1438 |                 a[(size_t)k * lda + j] = wk;
-      |                 ~~~~~~~~~~~~~~~~~~~~~~~^~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1597:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1436:48: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1436 |                     a[(size_t)j * lda + i] -= a[(size_t)k * lda + i] * wk
-      |                                               ~^~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
-tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+make: 'tests/correctness/adf_correctness' is up to date.
+make: 'tests/correctness/kpss_correctness' is up to date.
+make: 'tests/correctness/dfgls_correctness' is up to date.
+make: 'tests/correctness/otto_correctness' is up to date.
+make: 'tests/correctness/hlt_union_correctness' is up to date.
+make: 'tests/correctness/hlt_break_correctness' is up to date.
+make: 'tests/correctness/hhlt_correctness' is up to date.
+make: 'tests/correctness/zivot_andrews_correctness' is up to date.
+make: 'tests/correctness/johansen_correctness' is up to date.
+make: 'tests/correctness/engle_granger_correctness' is up to date.
+make: 'tests/correctness/maki_correctness' is up to date.
 make: 'tests/correctness/qlr_test_correctness' is up to date.
 make: 'tests/correctness/lbfgs_correctness' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/score_driven_location_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/score_driven_location_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/qvarma_analytic_agreement.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_analytic_agreement
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/qvarma_gaussian_limit.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_gaussian_limit
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  tests/correctness/qvarma_identification.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_identification
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/score_driven_location_correctness.c -lm -lopenblas -o tests/correctness/score_driven_location_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -lopenblas -o tests/correctness/qvarma_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_analytic_agreement.c -lm -lopenblas -o tests/correctness/qvarma_analytic_agreement
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_gaussian_limit.c -lm -lopenblas -o tests/correctness/qvarma_gaussian_limit
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp tests/correctness/qvarma_identification.c -lm -lopenblas -o tests/correctness/qvarma_identification
 tests/correctness/qvarma_identification.c: In function ‘curvature_at’:
 tests/correctness/qvarma_identification.c:57:5: warning: missing initializer for field ‘workspace’ of ‘QvarmaFitContext’ [-Wmissing-field-initializers]
    57 |     QvarmaFitContext context = { y, shape };
       |     ^~~~~~~~~~~~~~~~
 In file included from tests/correctness/qvarma_identification.c:38:
-tests/correctness/../../sd/qvarma.h:1564:21: note: ‘workspace’ declared here
- 1564 |     QvarmaAnalytic *workspace;
+tests/correctness/../../sd/qvarma.h:1656:21: note: ‘workspace’ declared here
+ 1656 |     QvarmaAnalytic *workspace;
       |                     ^~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/basis_to_regression.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/basis_to_regression
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/frame_to_model
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/frame_to_tensor.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/frame_to_tensor
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/tensor_to_optimizer.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/tensor_to_optimizer
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/join_missing_values.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/join_missing_values
-tests/integration/join_missing_values.c: In function ‘expect_abort’:
-tests/integration/join_missing_values.c:81:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-   81 |         freopen("/dev/null", "w", stderr);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/distributed_simulation.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/distributed_simulation
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. tests/integration/optimizer_swap.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/optimizer_swap
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/pipeline_ownership
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/npz_to_statistics
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/header_composition
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/header_composition_f32
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/basis_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/basis_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_fixed_parameter_fit.c -lm -lopenblas -o tests/correctness/qvarma_fixed_parameter_fit
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/basis_to_regression.c -lm -lopenblas -o tests/integration/basis_to_regression
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -lopenblas -o tests/integration/frame_to_model
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_tensor.c -lm -lopenblas -o tests/integration/frame_to_tensor
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/tensor_to_optimizer.c -lm -lopenblas -o tests/integration/tensor_to_optimizer
+make: 'tests/integration/join_missing_values' is up to date.
+make: 'tests/integration/distributed_simulation' is up to date.
+make: 'tests/integration/optimizer_swap' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/basis_example.c -lm -lopenblas -o examples/basis_example
 In file included from examples/basis_example.c:4:
 ./basis/spline.h: In function ‘_periodic_spline.constprop’:
 ./basis/spline.h:1143:16: warning: ‘sites’ may be used uninitialized [-Wmaybe-uninitialized]
@@ -256,10 +97,9 @@ In file included from examples/basis_example.c:4:
 ./basis/spline.h:271:19: note: by argument 3 of type ‘const mreal *’ {aka ‘const double *’} to ‘_spline_design_raw.constprop’ declared here
   271 | static inline Mat _spline_design_raw(const mreal *knots, int nk, const mreal *x, int nx,
       |                   ^~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/encoder.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/encoder
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/mlp_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/mlp_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/qvarma_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/unit_root_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/unit_root_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_fixed_parameters_example.c -lm -lopenblas -o examples/qvarma_fixed_parameters_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/singular_draws_example.c -lm -lopenblas -o examples/singular_draws_example
 
 === poly_correctness: PASS ===
 basis/poly.h correctness, float32 build
@@ -412,6 +252,34 @@ mat_lstsq
 mat_lstsq_rd
 test_solver: all passed
 
+=== lstsq_rank_deficiency: PASS ===
+mat_lstsq: reporting a rank-deficient design, float32 build
+
+known rank-deficient designs
+rescaled columns
+either side of the tolerance
+random designs against Gram-Schmidt in long double, 2000 draws
+  1882 compared, 1069 of them rank deficient
+a strided view
+NULL status on a rank-deficient design
+
+PASSED, 0 failures
+
+=== chol_singularity: PASS ===
+mat_chol: reporting a matrix that is not positive-definite, float32 build
+
+known rejected matrices
+well-conditioned matrices factor
+rescaled variables
+either side of the tolerance
+random matrices against a Cholesky in long double, 2000 draws
+  1923 compared, 1483 of them rejected
+a NaN on or below the diagonal
+a strided view, and the upper triangle
+NULL status on an indefinite matrix
+
+PASSED, 0 failures
+
 === test_special: PASS ===
 known values
 normal CDF known values
@@ -425,11 +293,11 @@ large-x asymptotics
   log1p vs libm over 200000 random magnitudes: worst 2.0 ulp at x = 2.3374e-07
   log(1 + 1e-20) is 0, special_log1p(1e-20) is 1e-20
   edges: -1, finite x below -1, the Sterbenz region and x up to 1e300
-  lgamma_diff vs the exact integer-shift identity: worst relative 1.78e-15
-  at x = 5e14 the subtraction gives 36.0000000000, log(x) is 33.8456292144
-  two half-steps against the exact whole step: worst relative 7.77e-16
-  lgamma_diff vs the subtraction it replaces: worst relative 3.16e-12, which is the subtraction's own cancellation
-  lgamma_diff composition split against whole: worst relative 2.33e-15
+  lgamma_diff vs the exact integer-shift identity: worst relative 2.55e-15
+  at x = 5e14 the subtraction gives 34.0000000000, log(x) is 33.8456292144
+  two half-steps against the exact whole step: worst relative 4.44e-16
+  lgamma_diff vs the subtraction it replaces: worst relative 2.63e-13, which is the subtraction's own cancellation
+  lgamma_diff composition split against whole: worst relative 1.22e-15
   digamma_diff is the x-derivative of lgamma_diff to 1e-05
 test_special: all passed
 
@@ -602,7 +470,7 @@ nu = infinity is the Gaussian, exactly
 a large finite nu: the normalization against its closed form
   d = 2 constant and d = 4 closed form hold to nu = 1e15
 a large finite nu: the density against the Gaussian it tends to
-  worst gap to the Gaussian at nu = 1e14: 0
+  worst gap to the Gaussian at nu = 1e14: 2.38e-07
 per-observation loc + views
 non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)
 degenerate nu (undocumented, unguarded - pinning current behavior)
@@ -635,6 +503,24 @@ matgauss: covariance recovery from simulated samples
   dense                  converged in <= 8 sweeps, score 2.4e-06
   30 replications per case per sample size, written to out/matgauss_recovery_report.txt
 test_matgauss_recovery: all passed
+
+=== mv_density_dispatch: PASS ===
+dist/mv densities on both sides of the triangular-solve dispatch, float32 build
+
+mvgauss_logpdf, mvstudent_logpdf, mvstudent_dlogpdf_nu
+  d = 12, n =   64: worst relative errors 1.2e-07, 9.3e-08, 1.4e-07
+  d = 12, n = 4096: worst relative errors 1.7e-07, 1.4e-07, 2.5e-07
+  d = 12, n = 4097: worst relative errors 1.7e-07, 1.5e-07, 2.6e-07
+  d = 13, n =   64: worst relative errors 1.2e-07, 8.7e-08, 2.9e-07
+  d = 13, n = 4096: worst relative errors 1.5e-07, 1.4e-07, 2.6e-07
+  d = 13, n = 4097: worst relative errors 1.6e-07, 1.4e-07, 2.7e-07
+  d = 32, n =  100: worst relative errors 9.5e-08, 9.3e-08, 6.1e-07
+matgauss_logpdf and its three gradients
+  n = 12, p = 6: worst relative errors 7.1e-08, 4.1e-07, 1.1e-06, 7.2e-07
+  n = 13, p = 6: worst relative errors 2.3e-08, 2.9e-07, 5.3e-07, 5.8e-07
+  n = 24, p = 6: worst relative errors 2.3e-08, 4.1e-07, 9.2e-07, 1.6e-06
+
+PASSED, 0 failures
 
 === test_ad: PASS ===
 dense ops (add/sub/scale/emul/ediv/pow, fan-out)
@@ -925,7 +811,7 @@ ported from Polars crates/polars/tests/it/core/joins.rs::test_empty_df_join (pro
 ported from Polars crates/polars/tests/it/core/joins.rs::test_join_floats (adapted to a single float join column)
 independent reference: row counts match a naive O(n*m) join across INNER/LEFT/FULL
 regression: join_hash_to_partition(join_mix64(...)) splits realistic keys roughly evenly across partitions
-regression (real build): skipped - this binary was not built with -fopenmp, see this function's own comment
+regression (real build): join_build_partitions_mt itself splits realistic keys roughly evenly across partitions
 crosses JOIN_PARALLEL_MIN_N: the dispatched (parallel-eligible) path matches join_probe_serial exactly, as a set
 test_join: all passed
 
@@ -1216,7 +1102,7 @@ ill-conditioned quadratic, weights spanning 1 to 10000
   condition number 1e4: 44 iterations, f = 2.69e-16
   ok
 badly scaled quadratic, weights spanning 1 to 1e8
-  93 iterations, 125 calls, f = 4.462e-15, function decrease below tolerance
+  91 iterations, 128 calls, f = 2.824e-16, function decrease below tolerance
   ok
 the accepted step flattens the slope, not only lowers the value
   step 16, slope -0.000252 from -0.0003, minimum along the direction at 100
@@ -1232,8 +1118,8 @@ memory of one correction pair
   22 iterations, f = 4.47e-14
   ok
 parameter count at and above the BLAS1 dispatch threshold
-  n = 16: 353 iterations, f = 8.89e-12
-  n = 40: 725 iterations, f = 1.98e-11
+  n = 16: 403 iterations, f = 3.74e-11
+  n = 40: 717 iterations, f = 3.8e-11
   ok
 a line search that cannot progress is not convergence
   value 3 at start, 3 returned, line search could not decrease the objective
@@ -1277,7 +1163,7 @@ the autodiff gradient against central differences
   K=3, 16 parameters, worst relative error 4.25e-07 at Omega_inv[2,2]
   ok
 the simulator and the filter agree on the recursion
-  largest disagreement between the two residual paths 4.441e-16 over 200 periods
+  largest disagreement between the two residual paths 2.220e-16 over 200 periods
   ok
 an unusable scale returns infinity rather than aborting
   diagonal theta -400, the density overflows: objective inf
@@ -1360,10 +1246,10 @@ an unusable scale returns the sentinel, not a number that is not one
 reported likelihood and gradient against the returned parameters
   ok
 convergence flag against the gradient it claims to have reached
-  converged 1 after 212 iterations, gradient norm 374.3
+  converged 1 after 329 iterations, gradient norm 1.008e+04
   ok
 the reason a fit stopped, against the verdict it reports
-  function decrease below tolerance after 241 iterations, converged 1
+  function decrease below tolerance after 217 iterations, converged 1
   ok
 the link moves one parameter per coordinate, by the stated derivative
   55 coordinates, at most 1 parameter moved by any one of them
@@ -1386,16 +1272,16 @@ PASSED, 0 failures
 analytic against traced t-QVARMA filter, float64 build
 
 analytic filter against the traced one, over shapes and draws
-  the ABM pipeline's shape                   n =  42, T = 120: value 0.00e+00, paths 1.58e-15, gradient 5.02e-13
-  no co-integrated block                     n =  20, T =  90: value 2.18e-16, paths 8.88e-16, gradient 1.10e-14
-  no co-integrated block, p = 3              n =  17, T =  80: value 2.13e-16, paths 1.25e-15, gradient 3.06e-14
-  rank two co-integration                    n =  59, T = 100: value 0.00e+00, paths 3.22e-15, gradient 2.41e-14
-  one beta per lag                           n =  47, T =  70: value 1.43e-16, paths 1.19e-14, gradient 1.10e-13
-  longer warm-up convention                  n =  40, T =  60: value 2.28e-16, paths 2.22e-15, gradient 3.11e-14
-  q longer than p                            n =  41, T =  50: value 0.00e+00, paths 3.77e-15, gradient 1.30e-14
-  restricted Psi_star                        n =  51, T =  65: value 3.47e-16, paths 1.49e-15, gradient 4.22e-14
-  sample barely past the warm-up             n =  75, T =   6: value 1.62e-16, paths 7.77e-16, gradient 2.67e-15
-  single I(0) series with a large I(1) block n =  71, T =  55: value 1.11e-16, paths 3.44e-15, gradient 4.75e-14
+  the ABM pipeline's shape                   n =  42, T = 120: value 1.50e-16, paths 1.19e-15, gradient 7.29e-13
+  no co-integrated block                     n =  20, T =  90: value 2.18e-16, paths 9.99e-16, gradient 9.13e-15
+  no co-integrated block, p = 3              n =  17, T =  80: value 2.13e-16, paths 8.26e-16, gradient 3.12e-14
+  rank two co-integration                    n =  59, T = 100: value 1.22e-16, paths 2.22e-15, gradient 1.46e-14
+  one beta per lag                           n =  47, T =  70: value 7.16e-16, paths 2.12e-14, gradient 2.45e-13
+  longer warm-up convention                  n =  40, T =  60: value 2.28e-16, paths 1.29e-15, gradient 2.48e-14
+  q longer than p                            n =  41, T =  50: value 1.72e-16, paths 1.89e-15, gradient 3.04e-14
+  restricted Psi_star                        n =  51, T =  65: value 3.47e-16, paths 1.17e-15, gradient 2.36e-14
+  sample barely past the warm-up             n =  75, T =   6: value 1.62e-16, paths 3.33e-16, gradient 1.45e-15
+  single I(0) series with a large I(1) block n =  71, T =  55: value 1.86e-16, paths 8.05e-16, gradient 3.70e-14
 
 both gradients against a central difference of the likelihood
   the ABM pipeline's shape                   analytic 1.10e-07, taped 1.10e-07
@@ -1451,23 +1337,23 @@ does d(log-likelihood)/d(theta_nu) go to zero
   nu     3e+06   |d/d theta_nu|    4.40326e-06
   nu     3e+08   |d/d theta_nu|    4.40285e-08
   nu     1e+10   |d/d theta_nu|    1.32095e-09
-  nu     1e+11   |d/d theta_nu|    1.32346e-10
-  nu     1e+12   |d/d theta_nu|    1.34525e-11
-  nu     1e+13   |d/d theta_nu|    1.15764e-12
-  nu     1e+14   |d/d theta_nu|    1.91935e-13
+  nu     1e+11   |d/d theta_nu|    1.32305e-10
+  nu     1e+12   |d/d theta_nu|    1.34008e-11
+  nu     1e+13   |d/d theta_nu|    1.28685e-12
+  nu     1e+14   |d/d theta_nu|     1.9193e-13
 
 analytic against traced, out where the cancellation was
-  nu     3e+00   analytic    -898.1608363081   traced    -898.1608363081   gradient 1.09e-14 at 31
-  nu     3e+01   analytic    -867.2101418300   traced    -867.2101418300   gradient 1.99e-13 at 36
-  nu     3e+02   analytic    -866.9547518245   traced    -866.9547518245   gradient 2.42e-14 at 36
-  nu     3e+04   analytic    -867.1381357341   traced    -867.1381357341   gradient 6.43e-13 at 36
-  nu     3e+06   analytic    -867.1402818993   traced    -867.1402818993   gradient 2.42e-13 at 36
-  nu     3e+08   analytic    -867.1403033936   traced    -867.1403033936   gradient 5.85e-14 at 36
-  nu     1e+10   analytic    -867.1403036043   traced    -867.1403036043   gradient 1.86e-13 at 36
-  nu     1e+11   analytic    -867.1403036101   traced    -867.1403036101   gradient 4.59e-14 at 36
-  nu     1e+12   analytic    -867.1403036107   traced    -867.1403036107   gradient 2.67e-14 at 36
-  nu     1e+13   analytic    -867.1403036108   traced    -867.1403036108   gradient 2.62e-13 at 36
-  nu     1e+14   analytic    -867.1403036108   traced    -867.1403036108   gradient 2.70e-13 at 36
+  nu     3e+00   analytic    -898.1608363081   traced    -898.1608363081   gradient 4.00e-15 at 35
+  nu     3e+01   analytic    -867.2101418300   traced    -867.2101418300   gradient 2.05e-13 at 36
+  nu     3e+02   analytic    -866.9547518245   traced    -866.9547518245   gradient 1.90e-14 at 36
+  nu     3e+04   analytic    -867.1381357341   traced    -867.1381357341   gradient 7.20e-13 at 36
+  nu     3e+06   analytic    -867.1402818993   traced    -867.1402818993   gradient 2.21e-13 at 36
+  nu     3e+08   analytic    -867.1403033936   traced    -867.1403033936   gradient 1.04e-13 at 36
+  nu     1e+10   analytic    -867.1403036043   traced    -867.1403036043   gradient 1.84e-13 at 36
+  nu     1e+11   analytic    -867.1403036101   traced    -867.1403036101   gradient 1.74e-13 at 36
+  nu     1e+12   analytic    -867.1403036107   traced    -867.1403036107   gradient 5.67e-14 at 36
+  nu     1e+13   analytic    -867.1403036108   traced    -867.1403036108   gradient 2.60e-13 at 36
+  nu     1e+14   analytic    -867.1403036108   traced    -867.1403036108   gradient 2.08e-13 at 36
 
 
 PASSED, 0 failures
@@ -1476,18 +1362,47 @@ PASSED, 0 failures
 qvarma identification, float32 build
 
 the intercept is learned far more slowly once the model has an I(1) block
-  with an I(1) block      9.869 at T=250 to    25.49 at T=1000, growth 2.58
+  with an I(1) block      9.888 at T=250 to    25.95 at T=1000, growth 2.62
   without one             683.6 at T=250 to     2869 at T=1000, growth 4.20
-  and 113 times less curvature at T=1000
+  and 111 times less curvature at T=1000
   ok
 Phi_star loses its curvature when the score loading is near zero
-  Psi_star ~ 0.12:    16.81     Psi_star ~ 0.02:    -2.58
+  Psi_star ~ 0.12:    16.79     Psi_star ~ 0.02:   -2.573
   ok
 beta loses its curvature when the co-integration loading is near zero
-  alpha ~ 0.20:    27.22     alpha ~ 0.02:    2.554
+  alpha ~ 0.20:     27.2     alpha ~ 0.02:    2.549
   ok
 a co-integrated block costs orders of magnitude of conditioning
-  without an I(1) block        127     with one       3550
+  without an I(1) block      125.8     with one       3547
+  ok
+
+PASSED, 0 failures
+
+=== qvarma_fixed_parameter_fit: PASS ===
+qvarma fit with fixed parameters, float64 build
+
+block ranges against the parameters the link moves
+  ok
+an empty fixed set against qvarma_fit
+  qvarma_fit 25 iterations, L -742.224047531096; empty fixed set 25 iterations, L -742.224047531096
+  ok
+held coordinates stay where the initial guess put them
+  nu held: 1 held, largest held move 0, largest free move 0.487
+  Omega_inv and nu held: 4 held, largest held move 1.11e-16, largest free move 0.171
+  Psi_star[0,1] held: 1 held, largest held move 0, largest free move 0.491
+  co-integrated, beta and nu held: 2 held, largest held move 0, largest free move 0.628
+  ok
+reported diagnostics against the free coordinates
+  converged 1, reported norm 0.000111927, recomputed 0.000111927, gradient along held nu -12.7451
+  ok
+holding nu at the unrestricted estimate
+  unrestricted L -1097.372273903 (nu 7.6975), restricted L -1097.372273903 from a start at -1925.7929
+  largest theta gap to the unrestricted estimate 2.13e-07
+  ok
+Monte Carlo: likelihood ratio of restricted against unrestricted fits
+  nu held at the true 8: used 100 of 100, mean statistic 1.105 (df 1), rejection rate 0.060
+  Psi_star off-diagonal held at the true 0: used 100 of 100, mean statistic 2.282 (df 2), rejection rate 0.090
+  nu held at a false 3: used 100 of 100, mean statistic 70.842 (df 1), rejection rate 1.000
   ok
 
 PASSED, 0 failures
@@ -1598,7 +1513,7 @@ frame/join.h: a join's output owns its own copy of everything, including the str
 frame/frame.h: a column view writes through to the frame, and a later append moves the block the view pointed at
 nn/mlp.h and sd/qvarma.h: a fit result owns its parameters, still usable after the frame and the design matrix are gone
 sd/qvarma.h and json.h: a fit written to disk reloads into a fresh model after the original is freed
-  the fit stopped after 421 iterations: function decrease below tolerance
+  the fit stopped after 204 iterations: function decrease below tolerance
 frame/csv.h and frame/npy.h: a frame written and read back is a new owner each time, with nothing shared between the two
 frame/rdata.h and frame/gzip.h: a frame loaded from a compressed file owns its values, not a slice of the inflate buffer
 sd/qvarma.h: the impulse response bands allocate and release per draw rather than accumulating
@@ -1632,4 +1547,4 @@ PASSED, 0 failures
 
 
 === summary ===
-72 passed, 0 failed
+77 passed, 0 failed

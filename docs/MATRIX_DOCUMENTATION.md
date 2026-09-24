@@ -263,7 +263,7 @@ Two thresholds, because a single output column crosses over far later than a squ
 #define MAT_GEMM_VECTOR 64   // m and k at or below this, when n == 1
 ```
 
-Both are crossovers measured in `tests/performance/small_blas_threshold.c`, which times the loop against the call across dimensions at one and four threads and writes `out/small_blas_threshold_float32.txt` and the float64 name. At `MAT_GEMM_SMALL` a square product is 1.04x (float64) to 1.49x (float32) faster as a loop at one thread and 8.1x to 11.2x at four; at 10 it loses at one thread in both builds (0.93x and 0.80x), which is where the threshold sits. `MAT_GEMM_VECTOR` is where the measurement stops rather than where the loop starts losing - a 64x64 by 64x1 product still runs 3.2x faster as a loop in float64 and 3.8x in float32 - so raising it needs the benchmark extended first. The `n == 1` case gets its own loop inside the kernel, running along the contraction index, because the general `i,l,j` order leaves a one-element innermost loop there and nothing vectorizes.
+Both are crossovers measured in `tests/performance/small_blas_threshold.c`, which times the loop against the call across dimensions from one caller and from one caller per hardware thread and writes `out/small_blas_threshold_float32.txt` and the float64 name. At `MAT_GEMM_SMALL` a square product is 1.04x (float64) to 1.49x (float32) faster as a loop at one thread and 8.1x to 11.2x at four; at 10 it loses at one thread in both builds (0.93x and 0.80x), which is where the threshold sits. `MAT_GEMM_VECTOR` is where the measurement stops rather than where the loop starts losing - a 64x64 by 64x1 product still runs 3.2x faster as a loop in float64 and 3.8x in float32 - so raising it needs the benchmark extended first. The `n == 1` case gets its own loop inside the kernel, running along the contraction index, because the general `i,l,j` order leaves a one-element innermost loop there and nothing vectorizes.
 
 `tests/correctness/test_mat.c`'s `test_gemm` checks `mat_gemm` directly against a reference written on raw pointers, at 1, 2, 7, 8, 9, 13, 63, 64 and 65 - either side of both thresholds and at each of them - crossed with both transpose flags on each operand, `n == 1` against `n == m`, two values of `alpha` and `beta` at 0, 1 and 2. A test at one size would exercise one of the two implementations and report on both. Leading dimensions wider than the operands are checked separately, since a kernel walking rows by the column count instead of the stride still returns a plausible matrix; so are a zero contraction length, which must leave `C` scaled by `beta` alone, and `beta == 0` over an uninitialized `C`, which must overwrite rather than read what is there. The transposed forms and the accumulating `beta` are otherwise reached only from `ad.h`'s `ad_matmul_backward`.
 
@@ -355,7 +355,8 @@ What does not carry:
   Nothing in the library detects which BLAS it is linked against.
 
 What to do about it: run `make bench-small_blas_threshold` on the new machine.
-It re-derives all four crossovers at one and four threads in both precisions
+It re-derives all four crossovers from one caller and from one caller per
+hardware thread, in both precisions,
 and prints the constants currently compiled in, so the answer is one command
 rather than an argument. Changing a constant needs nothing but the `#define`.
 
@@ -394,11 +395,18 @@ different. `openblas_set_num_threads(1)` is ignored by an OpenMP build of
 OpenBLAS; `OMP_NUM_THREADS` is what governs. Measured: a 1200x1200
 `cblas_dgemm` after the call runs at 85.6 GFLOPS, and at 34.3 GFLOPS when the
 same binary is launched with `OMP_NUM_THREADS=1`. Without the variable the
-wide-right-hand-side Cholesky rows of this benchmark report about 3.2 ms per
-BLAS call at every `n` from 4 up, a fixed cost that is OpenBLAS starting
-sixteen threads for a job of a few microseconds; with it those same cells fall
-to 3.4 to 111 microseconds and the table is monotone again. Launch this
-benchmark with `OMP_NUM_THREADS=1` on any OpenMP build of OpenBLAS.
+wide-right-hand-side Cholesky rows of this benchmark used to report about 3.2
+ms per BLAS call at every `n` from 4 up. That cost belonged to the benchmark,
+not to OpenBLAS: its one-caller cells ran inside `#pragma omp parallel
+num_threads(1)`, and from inside even a one-thread region an OpenMP build of
+OpenBLAS starts a new thread team for every call it threads. Measured on
+2026-09-24 on this machine, the same `?trsm` costs 10 to 45 microseconds from
+serial code and 1.1 to 1.3 ms from inside such a region. The one-caller cells
+now run outside any parallel region, with OpenBLAS at its default thread count
+as README's performance policy requires, and no thread variable is needed.
+
+What the corrected run says about the four constants, and why none was
+changed, is item 19 of `docs/PERFORMANCE_BACKLOG.md`.
 
 ### Other limitations
 

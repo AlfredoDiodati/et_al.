@@ -146,8 +146,8 @@ static void test_slab_reaches_a_factorization(Tensor stack, int K) {
               "the Mat view aliases the stack rather than copying it");
 
         Mat copy = mat_copy(view);
-        Mat from_view = mat_chol(view);
-        Mat from_copy = mat_chol(copy);
+        Mat from_view = mat_chol(view, NULL);
+        Mat from_copy = mat_chol(copy, NULL);
         for (int i = 0; i < K; i++)
             for (int j = 0; j < K; j++) {
                 double d = fabs((double)(AT(from_view, i, j) - AT(from_copy, i, j)));
@@ -193,6 +193,7 @@ static void test_time_axis_convention(Tensor stack, int K) {
 static void test_stack_survives_a_file(Tensor stack) {
     puts("a stack written as .npy and read back");
     const char *path = "tests/integration/out/frame_to_tensor_stack.npy";
+    frame_mkdir_p("tests/integration/out");
     tensor_write_npy(stack, path);
     Tensor back = tensor_read_npy(path);
     CHECK(back.ndim == stack.ndim, "the file round trip preserves the rank");

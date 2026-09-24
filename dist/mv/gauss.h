@@ -60,15 +60,17 @@ static inline Mat mvgauss_logpdf(Mat x, Mat loc, Mat cov) {
     mvgauss_check(x, loc, cov);
     int n = x.r, d = x.c;
 
-    Mat l = mat_chol(cov);
+    Mat l = mat_chol(cov, NULL);
     mreal half_logdet = 0;
     for (int k = 0; k < d; k++)
         half_logdet += MLOG(AT(l, k, k));
 
     Mat dt = mvgauss_diff_t(x, loc);
-    /* dt <- L^-1 * dt: all n observations in one triangular solve */
-    MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
-                d, n, 1, l.d, l.stride, dt.d, dt.stride);
+    /* dt <- L^-1 * dt: all n observations in one triangular solve. Through
+       _trtrs rather than ?trsm directly, so factor.h's dispatch substitutes
+       at the small d a density is evaluated at, where the call costs more
+       than the arithmetic. */
+    _trtrs('L', 'N', 'N', d, n, l.d, l.stride, dt.d, dt.stride);
 
     Mat o = mat_new(n, 1);
     for (int i = 0; i < n; i++) {
@@ -108,7 +110,7 @@ static inline Mat mvgauss_dlogpdf_loc(Mat x, Mat loc, Mat cov) {
     mvgauss_check(x, loc, cov);
     int n = x.r, d = x.c;
 
-    Mat l = mat_chol(cov);
+    Mat l = mat_chol(cov, NULL);
     Mat dt = mvgauss_diff_t(x, loc);
     int info = _potrs(d, n, l.d, l.stride, dt.d, dt.stride);
     assert(info == 0);
@@ -136,7 +138,7 @@ static inline Mat mvgauss_dlogpdf_cov(Mat x, Mat loc, Mat cov) {
     mvgauss_check(x, loc, cov);
     int n = x.r, d = x.c;
 
-    Mat l = mat_chol(cov);
+    Mat l = mat_chol(cov, NULL);
     Mat wt = mvgauss_diff_t(x, loc);
     int info = _potrs(d, n, l.d, l.stride, wt.d, wt.stride);
     assert(info == 0);
@@ -170,7 +172,7 @@ static inline Mat mvgauss_dlogpdf_cov(Mat x, Mat loc, Mat cov) {
 
 /* Return an n x d matrix whose row i is an independent draw from
    N_d(loc_i, cov) - the standard construction x = loc + L*z with
-   L = mat_chol(cov) and z a vector of standard normals, done for all n
+   L = mat_chol(cov, NULL) and z a vector of standard normals, done for all n
    rows in one gemm (Z * L^T, since the rows here are x^T). loc is
    1 x d (shared mean) or n x d (per-observation mean), same contract
    as every other function in this file. Consumes exactly n*d
@@ -180,7 +182,7 @@ static inline Mat mvgauss_sample(Rng *rng, Mat loc, Mat cov, int n) {
     assert(n >= 1 && cov.c == d);
     assert(loc.c == d && (loc.r == 1 || loc.r == n));
 
-    Mat l = mat_chol(cov);
+    Mat l = mat_chol(cov, NULL);
     Mat z = mat_new(n, d);
     for (int i = 0; i < n * d; i++)
         z.d[i] = (mreal)rng_normal(rng);

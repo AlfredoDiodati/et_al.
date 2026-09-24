@@ -100,7 +100,7 @@ static int touch_every_module(void) {
     if (MABS(tensor_sum(ta) - 9.f) > 1e-4f) problems++;
     tensor_free(scaled);
 
-    Mat chol = mat_chol(a);
+    Mat chol = mat_chol(a, NULL);
     if (chol.r != 2) problems++;
     if (mat_det(a) <= 0) problems++;
 

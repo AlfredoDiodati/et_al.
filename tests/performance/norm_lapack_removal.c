@@ -108,22 +108,12 @@ static Mat rand_view(int r, int c, int pad, unsigned *seed, Mat *parent_out) {
     return mat_slice(parent, 0, r, 0, c);
 }
 
-/* OpenBLAS's pthread build spawns worker threads that spin-wait, and on
-   the many small BLAS calls a blocked factorization makes, that overhead
-   swamps the arithmetic and varies with whatever else the machine is
-   doing. Measured here: with the default four threads, the same ?getrf
-   call on 256x256 timed 1036 us at the start of a run and 6208 us at the
-   end of it, a 5.99x drift that made the comparison undecidable and
-   reversed individual results between runs. Pinned to one thread the same
-   check comes out at 0.99x.
-
-   So the comparison is run single-threaded, and the report records what it
-   actually saw rather than what it asked for. OPENBLAS_NUM_THREADS has to
-   be set in the environment because OpenBLAS reads it when the library
-   initialises, before main. The Makefile target sets it. */
-static const char *blas_threads(void) {
-    const char *v = getenv("OPENBLAS_NUM_THREADS");
-    return v ? v : "unset (OpenBLAS default, probably one per core)";
+/* Both arms run at OpenBLAS's full thread count, which is the capacity
+   the library is used at; the minimum over repeats described at
+   time_norm is what absorbs the scheduling noise that adds. The report
+   records the thread count OpenBLAS actually ran with. */
+static int blas_threads(void) {
+    return openblas_get_num_threads();
 }
 
 int main(void) {
@@ -133,7 +123,7 @@ int main(void) {
 
     fprintf(f, "mat_norm: LAPACKE ?lange versus the CBLAS-only replacement\n\n");
     fprintf(f, "element type      %s\n", sizeof(mreal) == 8 ? "double (-DMAT_DOUBLE)" : "float");
-    fprintf(f, "OPENBLAS_NUM_THREADS  %s\n", blas_threads());
+    fprintf(f, "OpenBLAS threads  %d\n", blas_threads());
     fprintf(f, "timing            best per-call time over %d repeats, each\n", REPEATS);
     fprintf(f, "                  repeat looping the call for %.2f s\n", BUDGET);
     fprintf(f, "data              uniform in [-1, 1], seeded, identical for both arms\n");

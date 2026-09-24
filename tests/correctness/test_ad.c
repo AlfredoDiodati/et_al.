@@ -946,7 +946,7 @@ static mreal ref_chol_solve_loss(Mat L, Mat b) {
 static void test_chol_solve_fd(void) {
     puts("ad_chol_solve (finite-difference)");
     Mat Aspd = mat_lit(2, 2, 4.f,2.f, 2.f,3.f);
-    Mat L = mat_chol(Aspd);
+    Mat L = mat_chol(Aspd, NULL);
     Mat b = mat_lit(2, 1, 4.f,3.f);
 
     Tape *t = tape_new();

@@ -188,7 +188,7 @@ static void test_chol(void) {
     /* known output: L*L^T = [[4,2],[2,3]] */
     {
         Mat a = mat_lit(2, 2, 4,2, 2,3);
-        Mat l = mat_chol(a);
+        Mat l = mat_chol(a, NULL);
         CHECK(AT(l,0,0), 2.0f); CHECK(AT(l,0,1), 0.0f);
         CHECK(AT(l,1,0), 1.0f); CHECK(AT(l,1,1), 1.41421356237f);
 
@@ -202,7 +202,7 @@ static void test_chol(void) {
     /* identity: L must be I */
     {
         Mat i3 = mat_eye(3);
-        Mat l = mat_chol(i3);
+        Mat l = mat_chol(i3, NULL);
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
                 CHECK(AT(l,i,j), i == j ? 1.0f : 0.0f);
@@ -218,7 +218,7 @@ static void test_chol(void) {
         Mat slice = mat_slice(parent, 0, 2, 0, 2);
         assert(slice.stride != slice.c);
 
-        Mat l = mat_chol(slice);
+        Mat l = mat_chol(slice, NULL);
         Mat lt = mat_T(l);
         Mat rec = mat_mul(l, lt);
         check_eq(rec, slice, TOL_MUL);
@@ -230,7 +230,7 @@ static void test_chol(void) {
     /* adversarial: single positive element */
     {
         Mat a = mat_lit(1, 1, 9.0f);
-        Mat l = mat_chol(a);
+        Mat l = mat_chol(a, NULL);
         CHECK(AT(l,0,0), 3.0f);
         mat_free(a); mat_free(l);
     }

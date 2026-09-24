@@ -152,7 +152,7 @@ static void test_regression_through_a_basis(const DataFrame *frame) {
 
     NsBasis natural = ns_basis(gdp, (NsOptions){ .df = 5 });
     Mat design = with_intercept(natural.basis);
-    Mat beta = mat_lstsq(design, response);
+    Mat beta = mat_lstsq(design, response, NULL);
     Mat fitted = mat_mul(design, beta);
     CHECK(beta.r == 6 && beta.c == 1, "one coefficient per column plus an intercept");
 
@@ -160,7 +160,7 @@ static void test_regression_through_a_basis(const DataFrame *frame) {
     Mat copy = mat_copy(gdp);
     NsBasis from_copy = ns_basis(copy, (NsOptions){ .df = 5 });
     Mat design_copy = with_intercept(from_copy.basis);
-    Mat beta_copy = mat_lstsq(design_copy, response);
+    Mat beta_copy = mat_lstsq(design_copy, response, NULL);
     for (int i = 0; i < beta.r; i++)
         CHECK_CLOSE(AT(beta, i, 0), AT(beta_copy, i, 0), 1e-8,
                     "coefficient through the view and through the copy");
@@ -168,7 +168,7 @@ static void test_regression_through_a_basis(const DataFrame *frame) {
     /* a straight line in the same regressor, which the spline basis spans */
     Mat linear = mat_new(n, 2);
     for (int i = 0; i < n; i++) { AT(linear, i, 0) = 1; AT(linear, i, 1) = AT(gdp, i, 0); }
-    Mat linear_beta = mat_lstsq(linear, response);
+    Mat linear_beta = mat_lstsq(linear, response, NULL);
     Mat linear_fitted = mat_mul(linear, linear_beta);
 
     double spline_error = 0, linear_error = 0;
@@ -329,7 +329,7 @@ static void test_choosing_between_bases_with_mcs(const DataFrame *frame) {
         }
 
         Mat design = with_intercept(in_sample);
-        Mat beta = mat_lstsq(design, train_y);
+        Mat beta = mat_lstsq(design, train_y, NULL);
         Mat forecast_design = with_intercept(out_of_sample);
         Mat forecast = mat_mul(forecast_design, beta);
 

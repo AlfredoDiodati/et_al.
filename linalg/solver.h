@@ -163,10 +163,25 @@ static inline Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char
    b.r == a.r. Returns the n x nrhs solution as a new owner; a and b are
    not modified.
 
+   a is rejected as rank deficient when some column j is numerically
+   dependent on the columns before it: |R[j][j]| <= _pivot_tolerance(m) *
+   ||a_j||, with R from a == Q*R. |R[j][j]| / ||a_j|| is the sine of the
+   angle between column j and the span of the earlier ones, so the test
+   is unchanged by rescaling any column, and it is read off R directly,
+   since ||a_j||^2 is the sum of R[i][j]^2 over i <= j. A test on the
+   condition number of a^T*a instead squares the condition number, and
+   rejects a design only because its columns are in different units. See
+   _pivot_tolerance in decomp.h for the tolerance.
+
+   status NULL: a rank-deficient a asserts. Otherwise *status is 0 on
+   success, or the 1-based index j of the first dependent column, in which
+   case nothing is allocated and the returned Mat is empty (d == NULL,
+   which mat_free accepts).
+
    factor.h's _gels computes this against CBLAS alone; it replaced a
    LAPACKE ?gels call and is 1.40x to 2.29x faster across the shapes in
    tests/performance/lstsq_lapack_removal.c. */
-static inline Mat mat_lstsq(Mat a, Mat b) {
+static inline Mat mat_lstsq(Mat a, Mat b, int *status) {
     assert(a.r >= a.c && b.r == a.r);
     int m = a.r, n = a.c, nrhs = b.c;
     Mat qr = mat_copy(a);
@@ -174,8 +189,34 @@ static inline Mat mat_lstsq(Mat a, Mat b) {
     /* _gels overwrites its b argument in place with the solution in the
        first n rows - work is an m x nrhs copy of b sized for that. */
     Mat work = mat_copy(b);
-    int info = _gels(m, n, nrhs, qr.d, qr.stride, work.d, work.stride);
-    assert(info == 0); /* a is rank-deficient */
+    _gels(m, n, nrhs, qr.d, qr.stride, work.d, work.stride);
+
+    /* _gels leaves R in the upper triangle of qr. Its own return value
+       only flags a diagonal entry that is exactly zero, which the test
+       below already includes. The column norms are accumulated a row of R
+       at a time, since walking a column of a row-major R touches a new
+       cache line per entry; the stack buffer spares small designs, which
+       are most of them, an allocation. */
+    double small_norms_sq[64];
+    double *column_norms_sq = n <= 64 ? small_norms_sq : (double*)malloc((size_t)n * sizeof(double));
+    assert(column_norms_sq);
+    for (int j = 0; j < n; j++) column_norms_sq[j] = 0;
+    for (int i = 0; i < n; i++)
+        for (int j = i; j < n; j++) column_norms_sq[j] += (double)AT(qr, i, j) * AT(qr, i, j);
+    int info = 0;
+    double tolerance = _pivot_tolerance(m);
+    for (int j = 0; j < n; j++) {
+        double diagonal = (double)AT(qr, j, j);
+        if (diagonal * diagonal <= tolerance * tolerance * column_norms_sq[j]) { info = j + 1; break; }
+    }
+    if (column_norms_sq != small_norms_sq) free(column_norms_sq);
+    if (status) *status = info;
+    else assert(info == 0 && "mat_lstsq: a is numerically rank deficient");
+    if (info != 0) {
+        mat_free(qr);
+        mat_free(work);
+        return (Mat){0};
+    }
 
     Mat x = mat_new(n, nrhs);
     for (int i = 0; i < n; i++)
@@ -190,7 +231,7 @@ static inline Mat mat_lstsq(Mat a, Mat b) {
 /* Solve the least-squares problem min ||a*x - b||_2 via SVD
    (linalg/factor.h's _gelsd, which replaces ?gelsd), returning the
    minimum-norm solution even when a is rank-deficient - unlike mat_lstsq (QR-based ?gels), which requires full
-   column rank and simply asserts otherwise. Slower than mat_lstsq (SVD
+   column rank and rejects a design without it. Slower than mat_lstsq (SVD
    costs more than QR) - prefer mat_lstsq when a is known to be full
    rank, e.g. a well-specified regression design matrix; reach for this
    when that's not guaranteed, e.g. near-collinear regressors.

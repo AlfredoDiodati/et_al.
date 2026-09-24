@@ -53,13 +53,37 @@ run() {
 # The statistical test and model suites at the end of the list are built at
 # float64 whatever MAT_DOUBLE says, through the Makefile's STAT_CFLAGS - see
 # the note above it for why that is mandatory rather than advisable.
-SUITES="poly_correctness spline_design_correctness spline_basis_correctness spline_objects_correctness test_mat test_tensor test_tensor_serial test_mat_special test_decomp test_solver test_special test_stats test_random test_lhs test_mcs test_mcs_variance mcs_primitives mcs_size_and_power test_broadcast test_gauss test_student test_mvgauss test_mvstudent test_matgauss test_matgauss_recovery test_ad ad_tensor_gradients test_tape_reset test_adam test_optimizer test_cluster test_mlp test_frame test_csv test_txt test_npy test_npz test_json test_sql test_join gzip_inflate gzip_deflate rdata_array_read adf_correctness kpss_correctness dfgls_correctness otto_correctness hlt_union_correctness hlt_break_correctness hhlt_correctness zivot_andrews_correctness johansen_correctness engle_granger_correctness maki_correctness qlr_test_correctness lbfgs_correctness score_driven_location_correctness qvarma_correctness qvarma_analytic_agreement qvarma_gaussian_limit qvarma_identification qvarma_fixed_parameter_fit"
+SUITES="poly_correctness spline_design_correctness spline_basis_correctness spline_objects_correctness test_mat test_tensor test_tensor_serial test_mat_special test_decomp test_solver lstsq_rank_deficiency chol_singularity test_special test_stats test_random test_lhs test_mcs test_mcs_variance mcs_primitives mcs_size_and_power test_broadcast test_gauss test_student test_mvgauss test_mvstudent test_matgauss test_matgauss_recovery mv_density_dispatch test_ad ad_tensor_gradients test_tape_reset test_adam test_optimizer test_cluster test_mlp test_frame test_csv test_txt test_npy test_npz test_json test_sql test_join gzip_inflate gzip_deflate rdata_array_read adf_correctness kpss_correctness dfgls_correctness otto_correctness hlt_union_correctness hlt_break_correctness hhlt_correctness zivot_andrews_correctness johansen_correctness engle_granger_correctness maki_correctness qlr_test_correctness lbfgs_correctness score_driven_location_correctness qvarma_correctness qvarma_analytic_agreement qvarma_gaussian_limit qvarma_identification qvarma_fixed_parameter_fit"
 
 # tests/integration/ answers a different question from tests/correctness/: not
 # "is this module correct" but "does the hand-off between two of them hold".
 # Each of these binaries includes headers from at least two directories. See
 # README.md's "Testing and benchmarking" for the split.
 INTEGRATION="basis_to_regression frame_to_model frame_to_tensor tensor_to_optimizer join_missing_values distributed_simulation optimizer_swap pipeline_ownership npz_to_statistics header_composition header_composition_f32"
+
+# Build output belongs on disk, never in the index: a tracked binary is
+# rewritten by every build, shows up as a change in every commit, and runs
+# stale if a checkout gives it a newer timestamp than the sources make
+# compares it against. Two ways one gets in: git tracks a file whatever
+# .gitignore later says about it, and a binary nobody added a pattern for is
+# not ignored at all. Both are checked, the second by the ELF signature in
+# the first four bytes.
+tracked_build_output() {
+    local found
+    found=$( {
+        git ls-files -ci --exclude-standard
+        git ls-files -z | while IFS= read -r -d '' f; do
+            [ -f "$f" ] && [ "$(head -c 4 "$f" | od -An -tx1 | tr -d ' ')" = "7f454c46" ] && printf "%s\n" "$f"
+        done
+    } | sort -u)
+    if [ -n "$found" ]; then
+        printf "tracked build output, remove with git rm --cached and add to .gitignore:\n%s\n" "$found"
+        return 1
+    fi
+    printf "no build output is tracked\n"
+}
+
+run "tracked_build_output" tracked_build_output
 
 printf "building...\n"
 printf "=== build ===\n" >> "$REPORT"

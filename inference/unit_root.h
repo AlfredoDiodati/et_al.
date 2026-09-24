@@ -168,7 +168,7 @@ static inline AdfResult adf_with_deterministic(Mat series, int lags, int first_o
                                              - stats_series_at(series, t - i - 1);
     }
 
-    Mat coefficients = mat_lstsq(design, target);
+    Mat coefficients = mat_lstsq(design, target, NULL);
     Mat fitted = mat_mul(design, coefficients);
     mreal sum_squared_residual = 0;
     for (int row = 0; row < rows; row++) {
@@ -291,7 +291,7 @@ static inline KpssResult kpss(Mat series, int bandwidth, int deterministic) {
             AT(design, t, 1) = (mreal)(t + 1);
             AT(target, t, 0) = stats_series_at(series, t);
         }
-        Mat coefficients = mat_lstsq(design, target);
+        Mat coefficients = mat_lstsq(design, target, NULL);
         for (int t = 0; t < n; t++)
             residual.d[t] = stats_series_at(series, t) - AT(coefficients, 0, 0)
                           - AT(coefficients, 1, 0) * (mreal)(t + 1);
@@ -397,7 +397,7 @@ static inline Mat _qd_detrend(Mat series, Mat deterministic, mreal c_bar) {
         AT(target, t, 0) = t == 0 ? stats_series_at(series, 0)
                                   : stats_series_at(series, t) - alpha_bar * stats_series_at(series, t - 1);
     }
-    Mat psi = mat_lstsq(design, target);
+    Mat psi = mat_lstsq(design, target, NULL);
 
     Mat detrended = mat_new(1, n);
     for (int t = 0; t < n; t++) {
@@ -786,7 +786,7 @@ static inline mreal _hlt_trend_wald(Mat series) {
     mreal sum_squared[2];
     Mat design[2] = { unrestricted, restricted };
     for (int which = 0; which < 2; which++) {
-        Mat coefficients = mat_lstsq(design[which], target);
+        Mat coefficients = mat_lstsq(design[which], target, NULL);
         Mat fitted = mat_mul(design[which], coefficients);
         mreal total = 0;
         for (int t = 0; t < n; t++) {
@@ -1010,7 +1010,7 @@ static inline void _hlt_candidate(Mat series, int break_at, int model, int bandw
         AT(design, t, column) = (t + 1) > break_at ? (mreal)((t + 1) - break_at) : 0;
         AT(target, t, 0) = stats_series_at(series, t);
     }
-    Mat coefficients = mat_lstsq(design, target);
+    Mat coefficients = mat_lstsq(design, target, NULL);
     Mat fitted = mat_mul(design, coefficients);
     Vec residual = mat_new(n, 1);
     for (int t = 0; t < n; t++) residual.d[t] = AT(target, t, 0) - AT(fitted, t, 0);
@@ -1049,7 +1049,7 @@ static inline void _hlt_candidate(Mat series, int break_at, int model, int bandw
         AT(difference_design, row, column) = (t + 1) > break_at ? 1 : 0;
         AT(difference_target, row, 0) = stats_series_at(series, t) - stats_series_at(series, t - 1);
     }
-    Mat difference_coefficients = mat_lstsq(difference_design, difference_target);
+    Mat difference_coefficients = mat_lstsq(difference_design, difference_target, NULL);
     Mat difference_fitted = mat_mul(difference_design, difference_coefficients);
     Vec difference_residual = mat_new(rows, 1);
     for (int row = 0; row < rows; row++)
@@ -1310,7 +1310,7 @@ static inline mreal _hhlt_first_difference_fraction(Mat series, mreal trim_lower
     for (int candidate = first; candidate <= last; candidate++) {
         for (int row = 0; row < rows; row++)
             AT(design, row, 1) = (row + 1) > candidate ? 1 : 0;
-        Mat coefficients = mat_lstsq(design, target);
+        Mat coefficients = mat_lstsq(design, target, NULL);
         Mat fitted = mat_mul(design, coefficients);
         mreal total = 0;
         for (int row = 0; row < rows; row++) {
@@ -1350,7 +1350,7 @@ static inline mreal _hhlt_wald(Mat series, mreal fraction) {
     mreal sum_squared[2];
     Mat design[2] = { unrestricted, restricted };
     for (int which = 0; which < 2; which++) {
-        Mat coefficients = mat_lstsq(design[which], target);
+        Mat coefficients = mat_lstsq(design[which], target, NULL);
         Mat fitted = mat_mul(design[which], coefficients);
         mreal total = 0;
         for (int t = 0; t < n; t++) {
@@ -1571,7 +1571,7 @@ static inline ZivotAndrewsResult zivot_andrews(Mat series, int lags, int model,
             if (has_slope) AT(design, row, column) = after ? (mreal)(t - candidate) : 0;
         }
 
-        Mat coefficients = mat_lstsq(design, target);
+        Mat coefficients = mat_lstsq(design, target, NULL);
         Mat fitted = mat_mul(design, coefficients);
         mreal sum_squared_residual = 0;
         for (int row = 0; row < rows; row++) {

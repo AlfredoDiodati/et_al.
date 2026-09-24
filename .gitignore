@@ -28,6 +28,9 @@ tests/correctness/gzip_inflate
 tests/correctness/gzip_deflate
 tests/correctness/rdata_array_read
 tests/correctness/npz_python_interop
+tests/correctness/lstsq_rank_deficiency
+tests/correctness/chol_singularity
+tests/correctness/mv_density_dispatch
 
 # the statistical test and model suites, named for the question they answer
 # rather than the file they test - see README's "Adding files and headers".
@@ -39,6 +42,7 @@ tests/correctness/qvarma_recovery_study
 tests/correctness/mcs_settings_study
 tests/correctness/qvarma_analytic_agreement
 tests/correctness/qvarma_gaussian_limit
+tests/correctness/qvarma_fixed_parameter_fit
 tests/correctness/mcs_primitives
 tests/correctness/ad_tensor_gradients
 tests/correctness/mcs_primitives_candidate

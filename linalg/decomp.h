@@ -10,28 +10,93 @@
    kernels factorize in place, but functions here return new matrices and
    never mutate their arguments, matching the convention in mat.h.
 
-   Failure here (a not positive-definite, a singular) is treated as a
-   contract violation, not a recoverable runtime condition - same as
-   mat_reshape's assert(m.stride == m.c) in mat.h. Callers that need to
-   handle a possibly-singular or possibly-indefinite matrix gracefully
-   must check that themselves before calling in. */
+   A matrix that is singular because of the data it was built from is
+   reported through a status out-parameter by mat_chol here and by
+   mat_lstsq in solver.h, since a batch of estimations over simulated
+   data reaches such matrices on ordinary draws. Passing NULL for the
+   status keeps the old contract: the failure asserts. Every other
+   failure here (a singular LU, a malformed shape) is still a contract
+   violation, same as mat_reshape's assert(m.stride == m.c) in mat.h. */
+
+/* How small a pivot has to be, relative to the size it started from,
+   before it is indistinguishable from zero after a factorization that
+   accumulates rounding over length terms: 10 * sqrt(length) * MEPS.
+
+   sqrt(length) is the probabilistic rounding model (Higham and Mary,
+   2019), under which the error of a length-term reduction grows like
+   sqrt(length) * MEPS rather than the worst-case length * MEPS. The
+   worst-case form is far too loose for a long sample: at float32 with
+   50000 rows it would call a column dependent while 0.6 percent of it is
+   still independent of the others. Measured on exactly dependent inputs,
+   2000 draws per shape at both precisions, the computed ratio never
+   exceeded 1.9 * sqrt(length) * MEPS for mat_lstsq (m = 3..2000 rows,
+   n = 2..21 columns) or 2.2 * sqrt(length) * MEPS for mat_chol (n = 2..40,
+   the matrix rounded once from an exact second moment), so the factor 10
+   leaves at least 4.5 times the worst case as margin.
+
+   The tolerance follows MEPS, so the same matrix can pass at float64
+   and be rejected at float32. That is the intended answer: the question
+   is whether this precision can tell the pivot from zero. */
+static inline double _pivot_tolerance(int length) {
+    return 10.0 * sqrt((double)length) * (double)MEPS;
+}
 
 /* Return the lower-triangular Cholesky factor L such that a == L * L^T.
-   a must be square and symmetric positive-definite (only the lower
-   triangle is read - the upper triangle of a is ignored). The upper
-   triangle of the result is zeroed. Caller must mat_free().
+   a must be square and symmetric (only the lower triangle is read - the
+   upper triangle of a is ignored). The upper triangle of the result is
+   zeroed. Caller must mat_free().
+
+   a is rejected when some pivot is not positive, is not a number, or is
+   numerically zero: L[k][k]^2 <= _pivot_tolerance(n) * a[k][k].
+   L[k][k]^2 / a[k][k] is 1 - R^2 of variable k regressed on the ones
+   before it, so the test is unchanged by rescaling any variable, which a
+   test on the absolute size of L[k][k] would not be. The tolerance
+   covers this factorization's own rounding only; a matrix accumulated
+   from many terms carries its own error, which the caller knows and this
+   function does not.
+
+   status NULL: a rejected a asserts. Otherwise *status is 0 on success,
+   or the 1-based index k of the first rejected pivot, in which case
+   nothing is allocated and the returned Mat is empty (d == NULL, which
+   mat_free accepts).
 
    factor.h's _potrf computes this against CBLAS alone; it replaced a
    LAPACKE ?potrf call and is 1.23x to 3.54x faster across n = 8 to 1024
    (tests/performance/chol_lapack_removal.c). */
-static inline Mat mat_chol(Mat a) {
+static inline Mat mat_chol(Mat a, int *status) {
     assert(a.r == a.c);
+    int n = a.r;
     Mat l = mat_copy(a);
-    int info = _potrf(l.d, a.r, l.stride);
-    assert(info == 0); /* a is not positive-definite */
-    for (int i = 0; i < l.r; i++)
-        for (int j = i + 1; j < l.c; j++)
-            AT(l, i, j) = 0;
+    int info = _potrf(l.d, n, l.stride);
+
+    /* _potrf stops at the first pivot that is not positive, but an earlier
+       one can already be numerically zero, and dividing by it is what drove
+       the later one negative. _potrf leaves nothing usable behind when it
+       stops, so the leading block it accepted is factored again from a to
+       be inspected. That block can itself stop earlier, since a different
+       size can take a different blocking; the loop then shrinks it. */
+    int factored = n;
+    while (info > 0 && info - 1 < factored) {
+        factored = info - 1;
+        for (int i = 0; i < factored; i++)
+            for (int j = 0; j <= i; j++) AT(l, i, j) = AT(a, i, j);
+        int leading = factored > 0 ? _potrf(l.d, factored, l.stride) : 0;
+        if (leading > 0) info = leading;
+    }
+    /* The pivot test rides on the pass that zeroes the upper triangle,
+       which visits every row of l anyway. */
+    double tolerance = _pivot_tolerance(n);
+    for (int k = 0; k < factored; k++) {
+        double pivot = (double)AT(l, k, k);
+        if (pivot * pivot <= tolerance * (double)AT(a, k, k)) { info = k + 1; break; }
+        for (int j = k + 1; j < n; j++) AT(l, k, j) = 0;
+    }
+    if (status) *status = info;
+    else assert(info == 0 && "mat_chol: a is not numerically positive-definite");
+    if (info != 0) {
+        mat_free(l);
+        return (Mat){0};
+    }
     return l;
 }
 

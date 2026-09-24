@@ -75,11 +75,12 @@ static inline Mat _matgauss_whiten(Mat x, Mat loc, Mat rowcov, Mat colcov,
         for (int j = 0; j < p; j++)
             AT(w, i, j) = AT(x, i, j) - AT(loc, i, j);
 
-    Mat a = mat_chol(rowcov);
-    Mat b = mat_chol(colcov);
-    /* w <- a^-1 * w, then w <- w * b^-T */
-    MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
-                n, p, 1, a.d, a.stride, w.d, w.stride);
+    Mat a = mat_chol(rowcov, NULL);
+    Mat b = mat_chol(colcov, NULL);
+    /* w <- a^-1 * w, then w <- w * b^-T. The left solves here go through
+       _trtrs and its small-size dispatch; the right solves stay ?trsm, since
+       the substitution kernel behind the dispatch solves from the left only. */
+    _trtrs('L', 'N', 'N', n, p, a.d, a.stride, w.d, w.stride);
     MBLAS(trsm)(CblasRowMajor, CblasRight, CblasLower, CblasTrans, CblasNonUnit,
                 n, p, 1, b.d, b.stride, w.d, w.stride);
     *lu = a;
@@ -176,8 +177,7 @@ static inline Mat matgauss_dlogpdf_loc(Mat x, Mat loc, Mat rowcov, Mat colcov) {
 
     Mat lu, lv;
     Mat g = _matgauss_whiten(x, loc, rowcov, colcov, &lu, &lv);
-    MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
-                n, p, 1, lu.d, lu.stride, g.d, g.stride);
+    _trtrs('L', 'T', 'N', n, p, lu.d, lu.stride, g.d, g.stride);
     MBLAS(trsm)(CblasRowMajor, CblasRight, CblasLower, CblasNoTrans, CblasNonUnit,
                 n, p, 1, lv.d, lv.stride, g.d, g.stride);
 
@@ -203,8 +203,7 @@ static inline Mat matgauss_dlogpdf_rowcov(Mat x, Mat loc, Mat rowcov, Mat colcov
 
     Mat lu, lv;
     Mat r = _matgauss_whiten(x, loc, rowcov, colcov, &lu, &lv);
-    MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasLower, CblasTrans, CblasNonUnit,
-                n, p, 1, lu.d, lu.stride, r.d, r.stride);
+    _trtrs('L', 'T', 'N', n, p, lu.d, lu.stride, r.d, r.stride);
 
     Mat s = mat_new(n, n);
     MBLAS(syrk)(CblasRowMajor, CblasLower, CblasNoTrans, n, p,
@@ -289,8 +288,8 @@ static inline Mat matgauss_sample(Rng *rng, Mat loc, Mat rowcov, Mat colcov) {
     assert(rowcov.r == n && rowcov.c == n);
     assert(colcov.r == p && colcov.c == p);
 
-    Mat a = mat_chol(rowcov);
-    Mat b = mat_chol(colcov);
+    Mat a = mat_chol(rowcov, NULL);
+    Mat b = mat_chol(colcov, NULL);
     Mat o = mat_new(n, p);
     for (int i = 0; i < n * p; i++)
         o.d[i] = (mreal)rng_normal(rng);

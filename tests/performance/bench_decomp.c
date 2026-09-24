@@ -10,7 +10,7 @@
 
 void c_chol(int n, mreal *a, mreal *out) {
     Mat ma = { n, n, n, a };
-    Mat l = mat_chol(ma);
+    Mat l = mat_chol(ma, NULL);
     memcpy(out, l.d, (size_t)n * n * sizeof(mreal));
     mat_free(l);
 }
@@ -45,7 +45,7 @@ void c_solve(int n, mreal *a, mreal *b, mreal *out) {
 void c_lstsq(int m, int n, mreal *a, mreal *b, mreal *out) {
     Mat ma = { m, n, n, a };
     Mat mb = { m, 1, 1, b };
-    Mat x = mat_lstsq(ma, mb);
+    Mat x = mat_lstsq(ma, mb, NULL);
     memcpy(out, x.d, (size_t)n * sizeof(mreal));
     mat_free(x);
 }
@@ -153,7 +153,7 @@ void c_lu_solve_repeat(int n, mreal *a, mreal *b, int n_solves, mreal *out) {
 
 void c_chol_solve_repeat(int n, mreal *a, mreal *b, int n_solves, mreal *out) {
     Mat ma = { n, n, n, a };
-    Mat l = mat_chol(ma);
+    Mat l = mat_chol(ma, NULL);
     Vec vb = { n, 1, 1, b };
     Vec x = { 0, 0, 0, NULL };
     for (int i = 0; i < n_solves; i++) {

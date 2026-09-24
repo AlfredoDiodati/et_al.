@@ -56,14 +56,13 @@ static inline Mat mvstudent_logpdf(Mat x, Mat loc, Mat cov, mreal nu) {
         return mvgauss_logpdf(x, loc, cov);
     int n = x.r, d = x.c;
 
-    Mat l = mat_chol(cov);
+    Mat l = mat_chol(cov, NULL);
     mreal half_logdet = 0;
     for (int k = 0; k < d; k++)
         half_logdet += MLOG(AT(l, k, k));
 
     Mat dt = mvgauss_diff_t(x, loc);
-    MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
-                d, n, 1, l.d, l.stride, dt.d, dt.stride);
+    _trtrs('L', 'N', 'N', d, n, l.d, l.stride, dt.d, dt.stride);
 
     mreal lognorm = mvstudent_lognorm(nu, d);
     Mat o = mat_new(n, 1);
@@ -107,7 +106,7 @@ static inline Mat mvstudent_dlogpdf_loc(Mat x, Mat loc, Mat cov, mreal nu) {
         return mvgauss_dlogpdf_loc(x, loc, cov);
     int n = x.r, d = x.c;
 
-    Mat l = mat_chol(cov);
+    Mat l = mat_chol(cov, NULL);
     Mat dt = mvgauss_diff_t(x, loc);
     Mat wt = mat_copy(dt); /* wt <- cov^-1 * dt; dt kept for q_i = diff . w */
     int info = _potrs(d, n, l.d, l.stride, wt.d, wt.stride);
@@ -152,10 +151,9 @@ static inline Mat mvstudent_dlogpdf_nu(Mat x, Mat loc, Mat cov, mreal nu) {
     if (MISINF(nu))
         return mat_new(n, 1);
 
-    Mat l = mat_chol(cov);
+    Mat l = mat_chol(cov, NULL);
     Mat dt = mvgauss_diff_t(x, loc);
-    MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasLower, CblasNoTrans, CblasNonUnit,
-                d, n, 1, l.d, l.stride, dt.d, dt.stride);
+    _trtrs('L', 'N', 'N', d, n, l.d, l.stride, dt.d, dt.stride);
 
     mreal dlognorm = mvstudent_dlognorm_dnu(nu, d);
     Mat o = mat_new(n, 1);
@@ -186,7 +184,7 @@ static inline Mat mvstudent_dlogpdf_cov(Mat x, Mat loc, Mat cov, mreal nu) {
         return mvgauss_dlogpdf_cov(x, loc, cov);
     int n = x.r, d = x.c;
 
-    Mat l = mat_chol(cov);
+    Mat l = mat_chol(cov, NULL);
     Mat dt = mvgauss_diff_t(x, loc);
     Mat wt = mat_copy(dt);
     int info = _potrs(d, n, l.d, l.stride, wt.d, wt.stride);
@@ -247,7 +245,7 @@ static inline Mat mvstudent_sample(Rng *rng, Mat loc, Mat cov, mreal nu, int n) 
     assert(n >= 1 && cov.c == d);
     assert(loc.c == d && (loc.r == 1 || loc.r == n));
 
-    Mat l = mat_chol(cov);
+    Mat l = mat_chol(cov, NULL);
     Mat z = mat_new(n, d);
     for (int i = 0; i < n * d; i++)
         z.d[i] = (mreal)rng_normal(rng);

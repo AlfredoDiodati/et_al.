@@ -8,7 +8,7 @@
 
 Most functions here call `linalg/factor.h`'s driver kernels (`_gesv`, `_sysv`, `_gels`, `_gelsd`, which replace the LAPACKE routines of the same names and are CBLAS-only) directly rather than composing `linalg/decomp.h`'s `mat_lu`/`mat_chol`/`mat_qr` themselves - the driver routines do the factor-and-solve in one call, which is both simpler and avoids an extra copy. The exceptions are `vec_lu_solve`/`vec_chol_solve`, which deliberately take an already-computed `linalg/decomp.h` factorization instead of factoring again, and `vec_triangular_solve`, for a triangular matrix that was never factored at all because it already is the factor - see their own entries below.
 
-Same contract as `linalg/decomp.h`: inputs are copied first and never mutated, and a singular (`vec_solve`, `vec_solve_sym`) or rank-deficient (`mat_lstsq`) input is a contract violation caught by `assert(info == 0)`, not a recoverable error path. See `docs/DECOMP_DOCUMENTATION.md`'s "Contract: assert on failure, not error codes" section - the same reasoning applies here unchanged. The one exception is `mat_lstsq_rd`, whose entire purpose is to handle rank deficiency instead of asserting on it.
+Same contract as `linalg/decomp.h`: inputs are copied first and never mutated. A singular input to `vec_solve` or `vec_solve_sym` is a contract violation caught by `assert(info == 0)`. A rank-deficient design is different, because a regression over simulated or observed data reaches one on ordinary draws: `mat_lstsq` reports it through an `int *status`, and asserts only when the status pointer is `NULL`. See `docs/DECOMP_DOCUMENTATION.md`'s "Contract: a status for singular data, an assert for everything else" section. `mat_lstsq_rd` goes further and returns the minimum-norm solution of a rank-deficient problem instead of rejecting it.
 
 ## API reference
 
@@ -19,7 +19,7 @@ Vec vec_lu_solve(Mat lu, MatPivot *piv, Vec b)
 Vec vec_chol_solve(Mat l, Vec b)
 Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char diag)
 Vec vec_band_solve(Mat band, int kl, int ku, Vec b)
-Mat mat_lstsq(Mat a, Mat b)
+Mat mat_lstsq(Mat a, Mat b, int *status)
 Mat mat_lstsq_rd(Mat a, Mat b, int *rank_out)
 ```
 
@@ -54,9 +54,23 @@ Solve `op(a)*x = b` for `x`, where `a` is triangular and already in hand - no `m
 
 Solves `min ||a*x - b||_2` via QR (`?gels`). `a` is `m` x `n` with `m >= n` (square or overdetermined); `b` is `m` x `nrhs` - multiple right-hand sides are solved simultaneously in one call. Returns the `n` x `nrhs` solution as a new owner; neither `a` nor `b` is modified. Requires `a` to have full column rank - see `mat_lstsq_rd` otherwise. When `a` is square this reduces to an exact solve (same result as `vec_solve` for a single right-hand side, modulo the different factorization path), so `mat_lstsq` is a strict generalization - `vec_solve` exists separately because the exact-square case is common enough, and the `Vec` return type, to warrant its own name.
 
+`a` is rejected as rank deficient when some column `j` is numerically dependent on the columns before it:
+
+```
+|R[j][j]| <= 10 * sqrt(m) * MEPS * ||a_j||      with a == Q * R
+```
+
+`|R[j][j]| / ||a_j||` is the sine of the angle between column `j` and the span of the earlier columns. It is read off `R` at no extra cost over the factorization, since `||a_j||^2` is the sum of `R[i][j]^2` over `i <= j`. The status is `0`, or the index of the first dependent column counted from 1, in which case nothing is allocated and the returned `Mat` is empty (`d == NULL`, which `mat_free` accepts). With a `NULL` status a rejected design asserts. The tolerance is `decomp.h`'s `_pivot_tolerance(m)`; `docs/DECOMP_DOCUMENTATION.md` gives its derivation. For this test specifically: on exactly dependent designs, 2000 draws per shape for `m = 3..2000` rows and `n = 2..21` columns at both precisions, the computed sine never exceeded `1.9 * sqrt(m) * MEPS`.
+
+The test is on `a` itself, one column at a time, so rescaling a column changes neither the verdict nor anything in the solution except that column's coefficient, which scales inversely. R's `solve(crossprod(X))`, which the `lpirfs` package uses to fit a VAR, tests the reciprocal condition number of `X^T*X` against `MEPS` instead. That squares the condition number of `X`, and it depends on the units of the columns. Checked in R 4.6.0 on an intercept plus five standard normal columns over 119 rows: with one column multiplied by `1e-6` R accepts the design, with `1e-8` or `1e-9` it stops with "system is computationally singular". `examples/singular_draws_example.c` runs 40 VAR(1) designs with one series scaled by `1e-9` through `mat_lstsq` at float64 and all 40 are accepted; `tests/correctness/lstsq_rank_deficiency.c` checks column scalings of `1e6`, `1e-6`, `1e9` and `1e-9` at both precisions, verdict and coefficients.
+
+What the test does not cover. A design with a NaN or infinite entry is not reported: the value propagates into the solution, as it does in every accumulating function (README's Pitfalls). A full-rank but ill-conditioned design is solved without comment, and in least squares with a nonzero residual the solution's sensitivity grows with the square of the condition number of `a` rather than the condition number itself, which a per-column rank test does not bound.
+
+`tests/correctness/lstsq_rank_deficiency.c` checks the known cases, the rescaling, both sides of the tolerance, a strided view, the `NULL` path, and 2000 random designs against a long-double Gram-Schmidt reference.
+
 ### `mat_lstsq_rd`
 
-Solves the same least-squares problem via SVD instead of QR, returning the minimum-norm solution even when `a` is rank-deficient - unlike `mat_lstsq`, which requires full column rank and simply asserts otherwise. Slower than `mat_lstsq` (SVD costs more than QR), so prefer `mat_lstsq` when `a` is known to be full rank (e.g. a well-specified regression design matrix) and reach for this when that's not guaranteed (e.g. near-collinear regressors). If `rank_out` is non-`NULL`, `*rank_out` receives the effective rank the cutoff produced.
+Solves the same least-squares problem via SVD instead of QR, returning the minimum-norm solution even when `a` is rank-deficient - unlike `mat_lstsq`, which requires full column rank and rejects a design without it. Slower than `mat_lstsq` (SVD costs more than QR), so prefer `mat_lstsq` when `a` is known to be full rank (e.g. a well-specified regression design matrix) and reach for this when that's not guaranteed (e.g. near-collinear regressors). If `rank_out` is non-`NULL`, `*rank_out` receives the effective rank the cutoff produced.
 
 Calls `linalg/factor.h`'s `_gelsd`, which is CBLAS-only: bidiagonal reduction, divide and conquer on the bidiagonal, and the reduction's reflectors applied to the right-hand sides rather than assembled into the two orthogonal factors. It runs 1.12x to 2.78x ahead of the `LAPACKE_?gelsd` it replaced, worst case 1.12x at 384x384 - see `docs/FACTOR_DOCUMENTATION.md` and `out/lstsq_rd_lapack_removal_report.txt`.
 
@@ -114,7 +128,7 @@ The recovered rank is within 1 of the true rank at every size (float32 SVD noise
 
 ## Known limitations and future work
 
-- No iterative refinement or condition-number estimation on the solve path itself - a poorly-conditioned but technically nonsingular system solves "successfully" with no warning about accuracy loss. `mat_cond` (in `linalg/decomp.h`) can be checked separately beforehand.
+- No iterative refinement or condition-number estimation on the solve path itself - a poorly-conditioned but technically nonsingular system solves "successfully" with no warning about accuracy loss. `mat_lstsq` reports only numerical rank deficiency, not ill-conditioning short of it. `mat_cond` (in `linalg/decomp.h`) can be checked separately beforehand.
 - No weighted or regularized least squares (ridge/Tikhonov) - both `mat_lstsq` and `mat_lstsq_rd` are ordinary least squares only
 - No generalized/constrained least squares (`?gglse`, `?ggglm`)
 - `vec_triangular_solve` has no entry in `tests/correctness/test_solver.c` yet - it was added for a consuming project's need for a bare `?trtrs` and only exercised indirectly, through `_trtrs` itself (`ad_chol_quadform`'s existing coverage and `tests/correctness/chol_solve_blas_only.c`'s `test_trtrs`), not through the public wrapper's own shape/ownership contract. Add a hand-solved case plus the non-contiguous-view and boundary cases the rest of this file gets before this is on equal footing with `vec_solve`/`vec_chol_solve`.

@@ -8,14 +8,18 @@
 
 Every function here copies its input(s) with `mat_copy` before calling into the kernel, because `linalg/factor.h` factorizes in place but functions in this library return new matrices and never mutate their arguments. This also means inputs may be views (non-contiguous slices) - `mat_copy` handles the strided case, so a sliced submatrix works exactly like a freshly allocated owner.
 
-## Contract: assert on failure, not error codes
+## Contract: a status for singular data, an assert for everything else
 
-A kernel's `info` output being nonzero (matrix not positive-definite for `potrf`, exactly singular for `getrf`) is treated as a contract violation here, via `assert(info == 0)` - the same pattern `mat_reshape` in `linalg/mat.h` already uses for its `stride == c` precondition. This is a deliberate choice, not an oversight: callers that need to handle a possibly-singular or possibly-indefinite matrix gracefully (rather than crash) must check that themselves before calling in, the same way a caller must check `stride == c` before calling `mat_reshape`. There is no error-code return path.
+A matrix that is singular because of the data it was built from is reported, not asserted on. `mat_chol` takes an `int *status` and writes `0` on success or the 1-based index of the first rejected pivot, in which case it allocates nothing and returns an empty `Mat` (`d == NULL`, which `mat_free` accepts). `linalg/solver.h`'s `mat_lstsq` follows the same pattern for a rank-deficient design. A batch of estimations over simulated data meets such matrices on ordinary draws, and an assert there would stop the whole batch on the first one.
+
+Passing `NULL` for the status keeps the older contract: the failure asserts. That is the right call wherever a singular matrix can only mean a mistake by the caller, and it is what every call site that existed before the status was added passes.
+
+Every other failure is still a contract violation caught by `assert` - a kernel's nonzero `info` in `mat_lu` (exactly singular for `getrf`), a malformed shape - the same pattern `mat_reshape` in `linalg/mat.h` uses for its `stride == c` precondition. `mat_eig_sym_status` below is the third function with a status, for a Hessian that an optimizer reaches through data.
 
 ## API reference
 
 ```c
-Mat   mat_chol(Mat a)
+Mat   mat_chol(Mat a, int *status)
 Mat   mat_lu(Mat a, MatPivot **piv)
 void  mat_bandwidth(Mat a, int *kl_out, int *ku_out)
 Mat   mat_band_pack(Mat a, int kl, int ku)
@@ -31,9 +35,23 @@ void  mat_eig(Mat a, Vec *wr_out, Vec *wi_out)
 
 ### `mat_chol`
 
-Returns the lower-triangular Cholesky factor `L` such that `a == L * L^T`. `a` must be square and symmetric positive-definite; only the lower triangle of `a` is read, so the upper triangle can hold anything (a caller that only ever populates one triangle of a symmetric matrix does not need to mirror it first). The upper triangle of the result is explicitly zeroed. Caller must `mat_free()` the result.
+Returns the lower-triangular Cholesky factor `L` such that `a == L * L^T`. `a` must be square and symmetric; only the lower triangle of `a` is read, so the upper triangle can hold anything (a caller that only ever populates one triangle of a symmetric matrix does not need to mirror it first). The upper triangle of the result is explicitly zeroed. Caller must `mat_free()` the result.
 
-Computed by `linalg/factor.h`'s `_potrf`, which reaches no further than CBLAS. It replaced a `LAPACKE_?potrf('L')` call and is **1.23x to 3.54x faster** across n = 8 to 1024, worst case at n=96 — see `docs/FACTOR_DOCUMENTATION.md` for the structure, the variants that were tried and rejected, and the full measurement setup. Behaviour is unchanged: same factor, and the same `info` value on a matrix that is not positive definite, both checked directly against `?potrf` in `tests/correctness/chol_blas_only.c`.
+`a` is rejected when some pivot is not positive, is not a number, or is numerically zero:
+
+```
+L[k][k]^2 <= 10 * sqrt(n) * MEPS * a[k][k]
+```
+
+`L[k][k]^2 / a[k][k]` is `1 - R^2` of variable `k` regressed on the variables before it, so the verdict does not change when a variable is rescaled, which a test on the absolute size of `L[k][k]` would not guarantee. The status is the index of the first rejected pivot, counted from 1. With a `NULL` status a rejected matrix asserts; see the Contract section above.
+
+Where the tolerance comes from. The helper `_pivot_tolerance(length)` is `10 * sqrt(length) * MEPS`, with `length = n` here and `length = m` in `mat_lstsq`. The `sqrt` is the probabilistic rounding model (Higham and Mary, 2019): the error of a reduction over `length` terms grows like `sqrt(length) * MEPS`, not the worst-case `length * MEPS`. On exactly singular inputs, 2000 random draws per shape at both precisions, with each matrix rounded once from an exact second moment of `m = 50` or `2000` observations, the computed ratio never exceeded `2.2 * sqrt(n) * MEPS` for `n = 2..40`; the largest values were at `n = 2`. The factor 10 leaves 4.5 times that as margin. The tolerance follows `MEPS`, so a matrix can pass at float64 and be rejected at float32; the question it answers is whether this precision can tell the pivot from zero.
+
+The tolerance covers this factorization's own rounding only. A covariance accumulated from `m` observations in working precision carries its own error of about `sqrt(m) * MEPS`, and an exactly singular one built that way can land above the tolerance: at float64 with 2000 observations the measured ratio reached `48 * MEPS`, against a tolerance of `14 * MEPS` for `n = 2`. The caller knows how its matrix was formed and this function does not; accumulate in higher precision, or test the ratio against a wider margin, where that matters.
+
+`_potrf` stops at the first pivot that is not positive, but an earlier pivot can already be numerically zero, and dividing by it is what drives the later one negative. On such a failure `mat_chol` refactors the leading block `_potrf` accepted and inspects its pivots too, so the status names the variable that is actually dependent rather than the one that went negative after it. This costs nothing on a matrix that factors. `tests/correctness/chol_singularity.c` found the case: before the refactor, 479 of 1920 random singular matrices were reported at a later pivot than a long-double reference.
+
+Computed by `linalg/factor.h`'s `_potrf`, which reaches no further than CBLAS. It replaced a `LAPACKE_?potrf('L')` call and is **1.23x to 3.54x faster** across n = 8 to 1024, worst case at n=96 — see `docs/FACTOR_DOCUMENTATION.md` for the structure, the variants that were tried and rejected, and the full measurement setup. The factor itself is unchanged, and `_potrf` returns the same `info` as `?potrf` on a matrix that is not positive definite, both checked directly in `tests/correctness/chol_blas_only.c`. What `mat_chol` adds on top is the relative pivot test and the status; `tests/correctness/chol_singularity.c` checks both.
 
 ### `mat_lu`
 
@@ -138,7 +156,7 @@ Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_q
 
 ## Known limitations and future work
 
-- No pivoted/rank-revealing Cholesky - `mat_chol` assumes true positive-definiteness, not positive-semidefiniteness
+- No pivoted/rank-revealing Cholesky - `mat_chol` assumes true positive-definiteness, not positive-semidefiniteness; a semidefinite matrix is reported through the status, not factored
 - `mat_qr` requires `m >= n`; there is no underdetermined (`m < n`) QR path
 - `mat_eig` computes eigenvalues only, never eigenvectors - a real non-symmetric matrix's eigenvectors are generally complex, and this library has no complex type. Adding one (and a complex-capable eigenvector routine) is a substantial undertaking deliberately out of scope here; if it's ever needed, it belongs in a new header, not bolted onto `Mat`
 - No generalized eigenvalue problem (`?sygv`) - not currently needed by anything planned

@@ -62,7 +62,7 @@ static inline void johansen_result_free(JohansenResult *r) {
 /* The residual of target after regressing it on covariates, column by column.
    Returns a new rows x target.c matrix. */
 static inline Mat _residualize(Mat target, Mat covariates) {
-    Mat coefficients = mat_lstsq(covariates, target);
+    Mat coefficients = mat_lstsq(covariates, target, NULL);
     Mat fitted = mat_mul(covariates, coefficients);
     Mat residual = mat_new(target.r, target.c);
     for (int i = 0; i < target.r; i++)
@@ -151,7 +151,7 @@ static inline JohansenResult johansen(Mat data, int lags) {
     Mat s01_transpose = mat_T(s01);
     Mat product = mat_mul(s01_transpose, weighted);
 
-    Mat lower = mat_chol(s11);
+    Mat lower = mat_chol(s11, NULL);
     Mat half = _lower_triangular_solve_matrix(lower, product);
     Mat half_transpose = mat_T(half);
     Mat symmetric = _lower_triangular_solve_matrix(lower, half_transpose);
@@ -303,7 +303,7 @@ static inline EngleGrangerResult engle_granger(Mat data, int dependent, int lags
         }
         AT(target, t, 0) = AT(data, dependent, t);
     }
-    Mat coefficients = mat_lstsq(design, target);
+    Mat coefficients = mat_lstsq(design, target, NULL);
     Mat fitted = mat_mul(design, coefficients);
 
     Mat residual = mat_new(1, periods);
@@ -489,7 +489,7 @@ static inline void _maki_evaluate(Mat data, int dependent, int model, int lags,
     Mat target = mat_new(periods, 1);
     for (int t = 0; t < periods; t++) AT(target, t, 0) = AT(data, dependent, t);
 
-    Mat coefficients = mat_lstsq(design, target);
+    Mat coefficients = mat_lstsq(design, target, NULL);
     Mat fitted = mat_mul(design, coefficients);
     Mat residual = mat_new(1, periods);
     mreal total = 0;

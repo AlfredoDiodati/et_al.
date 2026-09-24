@@ -252,8 +252,8 @@ static void test_span_matches_raw_powers(void) {
             AT(design_raw, i, k + 1) = AT(raw, i, k);
         }
     }
-    Mat beta_orthogonal = mat_lstsq(design_orthogonal, y);
-    Mat beta_raw = mat_lstsq(design_raw, y);
+    Mat beta_orthogonal = mat_lstsq(design_orthogonal, y, NULL);
+    Mat beta_raw = mat_lstsq(design_raw, y, NULL);
     Mat fit_orthogonal = mat_mul(design_orthogonal, beta_orthogonal);
     Mat fit_raw = mat_mul(design_raw, beta_raw);
 

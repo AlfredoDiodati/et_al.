@@ -91,7 +91,7 @@ static void test_boundary_knots_do_not_change_the_fit(void) {
 
         BsBasis fitted = bs_basis(sample, options);
         Mat design = with_intercept(fitted.basis);
-        Mat beta = mat_lstsq(design, response);
+        Mat beta = mat_lstsq(design, response, NULL);
 
         Mat new_basis = bs_predict(&fitted.spec, at);
         Mat new_design = with_intercept(new_basis);

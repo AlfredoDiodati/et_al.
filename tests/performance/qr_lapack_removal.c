@@ -8,9 +8,9 @@
 
    Results are written to out/qr_lapack_removal_report.txt.
 
-   Build and run, with the thread count pinned for the reason below:
+   Build and run:
      make tests/performance/qr_lapack_removal
-     OPENBLAS_NUM_THREADS=1 ./tests/performance/qr_lapack_removal
+     ./tests/performance/qr_lapack_removal
 */
 
 #include "../../linalg/factor.h"
@@ -24,18 +24,14 @@ static double now(void) {
     return ts.tv_sec + 1e-9 * ts.tv_nsec;
 }
 
-/* OpenBLAS's pthread build spawns worker threads that spin-wait, and on
-   the many small BLAS calls these routines make, that overhead swamps the
-   arithmetic and drifts with whatever else the machine is doing. Measured
-   on the LU benchmark: with the default four threads the same ?getrf call
-   timed 1036 us at the start of a run and 6208 us at the end, a 5.99x
-   drift that reversed individual results between runs. Pinned to one
-   thread the same check comes out at 0.98x. The report records what it
-   actually saw; OPENBLAS_NUM_THREADS has to be set in the environment
-   because OpenBLAS reads it before main. */
-static const char *blas_threads(void) {
-    const char *v = getenv("OPENBLAS_NUM_THREADS");
-    return v ? v : "unset (OpenBLAS default, probably one per core)";
+/* Both arms run at OpenBLAS's full thread count, which is the capacity
+   the library is used at. OpenBLAS's worker threads spin-wait between
+   calls, so absolute times on the many small calls of a blocked kernel
+   drift over a run; the arms alternate, and drift that moves both arms of
+   a pair together cannot decide the comparison. The report records the
+   thread count OpenBLAS actually ran with. */
+static int blas_threads(void) {
+    return openblas_get_num_threads();
 }
 
 /* The two arms alternate in BLOCK-sized pieces until each has run for
@@ -131,7 +127,7 @@ int main(void) {
 
     fprintf(f, "QR: LAPACKE ?geqrf/?orgqr versus the CBLAS-only kernels\n\n");
     fprintf(f, "element type      %s\n", sizeof(mreal) == 8 ? "double (-DMAT_DOUBLE)" : "float");
-    fprintf(f, "OPENBLAS_NUM_THREADS  %s\n", blas_threads());
+    fprintf(f, "OpenBLAS threads  %d\n", blas_threads());
     fprintf(f, "timing            the two arms alternate in %.0f ms blocks until each\n", BLOCK * 1000);
     fprintf(f, "                  has run %.2f s, so both see the same machine state;\n", BUDGET);
     fprintf(f, "                  the ratio is the number to read\n");

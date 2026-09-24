@@ -263,22 +263,14 @@ static Result time_pair(Mat a, int nb, mreal *scratch, MatPivot *piv,
     return r;
 }
 
-/* OpenBLAS's pthread build spawns worker threads that spin-wait, and on
-   the many small BLAS calls a blocked factorization makes, that overhead
-   swamps the arithmetic and varies with whatever else the machine is
-   doing. Measured here: with the default four threads, the same ?getrf
-   call on 256x256 timed 1036 us at the start of a run and 6208 us at the
-   end of it, a 5.99x drift that made the comparison undecidable and
-   reversed individual results between runs. Pinned to one thread the same
-   check comes out at 0.99x.
-
-   So the comparison is run single-threaded, and the report records what it
-   actually saw rather than what it asked for. OPENBLAS_NUM_THREADS has to
-   be set in the environment because OpenBLAS reads it when the library
-   initialises, before main. The Makefile target sets it. */
-static const char *blas_threads(void) {
-    const char *v = getenv("OPENBLAS_NUM_THREADS");
-    return v ? v : "unset (OpenBLAS default, probably one per core)";
+/* Both arms run at OpenBLAS's full thread count, which is the capacity
+   the library is used at. OpenBLAS's worker threads spin-wait between
+   calls, so absolute times on the many small calls of a blocked kernel
+   drift over a run; the arms alternate, and drift that moves both arms of
+   a pair together cannot decide the comparison. The report records the
+   thread count OpenBLAS actually ran with. */
+static int blas_threads(void) {
+    return openblas_get_num_threads();
 }
 
 int main(void) {
@@ -288,7 +280,7 @@ int main(void) {
 
     fprintf(f, "LU: LAPACKE ?getrf versus the CBLAS-only _getrf\n\n");
     fprintf(f, "element type      %s\n", sizeof(mreal) == 8 ? "double (-DMAT_DOUBLE)" : "float");
-    fprintf(f, "OPENBLAS_NUM_THREADS  %s\n", blas_threads());
+    fprintf(f, "OpenBLAS threads  %d\n", blas_threads());
     fprintf(f, "timing            the two arms alternate in %.0f ms blocks until each\n", BLOCK * 1000);
     fprintf(f, "                  has run %.2f s, so both see the same thermal state;\n", BUDGET);
     fprintf(f, "                  times are averages over a run that is heating up and\n");

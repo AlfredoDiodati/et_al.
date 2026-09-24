@@ -94,7 +94,7 @@ static mreal information_in(Mat H, int start, int count) {
         for (int j = 0; j < rest; j++) AT(other, i, j) = AT(H, outside[i], outside[j]);
 
     Mat cross_T = mat_T(cross);
-    Mat solved = mat_lstsq(other, cross_T);
+    Mat solved = mat_lstsq(other, cross_T, NULL);
     Mat schur = mat_sub(block, mat_mul(cross, solved));
     for (int i = 0; i < count; i++)
         for (int j = 0; j < i; j++) {

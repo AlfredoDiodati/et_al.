@@ -219,7 +219,7 @@ static void test_reuse_solve(void) {
     /* vec_chol_solve: same idea, factoring via mat_chol instead */
     {
         Mat a = mat_lit(2, 2, 4,2, 2,3);
-        Mat l = mat_chol(a);
+        Mat l = mat_chol(a, NULL);
 
         Vec b1 = mat_lit(2, 1, 4,3);
         Vec x1 = vec_chol_solve(l, b1);
@@ -259,7 +259,7 @@ static void test_reuse_solve(void) {
     }
     {
         Mat a = mat_lit(1, 1, 9.0f);
-        Mat l = mat_chol(a);
+        Mat l = mat_chol(a, NULL);
         Vec b = mat_lit(1, 1, 18.0f);
         Vec x = vec_chol_solve(l, b);
         CHECK(AT(x,0,0), 2.0f);
@@ -292,7 +292,7 @@ static void test_lstsq(void) {
     {
         Mat a = mat_lit(4, 1, 1,1,1,1);
         Mat b = mat_lit(4, 1, 1,2,3,6);
-        Mat x = mat_lstsq(a, b);
+        Mat x = mat_lstsq(a, b, NULL);
         CHECK(AT(x,0,0), 3.0f);
         mat_free(a); mat_free(b); mat_free(x);
     }
@@ -301,7 +301,7 @@ static void test_lstsq(void) {
     {
         Mat a = mat_lit(2, 2, 2,1, 1,3);
         Mat b = mat_lit(2, 1, 5,10);
-        Mat x = mat_lstsq(a, b);
+        Mat x = mat_lstsq(a, b, NULL);
         CHECK(AT(x,0,0), 1.0f);
         CHECK(AT(x,1,0), 3.0f);
         mat_free(a); mat_free(b); mat_free(x);
@@ -311,7 +311,7 @@ static void test_lstsq(void) {
     {
         Mat a = mat_lit(2, 2, 2,1, 1,3);
         Mat b = mat_lit(2, 2, 5,1, 10,0);
-        Mat x = mat_lstsq(a, b);
+        Mat x = mat_lstsq(a, b, NULL);
         CHECK(AT(x,0,0), 1.0f);   CHECK(AT(x,1,0), 3.0f);
         CHECK(AT(x,0,1), 0.6f);  CHECK(AT(x,1,1), -0.2f);
         mat_free(a); mat_free(b); mat_free(x);
@@ -323,7 +323,7 @@ static void test_lstsq(void) {
         Mat a = mat_slice(parent, 0, 4, 0, 1); /* just the ones column */
         Mat b = mat_slice(parent, 0, 4, 1, 2); /* the [1,2,3,6] column */
         assert(a.stride != a.c && b.stride != b.c);
-        Mat x = mat_lstsq(a, b);
+        Mat x = mat_lstsq(a, b, NULL);
         CHECK(AT(x,0,0), 3.0f);
         mat_free(parent); mat_free(x);
     }
@@ -332,7 +332,7 @@ static void test_lstsq(void) {
     {
         Mat a = mat_lit(1, 1, 2.0f);
         Mat b = mat_lit(1, 1, 6.0f);
-        Mat x = mat_lstsq(a, b);
+        Mat x = mat_lstsq(a, b, NULL);
         CHECK(AT(x,0,0), 3.0f);
         mat_free(a); mat_free(b); mat_free(x);
     }
@@ -343,7 +343,7 @@ static void test_lstsq(void) {
         for (int n = 2; n <= 16; n++) {
             Mat a = rand_mat(n + 2, n);
             Mat b = rand_mat(n + 2, 1);
-            Mat x = mat_lstsq(a, b);
+            Mat x = mat_lstsq(a, b, NULL);
             check_lstsq_optimal(a, b, x, 1e-2);
             mat_free(a); mat_free(b); mat_free(x);
         }
@@ -423,7 +423,7 @@ static void test_lstsq_rd(void) {
         for (int n = 2; n <= 16; n++) {
             Mat a = rand_mat(n + 2, n);
             Mat b = rand_mat(n + 2, 1);
-            Mat x_qr = mat_lstsq(a, b);
+            Mat x_qr = mat_lstsq(a, b, NULL);
             int rank;
             Mat x_svd = mat_lstsq_rd(a, b, &rank);
             check_eq(x_qr, x_svd, TOL_MUL);

@@ -193,6 +193,13 @@ targets the function itself.
       category README calls out as most relevant to factorizations and
       solves. Needs a Hilbert-like or rank-1-perturbed matrix at that
       condition number, checked against a size-scaled tolerance.
+      Partly covered for `mat_chol` and `mat_lstsq`:
+      `tests/correctness/chol_singularity.c` and
+      `tests/correctness/lstsq_rank_deficiency.c` check the singularity
+      verdict on near-singular inputs either side of the tolerance and on
+      inputs rescaled by up to 1e6 (`mat_chol`) or 1e9 (`mat_lstsq`) either way. Neither checks the accuracy
+      of a solve at condition number 1e6-1e8, which is still open for every
+      function listed here.
 
 ## Naming-convention inconsistency (not a coverage gap)
 

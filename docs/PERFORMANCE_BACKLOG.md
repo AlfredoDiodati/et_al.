@@ -2048,3 +2048,55 @@ algorithm.
 the last `degree` columns onto the first `degree` puts entries in the
 opposite corner - so it stays a dense solve, which costs nothing at the
 handful of knots a seasonal pattern uses.
+
+## 19. OpenBLAS's thread start-up on small wide solves (`linalg/factor.h` dispatch)
+
+Open, and smaller than first reported. On 2026-09-24 a full-capacity run of
+`tests/performance/small_blas_threshold.c` reported about 2.2 ms per wide
+triangular solve through OpenBLAS. That was the benchmark: its one-caller cells
+ran inside `#pragma omp parallel num_threads(1)`, and from inside even a
+one-thread region an OpenMP build of OpenBLAS starts a new thread team for each
+call it threads. The same `?trsm` measured 10 to 45 microseconds from serial
+code and 1.1 to 1.3 ms from inside such a region. The one-caller cells now run
+outside any parallel region. The same run found a second defect in the new
+wide-solve table: it read the clock on every call, and this machine's clock
+source is `hpet`, at 1.2 microseconds a read, more than the smallest solves.
+The table now reads it once per batch.
+
+Setup of the corrected run: AMD Ryzen 7 4800H, 16 hardware threads, clock
+source `hpet` (the kernel offers no TSC), OpenBLAS 0.3.33 OpenMP build,
+`-O3 -march=native -ffast-math -fopenmp`, no thread variable set, one left lower
+triangular solve per call, input restored inside the timing, batch size doubled
+until a batch takes 20 ms, best of 5 batches, float32 and float64. Tables in
+`out/small_blas_threshold_float32.txt` and `out/small_blas_threshold_float64.txt`,
+last section.
+
+What it shows:
+
+- OpenBLAS hands a triangular solve to its threads once `n * nrhs` reaches
+  1024; at 768 it does not. The step costs about 4 to 5 microseconds: at `n = 16`
+  the float64 solve goes from 0.41 microseconds at 16 right-hand sides to 5.3 at
+  64, and at `n = 64` from 1.4 at one to 20.1 at 16.
+- From that onset up to `n * n * nrhs` of 65536 the loop wins in both precisions:
+  float64 3.40x at `n = 16`, 64 right-hand sides, 1.87x at 16 and 256, 1.72x at 24
+  and 64, 1.27x at 32 and 64, 2.38x at 64 and 16; float32 1.70x to 5.06x on the
+  same cells. Above it the two precisions part: float64 loses from 147456 on
+  (0.76x at `n = 48`, 64 right-hand sides), float32 still wins there (1.08x).
+- `TRSM_SMALL_N` 12 covers the cells below it correctly: every `n <= 12` row
+  with at most 4096 right-hand sides has the loop at least even.
+- `dist/mv/gauss.h`, `dist/mv/student.h` and `dist/mv/matgauss.h` call `?trsm`
+  directly for their whole-sample solves, so they get none of the dispatch.
+  At `d = 8` and 256 observations the loop is 3.69x faster than the call they
+  make.
+
+Done on 2026-09-24: the `dist/mv` left solves go through `_trtrs`, which uses
+the constants already measured. `mvgauss_logpdf` runs 1.2x to 3.8x faster at
+`d <= 12` in float64 and is unchanged above; the numbers and their setup are in
+`docs/MVGAUSS_DOCUMENTATION.md`. The right solves in `dist/mv/matgauss.h` still
+call `?trsm`, since `_trtrs_small` solves from the left only.
+
+Not done: a second rule in the dispatch, loop when OpenBLAS would thread
+(`n * nrhs >= 1024`, outside a parallel region of an OpenMP build) and
+`n * n * nrhs <= 65536`. It would depend on an OpenBLAS internal constant,
+would need `openblas_get_parallel` and `omp_in_parallel`, which the library
+does not call today, and would save a few microseconds per call.

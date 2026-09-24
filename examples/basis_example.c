@@ -108,7 +108,7 @@ int main(void) {
 
     PolyBasis polynomial = poly_basis(train_x, POLY_DEGREE);
     Mat poly_design = with_intercept(polynomial.basis);
-    Mat poly_beta = mat_lstsq(poly_design, train_y);
+    Mat poly_beta = mat_lstsq(poly_design, train_y, NULL);
     Mat poly_in = mat_mul(poly_design, poly_beta);
 
     /* Predicting means reusing the fit's own coefs. Building a fresh basis on
@@ -139,7 +139,7 @@ int main(void) {
        motivates the basis in the first place */
     Mat raw = poly_raw(train_x, POLY_DEGREE);
     Mat raw_design = with_intercept(raw);
-    Mat raw_beta = mat_lstsq(raw_design, train_y);
+    Mat raw_beta = mat_lstsq(raw_design, train_y, NULL);
     Mat raw_in = mat_mul(raw_design, raw_beta);
     double raw_condition = mat_cond(raw_design);
     double orthogonal_condition = mat_cond(poly_design);
@@ -148,7 +148,7 @@ int main(void) {
 
     BsBasis bs = bs_basis(train_x, (BsOptions){ .df = SPLINE_DF });
     Mat bs_design = with_intercept(bs.basis);
-    Mat bs_beta = mat_lstsq(bs_design, train_y);
+    Mat bs_beta = mat_lstsq(bs_design, train_y, NULL);
     Mat bs_in = mat_mul(bs_design, bs_beta);
     Mat bs_test_basis = bs_predict(&bs.spec, test_x);
     Mat bs_test_design = with_intercept(bs_test_basis);
@@ -159,7 +159,7 @@ int main(void) {
 
     NsBasis ns = ns_basis(train_x, (NsOptions){ .df = SPLINE_DF });
     Mat ns_design = with_intercept(ns.basis);
-    Mat ns_beta = mat_lstsq(ns_design, train_y);
+    Mat ns_beta = mat_lstsq(ns_design, train_y, NULL);
     Mat ns_in = mat_mul(ns_design, ns_beta);
     Mat ns_test_basis = ns_predict(&ns.spec, test_x);
     Mat ns_test_design = with_intercept(ns_test_basis);

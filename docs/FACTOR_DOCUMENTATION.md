@@ -96,8 +96,9 @@ comparison itself.
 ## Results
 
 Every routine replaced, and its worst case over the shapes its benchmark
-covers. All measured on this machine with `OPENBLAS_NUM_THREADS=1`, which
-is required rather than cosmetic — see "Measuring on this machine" below.
+covers. All measured with `OPENBLAS_NUM_THREADS=1`, on the machine each
+section names, before README's rule that performance is measured at full
+capacity, and not re-measured since — see "Measuring on this machine" below.
 Reproduce with `make lapack-comparison-bench`; each benchmark exits nonzero
 if its replacement is slower anywhere.
 
@@ -430,9 +431,10 @@ a scratch buffer, run the column-major kernel, and transpose back — for
 
 ## Measuring on this machine: OpenBLAS threading
 
-**Every benchmark here must be run with `OPENBLAS_NUM_THREADS=1`, and the
-`lapack-comparison-bench` target sets it.** This is not a convenience, it
-is what makes the measurement mean anything.
+**The benchmarks here run at OpenBLAS's full thread count**, per README's
+rule that performance is measured at full capacity, and each report records
+the count it ran with. They used to be pinned to one thread, for the reason
+below, and every number in the Results table above was taken that way.
 
 OpenBLAS's pthread build spawns worker threads that spin-wait. A blocked
 factorization makes many small BLAS calls, and on those the thread
@@ -453,10 +455,15 @@ Several rounds of "optimisation" against those numbers were fitting noise.
 The drift check is now printed at the end of the LU report so a
 contaminated run says so rather than being read as a result.
 
-This is a property of the benchmark harness, not of the library: at
-whatever thread count an application runs, both the replaced routine and
-its replacement pay the same overhead. Pinning to one thread is what
-isolates the thing being compared.
+Pinning removed that drift, and it also removed the cost an application at
+full capacity actually pays, which is why it is no longer done. What handles
+the drift instead is the pairing: every benchmark here except
+`norm_lapack_removal.c` alternates its two arms in short blocks, so drift that
+moves both arms of a pair together cannot decide the comparison, and
+`norm_lapack_removal.c` keeps the minimum over repeats. Whether the verdicts in
+the Results table survive at full thread count is not known yet: the
+comparison needs `liblapacke-dev`, which the machine this rule was introduced
+on does not have installed.
 
 ## `_getrf` — LU with partial pivoting
 
@@ -672,7 +679,7 @@ cases are checked by `Q*R == A` and `Q^T*Q == I` only.
 
 `vec_solve_sym` exists for symmetric matrices that are **not** positive
 definite — a sample covariance perturbed to indefiniteness, say — where
-`mat_chol` would assert and `vec_solve` would throw the symmetry away and
+`mat_chol` would reject and `vec_solve` would throw the symmetry away and
 do twice the arithmetic. So the replacement had to be a real
 Bunch-Kaufman factorization, not an LU under another name.
 
