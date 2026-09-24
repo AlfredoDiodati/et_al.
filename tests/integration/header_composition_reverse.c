@@ -39,6 +39,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../inference/mcs.h"
 #include "../../frame/gzip.h"
 #include "../../json.h"
+#include "../../regression.h"
 #include "../../stats.h"
 #include "../../random/random.h"
 #include "../../special.h"

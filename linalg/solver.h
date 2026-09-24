@@ -164,14 +164,14 @@ static inline Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char
    not modified.
 
    a is rejected as rank deficient when some column j is numerically
-   dependent on the columns before it: |R[j][j]| <= _pivot_tolerance(m) *
+   dependent on the columns before it: |R[j][j]| <= mat_rank_tolerance(m) *
    ||a_j||, with R from a == Q*R. |R[j][j]| / ||a_j|| is the sine of the
    angle between column j and the span of the earlier ones, so the test
    is unchanged by rescaling any column, and it is read off R directly,
    since ||a_j||^2 is the sum of R[i][j]^2 over i <= j. A test on the
    condition number of a^T*a instead squares the condition number, and
    rejects a design only because its columns are in different units. See
-   _pivot_tolerance in decomp.h for the tolerance. A design with a NaN or
+   mat_rank_tolerance in decomp.h for the tolerance. A design with a NaN or
    infinite entry is rejected too, at the first column holding one, and so
    is a column of finite entries whose norm overflows.
 
@@ -247,7 +247,7 @@ static inline Mat mat_lstsq(Mat a, Mat b, int *status) {
         }
 
     int info = 0;
-    double tolerance = _pivot_tolerance(m);
+    double tolerance = mat_rank_tolerance(m);
     for (int j = 0; j < n; j++) {
         double diagonal = (double)AT(qr, j, j) * column_inverse_scale[j];
         if (column_non_finite[j] != 0 ||
@@ -284,19 +284,15 @@ static inline Mat mat_lstsq(Mat a, Mat b, int *status) {
    a new owner; a and b are not modified. If rank_out is non-NULL,
    *rank_out receives the effective rank the cutoff below produced.
 
-   The rank cutoff is a fixed 10*FLT_EPSILON, deliberately NOT LAPACK's
-   own "rcond < 0 means machine precision of mreal" default. A singular
-   value's roundoff floor from the SVD computation itself scales with
-   mreal's working precision, so a machine-epsilon-relative cutoff can
-   classify the exact same mathematical input as full rank under the
-   float build and rank-deficient under -DMAT_DOUBLE - the float and
-   double epsilons differ by 9 orders of magnitude, and a genuinely
-   rank-deficient input's computed near-zero singular value sits close
-   enough to its own precision's epsilon that it can land on either side.
-   A fixed, looser cutoff (still far above either epsilon) keeps the rank
-   determination, and therefore which x comes back, identical across both
-   precision builds for the same input - confirmed by tests/correctness/test_solver.c's
-   MAT_DOUBLE run, which caught this exact inconsistency before the fix. */
+   A singular value counts as zero when it is at most
+   mat_rank_tolerance(max(m, n)) times the largest, the package's single
+   rank rule (linalg/decomp.h). A cutoff of MEPS alone sat close enough to
+   the rounding of a rank-deficient input's zero singular value to put it
+   on either side, which is why tests/correctness/test_solver.c once saw
+   float and double builds disagree; the rule's factor 10 over the measured
+   worst case of 0.71 * sqrt(max(m, n)) * MEPS removes that. The cutoff
+   follows MEPS, so a nearly collinear design can be full rank at float64
+   and rank deficient at float32, as for every other rank decision here. */
 static inline Mat mat_lstsq_rd(Mat a, Mat b, int *rank_out) {
     assert(a.r >= a.c && b.r == a.r);
     int m = a.r, n = a.c, nrhs = b.c;
@@ -307,7 +303,7 @@ static inline Mat mat_lstsq_rd(Mat a, Mat b, int *rank_out) {
     int rank;
 
     int info = _gelsd(qr.d, m, n, qr.stride, work.d, work.stride, nrhs,
-                      (mreal)(10 * FLT_EPSILON), s, &rank);
+                      (mreal)mat_rank_tolerance(m > n ? m : n), s, &rank);
     assert(info == 0); /* a singular value failed to converge */
 
     Mat x = mat_new(n, nrhs);

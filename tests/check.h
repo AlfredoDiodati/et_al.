@@ -88,6 +88,56 @@ static inline int check_stored_non_finite(const mreal *p, int infinite) {
     return infinite ? MISINF(value) : MISNAN(value);
 }
 
+/* The 1-based index of the first column that is an exact linear combination
+   of the ones before it, or 0. Every entry here is an integer or a multiple
+   of 1/4, so four times the matrix is an integer matrix, and its rank is
+   computed by elimination modulo a prime rather than in floating point. Two
+   primes have to agree: a rank can drop modulo one prime only if that prime
+   divides a nonzero minor. */
+static inline int check_first_dependent_modulo(Mat a, uint64_t prime) {
+    int m = a.r, n = a.c;
+    uint64_t *basis = calloc((size_t)m * n, sizeof *basis);
+    int *pivot_row = malloc((size_t)n * sizeof *pivot_row);
+    uint64_t *v = malloc((size_t)m * sizeof *v);
+    int kept = 0, found = 0;
+    for (int j = 0; j < n && !found; j++) {
+        for (int i = 0; i < m; i++) {
+            long long scaled = llround(4 * (double)AT(a, i, j));
+            long long r = scaled % (long long)prime;
+            v[i] = (uint64_t)(r < 0 ? r + (long long)prime : r);
+        }
+        for (int k = 0; k < kept; k++) {
+            uint64_t factor = v[pivot_row[k]];
+            if (!factor) continue;
+            for (int i = 0; i < m; i++) {
+                unsigned __int128 t = (unsigned __int128)factor * basis[(size_t)k * m + i] % prime;
+                v[i] = (v[i] + prime - (uint64_t)t) % prime;
+            }
+        }
+        int row = -1;
+        for (int i = 0; i < m && row < 0; i++) if (v[i]) row = i;
+        if (row < 0) { found = j + 1; break; }
+        /* normalize so the pivot is 1: multiply by its inverse, v^(p-2) */
+        uint64_t inverse = 1, base = v[row], exponent = prime - 2;
+        while (exponent) {
+            if (exponent & 1) inverse = (uint64_t)((unsigned __int128)inverse * base % prime);
+            base = (uint64_t)((unsigned __int128)base * base % prime);
+            exponent >>= 1;
+        }
+        for (int i = 0; i < m; i++) basis[(size_t)kept * m + i] = (uint64_t)((unsigned __int128)v[i] * inverse % prime);
+        pivot_row[kept++] = row;
+    }
+    free(basis); free(pivot_row); free(v);
+    return found;
+}
+
+static inline int check_first_dependent_exact(Mat a) {
+    int first = check_first_dependent_modulo(a, 2305843009213693951ULL);
+    int second = check_first_dependent_modulo(a, 1000000007ULL);
+    CHECK(first == second, "the two primes disagree about the rank (%d and %d)", first, second);
+    return first;
+}
+
 /* The banner every test file opens with and the verdict it closes on, so the
    binaries all report the same way and a runner can read any of them. */
 static inline void check_banner(const char *subject) {

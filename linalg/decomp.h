@@ -18,26 +18,53 @@
    failure here (a singular LU, a malformed shape) is still a contract
    violation, same as mat_reshape's assert(m.stride == m.c) in mat.h. */
 
-/* How small a pivot has to be, relative to the size it started from,
-   before it is indistinguishable from zero after a factorization that
-   accumulates rounding over length terms: 10 * sqrt(length) * MEPS.
+/* The package's one rule for numerical rank: a quantity is numerically
+   zero when it is at most mat_rank_tolerance(length) times the scale it is
+   measured against, with length the number of terms whose rounding the
+   computation behind it accumulates. Every rank or singularity decision in
+   the library applies it:
 
-   sqrt(length) is the probabilistic rounding model (Higham and Mary,
-   2019), under which the error of a length-term reduction grows like
-   sqrt(length) * MEPS rather than the worst-case length * MEPS. The
-   worst-case form is far too loose for a long sample: at float32 with
-   50000 rows it would call a column dependent while 0.6 percent of it is
-   still independent of the others. Measured on exactly dependent inputs,
-   2000 draws per shape at both precisions, the computed ratio never
-   exceeded 1.9 * sqrt(length) * MEPS for mat_lstsq (m = 3..2000 rows,
-   n = 2..21 columns) or 2.2 * sqrt(length) * MEPS for mat_chol (n = 2..40,
-   the matrix rounded once from an exact second moment), so the factor 10
-   leaves at least 4.5 times the worst case as margin.
+     mat_lstsq, mat_chol   |R[j][j]| against ||a_j||, length m; L[k][k]^2
+                           against a[k][k], length n
+     mat_lstsq_rd, mat_rank, ols
+                           a singular value against the largest, length
+                           max(m, n)
+     sd/qvarma.h, sd/score_driven_location.h
+                           a Hessian eigenvalue against the largest in size,
+                           length the number of parameters
 
-   The tolerance follows MEPS, so the same matrix can pass at float64
-   and be rejected at float32. That is the intended answer: the question
-   is whether this precision can tell the pivot from zero. */
-static inline double _pivot_tolerance(int length) {
+   The value is 10 * sqrt(length) * MEPS. sqrt(length) is the probabilistic
+   rounding model (Higham and Mary, 2019), under which the error of a
+   length-term reduction grows like sqrt(length) * MEPS rather than the
+   worst-case length * MEPS. The worst-case form is far too loose for a long
+   sample: at float32 with 50000 rows it would call a column dependent while
+   0.6 percent of it is still independent of the others. Measured on exactly
+   singular inputs stored exactly, at both precisions, in units of
+   sqrt(length) * MEPS, the computed quantity never exceeded 1.9 for the QR
+   column test (m = 3..2000, n = 2..21, 2000 draws per shape), 2.2 for the
+   Cholesky pivot (n = 2..40, 2000 draws), 0.71 for the smallest singular
+   value and 1.13 for the smallest eigenvalue of a Gram matrix (m = 3..2000,
+   n = 2..30, 500 draws). The factor 10 leaves at least 4.5 times the worst
+   case as margin.
+
+   The rules agree in one direction. The part of column j outside the span
+   of the earlier ones is at least the smallest singular value, and ||a_j||
+   is at most the largest, so sigma_min / sigma_max <= |R[j][j]| / ||a_j||:
+   a design the column test flags is flagged by the singular-value test at
+   the same tolerance, up to rounding in the last digits of the two computed
+   ratios. The converse does not hold. The column test is unchanged by
+   rescaling a column and the singular-value test is not, so a design with
+   one column in much smaller units can pass the first and fail the second.
+
+   The tolerance covers the rounding of the decision's own computation. A
+   matrix that arrives with larger error of its own, a covariance summed
+   over many observations or a Hessian taken by differencing, carries it on
+   top, and only the caller knows its size.
+
+   The tolerance follows MEPS, so the same matrix can pass at float64 and
+   be rejected at float32. That is the intended answer: the question is
+   whether this precision can tell the quantity from zero. */
+static inline double mat_rank_tolerance(int length) {
     return 10.0 * sqrt((double)length) * (double)MEPS;
 }
 
@@ -47,7 +74,7 @@ static inline double _pivot_tolerance(int length) {
    zeroed. Caller must mat_free().
 
    a is rejected when some pivot is not positive, is not a number, or is
-   numerically zero: L[k][k]^2 <= _pivot_tolerance(n) * a[k][k].
+   numerically zero: L[k][k]^2 <= mat_rank_tolerance(n) * a[k][k].
    L[k][k]^2 / a[k][k] is 1 - R^2 of variable k regressed on the ones
    before it, so the test is unchanged by rescaling any variable, which a
    test on the absolute size of L[k][k] would not be. The tolerance
@@ -85,7 +112,7 @@ static inline Mat mat_chol(Mat a, int *status) {
     }
     /* The pivot test rides on the pass that zeroes the upper triangle,
        which visits every row of l anyway. */
-    double tolerance = _pivot_tolerance(n);
+    double tolerance = mat_rank_tolerance(n);
     for (int k = 0; k < factored; k++) {
         double pivot = (double)AT(l, k, k);
         if (pivot * pivot <= tolerance * (double)AT(a, k, k)) { info = k + 1; break; }
@@ -356,9 +383,11 @@ static inline mreal mat_cond(Mat a) {
     return c;
 }
 
-/* Numerical rank of a via SVD singular values, using the same default
-   tolerance NumPy/MATLAB use: singular values <= max(a.r,a.c) * MEPS *
-   (largest singular value) are treated as zero. */
+/* Numerical rank of a: the number of singular values above
+   mat_rank_tolerance(max(m, n)) times the largest, the package's single rank
+   rule (see there). This is not NumPy's max(m, n) * MEPS: the sqrt(length)
+   growth and the factor 10 are what the rule measured on exactly singular
+   inputs. */
 static inline int mat_rank(Mat a) {
     Mat u, vt;
     Vec s;
@@ -366,7 +395,7 @@ static inline int mat_rank(Mat a) {
     int k = s.r;
     mreal smax = AT(s, 0, 0);
     int maxmn = a.r > a.c ? a.r : a.c;
-    mreal thresh = smax * (mreal)maxmn * MEPS;
+    mreal thresh = smax * (mreal)mat_rank_tolerance(maxmn);
 
     int rank = 0;
     for (int i = 0; i < k; i++)

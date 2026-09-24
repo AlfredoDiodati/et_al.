@@ -1,10 +1,10 @@
-test run: do 24 sep 2026 15:17:20 CEST
+test run: do 24 sep 2026 16:30:49 CEST
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 76 suites
+make test and check.sh run the same 78 suites
 
 === build ===
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/poly_correctness.c -lm -lopenblas -o tests/correctness/poly_correctness
@@ -15,11 +15,13 @@ make: 'tests/correctness/test_mat' is up to date.
 make: 'tests/correctness/test_tensor' is up to date.
 make: 'tests/correctness/test_tensor_serial' is up to date.
 make: 'tests/correctness/test_mat_special' is up to date.
-make: 'tests/correctness/test_decomp' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_decomp.c -lm -lopenblas -o tests/correctness/test_decomp
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_solver.c -lm -lopenblas -o tests/correctness/test_solver
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/lstsq_rank_deficiency.c -lm -lopenblas -o tests/correctness/lstsq_rank_deficiency
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/chol_singularity.c -lm -lopenblas -o tests/correctness/chol_singularity
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/singularity_rule_comparison.c -lm -lopenblas -o tests/correctness/singularity_rule_comparison
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/ols_pseudo_inverse_fallback.c -lm -lopenblas -o tests/correctness/ols_pseudo_inverse_fallback
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/rank_rule_consistency.c -lm -lopenblas -o tests/correctness/rank_rule_consistency
 make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
@@ -31,10 +33,10 @@ make: 'tests/correctness/mcs_size_and_power' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
 make: 'tests/correctness/test_student' is up to date.
-make: 'tests/correctness/test_mvgauss' is up to date.
-make: 'tests/correctness/test_mvstudent' is up to date.
-make: 'tests/correctness/test_matgauss' is up to date.
-make: 'tests/correctness/test_matgauss_recovery' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mvgauss.c -lm -lopenblas -o tests/correctness/test_mvgauss
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mvstudent.c -lm -lopenblas -o tests/correctness/test_mvstudent
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_matgauss.c -lm -lopenblas -o tests/correctness/test_matgauss
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_matgauss_recovery.c -lm -lopenblas -o tests/correctness/test_matgauss_recovery
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/mv_density_dispatch.c -lm -lopenblas -o tests/correctness/mv_density_dispatch
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_ad.c -lm -lopenblas -o tests/correctness/test_ad
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -ftrivial-auto-var-init=pattern tests/correctness/ad_tensor_gradients.c -lm -lopenblas -o tests/correctness/ad_tensor_gradients
@@ -444,6 +446,31 @@ Cholesky on exactly singular Gram matrices
   Cholesky scaled by 2^-50: singular exact 0 tolerance 4, regular exact 0 tolerance 0
 
 full tables in out/singularity_rule_comparison_float32_report.txt
+
+PASSED, 0 failures
+
+=== ols_pseudo_inverse_fallback: PASS ===
+ols: QR at full rank, the pseudo-inverse below it, float32 build
+
+full column rank
+known minimum-norm solutions
+random exactly rank-deficient designs, 1000 draws
+  640 of them took the pseudo-inverse
+either side of the tolerance
+strided x and y
+NaN and infinite entries
+
+PASSED, 0 failures
+
+=== rank_rule_consistency: PASS ===
+the package's rank decisions against one another, float32 build
+
+random designs, 2000 draws
+  implication compared on 1851 draws, 1364 of them flagged by mat_lstsq
+  same-rule comparison on 1322 draws
+  141 draws accepted by mat_lstsq with a lower singular-value rank
+singular values either side of the tolerance
+the converse fails for a column in much smaller units
 
 PASSED, 0 failures
 
@@ -1714,4 +1741,4 @@ PASSED, 0 failures
 
 
 === summary ===
-79 passed, 0 failed
+81 passed, 0 failed

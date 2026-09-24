@@ -861,7 +861,9 @@ static inline SdlocStandardErrors sdloc_standard_errors(const SdlocParams *m, Ma
     }
     e.condition = smallest_size > 0 ? largest_size / smallest_size : (mreal)INFINITY;
 
-    mreal floor_value = (mreal)(n * MEPS) * largest_size;
+    /* Flat directions by the package's rank rule; see sd/qvarma.h's
+       standard errors for what the tolerance does and does not cover. */
+    mreal floor_value = (mreal)mat_rank_tolerance(n) * largest_size;
     e.is_maximum = 1;
     e.n_flat = 0;
     for (int k = 0; k < n; k++) {

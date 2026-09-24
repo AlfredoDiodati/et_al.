@@ -2886,10 +2886,12 @@ static inline QvarmaStandardErrors qvarma_standard_errors(const QvarmaParams *m,
     }
     e.condition = smallest_size > 0 ? largest_size / smallest_size : (mreal)INFINITY;
 
-    /* Curvature this far below the largest cannot be told from zero once the
-       Hessian has been differenced, so it is read as flat rather than as a
-       small positive number that would give a confidently small error. */
-    mreal floor_value = (mreal)(n * MEPS) * largest_size;
+    /* Curvature at or below the package's rank tolerance relative to the
+       largest (mat_rank_tolerance, linalg/decomp.h) is read as flat rather
+       than as a small positive number that would give a confidently small
+       error. The tolerance covers the eigendecomposition's rounding; the
+       error the Hessian carries from being differenced comes on top. */
+    mreal floor_value = (mreal)mat_rank_tolerance(n) * largest_size;
     e.is_maximum = 1;
     e.n_flat = 0;
     for (int k = 0; k < n; k++) {

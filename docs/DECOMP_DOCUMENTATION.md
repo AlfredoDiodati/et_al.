@@ -16,9 +16,37 @@ Passing `NULL` for the status keeps the older contract: the failure asserts. Tha
 
 Every other failure is still a contract violation caught by `assert` - a kernel's nonzero `info` in `mat_lu` (exactly singular for `getrf`), a malformed shape - the same pattern `mat_reshape` in `linalg/mat.h` uses for its `stride == c` precondition. `mat_eig_sym_status` below is the third function with a status, for a Hessian that an optimizer reaches through data.
 
+## The rank rule
+
+Every rank or singularity decision in the library uses one rule: a quantity is numerically zero when it is at most `mat_rank_tolerance(length)` times the scale it is measured against, where `length` is the number of terms whose rounding the computation behind it accumulates. The value is `10 * sqrt(length) * MEPS`.
+
+| decision | quantity | measured against | `length` |
+|---|---|---|---|
+| `mat_lstsq` (and `ols`'s choice of path) | `|R[j][j]|` of `a == Q * R` | `||a_j||` | `m` |
+| `mat_chol` | `L[k][k]^2` | `a[k][k]` | `n` |
+| `mat_rank`, `mat_lstsq_rd` (and `ols`'s pseudo-inverse) | each singular value | the largest | `max(m, n)` |
+| `sd/qvarma.h`, `sd/score_driven_location.h` standard errors | each Hessian eigenvalue | the largest in size | number of parameters |
+
+Why `sqrt(length)`: under the probabilistic rounding model (Higham and Mary, 2019) the error of a reduction over `length` terms grows like `sqrt(length) * MEPS`, not the worst-case `length * MEPS`, and the worst-case form is far too loose for a long sample: at float32 with 50000 rows it would call a column dependent while 0.6 per cent of it is still independent of the others. Why 10: on exactly singular matrices stored exactly (small integers), at both precisions, the computed quantity never exceeded, in units of `sqrt(length) * MEPS`, 1.9 for the QR column test (`m = 3..2000`, `n = 2..21`, 2000 draws per shape), 2.2 for the Cholesky pivot (`n = 2..40`, 2000 draws), 0.71 for the smallest singular value and 1.13 for the smallest eigenvalue of a Gram matrix (`m = 3..2000`, `n = 2..30`, 500 draws). 10 leaves at least 4.5 times the worst case.
+
+What the one rule makes consistent, checked in `tests/correctness/rank_rule_consistency.c`:
+
+- A design `mat_lstsq` flags is also flagged by `mat_rank` and `mat_lstsq_rd`. The part of column `j` outside the earlier columns is at least the smallest singular value, and `||a_j||` is at most the largest, so `sigma_min / sigma_max <= |R[j][j]| / ||a_j||`. Rounding in the last digits can separate the two computed ratios only when one of them lies within a whisker of the tolerance.
+- A design `mat_lstsq` flags has a Gram matrix `X^T X` that `mat_chol` flags.
+- `mat_rank` and `mat_lstsq_rd` count the same singular values, through two different SVD routines.
+
+What it does not make consistent, by construction:
+
+- The converse of the first point fails. The column test is unchanged by rescaling a column and the singular-value test is not, so a design with one column in much smaller units passes `mat_lstsq` and loses rank in `mat_rank`.
+- `mat_chol` on `X^T X` flags designs `mat_lstsq` accepts on `X`: forming `X^T X` squares the condition number, so the Gram matrix really is indistinguishable from singular sooner. Each decision answers for the matrix it is given.
+- The tolerance covers the rounding of the decision's own computation. A matrix arriving with larger error, a covariance summed over many observations or a Hessian taken by differencing, carries it on top, and only the caller knows its size.
+
+The tolerance follows `MEPS`, so the same matrix can pass at float64 and fail at float32; the question each decision answers is whether this precision can tell the quantity from zero.
+
 ## API reference
 
 ```c
+double mat_rank_tolerance(int length)
 Mat   mat_chol(Mat a, int *status)
 Mat   mat_lu(Mat a, MatPivot **piv)
 void  mat_bandwidth(Mat a, int *kl_out, int *ku_out)
@@ -45,7 +73,7 @@ L[k][k]^2 <= 10 * sqrt(n) * MEPS * a[k][k]
 
 `L[k][k]^2 / a[k][k]` is `1 - R^2` of variable `k` regressed on the variables before it, so the verdict does not change when a variable is rescaled, which a test on the absolute size of `L[k][k]` would not guarantee. The status is the index of the first rejected pivot, counted from 1. With a `NULL` status a rejected matrix asserts; see the Contract section above.
 
-Where the tolerance comes from. The helper `_pivot_tolerance(length)` is `10 * sqrt(length) * MEPS`, with `length = n` here and `length = m` in `mat_lstsq`. The `sqrt` is the probabilistic rounding model (Higham and Mary, 2019): the error of a reduction over `length` terms grows like `sqrt(length) * MEPS`, not the worst-case `length * MEPS`. On exactly singular inputs, 2000 random draws per shape at both precisions, with each matrix rounded once from an exact second moment of `m = 50` or `2000` observations, the computed ratio never exceeded `2.2 * sqrt(n) * MEPS` for `n = 2..40`; the largest values were at `n = 2`. The factor 10 leaves 4.5 times that as margin. The tolerance follows `MEPS`, so a matrix can pass at float64 and be rejected at float32; the question it answers is whether this precision can tell the pivot from zero.
+The tolerance is the package's rank rule, `mat_rank_tolerance(n)`, described above with its derivation and what it is consistent with.
 
 The tolerance covers this factorization's own rounding only. A covariance accumulated from `m` observations in working precision carries its own error of about `sqrt(m) * MEPS`, and an exactly singular one built that way can land above the tolerance: at float64 with 2000 observations the measured ratio reached `48 * MEPS`, against a tolerance of `14 * MEPS` for `n = 2`. The caller knows how its matrix was formed and this function does not; accumulate in higher precision, or test the ratio against a wider margin, where that matters.
 
@@ -105,7 +133,7 @@ Condition number of `a` - ratio of largest to smallest singular value, via `mat_
 
 ### `mat_rank`
 
-Numerical rank of `a` via `mat_svd`'s singular values, using the same default tolerance NumPy/MATLAB use: singular values `<= max(a.r,a.c) * MEPS * (largest singular value)` count as zero, where `MEPS` is the build's machine epsilon (`FLT_EPSILON`/`DBL_EPSILON`, dispatched with precision same as everything else - see `docs/MATRIX_DOCUMENTATION.md`'s Precision section).
+Numerical rank of `a`: the number of singular values, from `mat_svd`, above `mat_rank_tolerance(max(m, n))` times the largest, the rank rule above. It is not NumPy's `max(m, n) * MEPS`; the two agree near 100 rows and part on either side of it, and at 1000 rows NumPy's would count as zero a singular value three times this one's tolerance.
 
 ### `mat_eig`
 

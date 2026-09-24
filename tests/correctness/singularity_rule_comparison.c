@@ -139,56 +139,6 @@ static Mat exact_singular_design(Rng *rng, Pattern pattern, int m) {
     return a;
 }
 
-/* The 1-based index of the first column that is an exact linear combination
-   of the ones before it, or 0. Every entry here is an integer or a multiple
-   of 1/4, so four times the matrix is an integer matrix, and its rank is
-   computed by elimination modulo a prime rather than in floating point. Two
-   primes have to agree: a rank can drop modulo one prime only if that prime
-   divides a nonzero minor. */
-static int first_dependent_modulo(Mat a, uint64_t prime) {
-    int m = a.r, n = a.c;
-    uint64_t *basis = calloc((size_t)m * n, sizeof *basis);
-    int *pivot_row = malloc((size_t)n * sizeof *pivot_row);
-    uint64_t *v = malloc((size_t)m * sizeof *v);
-    int kept = 0, found = 0;
-    for (int j = 0; j < n && !found; j++) {
-        for (int i = 0; i < m; i++) {
-            long long scaled = llround(4 * (double)AT(a, i, j));
-            long long r = scaled % (long long)prime;
-            v[i] = (uint64_t)(r < 0 ? r + (long long)prime : r);
-        }
-        for (int k = 0; k < kept; k++) {
-            uint64_t factor = v[pivot_row[k]];
-            if (!factor) continue;
-            for (int i = 0; i < m; i++) {
-                unsigned __int128 t = (unsigned __int128)factor * basis[(size_t)k * m + i] % prime;
-                v[i] = (v[i] + prime - (uint64_t)t) % prime;
-            }
-        }
-        int row = -1;
-        for (int i = 0; i < m && row < 0; i++) if (v[i]) row = i;
-        if (row < 0) { found = j + 1; break; }
-        /* normalize so the pivot is 1: multiply by its inverse, v^(p-2) */
-        uint64_t inverse = 1, base = v[row], exponent = prime - 2;
-        while (exponent) {
-            if (exponent & 1) inverse = (uint64_t)((unsigned __int128)inverse * base % prime);
-            base = (uint64_t)((unsigned __int128)base * base % prime);
-            exponent >>= 1;
-        }
-        for (int i = 0; i < m; i++) basis[(size_t)kept * m + i] = (uint64_t)((unsigned __int128)v[i] * inverse % prime);
-        pivot_row[kept++] = row;
-    }
-    free(basis); free(pivot_row); free(v);
-    return found;
-}
-
-static int first_dependent_exact(Mat a) {
-    int first = first_dependent_modulo(a, 2305843009213693951ULL);
-    int second = first_dependent_modulo(a, 1000000007ULL);
-    CHECK(first == second, "the two primes disagree about the rank (%d and %d)", first, second);
-    return first;
-}
-
 static Mat integer_response(Rng *rng, int m) {
     Mat b = mat_new(m, 1);
     for (int i = 0; i < m; i++) AT(b, i, 0) = (mreal)small_int(rng, 8);
@@ -227,7 +177,7 @@ static void test_exact(Rng *rng) {
                     if (max_abs(x) > largest_through) largest_through = max_abs(x);
                     if (max_abs(x) < smallest_let_through) smallest_let_through = max_abs(x);
                 }
-                int expected = first_dependent_exact(a);
+                int expected = check_first_dependent_exact(a);
                 if (expected < 4) earlier++;
                 if (tolerance) tolerance_flags++;
                 if (tolerance == expected) right_column++;

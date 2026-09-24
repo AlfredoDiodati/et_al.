@@ -45,6 +45,7 @@ the lot as unused.
 #include "../../special.h"
 #include "../../random/random.h"
 #include "../../stats.h"
+#include "../../regression.h"
 #include "../../json.h"
 #include "../../frame/gzip.h"
 #include "../../basis/poly.h"
@@ -122,6 +123,12 @@ static int touch_every_module(void) {
     if (rng_uniform(&rng) < 0 || rng_uniform(&rng) >= 1) problems++;
 
     if (MABS(stats_mean(b) - 1.5f) > 1e-4f) problems++;
+
+    Mat ones = mat_lit(2, 1, 1.f, 1.f), pair = mat_lit(2, 1, 1.f, 3.f);
+    OlsFit fit = ols(ones, pair);
+    if (fit.status != 0 || MABS(AT(fit.coefficients, 0, 0) - 2.0f) > 1e-4f) problems++;
+    ols_free(&fit);
+    mat_free(ones); mat_free(pair);
 
     JsonValue *root = json_object();
     json_object_set(root, "n", json_number(1));
