@@ -21,10 +21,12 @@ What this file establishes:
   reference       over fixed-seed random matrices biased toward singularity,
                   the reported index matches a Cholesky in long double,
                   excluding draws within a factor 3 of the tolerance
-  NaN             a NaN on or below the diagonal is reported, on both the
-                  unblocked (n <= 16) and blocked paths
+  non-finite      a NaN or an infinity on or below the diagonal is reported,
+                  on both the unblocked (n <= 16) and blocked paths
   views           a strided view gets the same verdict as its contiguous copy,
                   and the upper triangle is never read
+  earlier pivot   a numerically zero pivot before the negative one _potrf
+                  stops at is the one reported, on both _potrf paths
   NULL status     an indefinite matrix aborts, in a forked child
 
 Run with make tests/correctness/chol_singularity. STRESS=1 widens the random
@@ -266,19 +268,23 @@ static void test_against_reference(Rng *rng) {
 }
 
 static void test_nan(Rng *rng) {
-    puts("a NaN on or below the diagonal");
+    puts("a NaN or an infinity on or below the diagonal");
     int sizes[] = {3, 30};
-    for (int s = 0; s < 2; s++) {
-        int n = sizes[s];
-        Mat a = well_conditioned(rng, n);
-        Mat b = mat_copy(a);
-        AT(a, 1, 1) = (mreal)NAN;
-        AT(b, n - 1, 0) = (mreal)NAN;
-        int on_diagonal = chol_status(a), below = chol_status(b);
-        CHECK(on_diagonal > 0, "n = %d: NaN at [1][1] is reported (status %d)", n, on_diagonal);
-        CHECK(below > 0, "n = %d: NaN at [%d][0] is reported (status %d)", n, n - 1, below);
-        mat_free(a); mat_free(b);
-    }
+    for (int s = 0; s < 2; s++)
+        for (int infinite = 0; infinite < 2; infinite++) {
+            int n = sizes[s];
+            const char *kind = infinite ? "infinity" : "NaN";
+            Mat a = well_conditioned(rng, n);
+            Mat b = mat_copy(a);
+            AT(a, 1, 1) = check_non_finite(infinite);
+            AT(b, n - 1, 0) = check_non_finite(infinite);
+            CHECK(check_stored_non_finite(&AT(a, 1, 1), infinite) && check_stored_non_finite(&AT(b, n - 1, 0), infinite),
+                  "the stored entries really are %s", kind);
+            int on_diagonal = chol_status(a), below = chol_status(b);
+            CHECK(on_diagonal > 0, "n = %d: %s at [1][1] is reported (status %d)", n, kind, on_diagonal);
+            CHECK(below > 0, "n = %d: %s at [%d][0] is reported (status %d)", n, kind, n - 1, below);
+            mat_free(a); mat_free(b);
+        }
 }
 
 static void test_view(Rng *rng) {
@@ -306,6 +312,37 @@ static void test_view(Rng *rng) {
         for (int j = i + 1; j < n; j++) AT(garbage_above, i, j) = -1e6;
     CHECK(chol_status(garbage_above) == 0, "values above the diagonal are not read");
     mat_free(inner); mat_free(parent); mat_free(copy); mat_free(garbage_above);
+}
+
+/* An earlier pivot can be numerically zero while _potrf only stops at a
+   later, negative one: dividing by the tiny pivot is what drives the later
+   one negative. mat_chol once reported the later pivot. The case is built
+   exactly: pivot k is (1 + delta) - 1 = delta, stored exactly, positive and
+   below the tolerance, and pivot k + 1 is 1 - 1/delta < 0. It is placed at
+   the start of a 3 x 3 matrix, which takes _potrf's unblocked path, and at
+   the end of a 20 x 20 identity, which takes the blocked one. The test first
+   confirms _potrf stops at pivot k + 1, so the case really arises. */
+static void test_dependent_before_failing_pivot(void) {
+    puts("a numerically zero pivot before the one _potrf stops at");
+    mreal delta = (mreal)(sizeof(mreal) == sizeof(double) ? ldexp(1.0, -50) : ldexp(1.0, -22));
+    int sizes[] = { 3, 20 };
+    for (int s = 0; s < 2; s++) {
+        int n = sizes[s], k = n - 2;
+        Mat a = mat_eye(n);
+        AT(a, k - 1, k - 1) = 1;
+        AT(a, k, k - 1) = 1; AT(a, k - 1, k) = 1;
+        AT(a, k, k) = 1 + delta;
+        AT(a, k + 1, k) = 1; AT(a, k, k + 1) = 1;
+        CHECK(delta < documented_tolerance(n), "delta %g is below the tolerance %g", (double)delta,
+              documented_tolerance(n));
+        Mat copy = mat_copy(a);
+        int stops_at = _potrf(copy.d, n, copy.stride);
+        mat_free(copy);
+        CHECK(stops_at == k + 2, "n = %d: _potrf stops at pivot %d (expected %d)", n, stops_at, k + 2);
+        int status = chol_status(a);
+        CHECK(status == k + 1, "n = %d: mat_chol reports pivot %d, the numerically zero one (got %d)", n, k + 1, status);
+        mat_free(a);
+    }
 }
 
 static void call_with_null_status(void) {
@@ -337,6 +374,7 @@ int main(void) {
     test_against_reference(&rng);
     test_nan(&rng);
     test_view(&rng);
+    test_dependent_before_failing_pivot();
     test_null_status_aborts();
     return check_report();
 }

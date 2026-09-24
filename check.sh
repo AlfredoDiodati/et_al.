@@ -53,7 +53,7 @@ run() {
 # The statistical test and model suites at the end of the list are built at
 # float64 whatever MAT_DOUBLE says, through the Makefile's STAT_CFLAGS - see
 # the note above it for why that is mandatory rather than advisable.
-SUITES="poly_correctness spline_design_correctness spline_basis_correctness spline_objects_correctness test_mat test_tensor test_tensor_serial test_mat_special test_decomp test_solver lstsq_rank_deficiency chol_singularity test_special test_stats test_random test_lhs test_mcs test_mcs_variance mcs_primitives mcs_size_and_power test_broadcast test_gauss test_student test_mvgauss test_mvstudent test_matgauss test_matgauss_recovery mv_density_dispatch test_ad ad_tensor_gradients test_tape_reset test_adam test_optimizer test_cluster test_mlp test_frame test_csv test_txt test_npy test_npz test_json test_sql test_join gzip_inflate gzip_deflate rdata_array_read adf_correctness kpss_correctness dfgls_correctness otto_correctness hlt_union_correctness hlt_break_correctness hhlt_correctness zivot_andrews_correctness johansen_correctness engle_granger_correctness maki_correctness qlr_test_correctness lbfgs_correctness score_driven_location_correctness qvarma_correctness qvarma_analytic_agreement qvarma_gaussian_limit qvarma_identification qvarma_fixed_parameter_fit"
+SUITES="poly_correctness spline_design_correctness spline_basis_correctness spline_objects_correctness test_mat test_tensor test_tensor_serial test_mat_special test_decomp test_solver lstsq_rank_deficiency chol_singularity singularity_rule_comparison test_special test_stats test_random test_lhs test_mcs test_mcs_variance mcs_primitives mcs_size_and_power test_broadcast test_gauss test_student test_mvgauss test_mvstudent test_matgauss test_matgauss_recovery mv_density_dispatch test_ad ad_tensor_gradients test_tape_reset test_adam test_optimizer test_cluster test_mlp test_frame test_csv test_txt test_npy test_npz test_json test_sql test_join gzip_inflate gzip_deflate rdata_array_read adf_correctness kpss_correctness dfgls_correctness otto_correctness hlt_union_correctness hlt_break_correctness hhlt_correctness zivot_andrews_correctness johansen_correctness engle_granger_correctness maki_correctness qlr_test_correctness lbfgs_correctness score_driven_location_correctness qvarma_correctness qvarma_analytic_agreement qvarma_gaussian_limit qvarma_identification qvarma_fixed_parameter_fit"
 
 # tests/integration/ answers a different question from tests/correctness/: not
 # "is this module correct" but "does the hand-off between two of them hold".
@@ -85,6 +85,32 @@ tracked_build_output() {
 
 run "tracked_build_output" tracked_build_output
 
+# `make test` and this script are two runners over the same suites, and a
+# suite one of them skips passes unnoticed: the test recipe once handed
+# mcs_size_and_power to mcs_primitives as an argument instead of running it.
+# The recipe now runs every prerequisite, and this checks that its list and
+# the lists here name the same suites. test_mat_special is the one expected
+# difference: it is built without -ffast-math and only this script runs it.
+same_suites_as_make_test() {
+    local from_make from_here
+    from_make=$(make -n test 2>/dev/null | grep '^for t in' | head -1 \
+        | sed 's/^for t in //; s/; do.*//' | tr ' ' '\n' | sed 's|^tests/[a-z]*/||' | grep -v '^$' | sort)
+    from_here=$(printf '%s\n' $SUITES $INTEGRATION | grep -vx test_mat_special | sort)
+    if [ -z "$from_make" ]; then
+        printf "could not read the suites from make -n test\n"
+        return 1
+    fi
+    if [ "$from_make" != "$from_here" ]; then
+        printf "make test and check.sh run different suites:\n"
+        diff <(printf '%s\n' "$from_make") <(printf '%s\n' "$from_here") | grep '^[<>]' \
+            | sed 's/^</  only in make test:/; s/^>/  only in check.sh:/'
+        return 1
+    fi
+    printf "make test and check.sh run the same %d suites\n" "$(printf '%s\n' "$from_make" | wc -l)"
+}
+
+run "same_suites_as_make_test" same_suites_as_make_test
+
 printf "building...\n"
 printf "=== build ===\n" >> "$REPORT"
 BUILD_TARGETS=""
@@ -99,6 +125,11 @@ printf "\n" >> "$REPORT"
 for s in $SUITES; do
     run "$s" "./tests/correctness/$s"
 done
+
+# Every integration suite runs from a clean output directory, the state of a
+# fresh clone: frame_to_tensor once wrote into tests/integration/out without
+# creating it, and passed only on machines where an earlier run had.
+rm -rf tests/integration/out
 
 printf "\nintegration\n"
 printf "=== integration ===\n" >> "$REPORT"

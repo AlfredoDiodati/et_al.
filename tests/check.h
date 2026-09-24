@@ -57,6 +57,37 @@ static int failures = 0;
         failures++; } \
 } while (0)
 
+/* A NaN, or an infinity when infinite is nonzero, in mreal. Under
+   -ffinite-math-only the compiler may assume neither exists and fold one
+   known at compile time into a finite value: GCC 15.2 stored FLT_MAX in a
+   float32 build for `which ? (mreal)INFINITY : (mreal)NAN`, and for the same
+   choice made between two bit patterns and put through memcpy. The bits are
+   therefore read through a volatile at run time, where there is nothing to
+   fold. */
+static inline mreal check_non_finite(int infinite) {
+#ifdef MAT_DOUBLE
+    volatile uint64_t bits = infinite ? 0x7FF0000000000000ull : 0x7FF8000000000000ull;
+    uint64_t raw = bits;
+#else
+    volatile uint32_t bits = infinite ? 0x7F800000u : 0x7FC00000u;
+    uint32_t raw = bits;
+#endif
+    mreal value;
+    memcpy(&value, &raw, sizeof value);
+    return value;
+}
+
+/* Whether the element at p, read back from memory, is a NaN (infinite zero)
+   or an infinity (infinite nonzero). Read through a volatile so the answer
+   is about what was stored rather than about a value the compiler already
+   knows, which is how a check folded from the same constant as the store
+   once reported a NaN that memory did not hold. */
+static inline int check_stored_non_finite(const mreal *p, int infinite) {
+    const volatile mreal *stored = p;
+    mreal value = *stored;
+    return infinite ? MISINF(value) : MISNAN(value);
+}
+
 /* The banner every test file opens with and the verdict it closes on, so the
    binaries all report the same way and a runner can read any of them. */
 static inline void check_banner(const char *subject) {

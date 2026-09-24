@@ -1,7 +1,10 @@
-test run: do 24 sep 2026 13:43:07 CEST
+test run: do 24 sep 2026 15:17:20 CEST
 
 === tracked_build_output: PASS ===
 no build output is tracked
+
+=== same_suites_as_make_test: PASS ===
+make test and check.sh run the same 76 suites
 
 === build ===
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/poly_correctness.c -lm -lopenblas -o tests/correctness/poly_correctness
@@ -13,16 +16,17 @@ make: 'tests/correctness/test_tensor' is up to date.
 make: 'tests/correctness/test_tensor_serial' is up to date.
 make: 'tests/correctness/test_mat_special' is up to date.
 make: 'tests/correctness/test_decomp' is up to date.
-make: 'tests/correctness/test_solver' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_solver.c -lm -lopenblas -o tests/correctness/test_solver
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/lstsq_rank_deficiency.c -lm -lopenblas -o tests/correctness/lstsq_rank_deficiency
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/chol_singularity.c -lm -lopenblas -o tests/correctness/chol_singularity
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/singularity_rule_comparison.c -lm -lopenblas -o tests/correctness/singularity_rule_comparison
 make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
-make: 'tests/correctness/test_lhs' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_lhs.c -lm -lopenblas -o tests/correctness/test_lhs
 make: 'tests/correctness/test_mcs' is up to date.
 make: 'tests/correctness/test_mcs_variance' is up to date.
-make: 'tests/correctness/mcs_primitives' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/mcs_primitives.c -lm -lopenblas -o tests/correctness/mcs_primitives
 make: 'tests/correctness/mcs_size_and_power' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
@@ -31,14 +35,14 @@ make: 'tests/correctness/test_mvgauss' is up to date.
 make: 'tests/correctness/test_mvstudent' is up to date.
 make: 'tests/correctness/test_matgauss' is up to date.
 make: 'tests/correctness/test_matgauss_recovery' is up to date.
-make: 'tests/correctness/mv_density_dispatch' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/mv_density_dispatch.c -lm -lopenblas -o tests/correctness/mv_density_dispatch
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_ad.c -lm -lopenblas -o tests/correctness/test_ad
-make: 'tests/correctness/ad_tensor_gradients' is up to date.
-make: 'tests/correctness/test_tape_reset' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -ftrivial-auto-var-init=pattern tests/correctness/ad_tensor_gradients.c -lm -lopenblas -o tests/correctness/ad_tensor_gradients
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_tape_reset.c -lm -lopenblas -o tests/correctness/test_tape_reset
 make: 'tests/correctness/test_adam' is up to date.
 make: 'tests/correctness/test_optimizer' is up to date.
 make: 'tests/correctness/test_cluster' is up to date.
-make: 'tests/correctness/test_mlp' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mlp.c -lm -lopenblas -o tests/correctness/test_mlp
 make: 'tests/correctness/test_frame' is up to date.
 make: 'tests/correctness/test_csv' is up to date.
 make: 'tests/correctness/test_txt' is up to date.
@@ -50,18 +54,131 @@ make: 'tests/correctness/test_join' is up to date.
 make: 'tests/correctness/gzip_inflate' is up to date.
 make: 'tests/correctness/gzip_deflate' is up to date.
 make: 'tests/correctness/rdata_array_read' is up to date.
-make: 'tests/correctness/adf_correctness' is up to date.
-make: 'tests/correctness/kpss_correctness' is up to date.
-make: 'tests/correctness/dfgls_correctness' is up to date.
-make: 'tests/correctness/otto_correctness' is up to date.
-make: 'tests/correctness/hlt_union_correctness' is up to date.
-make: 'tests/correctness/hlt_break_correctness' is up to date.
-make: 'tests/correctness/hhlt_correctness' is up to date.
-make: 'tests/correctness/zivot_andrews_correctness' is up to date.
-make: 'tests/correctness/johansen_correctness' is up to date.
-make: 'tests/correctness/engle_granger_correctness' is up to date.
-make: 'tests/correctness/maki_correctness' is up to date.
-make: 'tests/correctness/qlr_test_correctness' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/adf_correctness.c -lm -lopenblas -o tests/correctness/adf_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/kpss_correctness.c -lm -lopenblas -o tests/correctness/kpss_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/dfgls_correctness.c -lm -lopenblas -o tests/correctness/dfgls_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/otto_correctness.c -lm -lopenblas -o tests/correctness/otto_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hlt_union_correctness.c -lm -lopenblas -o tests/correctness/hlt_union_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hlt_break_correctness.c -lm -lopenblas -o tests/correctness/hlt_break_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hhlt_correctness.c -lm -lopenblas -o tests/correctness/hhlt_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/zivot_andrews_correctness.c -lm -lopenblas -o tests/correctness/zivot_andrews_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/johansen_correctness.c -lm -lopenblas -o tests/correctness/johansen_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/engle_granger_correctness.c -lm -lopenblas -o tests/correctness/engle_granger_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/maki_correctness.c -lm -lopenblas -o tests/correctness/maki_correctness
+In file included from tests/correctness/../../inference/../linalg/decomp.h:3,
+                 from tests/correctness/../../inference/../linalg/solver.h:2,
+                 from tests/correctness/../../inference/unit_root.h:2,
+                 from tests/correctness/../../inference/cointegration.h:2,
+                 from tests/correctness/maki_correctness.c:17:
+In function ‘_sy_sub_dot’,
+    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1576:13,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1510:47: warning: array subscript -1 is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
+ 1510 |             for (int i = 0; i < m; i++) s += x[i] * col[i];
+      |                                              ~^~~
+In function ‘_sysv’,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset -8 into object of size 32 allocated by ‘malloc’
+ 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function ‘_sy_sub_dot’,
+    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1576:13,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1511:14: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
+ 1511 |             b[row + (size_t)q * ldb] -= s;
+      |             ~^~~~~~~~~~~~~~~~~~~~~~~
+In function ‘_sysv’,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1592:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
+ 1592 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function ‘_sy_sub_dot’,
+    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1576:13,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1511:38: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
+ 1511 |             b[row + (size_t)q * ldb] -= s;
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~
+In function ‘_sysv’,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1592:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
+ 1592 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function ‘_sy_sub_outer’,
+    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1536:13,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1598:20,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1492:19: warning: array subscript [-2147483645, -1] is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
+ 1492 |             mreal f = b[row + (size_t)q * ldb];
+      |                   ^
+In function ‘_sysv’,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1592:25: note: at offset [-17179869160, -8] into object of size 16 allocated by ‘malloc’
+ 1592 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function ‘_sytf2’,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1597:16,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1424:19: warning: array subscript [-6442450928, -2] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
+ 1424 |             mreal d21 = a[(size_t)k * lda + k + 1];
+      |                   ^~~
+In function ‘_sysv’,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset [-51539607424, -16] into object of size 32 allocated by ‘malloc’
+ 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function ‘_sytf2’,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1597:16,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1431:42: warning: array subscript [-6442450926, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
+ 1431 |                 mreal wk = d21 * (d11 * a[(size_t)k * lda + j]
+      |                                         ~^~~~~~~~~~~~~~~~~~~~~
+In function ‘_sysv’,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset [-51539607408, -8] into object of size 32 allocated by ‘malloc’
+ 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function ‘_sytf2’,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1597:16,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1438:40: warning: array subscript [-6442450926, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
+ 1438 |                 a[(size_t)k * lda + j] = wk;
+      |                 ~~~~~~~~~~~~~~~~~~~~~~~^~~~
+In function ‘_sysv’,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset [-51539607408, -8] into object of size 32 allocated by ‘malloc’
+ 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function ‘_sytf2’,
+    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1597:16,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1436:48: warning: array subscript [-6442450926, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
+ 1436 |                     a[(size_t)j * lda + i] -= a[(size_t)k * lda + i] * wk
+      |                                               ~^~~~~~~~~~~~~~~~~~~~~
+In function ‘_sysv’,
+    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:103:16,
+    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:186:29:
+tests/correctness/../../inference/../linalg/factor.h:1591:25: note: at offset [-51539607408, -8] into object of size 32 allocated by ‘malloc’
+ 1591 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qlr_test_correctness.c -lm -lopenblas -o tests/correctness/qlr_test_correctness
 make: 'tests/correctness/lbfgs_correctness' is up to date.
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/score_driven_location_correctness.c -lm -lopenblas -o tests/correctness/score_driven_location_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -lopenblas -o tests/correctness/qvarma_correctness
@@ -79,11 +196,19 @@ tests/correctness/../../sd/qvarma.h:1656:21: note: ‘workspace’ declared here
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_fixed_parameter_fit.c -lm -lopenblas -o tests/correctness/qvarma_fixed_parameter_fit
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/basis_to_regression.c -lm -lopenblas -o tests/integration/basis_to_regression
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -lopenblas -o tests/integration/frame_to_model
+In file included from tests/integration/../check.h:2,
+                 from tests/integration/frame_to_model.c:27:
+In function ‘mat_new’,
+    inlined from ‘test_mlp_trains_the_same_on_a_view’ at tests/integration/frame_to_model.c:286:19,
+    inlined from ‘main’ at tests/integration/frame_to_model.c:514:5:
+tests/integration/../../linalg/mat.h:133:5: warning: ‘memset’ specified bound between 18446744056529682592 and 18446744073709551552 exceeds maximum object size 9223372036854775807 [-Wstringop-overflow=]
+  133 |     memset(d, 0, n * sizeof(mreal));
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_tensor.c -lm -lopenblas -o tests/integration/frame_to_tensor
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/tensor_to_optimizer.c -lm -lopenblas -o tests/integration/tensor_to_optimizer
-make: 'tests/integration/join_missing_values' is up to date.
-make: 'tests/integration/distributed_simulation' is up to date.
-make: 'tests/integration/optimizer_swap' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/join_missing_values.c -lm -lopenblas -o tests/integration/join_missing_values
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/distributed_simulation.c -lm -lopenblas -o tests/integration/distributed_simulation
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. tests/integration/optimizer_swap.c -lm -lopenblas -o tests/integration/optimizer_swap
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
@@ -97,9 +222,12 @@ In file included from examples/basis_example.c:4:
 ./basis/spline.h:271:19: note: by argument 3 of type ‘const mreal *’ {aka ‘const double *’} to ‘_spline_design_raw.constprop’ declared here
   271 | static inline Mat _spline_design_raw(const mreal *knots, int nk, const mreal *x, int nx,
       |                   ^~~~~~~~~~~~~~~~~~
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/encoder.c -lm -lopenblas -o examples/encoder
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/mlp_example.c -lm -lopenblas -o examples/mlp_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_fixed_parameters_example.c -lm -lopenblas -o examples/qvarma_fixed_parameters_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/singular_draws_example.c -lm -lopenblas -o examples/singular_draws_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/unit_root_example.c -lm -lopenblas -o examples/unit_root_example
 
 === poly_correctness: PASS ===
 basis/poly.h correctness, float32 build
@@ -261,6 +389,9 @@ either side of the tolerance
 random designs against Gram-Schmidt in long double, 2000 draws
   1882 compared, 1069 of them rank deficient
 a strided view
+columns near the ends of the floating-point range
+NaN and infinite entries
+finite entries, overflowing column norm
 NULL status on a rank-deficient design
 
 PASSED, 0 failures
@@ -274,9 +405,45 @@ rescaled variables
 either side of the tolerance
 random matrices against a Cholesky in long double, 2000 draws
   1923 compared, 1483 of them rejected
-a NaN on or below the diagonal
+a NaN or an infinity on or below the diagonal
 a strided view, and the upper triangle
+a numerically zero pivot before the one _potrf stops at
 NULL status on an indefinite matrix
+
+PASSED, 0 failures
+
+=== singularity_rule_comparison: PASS ===
+the tolerance rule against the exact-zero rule, float32 build
+
+exactly singular designs
+  exact-zero rule missed 1421 of 1500 exactly singular designs
+  smallest largest |x| it let through: 60.6
+independence shrinking like 2^-k, true coefficients known
+  worst error * sine / MEPS: 2.09
+trying to break either rule
+  c2 = c1 - c0 with c1 nearly collinear with c0              exact 0, tolerance 0
+  the same columns ordered w, K v, K v + w                   exact 0, tolerance 3
+  independent, columns 1 and 3 at 1e+30                      exact 0, tolerance 0
+  c2 = c0 - c1, all at 1e+30                                 exact 0, tolerance 3
+  independent, columns 1 and 3 at 1e-30                      exact 0, tolerance 0
+  c2 = c0 - c1, all at 1e-30                                 exact 0, tolerance 3
+  independent, columns 1 and 3 at 1e+18                      exact 0, tolerance 0
+  c2 = c0 - c1, all at 1e+18                                 exact 0, tolerance 3
+  independent, columns 1 and 3 at 1e-18                      exact 0, tolerance 0
+  c2 = c0 - c1, all at 1e-18                                 exact 0, tolerance 3
+  second column subnormal                                    exact 2, tolerance 2
+  one infinite entry in column 2                             exact 0, tolerance 2
+  one NaN entry in column 2                                  exact 2, tolerance 2
+  c3 = c0 + 2 c1 - c2, 200000 rows                           exact 0, tolerance 4
+  40 x 40, last column c0 - c1 + c2                          exact 0, tolerance 40
+Cholesky on exactly singular Gram matrices
+  exact-zero rule missed 202 of 500 exactly singular Gram matrices
+  Cholesky scaled by 2^100: singular exact 0 tolerance 4, regular exact 0 tolerance 0
+  Cholesky scaled by 2^-100: singular exact 4 tolerance 4, regular exact 0 tolerance 0
+  Cholesky scaled by 2^50: singular exact 4 tolerance 4, regular exact 0 tolerance 0
+  Cholesky scaled by 2^-50: singular exact 0 tolerance 4, regular exact 0 tolerance 0
+
+full tables in out/singularity_rule_comparison_float32_report.txt
 
 PASSED, 0 failures
 
@@ -1547,4 +1714,4 @@ PASSED, 0 failures
 
 
 === summary ===
-77 passed, 0 failed
+79 passed, 0 failed

@@ -30,6 +30,7 @@ tests/correctness/rdata_array_read
 tests/correctness/npz_python_interop
 tests/correctness/lstsq_rank_deficiency
 tests/correctness/chol_singularity
+tests/correctness/singularity_rule_comparison
 tests/correctness/mv_density_dispatch
 
 # the statistical test and model suites, named for the question they answer

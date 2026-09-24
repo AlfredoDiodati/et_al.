@@ -6,11 +6,11 @@
    QR, or via SVD for rank-deficient input).
    All functions here call decomp.h. decomp.h never includes this file.
    Like decomp.h, inputs are copied first (the kernels solve in place) so
-   these functions never mutate their arguments, and a singular/rank-
-   deficient input is treated as a contract violation (assert), not a
-   recoverable runtime condition - see decomp.h's header comment. The one
-   exception is mat_lstsq_rd, whose entire purpose is to handle rank
-   deficiency instead of asserting on it. */
+   these functions never mutate their arguments, and a singular input to
+   a square solve is a contract violation (assert) - see decomp.h's header
+   comment. mat_lstsq reports a rank-deficient design through a status
+   instead, asserting only when the status pointer is NULL, and
+   mat_lstsq_rd solves the rank-deficient problem outright. */
 
 /* Solve a*x = b for x via LU factorization with partial pivoting
    (factor.h's _gesv). a must be square; b is a single right-hand-side column
@@ -171,7 +171,9 @@ static inline Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char
    since ||a_j||^2 is the sum of R[i][j]^2 over i <= j. A test on the
    condition number of a^T*a instead squares the condition number, and
    rejects a design only because its columns are in different units. See
-   _pivot_tolerance in decomp.h for the tolerance.
+   _pivot_tolerance in decomp.h for the tolerance. A design with a NaN or
+   infinite entry is rejected too, at the first column holding one, and so
+   is a column of finite entries whose norm overflows.
 
    status NULL: a rank-deficient a asserts. Otherwise *status is 0 on
    success, or the 1-based index j of the first dependent column, in which
@@ -186,6 +188,23 @@ static inline Mat mat_lstsq(Mat a, Mat b, int *status) {
     int m = a.r, n = a.c, nrhs = b.c;
     Mat qr = mat_copy(a);
 
+    /* A NaN or an infinity in a is looked for in its bits before anything
+       is computed from it. Nothing computed from it can be trusted to carry
+       it: in a float32 -ffast-math build (GCC 15.2) _gels treats a column
+       holding a NaN as if its norm were zero, skips its reflector, leaves the
+       NaN below R and returns finite numbers. The status names the first
+       column holding one. */
+    if (!mat_all_finite(qr)) {
+        int column = 0;
+        for (int j = 0; j < n && !column; j++)
+            for (int i = 0; i < m; i++)
+                if (MISNAN(AT(qr, i, j)) || MISINF(AT(qr, i, j))) { column = j + 1; break; }
+        if (status) *status = column;
+        else assert(0 && "mat_lstsq: a has a NaN or infinite entry");
+        mat_free(qr);
+        return (Mat){0};
+    }
+
     /* _gels overwrites its b argument in place with the solution in the
        first n rows - work is an m x nrhs copy of b sized for that. */
     Mat work = mat_copy(b);
@@ -197,19 +216,44 @@ static inline Mat mat_lstsq(Mat a, Mat b, int *status) {
        at a time, since walking a column of a row-major R touches a new
        cache line per entry; the stack buffer spares small designs, which
        are most of them, an allocation. */
-    double small_norms_sq[64];
-    double *column_norms_sq = n <= 64 ? small_norms_sq : (double*)malloc((size_t)n * sizeof(double));
-    assert(column_norms_sq);
-    for (int j = 0; j < n; j++) column_norms_sq[j] = 0;
+    double small_buffer[192];
+    double *buffer = n <= 64 ? small_buffer : (double*)malloc(3 * (size_t)n * sizeof(double));
+    assert(buffer);
+    double *column_inverse_scale = buffer, *column_norms_sq = buffer + n, *column_non_finite = buffer + 2 * n;
+
+    /* Each column is divided by its largest entry before it is squared: in
+       float64 an entry beyond about 1e154 squares to infinity and one below
+       about 1e-154 to zero, and either would decide the test on its own.
+
+       A finite a can still overflow to an infinity inside the factorization,
+       so R's entries are checked again through their bit patterns as they
+       are read; a test on the norm computed from them would not do, since
+       under -ffast-math GCC 15.2 compiles the scaled sum so that a NaN entry
+       never reaches it. */
+    for (int j = 0; j < n; j++) { column_inverse_scale[j] = 0; column_norms_sq[j] = 0; column_non_finite[j] = 0; }
     for (int i = 0; i < n; i++)
-        for (int j = i; j < n; j++) column_norms_sq[j] += (double)AT(qr, i, j) * AT(qr, i, j);
+        for (int j = i; j < n; j++) {
+            mreal value = AT(qr, i, j);
+            if (MISNAN(value) || MISINF(value)) { column_non_finite[j] = 1; continue; }
+            double entry = fabs((double)value);
+            if (entry > column_inverse_scale[j]) column_inverse_scale[j] = entry;
+        }
+    for (int j = 0; j < n; j++)
+        column_inverse_scale[j] = column_inverse_scale[j] > 0 ? 1 / column_inverse_scale[j] : 0;
+    for (int i = 0; i < n; i++)
+        for (int j = i; j < n; j++) {
+            double scaled = (double)AT(qr, i, j) * column_inverse_scale[j];
+            column_norms_sq[j] += scaled * scaled;
+        }
+
     int info = 0;
     double tolerance = _pivot_tolerance(m);
     for (int j = 0; j < n; j++) {
-        double diagonal = (double)AT(qr, j, j);
-        if (diagonal * diagonal <= tolerance * tolerance * column_norms_sq[j]) { info = j + 1; break; }
+        double diagonal = (double)AT(qr, j, j) * column_inverse_scale[j];
+        if (column_non_finite[j] != 0 ||
+            diagonal * diagonal <= tolerance * tolerance * column_norms_sq[j]) { info = j + 1; break; }
     }
-    if (column_norms_sq != small_norms_sq) free(column_norms_sq);
+    if (buffer != small_buffer) free(buffer);
     if (status) *status = info;
     else assert(info == 0 && "mat_lstsq: a is numerically rank deficient");
     if (info != 0) {

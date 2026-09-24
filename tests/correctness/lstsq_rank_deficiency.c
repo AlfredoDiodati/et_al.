@@ -24,6 +24,10 @@ What this file establishes:
                   long double, excluding draws within a factor 3 of the
                   tolerance where rounding may decide either way
   views           a strided view gets the same verdict as its contiguous copy
+  extremes        independent columns at 1e+-200 (1e+-30 in float32) are
+                  accepted and a dependent one at the same scale is caught
+  non-finite      a NaN or an infinity in any column is rejected, and so is a
+                  column of finite entries whose norm overflows
   NULL status     a rank-deficient design aborts, in a forked child
 
 Run with make tests/correctness/lstsq_rank_deficiency. STRESS=1 widens the
@@ -325,6 +329,81 @@ static void test_view(Rng *rng) {
     mat_free(parent); mat_free(copy); mat_free(b);
 }
 
+/* Squaring an entry beyond about 1e154 in float64 gives infinity and below
+   about 1e-154 gives zero. An earlier version of the rank test squared R's
+   entries as they were, rejected an independent design at 1e+-200 and
+   missed a dependent one at the same scale; the norms are now taken after
+   dividing each column by its largest entry. float32 values square safely
+   in double, so its build uses 1e+-30, near the end of its own range. */
+static void test_extreme_magnitudes(Rng *rng) {
+    puts("columns near the ends of the floating-point range");
+    double magnitudes_double[] = { 1e200, 1e-200 };
+    double magnitudes_float[] = { 1e30, 1e-30 };
+    double *magnitudes = sizeof(mreal) == sizeof(double) ? magnitudes_double : magnitudes_float;
+    int m = 50;
+    for (int t = 0; t < 2; t++) {
+        Mat independent = mat_new(m, 3), dependent = mat_new(m, 3);
+        for (int i = 0; i < m; i++) {
+            double c0 = rng_normal(rng), c1 = rng_normal(rng), c2 = rng_normal(rng);
+            AT(independent, i, 0) = (mreal)(magnitudes[t] * c0);
+            AT(independent, i, 1) = (mreal)c1;
+            AT(independent, i, 2) = (mreal)(magnitudes[t] * c2);
+            AT(dependent, i, 0) = (mreal)(magnitudes[t] * c0);
+            AT(dependent, i, 1) = (mreal)(magnitudes[t] * c1);
+            AT(dependent, i, 2) = AT(dependent, i, 0) + AT(dependent, i, 1);
+        }
+        Mat b = random_response(rng, m);
+        int accepted = lstsq_status(independent, b);
+        int rejected = lstsq_status(dependent, b);
+        CHECK(accepted == 0, "independent columns at %g are accepted (status %d)", magnitudes[t], accepted);
+        CHECK(rejected == 3, "c2 = c0 + c1 at %g is column 3 (status %d)", magnitudes[t], rejected);
+        mat_free(independent); mat_free(dependent); mat_free(b);
+    }
+}
+
+/* Finite entries whose column norm is past the end of the range: every
+   entry is representable, but the factorization cannot represent the
+   column, and the answer has to be a rejection rather than a solution built
+   on an overflowed norm. */
+static void test_overflowing_column(Rng *rng) {
+    puts("finite entries, overflowing column norm");
+    double big = sizeof(mreal) == sizeof(double) ? 1e308 : 1e38;
+    int m = 20;
+    Mat a = mat_new(m, 3);
+    for (int i = 0; i < m; i++) {
+        AT(a, i, 0) = (mreal)rng_normal(rng);
+        AT(a, i, 1) = (mreal)(big * (i % 2 ? 1 : -1));
+        AT(a, i, 2) = (mreal)rng_normal(rng);
+    }
+    CHECK(mat_all_finite(a), "every entry is finite");
+    Mat b = random_response(rng, m);
+    int status = lstsq_status(a, b);
+    CHECK(status == 2, "the column whose norm overflows is rejected as column 2 (status %d)", status);
+    mat_free(a); mat_free(b);
+}
+
+/* A NaN or an infinity anywhere in the design is rejected rather than solved
+   into NaN or into finite nonsense. The tolerance rule once accepted the NaN
+   case, because every comparison against a NaN is false. */
+static void test_non_finite(Rng *rng) {
+    puts("NaN and infinite entries");
+    int m = 20;
+    for (int which = 0; which < 2; which++)
+        for (int column = 0; column < 3; column++) {
+            Mat a = mat_new(m, 3);
+            for (int i = 0; i < m * 3; i++) a.d[i] = (mreal)rng_normal(rng);
+            AT(a, 7, column) = check_non_finite(which);
+            CHECK(check_stored_non_finite(&AT(a, 7, column), which), "the stored entry really is %s",
+                  which ? "infinite" : "NaN");
+            Mat b = random_response(rng, m);
+            int status = lstsq_status(a, b);
+            CHECK(status >= 1 && status <= column + 1 + 2,
+                  "%s in column %d is rejected (status %d)", which ? "infinity" : "NaN", column + 1, status);
+            CHECK(status != 0 && status <= 3, "and the status names a column");
+            mat_free(a); mat_free(b);
+        }
+}
+
 static void call_with_null_status(void) {
     double proportional[] = {1, 2, 2, 4, 3, 6};
     Mat a = design_from(3, 2, proportional);
@@ -353,6 +432,9 @@ int main(void) {
     test_threshold(&rng);
     test_against_reference(&rng);
     test_view(&rng);
+    test_extreme_magnitudes(&rng);
+    test_non_finite(&rng);
+    test_overflowing_column(&rng);
     test_null_status_aborts();
     return check_report();
 }
