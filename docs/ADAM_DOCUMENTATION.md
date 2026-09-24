@@ -60,4 +60,3 @@ Convergence tests necessarily use loose tolerances (`1e-2`) and a chosen iterati
 - No AMSGrad (Reddi et al. 2018, a fix for a convergence counterexample in the original Adam analysis), no decoupled weight decay (AdamW, Loshchilov & Hutter 2019) - both are extensions with their own papers, not part of Kingma & Ba 2015's Algorithm 1.
 - No learning-rate schedule/decay - `lr` is fixed for the lifetime of an `AdamState`.
 - No gradient clipping.
-- Only Adam so far - `solver/` is structured (one file per algorithm) to add SGD, L-BFGS, or others later without touching this file.
