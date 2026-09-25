@@ -9,7 +9,7 @@ text, or a header that only compiles because whatever included it first
 happened to pull in <string.h>, are all invisible today and all land on the
 first user who includes two modules together.
 
-README.md's "Implementing a new model" policy already anticipates the first of
+docs/IMPLEMENTING_A_MODEL.md's policy already anticipates the first of
 those: "the prefix comes back when the file moves into a shared library,
 because C has one flat namespace and two models cannot both export fit."
 Nothing enforced it until this file.
@@ -75,6 +75,7 @@ the lot as unused.
 #include "../../nn/mlp.h"
 #include "../../sd/qvarma.h"
 #include "../../sd/score_driven_location.h"
+#include "../../varima/var.h"
 
 #include <stdio.h>
 
@@ -202,6 +203,13 @@ static int touch_every_module(void) {
     SdlocParams sdloc_shape = sdloc_params_new(2);
     if (sdloc_n_theta(2) < 1) problems++;
     sdloc_params_free(&sdloc_shape);
+
+    VarSpec var_spec = { 2, 1, VAR_SIGMA_ML };
+    Mat var_nu = mat_new(2, 1), var_A = mat_new(2, 2), var_Sigma = mat_eye(2);
+    Var var_model = var_new(&var_spec, var_nu, var_A, var_Sigma);
+    Mat shock = var_shock_matrix(&var_model);
+    if (AT(shock, 1, 1) != 1) problems++;
+    mat_free(shock); var_free(&var_model); mat_free(var_nu); mat_free(var_A); mat_free(var_Sigma);
 
     df_free(&joined); df_free(&queried); df_free(&frame);
     mat_free(mv_density); mat_free(mean); mat_free(observation); mat_free(covariance);

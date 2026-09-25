@@ -688,6 +688,30 @@ static void test_all_finite(void) {
     }
 }
 
+/* mat_fingerprint replaced two copies of the same hash in sd/qvarma.h and
+   sd/score_driven_location.h, whose caches on disk carry its values, so the
+   value is pinned to what those copies produced. */
+static void test_fingerprint(void) {
+    puts("mat_fingerprint: pinned value, strided view, shape and single-entry sensitivity");
+    Mat a = mat_lit(2, 3, 1.5f, -2.f, 0.25f, 3.f, 0.001f, 7.f);
+    assert(mat_fingerprint(a) == 18341355472998.0);
+
+    Mat wide = mat_new(2, 5);
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < 3; j++) AT(wide, i, j + 1) = AT(a, i, j);
+    AT(wide, 0, 0) = 99; AT(wide, 1, 4) = -99;
+    Mat view = mat_slice(wide, 0, 2, 1, 4);
+    assert(view.stride == 5);
+    assert(mat_fingerprint(view) == mat_fingerprint(a));
+
+    Mat reshaped = mat_lit(3, 2, 1.5f, -2.f, 0.25f, 3.f, 0.001f, 7.f);
+    assert(mat_fingerprint(reshaped) != mat_fingerprint(a));
+    AT(a, 1, 2) = (mreal)7.5;
+    assert(mat_fingerprint(a) != 18341355472998.0);
+    assert(mat_fingerprint(a) < 281474976710656.0);
+    mat_free(a); mat_free(wide); mat_free(reshaped);
+}
+
 static void test_nan_propagation_under_fast_math(void) {
     puts("mat_max/mat_min propagate NaN correctly even under -ffast-math");
 
@@ -878,6 +902,7 @@ int main(void) {
     test_reductions();
     test_nan_propagation_under_fast_math();
     test_all_finite();
+    test_fingerprint();
     test_concatenation();
     test_linalg();
     puts("test_mat: all passed");

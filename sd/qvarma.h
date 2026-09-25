@@ -2419,8 +2419,15 @@ static inline int qvarma_load_params(QvarmaParams *m, const char *path) {
     fclose(probe);
     JsonValue *root = json_parse_file(path);
     if (!root) return 0;
+    /* A cache is a file a user can edit, so a value of the wrong type is a
+       refusal like a missing one, not an assert in the accessors. */
+    if (root->type != JSON_OBJECT) {
+        json_free(root);
+        return 0;
+    }
 
     JsonValue *shape = json_object_get(root, "shape");
+    if (shape && shape->type != JSON_OBJECT) shape = NULL;
     struct { const char *key; int value; } fields[] = {
         { "K", m->K }, { "K_star", m->K_star }, { "p", m->p }, { "q", m->q },
         { "r", m->r }, { "R", m->R }, { "shared_beta", m->shared_beta },
@@ -2429,13 +2436,17 @@ static inline int qvarma_load_params(QvarmaParams *m, const char *path) {
     };
     for (size_t i = 0; i < sizeof fields / sizeof fields[0]; i++) {
         JsonValue *field = shape ? json_object_get(shape, fields[i].key) : NULL;
-        if (!field || (int)json_as_number(field) != fields[i].value) {
+        if (!field || field->type != JSON_NUMBER || (int)json_as_number(field) != fields[i].value) {
             json_free(root);
             return 0;
         }
     }
 
     JsonValue *stored_bound = shape ? json_object_get(shape, "phi_star_bound") : NULL;
+    if (stored_bound && stored_bound->type != JSON_NUMBER) {
+        json_free(root);
+        return 0;
+    }
     mreal cached_bound = stored_bound ? (mreal)json_as_number(stored_bound) : (mreal)1;
     if (cached_bound != m->phi_star_bound) {
         json_free(root);
@@ -2444,7 +2455,9 @@ static inline int qvarma_load_params(QvarmaParams *m, const char *path) {
 
     JsonValue *values = json_object_get(root, "theta");
     int n = qvarma_n_theta(m);
-    if (!values || json_array_len(values) != n) {
+    int usable = values && values->type == JSON_ARRAY && json_array_len(values) == n;
+    for (int i = 0; usable && i < n; i++) usable = json_array_get(values, i)->type == JSON_NUMBER;
+    if (!usable) {
         json_free(root);
         return 0;
     }
@@ -2460,27 +2473,9 @@ static inline int qvarma_load_params(QvarmaParams *m, const char *path) {
 A fingerprint of the data, so a cached fit is only reused for the sample it was
 fit on. Without it a stored log-likelihood silently describes a different
 dataset, which is a worse failure than refitting: the numbers look valid.
-Element by element rather than over the buffer, so a strided view hashes the
-same as a copy.
+The hash is linalg/mat.h's mat_fingerprint.
 */
-static inline double qvarma_data_fingerprint(Mat y) {
-    unsigned long long h = 1469598103934665603ULL;
-    for (int i = 0; i < y.r; i++)
-        for (int j = 0; j < y.c; j++) {
-            double value = (double)AT(y, i, j);
-            unsigned char bytes[sizeof value];
-            memcpy(bytes, &value, sizeof value);
-            for (size_t k = 0; k < sizeof value; k++) {
-                h ^= bytes[k];
-                h *= 1099511628211ULL;
-            }
-        }
-    h ^= (unsigned long long)y.r; h *= 1099511628211ULL;
-    h ^= (unsigned long long)y.c; h *= 1099511628211ULL;
-    /* Masked to 48 bits so it survives a round trip through a JSON number,
-       which is a double and exact only below 2^53. */
-    return (double)(h & 0xFFFFFFFFFFFFULL);
-}
+static inline double qvarma_data_fingerprint(Mat y) { return mat_fingerprint(y); }
 
 /*
 A fit written whole: the parameters, the diagnostics the fit produced, and the
@@ -2557,8 +2552,8 @@ static inline int qvarma_load_fit(QvarmaFitResult *result, Mat y, const char *pa
     if (!probe) return 0;
     fclose(probe);
     JsonValue *root = json_parse_file(path);
-    JsonValue *diagnostics = root ? json_object_get(root, "fit") : NULL;
-    if (!diagnostics) {
+    JsonValue *diagnostics = root && root->type == JSON_OBJECT ? json_object_get(root, "fit") : NULL;
+    if (!diagnostics || diagnostics->type != JSON_OBJECT) {
         if (root) json_free(root);
         return 0;
     }

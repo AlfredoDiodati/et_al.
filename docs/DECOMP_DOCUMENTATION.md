@@ -76,6 +76,15 @@ L[k][k]^2 <= 10 * sqrt(n) * MEPS * a[k][k]
 
 The tolerance is the package's rank rule, `mat_rank_tolerance(n)`, described above with its derivation and what it is consistent with.
 
+Discrepancy with the reference R code. The reference is the `lpirfs` package, version 0.2.5, on R 4.6.1.
+
+- `lpirfs` builds its shock matrix from `t(chol(cov(residuals)))` (`R/get_mat_chol.R`). R's `chol` without pivoting calls LAPACK's `dpotrf`, which fails only when a pivot is at or below zero or is NaN, with the message "the leading minor of order k is not positive" (`src/modules/lapack/Lapack.c`, `La_chol`; the test is in `DPOTRF2` in `dlapack.f`).
+- `lpirfs` then divides each column of the factor by its diagonal entry without checking it.
+- On a covariance that is singular in exact arithmetic, such as the residuals of one series being the sum of two others, the last pivot is rounding noise, and its sign decides between two outcomes in R:
+  - at or below zero, the draw fails;
+  - above zero, the diagonal entry is about `1e-8` of the others, so that column of the shock matrix is scaled up by about `1e8`, and the result is a finite but meaningless response.
+- `mat_chol` rejects such a matrix every time, at the relative tolerance above.
+
 The tolerance covers this factorization's own rounding only. A covariance accumulated from `m` observations in working precision carries its own error of about `sqrt(m) * MEPS`, and an exactly singular one built that way can land above the tolerance: at float64 with 2000 observations the measured ratio reached `48 * MEPS`, against a tolerance of `14 * MEPS` for `n = 2`. The caller knows how its matrix was formed and this function does not; accumulate in higher precision, or test the ratio against a wider margin, where that matters.
 
 `_potrf` stops at the first pivot that is not positive, but an earlier pivot can already be numerically zero, and dividing by it is what drives the later one negative. On such a failure `mat_chol` refactors the leading block `_potrf` accepted and inspects its pivots too, so the status names the variable that is actually dependent rather than the one that went negative after it. This costs nothing on a matrix that factors. `tests/correctness/chol_singularity.c` found the case: before the refactor, 479 of 1920 random singular matrices were reported at a later pivot than a long-double reference.

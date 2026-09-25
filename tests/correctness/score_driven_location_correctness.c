@@ -592,6 +592,58 @@ A refused load must also leave the caller's model alone. The parameters used to
 be read before the fingerprint was checked, so a cache from another sample was
 written into the model and then reported as not loaded.
 */
+/* A cache holding text that is not JSON, or JSON of the wrong shape, is
+   refused like a missing one. Before json_parse returned NULL on malformed
+   text, a truncated cache aborted inside the parser, and a root or field of
+   the wrong type aborted inside the accessors. */
+static void write_text(const char *path, const char *text) {
+    FILE *f = fopen(path, "w");
+    assert(f);
+    fputs(text, f);
+    fclose(f);
+}
+
+static void test_cache_refuses_a_damaged_file(void) {
+    printf("a truncated cache, and one whose values have the wrong type, are refused\n");
+    int K = 2, T = 120;
+    SdlocParams truth = plausible_params(K);
+    Rng rng = rng_new(4242u, 0);
+    Mat y = sdloc_simulate(&rng, &truth, T);
+    const char *path = "out/score_driven_location_correctness_damaged.json";
+
+    SdlocFitOptions capped = sdloc_default_fit_options();
+    capped.max_iterations = 3;
+    SdlocFitResult fit = sdloc_fit(y, &truth, capped);
+    sdloc_save_fit(&fit, y, path);
+    FILE *f = fopen(path, "r");
+    char text[65536];
+    size_t n = fread(text, 1, sizeof text - 1, f);
+    fclose(f);
+    text[n / 2] = 0;
+    write_text(path, text);
+
+    SdlocFitResult loaded = sdloc_fit_result_new(K);
+    CHECK(sdloc_load_fit(&loaded, y, path) == 0, "a truncated cache must be refused");
+    CHECK(sdloc_load_params(&loaded.params, path) == 0, "a truncated parameter file must be refused");
+
+    const char *damaged[] = {
+        "[1, 2]",
+        "{\"K\": \"2\", \"theta\": [1]}",
+        "{\"K\": 2, \"theta\": \"none\"}",
+        "{\"K\": 2, \"theta\": [1, 2, 3, 4, 5, 6, 7, 8, 9, \"x\"]}",
+        "{\"K\": 2, \"theta\": [1], \"fit\": [1]}",
+    };
+    for (size_t i = 0; i < sizeof damaged / sizeof damaged[0]; i++) {
+        write_text(path, damaged[i]);
+        CHECK(sdloc_load_fit(&loaded, y, path) == 0, "damaged cache %zu must be refused", i);
+        CHECK(sdloc_load_params(&loaded.params, path) == 0, "damaged parameter file %zu must be refused", i);
+    }
+    sdloc_fit_result_free(&loaded);
+    sdloc_fit_result_free(&fit);
+    sdloc_params_free(&truth);
+    mat_free(y);
+}
+
 static void test_cache_refuses_a_file_it_cannot_use(void) {
     printf("an incomplete cache is refused, and a refused load changes nothing\n");
     int K = 2, T = 120;
@@ -950,6 +1002,7 @@ int main(void) {
     test_parameter_cache();
     test_a_resumed_chain_accumulates();
     test_cache_refuses_a_file_it_cannot_use();
+    test_cache_refuses_a_damaged_file();
     test_a_cache_from_before_the_reasons_were_recorded();
     test_standard_errors();
     if (getenv("STRESS")) test_recovery();

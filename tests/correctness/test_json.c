@@ -1,7 +1,4 @@
 #include "../../json.h"
-#include <unistd.h>
-#include <sys/wait.h>
-#include <signal.h>
 
 /* Deep structural equality, used as the round-trip oracle throughout this
    file: no independent reference JSON implementation exists in C to
@@ -186,34 +183,13 @@ static void test_file_roundtrip(void) {
     remove(path);
 }
 
-/* json_parse treats any malformed input as a contract violation (assert),
-   not a recoverable error - see json_parse's own comment ("a contract
-   violation, not a recoverable error path"). Every test above only ever
-   feeds well-formed JSON, so that rejection path has never actually been
-   exercised. Confirm each kind of malformed input really does abort,
-   the same fork+expect-SIGABRT technique test_mvgauss.c/test_ad.c use for
-   their own assert-guarded contract violations. */
-static void expect_abort(void (*fn)(void)) {
-    pid_t pid = fork();
-    assert(pid >= 0);
-    if (pid == 0) {
-        freopen("/dev/null", "w", stderr); /* silence the expected assert() message */
-        fn();
-        _exit(111); /* fn() must never return - reaching here is itself a failure */
-    }
-    int status;
-    waitpid(pid, &status, 0);
-    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
-}
-
-static const char *g_bad_json;
-static void call_json_parse(void) {
-    JsonValue *v = json_parse(g_bad_json);
-    (void)v;
-}
-
-static void test_malformed_json_aborts(void) {
-    puts("malformed JSON aborts (fork + expect SIGABRT)");
+/* json_parse returns NULL on malformed input, because the text it reads
+   comes from files a user can truncate or edit and the model caches refuse
+   such a file rather than abort. Each case is also run inside a larger
+   document, so a failure deep in the tree has to free what the levels above
+   it had built; the sanitizer build checks nothing leaks. */
+static void test_malformed_json_returns_null(void) {
+    puts("malformed JSON returns NULL, at the top level and nested");
 
     static const char *cases[] = {
         "\"unterminated string",     /* no closing quote */
@@ -225,11 +201,24 @@ static void test_malformed_json_aborts(void) {
         "{\"a\" 1}",                /* missing ':' after an object key */
         "[1, 2",                    /* missing closing ']' */
         "tru",                     /* truncated literal */
+        "\"bad \\q escape\"",       /* unknown escape */
+        "\"\\u12g4\"",              /* bad hex digit in a \u escape */
+        "{1: 2}",                   /* key that is not a string */
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        g_bad_json = cases[i];
-        expect_abort(call_json_parse);
+        assert(json_parse(cases[i]) == NULL);
+        char nested[256];
+        snprintf(nested, sizeof nested, "{\"x\": [1, {\"y\": \"z\", \"w\": %s", cases[i]);
+        assert(json_parse(nested) == NULL);
     }
+
+    /* a truncated file, the case the model caches rely on */
+    const char *path = "test_json_truncated.json";
+    FILE *f = fopen(path, "w");
+    fputs("{\"K\": 3, \"theta\": [0.5, -1.25", f);
+    fclose(f);
+    assert(json_parse_file(path) == NULL);
+    remove(path);
 }
 
 /* --- STRESS=1: fixed-seed randomized round-trip fuzzing, per this
@@ -308,7 +297,7 @@ int main(void) {
     test_duplicate_key_last_wins();
     test_adversarial();
     test_file_roundtrip();
-    test_malformed_json_aborts();
+    test_malformed_json_returns_null();
 
     if (getenv("STRESS")) test_random_roundtrip_stress();
 

@@ -194,6 +194,7 @@ static inline void mlp_save(const MLP *net, const char *path) {
    no way to recover them from the file. Caller must mlp_free(). */
 static inline MLP mlp_load(const char *path, Activation hidden_act, Activation out_act) {
     JsonValue *root = json_parse_file(path);
+    assert(root && "mlp_load: the file is not valid JSON");
     MLP net = mlp_from_json(root, hidden_act, out_act);
     json_free(root);
     return net;

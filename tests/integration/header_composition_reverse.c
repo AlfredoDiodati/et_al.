@@ -10,6 +10,7 @@ is written in header_composition.c; this file is the other half of it and
 carries no checks of its own beyond compiling and linking.
 */
 
+#include "../../varima/var.h"
 #include "../../sd/score_driven_location.h"
 #include "../../sd/qvarma.h"
 #include "../../nn/mlp.h"

@@ -46,6 +46,8 @@ tests/correctness/mcs_settings_study
 tests/correctness/qvarma_analytic_agreement
 tests/correctness/qvarma_gaussian_limit
 tests/correctness/qvarma_fixed_parameter_fit
+tests/correctness/var_recovery
+tests/correctness/lag_matrix_layout
 tests/correctness/mcs_primitives
 tests/correctness/ad_tensor_gradients
 tests/correctness/mcs_primitives_candidate

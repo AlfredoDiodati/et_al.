@@ -571,6 +571,10 @@ the reason is kept for every run rather than only the last, and
 recorded, and then neither `status` nor `run_status` may be read. A fit always
 knows why it stopped.
 
+### A damaged cache
+
+A truncated file, a file that is not valid JSON, and one whose root, `shape`, fields or `theta` entries have the wrong type are refused like a missing one, and the caller's model is left untouched. `test_cache_refuses_a_damaged_file` in `tests/correctness/qvarma_correctness.c` checks each. Until `json_parse` returned `NULL` on malformed text, a truncated cache stopped the program inside the parser, and a value of the wrong type stopped it inside the JSON accessors.
+
 ### A cache from before these fields existed
 
 A cache in the format that shipped earlier carries the parameters, the shape and

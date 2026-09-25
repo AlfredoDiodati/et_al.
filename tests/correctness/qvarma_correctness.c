@@ -1333,6 +1333,68 @@ leave the caller's model alone, and the parameters used to be read before the
 fingerprint was checked, so a cache from another sample was written into the
 model and then reported as not loaded.
 */
+/* A cache holding text that is not JSON, or JSON of the wrong shape, is
+   refused like a missing one. Before json_parse returned NULL on malformed
+   text, a truncated cache aborted inside the parser, and a root or field of
+   the wrong type aborted inside the accessors. */
+static void write_text(const char *path, const char *text) {
+    FILE *f = fopen(path, "w");
+    assert(f);
+    fputs(text, f);
+    fclose(f);
+}
+
+static void test_cache_refuses_a_damaged_file(void) {
+    printf("a truncated cache, and one whose values have the wrong type, are refused\n");
+    QvarmaParams truth = baseline();
+    Rng rng = rng_new(4243, 0);
+    fill_plausible(&truth, &rng);
+    Mat y = qvarma_simulate(&rng, &truth, 120);
+    const char *path = "out/correctness_fit_damaged.json";
+
+    QvarmaFitOptions capped = qvarma_default_fit_options();
+    capped.max_iterations = 3;
+    QvarmaFitResult fit = qvarma_fit(y, &truth, capped);
+    qvarma_save_fit(&fit, y, path);
+    FILE *f = fopen(path, "r");
+    char text[65536];
+    size_t n = fread(text, 1, sizeof text - 1, f);
+    fclose(f);
+    text[n / 2] = 0;
+    write_text(path, text);
+
+    QvarmaFitResult loaded = qvarma_fit_result_new(&truth);
+    CHECK(qvarma_load_fit(&loaded, y, path) == 0, "a truncated cache must be refused");
+    CHECK(qvarma_load_params(&loaded.params, path) == 0, "a truncated parameter file must be refused");
+
+    const char *damaged[] = {
+        "[1, 2]",
+        "{\"shape\": [1], \"theta\": [1]}",
+        "{\"shape\": {\"K\": \"3\"}, \"theta\": [1]}",
+        "{\"theta\": [1], \"fit\": \"none\"}",
+    };
+    for (size_t i = 0; i < sizeof damaged / sizeof damaged[0]; i++) {
+        write_text(path, damaged[i]);
+        CHECK(qvarma_load_fit(&loaded, y, path) == 0, "damaged cache %zu must be refused", i);
+        CHECK(qvarma_load_params(&loaded.params, path) == 0, "damaged parameter file %zu must be refused", i);
+    }
+
+    /* the right shape with a theta entry of the wrong type */
+    JsonValue *root = qvarma_params_to_json(&truth);
+    JsonValue *theta = json_object_get(root, "theta");
+    free(theta->items[0]->string);
+    theta->items[0]->type = JSON_STRING;
+    theta->items[0]->string = json_strdup("x");
+    json_write_file(root, path);
+    json_free(root);
+    CHECK(qvarma_load_params(&loaded.params, path) == 0, "a theta entry that is not a number must be refused");
+
+    qvarma_fit_result_free(&loaded);
+    qvarma_fit_result_free(&fit);
+    qvarma_params_free(&truth);
+    mat_free(y);
+}
+
 static void test_cache_refuses_a_file_it_cannot_use(void) {
     printf("an incomplete cache is refused, and a refused load changes nothing\n");
     QvarmaParams truth = baseline();
@@ -2366,6 +2428,7 @@ int main(void) {
     test_fit_cached_accumulates_a_chain();
     test_a_finished_fit_is_not_resumed();
     test_cache_refuses_a_file_it_cannot_use();
+    test_cache_refuses_a_damaged_file();
     test_a_cache_from_before_the_reasons_were_recorded();
     test_infeasible_points_return_a_sentinel();
     test_fit_reports_what_it_returns();

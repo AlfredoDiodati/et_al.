@@ -158,6 +158,8 @@ int mat_all_finite(Mat m)  // 0 if any element is NaN or infinite, 1 otherwise
 
 `mat_all_finite` is the predicate form of the question `mat_max`/`mat_min` answer as a side effect. They report a NaN by returning one, which means a caller has to know that a NaN return says "there was one" rather than "the maximum was one", and they say nothing at all about an infinity. It reuses `mat_absmax_bits` rather than testing each element (see Special value behavior below for why that is the cheap way to ask), and costs one pass: roughly 1.7x a double-accumulated mean over the same buffer, 584 us against 335 us at 1,000,000 float64 elements, `-O3 -march=native -ffast-math`, best of 30 interleaved rounds.
 
+`double mat_fingerprint(Mat m)` is a 48-bit hash of `m`'s values and shape: FNV-1a over each entry widened to double, element by element so a strided view hashes the same as a copy, then the two dimensions, masked to 48 bits so it survives a round trip through a JSON number. The model caches in `sd/` and `varima/` store it beside a fit and refuse the fit when the data's fingerprint disagrees. It replaced two identical copies in `sd/qvarma.h` and `sd/score_driven_location.h`, which now call it, and `tests/correctness/test_mat.c` pins its value on a fixed matrix to what those copies produced, so caches already on disk stay valid.
+
 That cost is why callers above this layer split on it rather than all checking: `stats.h`'s sorting functions and every statistical test that returns a verdict assert on it, while the accumulating reductions let a NaN propagate instead. See `docs/FRAME_DOCUMENTATION.md`'s note on missing values for that rule.
 
 ### Concatenation

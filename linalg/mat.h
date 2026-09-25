@@ -581,6 +581,31 @@ static inline int mat_all_finite(Mat m) {
     return best < MINFBITS;
 }
 
+/* A 48-bit fingerprint of m's values and shape, for telling whether a result
+   stored on disk was computed from the same data: the model caches in sd/ and
+   varima/ store it beside a fit and refuse the fit when it disagrees. FNV-1a
+   over each entry widened to double, so a float32 and a float64 build give
+   the same value for data both can represent, element by element so a strided
+   view gives the same value as a copy, then the two dimensions. Masked to 48
+   bits so it survives a round trip through a JSON number, which is a double
+   and exact only below 2^53. */
+static inline double mat_fingerprint(Mat m) {
+    unsigned long long h = 1469598103934665603ULL;
+    for (int i = 0; i < m.r; i++)
+        for (int j = 0; j < m.c; j++) {
+            double value = (double)AT(m, i, j);
+            unsigned char bytes[sizeof value];
+            memcpy(bytes, &value, sizeof value);
+            for (size_t k = 0; k < sizeof value; k++) {
+                h ^= bytes[k];
+                h *= 1099511628211ULL;
+            }
+        }
+    h ^= (unsigned long long)m.r; h *= 1099511628211ULL;
+    h ^= (unsigned long long)m.c; h *= 1099511628211ULL;
+    return (double)(h & 0xFFFFFFFFFFFFULL);
+}
+
 /* Return the maximum element. */
 static inline mreal mat_max(Mat m) {
     mreal v = AT(m,0,0);

@@ -92,7 +92,7 @@ includes more than four of these headers at once, and the four that do are from
 the same family. So two headers that both define a function named `fit`, an
 object-like macro redefined with different text, or a header that only compiles
 because whatever included it first pulled in `<string.h>`, are all invisible
-today. `README.md`'s "Implementing a new model" policy anticipates the first of
+today. `docs/IMPLEMENTING_A_MODEL.md`'s policy anticipates the first of
 those and nothing enforced it.
 
 Two translation units on purpose. One includes every header in declaration

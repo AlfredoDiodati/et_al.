@@ -123,7 +123,9 @@ static inline JsonValue *json_array_get(const JsonValue *v, int i) {
 
 /* --- parsing --- */
 
-typedef struct { const char *p; } JsonParser;
+/* failed is set by the first malformed character and every level above it
+   returns NULL from then on, freeing what it had built. */
+typedef struct { const char *p; int failed; } JsonParser;
 
 static inline void json_skip_ws(JsonParser *jp) {
     while (*jp->p == ' ' || *jp->p == '\t' || *jp->p == '\n' || *jp->p == '\r') jp->p++;
@@ -133,15 +135,17 @@ static inline void json_skip_ws(JsonParser *jp) {
    opening quote), handling \", \\, \/, \n, \t, \r, \b, \f, and \uXXXX
    (encoded as UTF-8; only BMP code points - no surrogate-pair handling
    for characters outside it, sufficient for parameter-file text, not a
-   full Unicode-in-JSON implementation). Returns a malloc'd C string. */
+   full Unicode-in-JSON implementation). Returns a malloc'd C string, or
+   NULL with jp->failed set when the string is malformed. */
 static inline char *json_parse_string_raw(JsonParser *jp) {
-    assert(*jp->p == '"' && "json: expected string");
+    if (*jp->p != '"') { jp->failed = 1; return NULL; }
     jp->p++;
     size_t cap = 32, len = 0;
     char *buf = (char*)malloc(cap);
 #define JSTR_PUSH(c) do { if (len + 1 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); } buf[len++] = (char)(c); } while (0)
+#define JSTR_FAIL() do { free(buf); jp->failed = 1; return NULL; } while (0)
     while (*jp->p != '"') {
-        assert(*jp->p != '\0' && "json: unterminated string");
+        if (*jp->p == '\0') JSTR_FAIL();
         if (*jp->p == '\\') {
             jp->p++;
             char esc = *jp->p;
@@ -149,12 +153,13 @@ static inline char *json_parse_string_raw(JsonParser *jp) {
                 jp->p++;
                 unsigned cp = 0;
                 for (int k = 0; k < 4; k++) {
-                    char h = *jp->p++;
+                    char h = *jp->p;
                     unsigned digit;
                     if (h >= '0' && h <= '9') digit = (unsigned)(h - '0');
                     else if (h >= 'a' && h <= 'f') digit = (unsigned)(h - 'a' + 10);
                     else if (h >= 'A' && h <= 'F') digit = (unsigned)(h - 'A' + 10);
-                    else { assert(0 && "json: bad \\u escape"); digit = 0; }
+                    else JSTR_FAIL();
+                    jp->p++;
                     cp = (cp << 4) | digit;
                 }
                 if (cp < 0x80) {
@@ -178,7 +183,7 @@ static inline char *json_parse_string_raw(JsonParser *jp) {
                     case 'r': out = '\r'; break;
                     case 'b': out = '\b'; break;
                     case 'f': out = '\f'; break;
-                    default: assert(0 && "json: bad escape"); out = 0;
+                    default: JSTR_FAIL();
                 }
                 JSTR_PUSH(out);
                 jp->p++;
@@ -190,6 +195,7 @@ static inline char *json_parse_string_raw(JsonParser *jp) {
     }
     jp->p++; /* closing quote */
     buf[len] = '\0'; /* always room: JSTR_PUSH keeps cap > len */
+#undef JSTR_FAIL
 #undef JSTR_PUSH
     return buf;
 }
@@ -203,7 +209,7 @@ static inline char *json_parse_string_raw(JsonParser *jp) {
 static inline double json_parse_number_raw(JsonParser *jp) {
     char *end;
     double v = strtod(jp->p, &end);
-    assert(end != jp->p && "json: malformed number");
+    if (end == jp->p) { jp->failed = 1; return 0; }
     jp->p = end;
     return v;
 }
@@ -212,8 +218,10 @@ static inline JsonValue *json_parse_value(JsonParser *jp) {
     json_skip_ws(jp);
     char c = *jp->p;
     if (c == '"') {
+        char *text = json_parse_string_raw(jp);
+        if (!text) return NULL;
         JsonValue *v = json_alloc(JSON_STRING);
-        v->string = json_parse_string_raw(jp);
+        v->string = text;
         return v;
     }
     if (c == '{') {
@@ -223,17 +231,18 @@ static inline JsonValue *json_parse_value(JsonParser *jp) {
         if (*jp->p == '}') { jp->p++; return v; }
         for (;;) {
             json_skip_ws(jp);
-            assert(*jp->p == '"' && "json: expected string key in object");
             char *key = json_parse_string_raw(jp);
+            if (!key) { json_free(v); return NULL; }
             json_skip_ws(jp);
-            assert(*jp->p == ':' && "json: expected ':' after object key");
+            if (*jp->p != ':') { free(key); json_free(v); jp->failed = 1; return NULL; }
             jp->p++;
             JsonValue *val = json_parse_value(jp);
+            if (!val) { free(key); json_free(v); return NULL; }
             json_object_set(v, key, val);
             free(key); /* json_object_set copies the key */
             json_skip_ws(jp);
             if (*jp->p == ',') { jp->p++; continue; }
-            assert(*jp->p == '}' && "json: expected ',' or '}' in object");
+            if (*jp->p != '}') { json_free(v); jp->failed = 1; return NULL; }
             jp->p++;
             break;
         }
@@ -245,48 +254,59 @@ static inline JsonValue *json_parse_value(JsonParser *jp) {
         json_skip_ws(jp);
         if (*jp->p == ']') { jp->p++; return v; }
         for (;;) {
-            json_array_push(v, json_parse_value(jp));
+            JsonValue *item = json_parse_value(jp);
+            if (!item) { json_free(v); return NULL; }
+            json_array_push(v, item);
             json_skip_ws(jp);
             if (*jp->p == ',') { jp->p++; continue; }
-            assert(*jp->p == ']' && "json: expected ',' or ']' in array");
+            if (*jp->p != ']') { json_free(v); jp->failed = 1; return NULL; }
             jp->p++;
             break;
         }
         return v;
     }
     if (c == 't') {
-        assert(strncmp(jp->p, "true", 4) == 0 && "json: malformed literal");
+        if (strncmp(jp->p, "true", 4) != 0) { jp->failed = 1; return NULL; }
         jp->p += 4;
         JsonValue *v = json_alloc(JSON_BOOL); v->boolean = 1; return v;
     }
     if (c == 'f') {
-        assert(strncmp(jp->p, "false", 5) == 0 && "json: malformed literal");
+        if (strncmp(jp->p, "false", 5) != 0) { jp->failed = 1; return NULL; }
         jp->p += 5;
         JsonValue *v = json_alloc(JSON_BOOL); v->boolean = 0; return v;
     }
     if (c == 'n') {
-        assert(strncmp(jp->p, "null", 4) == 0 && "json: malformed literal");
+        if (strncmp(jp->p, "null", 4) != 0) { jp->failed = 1; return NULL; }
         jp->p += 4;
         return json_alloc(JSON_NULL);
     }
-    assert((c == '-' || (c >= '0' && c <= '9')) && "json: unexpected character");
+    if (!(c == '-' || (c >= '0' && c <= '9'))) { jp->failed = 1; return NULL; }
+    double number = json_parse_number_raw(jp);
+    if (jp->failed) return NULL;
     JsonValue *v = json_alloc(JSON_NUMBER);
-    v->number = json_parse_number_raw(jp);
+    v->number = number;
     return v;
 }
 
 /* Parses text as a single JSON value (object, array, string, number,
-   bool, or null). Asserts on any malformed input or trailing characters
-   after the top-level value - a contract violation, not a recoverable
-   error path (see linalg/decomp.h's "Contract" section). */
+   bool, or null). Returns NULL, having freed whatever it had built, on
+   malformed input or on characters after the top-level value: text read
+   from a file is data, and a file can be truncated or edited, so a bad
+   one is for the caller to refuse rather than a contract violation. A
+   caller for which a bad document is programmer error asserts on the
+   NULL itself. */
 static inline JsonValue *json_parse(const char *text) {
-    JsonParser jp; jp.p = text;
+    JsonParser jp; jp.p = text; jp.failed = 0;
     JsonValue *v = json_parse_value(&jp);
+    if (!v) return NULL;
     json_skip_ws(&jp);
-    assert(*jp.p == '\0' && "json: trailing characters after top-level value");
+    if (*jp.p != '\0') { json_free(v); return NULL; }
     return v;
 }
 
+/* json_parse of the file's contents: NULL when they are malformed. A file
+   that cannot be opened is still an assert; callers that treat a missing
+   file as a normal outcome probe it with fopen first. */
 static inline JsonValue *json_parse_file(const char *path) {
     FILE *f = fopen(path, "rb");
     assert(f && "json: could not open file");

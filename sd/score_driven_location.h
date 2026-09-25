@@ -542,14 +542,18 @@ static inline int sdloc_load_params(SdlocParams *m, const char *path) {
     fclose(probe);
     JsonValue *root = json_parse_file(path);
     if (!root) return 0;
-    JsonValue *stored_K = json_object_get(root, "K");
-    if (!stored_K || (int)json_as_number(stored_K) != m->K) {
+    /* A cache is a file a user can edit, so a value of the wrong type is a
+       refusal like a missing one, not an assert in the accessors. */
+    JsonValue *stored_K = root->type == JSON_OBJECT ? json_object_get(root, "K") : NULL;
+    if (!stored_K || stored_K->type != JSON_NUMBER || (int)json_as_number(stored_K) != m->K) {
         json_free(root);
         return 0;
     }
     JsonValue *values = json_object_get(root, "theta");
     int n = sdloc_n_theta(m->K);
-    if (!values || json_array_len(values) != n) {
+    int usable = values && values->type == JSON_ARRAY && json_array_len(values) == n;
+    for (int i = 0; usable && i < n; i++) usable = json_array_get(values, i)->type == JSON_NUMBER;
+    if (!usable) {
         json_free(root);
         return 0;
     }
@@ -561,22 +565,7 @@ static inline int sdloc_load_params(SdlocParams *m, const char *path) {
     return 1;
 }
 
-static inline double sdloc_data_fingerprint(Mat y) {
-    unsigned long long h = 1469598103934665603ULL;
-    for (int i = 0; i < y.r; i++)
-        for (int j = 0; j < y.c; j++) {
-            double value = (double)AT(y, i, j);
-            unsigned char bytes[sizeof value];
-            memcpy(bytes, &value, sizeof value);
-            for (size_t k = 0; k < sizeof value; k++) {
-                h ^= bytes[k];
-                h *= 1099511628211ULL;
-            }
-        }
-    h ^= (unsigned long long)y.r; h *= 1099511628211ULL;
-    h ^= (unsigned long long)y.c; h *= 1099511628211ULL;
-    return (double)(h & 0xFFFFFFFFFFFFULL);
-}
+static inline double sdloc_data_fingerprint(Mat y) { return mat_fingerprint(y); }
 
 static inline void sdloc_save_fit(const SdlocFitResult *result, Mat y, const char *path) {
     JsonValue *root = sdloc_params_to_json(&result->params);
@@ -645,8 +634,8 @@ static inline int sdloc_load_fit(SdlocFitResult *result, Mat y, const char *path
     if (!probe) return 0;
     fclose(probe);
     JsonValue *root = json_parse_file(path);
-    JsonValue *diagnostics = root ? json_object_get(root, "fit") : NULL;
-    if (!diagnostics) {
+    JsonValue *diagnostics = root && root->type == JSON_OBJECT ? json_object_get(root, "fit") : NULL;
+    if (!diagnostics || diagnostics->type != JSON_OBJECT) {
         if (root) json_free(root);
         return 0;
     }

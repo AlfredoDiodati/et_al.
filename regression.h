@@ -166,3 +166,24 @@ static inline void ols_free(OlsFit *fit) {
     fit->coefficients = (Mat){0};
     fit->residuals = (Mat){0};
 }
+
+/* The lagged regressors of a K x T series y, one column per period, the
+   package's convention for time series: a (T - p) x (K p) matrix whose row
+   for period t, t = p..T-1 counted from 0, is [y_{t-1}', y_{t-2}', ...,
+   y_{t-p}'], every variable's first lag, then every variable's second, in
+   the order of y's rows. Only periods with all p lags are kept, so row 0 is
+   period p. The layout is lag-major so the coefficients on the first lag are
+   one contiguous block, which is the block an impulse response reads. y may
+   be a strided view; the result is an owner. */
+static inline Mat lag_matrix(Mat y, int p) {
+    assert(p >= 1 && y.r >= 1 && y.c > p && "lag_matrix: need 1 <= p < T");
+    int K = y.r, rows = y.c - p;
+    Mat lags = _mat_alloc(rows, K * p);
+    for (int row = 0; row < rows; row++) {
+        int t = row + p;
+        for (int lag = 1; lag <= p; lag++)
+            for (int k = 0; k < K; k++)
+                AT(lags, row, (lag - 1) * K + k) = AT(y, k, t - lag);
+    }
+    return lags;
+}
