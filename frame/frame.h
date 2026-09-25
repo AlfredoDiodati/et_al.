@@ -466,6 +466,36 @@ static inline DataFrame frame_rows_to_dataframe(StrList *rows, int n_rows_total,
 /* Frees every column, both storage backings, column metadata, and row
    names (if set). Does not free df itself (it's typically a stack value,
    the same convention Tape/MLP's owning structs already follow). */
+/* The running sum of every numeric column, down the rows: polars'
+   df.select(pl.col(numeric columns).cum_sum()). String columns, the column
+   order and names, and the row names are copied unchanged, so the result is
+   a DataFrame of the same shape the caller frees with df_free. A NaN, which
+   is how a frame marks a missing number (frame/join.h), propagates from its
+   row down its column, as every accumulating statistic in this package lets
+   a NaN through; polars instead skips a null and carries the sum past it.
+   The sum is mat_cumsum's, in order down each column. */
+static inline DataFrame df_cumsum(const DataFrame *df) {
+    DataFrame out = df_new(df->r);
+    if (df->numeric.c > 0) out.numeric = mat_cumsum(df->numeric, 0);
+    else out.numeric = (Mat){ df->r, 0, 0, NULL };
+    out.n_string = df->n_string;
+    if (df->n_string > 0) {
+        out.string_cols = (char***)malloc((size_t)df->n_string * sizeof(char**));
+        for (int s = 0; s < df->n_string; s++) {
+            out.string_cols[s] = (char**)malloc((size_t)df->r * sizeof(char*));
+            for (int i = 0; i < df->r; i++) out.string_cols[s][i] = frame_strdup(df->string_cols[s][i]);
+        }
+    }
+    out.n_cols = df->n_cols;
+    out.columns = (ColumnMeta*)malloc((size_t)df->n_cols * sizeof(ColumnMeta));
+    for (int j = 0; j < df->n_cols; j++) {
+        out.columns[j] = df->columns[j];
+        out.columns[j].name = frame_strdup(df->columns[j].name);
+    }
+    if (df->row_names) df_set_row_names(&out, (const char *const *)df->row_names);
+    return out;
+}
+
 static inline void df_free(DataFrame *df) {
     mat_free(df->numeric);
     for (int i = 0; i < df->n_string; i++) {

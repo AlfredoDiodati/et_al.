@@ -49,6 +49,8 @@ Mat df_col_numeric(const DataFrame *df, const char *name)
 char **df_col_string(const DataFrame *df, const char *name)
 ColType df_col_type(const DataFrame *df, const char *name)
 
+DataFrame df_cumsum(const DataFrame *df)
+
 void df_print(const DataFrame *df)
 ```
 
@@ -59,6 +61,10 @@ void df_print(const DataFrame *df)
 `df_add_numeric_col`/`df_add_string_col` append a column, copying the data in (the caller keeps ownership of `col` and must free it themselves — the usual "functions own new memory" convention). Growing `numeric` by one column has no in-place append available (`Mat` has none), so each numeric add is a copy-and-replace of the whole `numeric` block — fine at the tens-of-columns scale a DataFrame is expected to have; see Known limitations if this ever needs to be faster.
 
 `df_col_numeric` returns a **zero-copy view** (`mat_slice`) into `numeric` — mutating it mutates the DataFrame directly, the same view semantics `mat_slice` always has (see `docs/MATRIX_DOCUMENTATION.md`). `df_col_string` returns the DataFrame's own stored array directly — a view, not a copy; don't free it or its elements. Both assert if `name` doesn't exist or names a column of the other type — a contract violation, not a recoverable error path, the same convention `linalg/decomp.h`/`linalg/solver.h` already use.
+
+`df_cumsum(df)` returns a new DataFrame with every numeric column replaced by its running sum down the rows, which is polars' `df.select(pl.col(numeric columns).cum_sum())`. String columns, column order and names, and row names are copied unchanged, and the input is not modified. The sum is `mat_cumsum(numeric, 0)`, in order down each column; see `docs/MATRIX_DOCUMENTATION.md`, "Running sum", for the semantics, the threading, and timings against polars (faster in every case measured, 1.16 ms against 1.57 ms at 1e5 x 10).
+
+Discrepancy with polars. A frame marks a missing number with NaN (`frame/join.h`), and `df_cumsum` lets it propagate: every row from the NaN down that column is NaN. This follows the rule every accumulating statistic in this package follows. polars (commit `2add28fdab`, `crates/polars-ops/src/series/ops/cum_agg.rs`, `det_sum`) skips a null instead, returns null at that row, and carries the sum past it: `[None, 2, None, 7, 8, None]` gives `[None, 2, None, 9, 17, None]`. A float NaN in polars propagates as it does here. `tests/correctness/cumsum_correctness.c` ports polars' `test_cum_agg_with_nulls` with the NaN target.
 
 `df_set_row_names` deep-copies `names` (`r` entries); calling it again replaces the previous row names, freeing them first. `row_names == NULL` (the default) is a fully valid "no row labels" state, not an error state to check for before using the rest of the API.
 

@@ -85,6 +85,8 @@ tensor_free(products);
 
 **Reductions** `tensor_sum_axes` / `_axis`, `tensor_prod_axes` / `_axis`, `tensor_max_axes` / `_axis`, `tensor_min_axes` / `_axis`, `tensor_mean_axes` / `_axis`, each with a `keepdims` flag; `tensor_argmax_axis`, `tensor_argmin_axis`; and the whole-tensor `tensor_sum`, `tensor_mean`, `tensor_prod`, `tensor_max`, `tensor_min`, `tensor_all_finite`, which return a scalar rather than a tensor.
 
+**Running sum** `tensor_cumsum(t, axis)`, `numpy.cumsum(t, axis)` with a negative axis counted from the end: same shape as `t`, summed in order along the axis, bit for bit numpy's in float64. A view whose axes cannot be addressed as outer x axis x inner is copied to contiguous first. It runs on `linalg/mat.h`'s `_mat_cumsum_kernel`, whose semantics, threading band, tests and timings against numpy are in `docs/MATRIX_DOCUMENTATION.md`, "Running sum".
+
 `keepdims` leaves each reduced axis in place at extent 1, which is what makes the result broadcast back against the input - the shape a centring or a softmax wants.
 
 **Joining** `tensor_concat(ts, n, axis)` along an existing axis, `tensor_stack(ts, n, axis)` along a new one.

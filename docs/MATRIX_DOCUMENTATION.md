@@ -162,6 +162,77 @@ int mat_all_finite(Mat m)  // 0 if any element is NaN or infinite, 1 otherwise
 
 That cost is why callers above this layer split on it rather than all checking: `stats.h`'s sorting functions and every statistical test that returns a verdict assert on it, while the accumulating reductions let a NaN propagate instead. See `docs/FRAME_DOCUMENTATION.md`'s note on missing values for that rule.
 
+### Running sum
+
+```c
+Mat mat_cumsum(Mat m, int axis)   // axis 0: down each column; axis 1: along each row
+```
+
+`mat_cumsum` is `numpy.cumsum(m, axis)`: the running sum down each column or along each row, with an r x c owner as the result. `m` may be a strided view. A `Vec` is a column, so `mat_cumsum(v, 0)` is its running sum. `linalg/tensor.h`'s `tensor_cumsum` and `frame/frame.h`'s `df_cumsum` go through the same kernel, `_mat_cumsum_kernel`, which sums an outer x length x inner block along its middle axis with one stride per axis.
+
+**Semantics.** They follow numpy's accumulate (numpy commit `a98529dfd9`, `numpy/_core/src/umath/ufunc_object.c`, `PyUFunc_Accumulate`):
+
+- The sum runs in order along the axis, in `mreal`, the precision of the build.
+- The first element is copied rather than added to zero.
+
+So a float64 result equals `numpy.cumsum`'s bit for bit, and a float32 build equals numpy on a float32 array bit for bit. A NaN or an infinity propagates from where it enters, and `+inf` followed by `-inf` gives NaN.
+
+polars (commit `2add28fdab`, `crates/polars-ops/src/series/ops/cum_agg.rs`, `cum_sum_with_init`) differs in three places:
+
+- It starts from zero, so under IEEE arithmetic a leading `-0.0` becomes `+0.0`. This build compiles with `-ffast-math`, which lets the compiler fold `0 + x` into `x`, so the sign of a leading zero is not something this library can promise either way.
+- It accumulates a Float32 column in float64 and rounds each output, where this library accumulates in float32, as numpy does. The two agree within the rounding bound of in-order summation.
+- It skips a null and carries the sum past it. See `docs/FRAME_DOCUMENTATION.md` for what `df_cumsum` does instead.
+
+R differs from both. Its `cumsum` (R 4.6.1, `src/main/cum.c`) accumulates in `long double`, 80 bits on x86-64 Linux, and rounds each output to double. So a float64 result here agrees with R only within the rounding bound of in-order summation in double, not bit for bit.
+
+**Threads.** Only lanes that do not depend on each other are split across threads, never a single running sum, so the result is the same whatever the thread count, which the tests check. A lane is either a whole row summed on its own, or a chunk of `MAT_CUMSUM_CHUNK` (256) columns of a block summed down its rows.
+
+Threading pays only inside a band of sizes, measured by `tests/performance/cumsum_threshold.c` (`make bench-cumsum_threshold`) on this machine: 16 threads, float64, the threaded path forced at every size, and each cell the best of 5 batches of at least 20 ms with the output allocated per call.
+
+- **Rows as lanes:** threading is faster from 8192 elements, by 1.5x at 8192 and 20x at 2^19. That lower end is `MAT_CUMSUM_OMP_MIN_ROWS`.
+- **Column chunks as lanes:** faster from 32768 elements, by 1.4x at 32768 and 8.7x at 2^19. That lower end is `MAT_CUMSUM_OMP_MIN_COLUMNS`.
+- **Upper end:** from 2^20 elements, input and output no longer fit in the 8 MB last-level cache, and the sum is bound by memory bandwidth. With the output buffer reused, 16 threads were no faster than one. With the output allocated per call, they were 1.5x slower along rows at 2^22 and 6x slower down columns, as the threads page-faulted the fresh allocation in together. So the band stops at `MAT_CUMSUM_OMP_MAX`, 2^20 elements.
+
+Like the other dispatch constants, these three are one machine's measurement.
+
+**Tests.** `tests/correctness/cumsum_correctness.c`, in `make test` in both precisions, holds:
+
+- numpy's `TestCumsum.test_basic` and polars' `test_cum_agg`, copied with their exact targets;
+- polars' `test_cum_agg_with_nulls`, adapted to NaN;
+- every axis and its negative on tensors of rank 1 to 4, and permuted and sliced views, against an in-order reference, exactly;
+- a strided `Mat` against its copy;
+- every kernel path either side of each end of the band and of the chunk width, with one thread against every thread;
+- special values, and a frame's string columns and labels.
+
+`tests/correctness/cumsum_reference_agreement.py` (`make test-cumsum-python`, outside `make test` because it needs numpy and polars) makes 77 comparisons in each precision against numpy 2.3.3 and polars 1.38.1:
+
+- vectors, matrices, tensors, numpy views and frames;
+- values from `1e-8` to `1e8` with cancelling signs;
+- NaN and infinities.
+
+All of them agree. In both precisions each matches numpy bit for bit. Against polars they are equal in float64, and within the float32 rounding bound, `(k + 1) 2^-24` times the running sum of absolute values, in float32.
+
+Mutation check: accumulating the one-lane path in double instead of `mreal` fails both files in float32.
+
+**Speed.** `tests/performance/bench_cumsum.py` (in `bench.sh`) times all three against numpy and polars. Setup:
+
+- float64 standard normals from `default_rng(0)`, every library at its default thread count;
+- each time the best of 5 batches of at least 20 ms, with every call allocating its result;
+- et_al timed inside C. The time through ctypes is also printed, and adds 1 to 2 microseconds.
+
+et_al is faster than both packages in all 26 cases:
+
+| case | et_al | numpy | polars |
+|---|---|---|---|
+| vector, n = 1000 | 1.1 us | 4.5 us | 27.1 us |
+| vector, n = 1e7 | 18.7 ms | 34.2 ms | 52.2 ms |
+| 1e5 x 10 down columns | 1.16 ms | 11.8 ms | 1.57 ms (DataFrame) |
+| 1e6 x 10 down columns | 17.5 ms | 122.9 ms | 18.6 ms (DataFrame) |
+| 10 x 1e5 down columns | 1.05 ms | 3.58 ms | 295 ms (DataFrame, 100000 columns) |
+| 100 x 100 x 100 tensor, axis 0 | 1.04 ms | 3.47 ms | - |
+
+The closest case, 1e6 x 10 down columns against polars, was re-timed in 6 alternating rounds, 3 with each library first. The ratio was 0.84 to 0.88 for `mat_cumsum` and 0.85 to 0.91 for `df_cumsum`, in every round and both orders. Above the cache the two are bound by the same memory bandwidth, which is why the margin there is narrow.
+
 ### Concatenation
 
 ```c

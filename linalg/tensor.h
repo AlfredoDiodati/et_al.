@@ -1044,6 +1044,25 @@ static inline Tensor tensor_mean_axis(Tensor t, int axis, int keepdims) {
     return tensor_mean_axes(t, &axis, 1, keepdims);
 }
 
+/* The running sum along one axis, same shape as t: numpy.cumsum(t, axis),
+   with axis counted from the end when negative. The sum runs in order along
+   the axis, which is mat.h's _mat_cumsum_kernel; a view whose axes cannot be
+   addressed as outer x axis x inner is copied to contiguous first. */
+static inline Tensor tensor_cumsum(Tensor t, int axis) {
+    assert(t.ndim >= 1 && "tensor_cumsum: a rank-0 tensor has no axis");
+    if (axis < 0) axis += t.ndim;
+    assert(axis >= 0 && axis < t.ndim && "tensor_cumsum: axis out of range");
+    Tensor source = tensor_is_contiguous(t) ? t : tensor_copy(t);
+    int outer = 1, inner = 1;
+    for (int i = 0; i < axis; i++) outer *= t.shape[i];
+    for (int i = axis + 1; i < t.ndim; i++) inner *= t.shape[i];
+    int length = t.shape[axis];
+    Tensor out = _tensor_new_uninit(t.ndim, t.shape);
+    _mat_cumsum_kernel(source.d, (ptrdiff_t)length * inner, inner, 1, out.d, outer, length, inner);
+    if (source.d != t.d) tensor_free(source);
+    return out;
+}
+
 /* The whole-tensor reductions, returning a scalar rather than a tensor.
    These are the ones that parallelize, since the accumulator is one value
    and OpenMP's reduction clause owns the split and the merge. */

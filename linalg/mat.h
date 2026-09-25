@@ -550,6 +550,102 @@ static inline mreal mat_sum(Mat m) {
 /* Return the mean of all elements. */
 static inline mreal mat_mean(Mat m) { return mat_sum(m) / (mreal)(m.r * m.c); }
 
+/* The band of element counts in which _mat_cumsum_kernel splits
+   independent lanes across threads, measured in
+   tests/performance/cumsum_threshold.c (16 threads, float64). Rows summed
+   one per lane pay from 8192 elements (1.5x, 20x at 2^19), column chunks
+   from 32768 (1.4x, 8.7x at 2^19). From 2^20 elements, input and output
+   no longer fit this machine's 8 MB of last-level cache and the sum is
+   bound by memory bandwidth: 16 threads were no faster with the output
+   buffer reused, 1.5x slower along rows at 2^22, and 6x slower down
+   columns at 2^22 when the output was allocated per call, as the threads
+   page-faulted it in together. */
+#ifndef MAT_CUMSUM_OMP_MIN_ROWS
+#define MAT_CUMSUM_OMP_MIN_ROWS 8192
+#endif
+#ifndef MAT_CUMSUM_OMP_MIN_COLUMNS
+#define MAT_CUMSUM_OMP_MIN_COLUMNS 32768
+#endif
+#ifndef MAT_CUMSUM_OMP_MAX
+#define MAT_CUMSUM_OMP_MAX 1048576
+#endif
+
+/* Width of the column chunks a thread takes when the lanes to split are the
+   columns of one block: a multiple of a cache line in either precision, so
+   two threads never write the same line. */
+#define MAT_CUMSUM_CHUNK 256
+
+/* The running sum of an outer x length x inner block along its middle axis,
+   into out, contiguous in that order:
+
+       out[o][0][i] = in[o][0][i],   out[o][k][i] = out[o][k-1][i] + in[o][k][i].
+
+   in is addressed by one stride per axis, so a strided Mat or a transposed
+   view needs no copy. The sum runs in order along the axis, in mreal, with
+   the first element copied rather than added to zero, which is numpy's
+   accumulate: a float64 result equals numpy.cumsum's bit for bit, and a NaN
+   or an infinity propagates from where it enters. What is split across
+   threads is only ever lanes that do not depend on each other, whole outer
+   blocks or chunks of columns, so the result does not depend on the thread
+   count. */
+static inline void _mat_cumsum_kernel(const mreal *in, ptrdiff_t in_outer, ptrdiff_t in_axis, ptrdiff_t in_inner,
+                                      mreal *out, int outer, int length, int inner) {
+    size_t total = (size_t)outer * length * inner;
+    if (total == 0) return;
+    if (inner == 1) {
+        int threaded = outer > 1 && total >= MAT_CUMSUM_OMP_MIN_ROWS && total <= MAT_CUMSUM_OMP_MAX;
+        #pragma omp parallel for schedule(static) if(threaded)
+        for (int o = 0; o < outer; o++) {
+            const mreal *src = in + o * in_outer;
+            mreal *restrict dst = out + (size_t)o * length;
+            mreal acc = src[0];
+            dst[0] = acc;
+            for (int k = 1; k < length; k++) {
+                acc += src[k * in_axis];
+                dst[k] = acc;
+            }
+        }
+        return;
+    }
+    int chunks = (inner + MAT_CUMSUM_CHUNK - 1) / MAT_CUMSUM_CHUNK;
+    int lanes = outer * chunks;
+    int threaded = lanes > 1 && total >= MAT_CUMSUM_OMP_MIN_COLUMNS && total <= MAT_CUMSUM_OMP_MAX;
+    #pragma omp parallel for schedule(static) if(threaded)
+    for (int lane = 0; lane < lanes; lane++) {
+        int o = lane / chunks, i0 = (lane % chunks) * MAT_CUMSUM_CHUNK;
+        int width = inner - i0 < MAT_CUMSUM_CHUNK ? inner - i0 : MAT_CUMSUM_CHUNK;
+        const mreal *src = in + o * in_outer + i0 * in_inner;
+        mreal *restrict dst = out + (size_t)o * length * inner + i0;
+        if (in_inner == 1) {
+            for (int i = 0; i < width; i++) dst[i] = src[i];
+            for (int k = 1; k < length; k++) {
+                const mreal *restrict row = src + k * in_axis;
+                mreal *restrict previous = dst + (size_t)(k - 1) * inner, *restrict current = dst + (size_t)k * inner;
+                for (int i = 0; i < width; i++) current[i] = previous[i] + row[i];
+            }
+        } else {
+            for (int i = 0; i < width; i++) dst[i] = src[i * in_inner];
+            for (int k = 1; k < length; k++) {
+                const mreal *row = src + k * in_axis;
+                mreal *restrict previous = dst + (size_t)(k - 1) * inner, *restrict current = dst + (size_t)k * inner;
+                for (int i = 0; i < width; i++) current[i] = previous[i] + row[i * in_inner];
+            }
+        }
+    }
+}
+
+/* The running sum of m along axis 0, down each column, or axis 1, along each
+   row: numpy.cumsum(m, axis). A Vec is a column, so axis 0 is its running
+   sum. m may be a strided view; the result is an r x c owner. See
+   _mat_cumsum_kernel for the order of summation and NaN. */
+static inline Mat mat_cumsum(Mat m, int axis) {
+    assert((axis == 0 || axis == 1) && "mat_cumsum: axis is 0 (down each column) or 1 (along each row)");
+    Mat o = _mat_alloc(m.r, m.c);
+    if (axis == 0) _mat_cumsum_kernel(m.d, 0, m.stride, 1, o.d, 1, m.r, m.c);
+    else _mat_cumsum_kernel(m.d, m.stride, 1, 1, o.d, m.r, m.c, 1);
+    return o;
+}
+
 /* Is every element finite: no NaN and no infinity.
 
    This is the check a caller owes before handing a sample to anything that
