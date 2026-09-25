@@ -466,18 +466,13 @@ static inline DataFrame frame_rows_to_dataframe(StrList *rows, int n_rows_total,
 /* Frees every column, both storage backings, column metadata, and row
    names (if set). Does not free df itself (it's typically a stack value,
    the same convention Tape/MLP's owning structs already follow). */
-/* The running sum of every numeric column, down the rows: polars'
-   df.select(pl.col(numeric columns).cum_sum()). String columns, the column
-   order and names, and the row names are copied unchanged, so the result is
-   a DataFrame of the same shape the caller frees with df_free. A NaN, which
-   is how a frame marks a missing number (frame/join.h), propagates from its
-   row down its column, as every accumulating statistic in this package lets
-   a NaN through; polars instead skips a null and carries the sum past it.
-   The sum is mat_cumsum's, in order down each column. */
-static inline DataFrame df_cumsum(const DataFrame *df) {
+/* A copy of df whose numeric block is `numeric`, taken over rather than
+   copied; string columns, column order and names, and row names are
+   deep-copied. The frame operations that transform every numeric column
+   return their result through it. */
+static inline DataFrame _df_with_numeric(const DataFrame *df, Mat numeric) {
     DataFrame out = df_new(df->r);
-    if (df->numeric.c > 0) out.numeric = mat_cumsum(df->numeric, 0);
-    else out.numeric = (Mat){ df->r, 0, 0, NULL };
+    out.numeric = numeric;
     out.n_string = df->n_string;
     if (df->n_string > 0) {
         out.string_cols = (char***)malloc((size_t)df->n_string * sizeof(char**));
@@ -494,6 +489,33 @@ static inline DataFrame df_cumsum(const DataFrame *df) {
     }
     if (df->row_names) df_set_row_names(&out, (const char *const *)df->row_names);
     return out;
+}
+
+/* The running sum of every numeric column, down the rows: polars'
+   df.select(pl.col(numeric columns).cum_sum()). String columns, the column
+   order and names, and the row names are copied unchanged, so the result is
+   a DataFrame of the same shape the caller frees with df_free. A NaN, which
+   is how a frame marks a missing number (frame/join.h), propagates from its
+   row down its column, as every accumulating statistic in this package lets
+   a NaN through; polars instead skips a null and carries the sum past it.
+   The sum is mat_cumsum's, in order down each column. */
+static inline DataFrame df_cumsum(const DataFrame *df) {
+    Mat numeric = df->numeric.c > 0 ? mat_cumsum(df->numeric, 0) : (Mat){ df->r, 0, 0, NULL };
+    return _df_with_numeric(df, numeric);
+}
+
+/* The right-aligned rolling mean of every numeric column over `window`
+   consecutive rows: polars' df.select(pl.col(numeric columns).rolling_mean(
+   window)). The first window - 1 rows are NaN, which in a frame reads as
+   missing, where polars returns null. Everything else is copied as
+   df_cumsum copies it. A NaN already in a column makes every window holding
+   it NaN, as in polars, which propagates a float NaN the same way; polars
+   skips a null instead and averages the rest of the window only when it asks
+   for fewer than window samples, which this function does not. The means are
+   mat_rolling_mean's. */
+static inline DataFrame df_rolling_mean(const DataFrame *df, int window) {
+    Mat numeric = df->numeric.c > 0 ? mat_rolling_mean(df->numeric, window, 0) : (Mat){ df->r, 0, 0, NULL };
+    return _df_with_numeric(df, numeric);
 }
 
 static inline void df_free(DataFrame *df) {

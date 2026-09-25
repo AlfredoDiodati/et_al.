@@ -50,6 +50,7 @@ char **df_col_string(const DataFrame *df, const char *name)
 ColType df_col_type(const DataFrame *df, const char *name)
 
 DataFrame df_cumsum(const DataFrame *df)
+DataFrame df_rolling_mean(const DataFrame *df, int window)
 
 void df_print(const DataFrame *df)
 ```
@@ -63,6 +64,8 @@ void df_print(const DataFrame *df)
 `df_col_numeric` returns a **zero-copy view** (`mat_slice`) into `numeric` — mutating it mutates the DataFrame directly, the same view semantics `mat_slice` always has (see `docs/MATRIX_DOCUMENTATION.md`). `df_col_string` returns the DataFrame's own stored array directly — a view, not a copy; don't free it or its elements. Both assert if `name` doesn't exist or names a column of the other type — a contract violation, not a recoverable error path, the same convention `linalg/decomp.h`/`linalg/solver.h` already use.
 
 `df_cumsum(df)` returns a new DataFrame with every numeric column replaced by its running sum down the rows, which is polars' `df.select(pl.col(numeric columns).cum_sum())`. String columns, column order and names, and row names are copied unchanged, and the input is not modified. The sum is `mat_cumsum(numeric, 0)`, in order down each column; see `docs/MATRIX_DOCUMENTATION.md`, "Running sum", for the semantics, the threading, and timings against polars (faster in every case measured, 1.16 ms against 1.57 ms at 1e5 x 10).
+
+`df_rolling_mean(df, window)` returns a new DataFrame with every numeric column replaced by its right-aligned rolling mean over `window` rows, which is polars' `df.select(pl.col(numeric columns).rolling_mean(window))`. Everything else is copied as `df_cumsum` copies it. The first `window - 1` rows are NaN, which in a frame reads as missing, where polars returns null. A NaN already in a column makes every window holding it NaN, as a float NaN does in polars. polars skips a null instead, and with `min_samples` below the window averages the rest, which this function does not do. The means are `mat_rolling_mean`'s. See `docs/MATRIX_DOCUMENTATION.md`, "Rolling mean", for how they are summed, their accuracy, and timings against polars: faster in every case measured except a tie on 1e6 x 10, where both are bound by memory bandwidth.
 
 Discrepancy with polars. A frame marks a missing number with NaN (`frame/join.h`), and `df_cumsum` lets it propagate: every row from the NaN down that column is NaN. This follows the rule every accumulating statistic in this package follows. polars (commit `2add28fdab`, `crates/polars-ops/src/series/ops/cum_agg.rs`, `det_sum`) skips a null instead, returns null at that row, and carries the sum past it: `[None, 2, None, 7, 8, None]` gives `[None, 2, None, 9, 17, None]`. A float NaN in polars propagates as it does here. `tests/correctness/cumsum_correctness.c` ports polars' `test_cum_agg_with_nulls` with the NaN target.
 

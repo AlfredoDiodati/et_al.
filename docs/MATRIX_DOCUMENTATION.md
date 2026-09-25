@@ -233,6 +233,94 @@ et_al is faster than both packages in all 26 cases:
 
 The closest case, 1e6 x 10 down columns against polars, was re-timed in 6 alternating rounds, 3 with each library first. The ratio was 0.84 to 0.88 for `mat_cumsum` and 0.85 to 0.91 for `df_cumsum`, in every round and both orders. Above the cache the two are bound by the same memory bandwidth, which is why the margin there is narrow.
 
+### Rolling mean
+
+```c
+Mat mat_rolling_mean(Mat m, int window, int axis)   // axis 0: down each column; axis 1: along each row
+```
+
+`mat_rolling_mean` returns the right-aligned mean over `window` consecutive elements along the axis. Position `t` holds the mean of `t - window + 1 .. t`. The first `window - 1` positions have no full window and are NaN, which is how a frame marks a missing number. The result has `m`'s shape, and `m` may be a strided view.
+
+It is polars' `rolling_mean(window)` with its default `min_samples = window` and `center = False`, and zoo's `rollmean(k = window, fill = NA, align = "right")`. `linalg/tensor.h`'s `tensor_rolling_mean` and `frame/frame.h`'s `df_rolling_mean` go through the same kernel, `_mat_rolling_mean_kernel`.
+
+**How each mean is summed.** There are two regimes. Their boundaries were measured, not chosen, by `tests/performance/rolling_mean_threshold.c` (`make bench-rolling_mean_threshold`): one thread, float64, best of 5 batches of at least 20 ms.
+
+- **Direct.** Along a single lane, a window of at most `MAT_ROLLING_DIRECT_MAX` (64) elements is summed on its own, in `mreal`, vectorised across neighbouring outputs.
+  - A NaN or an infinity affects exactly the windows that hold it, and a window of zeros averages to exactly zero.
+  - The loops add from the oldest element, but under `-ffast-math` the compiler may reorder the sum, and in the float32 build it does. The result is therefore within the rounding of a direct sum, not necessarily the in-order one.
+  - This regime is faster than the slide from window 4 to 64 (3.8 against 4.5 ns per output at 4, 5.0 against 5.2 at 64) and slower from 96. At window 2 the slide is faster (4.8 against 6.0 ns), and the window is summed directly anyway, since this is the exact regime.
+- **Slide.** Wider windows along a lane, and every window from 2 across a block of lanes (where the slide, vectorised across the lanes, was faster at every window: 0.60 against 0.66 ns per output and lane at window 4 on 64 lanes), slide instead.
+  - The running sum is in double: add the entering element, subtract the leaving one.
+  - It restarts from a directly summed window every `window` outputs, so its rounding never accumulates past one window's worth.
+  - A NaN or an infinity that enters stays in the running sum through every later step, so a non-finite sum at the end of a window's worth identifies exactly the windows that held one. Those are summed again window by window.
+  - An earlier version scanned the inputs for non-finite values instead. That took a call on a 1e6 x 10 block at window 4 from 19.5 to 25.2 ms.
+
+**Accuracy**, measured against the exactly rounded mean of every window (`math.fsum`). Setup: three series of 20001 draws, a standard normal times `10^U` with `U` uniform on the integers `-8..8`, so values span 16 orders of magnitude; seed 5; float64. The table gives the largest error in units of `2^-53` times the window's mean absolute value:
+
+| window | this library | numpy (`sliding_window_view(...).mean`) | polars 1.38.1 |
+|---|---|---|---|
+| 4 | 2 | 2 | 3.3e16 |
+| 17 | 7.4 | 4.2 | 1.0e9 |
+| 100 | 61 | 4.8 | 67 |
+| 1000 | 14 | 1.9 | 1.9 |
+
+numpy sums every window on its own, at a cost that grows with the window. polars (commit `2add28fdab`, `crates/polars-compute/src/rolling/sum.rs`, `SumWindow`) slides a Kahan-compensated float64 sum through the whole series without restarting, and counts non-finite values apart. Its error is therefore set by the largest values that have ever passed through the window, which is harmless on well-scaled data and far off on this data at small windows.
+
+The bound this library is tested against is `(3 window + 2) u S2 / window`, with `u` the unit roundoff of the build and `S2` the sum of absolute values over the two windows ending at the position.
+
+**Discrepancies with the reference code.**
+
+- **polars:**
+  - It returns null where the window is not full; here that is NaN.
+  - It skips a null and, with `min_samples` below the window, averages what is left; there is no `min_samples` here.
+  - `center = True` is not implemented. polars and zoo place an even window differently: for window 4 polars centres on the third element, zoo on the second.
+- **zoo 1.9-0** (`R/rollmean.R`, `rollmean.zoo`): it sums the first window, then takes a running sum of differences through `cumsum` from the start of the series. So its rounding accumulates over the whole series rather than over one window.
+- **numpy** has no rolling mean.
+
+**Threads.** Lanes, column chunks and stretches along the axis are independent, so they are what is split across threads, and the result is the same whatever the thread count. Threading pays between `MAT_ROLLING_OMP_MIN` (16384) and `MAT_ROLLING_OMP_MAX` (2^21) elements, measured in the same file with 16 threads against one:
+
+- at 16384 elements it is 2.2x faster on one series at window 4, 8x at window 100, and 1.3x on 64 columns at window 4, where at 8192 elements the last one cost 0.71x;
+- at 2^21 it still gains 1.4x, 3.8x and 1.07x;
+- at 2^22 it loses on two of the three shapes (0.86x and 0.69x), once the data outgrow the 8 MB last-level cache.
+
+**Tests.** `tests/correctness/rolling_mean_correctness.c`, in `make test` in both precisions:
+
+- polars' `test_rolling_ints`, `test_rolling_infinity` and `test_rolling_sum_stability_11146`, the last adapted to full windows, where eight zeros must average to exactly 0.0;
+- polars' `test_rolling_sum_non_finite_23115`: 1000 draws from `{0, NaN, inf, -inf, 42, -3}` at window 4, past the direct limit, and on a block;
+- every axis of tensors of rank 1 to 4 and views against a long double reference within the bound;
+- the slide across its restart points;
+- one thread against every thread, bit for bit.
+
+Mutations run against it, each failing it:
+
+- a slide that ignores a non-finite value (558 failing checks);
+- a slide that never restarts (63);
+- a window starting one element late (70698).
+
+`tests/correctness/rolling_mean_reference_agreement.py` (`make test-rolling-mean-python`) makes 314 comparisons in both precisions:
+
+- vectors against the exact mean within the bound, and numpy held to the same bound;
+- matrices, tensors and views against numpy within twice the bound;
+- polars on well-scaled data within four times the bound plus `8 u max|x|`, its own sliding term.
+
+On wide data it measures polars rather than comparing with it.
+
+**Speed.** `tests/performance/bench_rolling_mean.py` (in `bench.sh`) uses the setup of the running-sum benchmark:
+
+- windows 4, 64 and 1000;
+- numpy's `sliding_window_view(...).mean` and polars' `rolling_mean`.
+
+| case | this library | numpy | polars |
+|---|---|---|---|
+| vector n = 1000, window 4 | 0.9 us | 31.8 us | 34.0 us |
+| vector n = 1e5, window 64 | 85 us | 2.36 ms | 0.99 ms |
+| vector n = 1e5, window 1000 | 42 us | 16.9 ms | 0.99 ms |
+| vector n = 1e7, window 4 | 20.1 ms | 167 ms | 96.8 ms |
+| 1e5 x 10 down columns, window 4 (frame) | 1.22 ms | - | 2.36 ms |
+| 1000 x 1000 down columns, window 4 | 1.26 ms | 3.29 ms | 5.63 ms |
+
+It was faster than both packages in all 32 cases of that run, with one qualification. On 1e6 x 10 down the columns the two are tied, not ordered: 19.4 against 20.1 ms at window 4 in that run. Six alternating rounds, three with each first, gave ratios from 0.80 to 1.11 at window 4 and from 0.71 to 1.00 at window 64. At that size both are bound by memory bandwidth. This library moves the same bytes there as `mat_cumsum` on the same data (17 ms): the input read once, the output written and read for ownership. Going below that would take non-temporal stores, which the compiler does not emit from this code.
+
 ### Concatenation
 
 ```c

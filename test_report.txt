@@ -1,10 +1,10 @@
-test run: vr 25 sep 2026 14:22:57 CEST
+test run: vr 25 sep 2026 15:05:50 CEST
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 82 suites
+make test and check.sh run the same 83 suites
 
 === build ===
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/poly_correctness.c -lm -lopenblas -o tests/correctness/poly_correctness
@@ -42,6 +42,10 @@ tests/correctness/../../linalg/mat.h:596:13: warning: unused variable ‘threade
 tests/correctness/../../linalg/mat.h:612:9: warning: unused variable ‘threaded’ [-Wunused-variable]
   612 |     int threaded = lanes > 1 && total >= MAT_CUMSUM_OMP_MIN_COLUMNS && total <= MAT_CUMSUM_OMP_MAX;
       |         ^~~~~~~~
+tests/correctness/../../linalg/mat.h: In function ‘_mat_rolling_mean_kernel’:
+tests/correctness/../../linalg/mat.h:790:9: warning: unused variable ‘threaded’ [-Wunused-variable]
+  790 |     int threaded = units > 1 && total >= MAT_ROLLING_OMP_MIN && total <= MAT_ROLLING_OMP_MAX;
+      |         ^~~~~~~~
 tests/correctness/test_tensor.c: In function ‘test_elementwise’:
 tests/correctness/test_tensor.c:370:24: warning: ‘shape’ may be used uninitialized [-Wmaybe-uninitialized]
   370 |             Tensor a = rand_tensor(ndim, shape);
@@ -62,6 +66,7 @@ tests/correctness/test_tensor.c:368:17: note: ‘shape’ declared here
   368 |             int shape[TENSOR_MAX_NDIM];
       |                 ^~~~~
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/cumsum_correctness.c -lm -lopenblas -o tests/correctness/cumsum_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/rolling_mean_correctness.c -lm -lopenblas -o tests/correctness/rolling_mean_correctness
 cc -Wall -Wextra -O1 -g -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mat_special.c -lm -lopenblas -o tests/correctness/test_mat_special
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_decomp.c -lm -lopenblas -o tests/correctness/test_decomp
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_solver.c -lm -lopenblas -o tests/correctness/test_solver
@@ -283,6 +288,15 @@ a strided Mat view against its copy, both axes
 both kernel paths either side of each end of the threaded band and of the column chunk, one thread against every thread
 a DataFrame keeps its string columns, order, names and row names; no numeric column still copies
 cumsum_correctness: all passed
+
+=== rolling_mean_correctness: PASS ===
+polars: test_rolling_ints, test_rolling_infinity, test_rolling_sum_stability_11146
+polars test_rolling_sum_non_finite_23115, window 4 (direct), past MAT_ROLLING_DIRECT_MAX (slid), and a block
+tensors of rank 1 to 4 on every axis, negative axes, views, windows 1, n and beyond n
+the slide past MAT_ROLLING_DIRECT_MAX, at 100 and at 1000, across its restart points
+sizes either side of the threaded band, both regimes, one thread against every thread
+a DataFrame keeps its string columns, names and row names
+rolling_mean_correctness: all passed
 
 === test_mat_special: PASS ===
 --- overflow ---
@@ -1710,4 +1724,4 @@ PASSED, 0 failures
 
 
 === summary ===
-85 passed, 0 failed
+86 passed, 0 failed

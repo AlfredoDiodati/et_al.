@@ -646,6 +646,186 @@ static inline Mat mat_cumsum(Mat m, int axis) {
     return o;
 }
 
+/* The largest window whose means are summed window by window along a single
+   lane (inner == 1); wider ones slide. Measured in
+   tests/performance/rolling_mean_threshold.c, one thread, float64, a
+   65536-element series: summing each window is faster from window 4 up to
+   64 (3.8 against 4.5 ns per output at 4, 5.0 against 5.2 at 64) and slower
+   from 96 (6.9 against 5.2). At window 2 the slide is faster (4.8 against
+   6.0) and the window is summed directly anyway, since that is the exact
+   path. Across a block of lanes (inner > 1) the slide, vectorised across the
+   lanes, was faster at every window from 2 (0.60 against 0.66 ns per output
+   and lane at window 4, 64 lanes), so there only a window of one, where a
+   slide would turn an exact copy into drift, is summed directly. */
+#ifndef MAT_ROLLING_DIRECT_MAX
+#define MAT_ROLLING_DIRECT_MAX 64
+#endif
+
+/* The band of element counts in which _mat_rolling_mean_kernel splits its
+   independent pieces across threads, measured in the same file with the
+   band opened, 16 threads against one: at 16384 elements threading is 2.2x
+   faster on one series at window 4, 8x at window 100 and 1.3x on 64 columns
+   at window 4, where at 8192 it cost 0.71x; at 2^21 it still gains 1.4x, 3.8x
+   and 1.07x; at 2^22 it loses 0.86x and 0.69x on two of the three shapes. */
+#ifndef MAT_ROLLING_OMP_MIN
+#define MAT_ROLLING_OMP_MIN 16384
+#endif
+#ifndef MAT_ROLLING_OMP_MAX
+#define MAT_ROLLING_OMP_MAX 2097152
+#endif
+
+/* Outputs along the axis one piece of a direct-sum lane covers. */
+#define MAT_ROLLING_TILE 1024
+
+/* The fewest outputs along the axis one piece of a slide covers. */
+#define MAT_ROLLING_SLIDE_SPAN 64
+
+/* The means of the windows ending at t = t0..t1-1 of `width` lanes, each
+   window summed on its own, in mreal. One lane is vectorised across outputs,
+   several across lanes. The loops add a window from its oldest element, but
+   under -ffast-math the compiler may reorder that sum, and in a float32
+   build it does; the result is then within the rounding of a direct sum
+   rather than equal to the in-order one. */
+static inline void _mat_rolling_direct(const mreal *src, ptrdiff_t in_axis, ptrdiff_t in_inner, mreal *dst, int inner,
+                                       int width, int window, int t0, int t1) {
+    mreal sums[MAT_ROLLING_TILE > MAT_CUMSUM_CHUNK ? MAT_ROLLING_TILE : MAT_CUMSUM_CHUNK];
+    if (width == 1) {
+        for (int t0_tile = t0; t0_tile < t1; t0_tile += MAT_ROLLING_TILE) {
+            int count = t1 - t0_tile < MAT_ROLLING_TILE ? t1 - t0_tile : MAT_ROLLING_TILE;
+            const mreal *oldest = src + (t0_tile - window + 1) * in_axis;
+            for (int t = 0; t < count; t++) sums[t] = oldest[t * in_axis];
+            for (int j = 1; j < window; j++) {
+                const mreal *next = oldest + j * in_axis;
+                for (int t = 0; t < count; t++) sums[t] += next[t * in_axis];
+            }
+            for (int t = 0; t < count; t++) dst[(size_t)(t0_tile + t) * inner] = sums[t] / (mreal)window;
+        }
+        return;
+    }
+    for (int t = t0; t < t1; t++) {
+        const mreal *oldest = src + (t - window + 1) * in_axis;
+        for (int i = 0; i < width; i++) sums[i] = oldest[i * in_inner];
+        for (int j = 1; j < window; j++) {
+            const mreal *next = oldest + j * in_axis;
+            for (int i = 0; i < width; i++) sums[i] += next[i * in_inner];
+        }
+        mreal *row = dst + (size_t)t * inner;
+        for (int i = 0; i < width; i++) row[i] = sums[i] / (mreal)window;
+    }
+}
+
+/* The same means by one sliding sum per lane, in double: the window ending at
+   t0 summed in order, then each step adds the entering element and subtracts
+   the leaving one. The caller keeps t1 - t0 at most one window, so the
+   rounding a slide carries is bounded by as many steps as a direct sum of
+   one window takes. Returns 0 when a NaN or an infinity entered: once in, it
+   stays in the sum through every later step, since adding or subtracting a
+   finite value leaves it and subtracting an infinity from itself gives NaN,
+   so the sums at the last step are enough to tell. */
+static inline int _mat_rolling_slide(const mreal *src, ptrdiff_t in_axis, ptrdiff_t in_inner, mreal *dst, int inner,
+                                      int width, int window, int t0, int t1) {
+    double sums[MAT_CUMSUM_CHUNK];
+    const mreal *oldest = src + (t0 - window + 1) * in_axis;
+    for (int i = 0; i < width; i++) sums[i] = (double)oldest[i * in_inner];
+    for (int j = 1; j < window; j++) {
+        const mreal *next = oldest + j * in_axis;
+        for (int i = 0; i < width; i++) sums[i] += (double)next[i * in_inner];
+    }
+    mreal *row = dst + (size_t)t0 * inner;
+    for (int i = 0; i < width; i++) row[i] = (mreal)(sums[i] / window);
+    for (int t = t0 + 1; t < t1; t++) {
+        const mreal *entering = src + t * in_axis, *leaving = src + (t - window) * in_axis;
+        row = dst + (size_t)t * inner;
+        for (int i = 0; i < width; i++) {
+            sums[i] += (double)entering[i * in_inner] - (double)leaving[i * in_inner];
+            row[i] = (mreal)(sums[i] / window);
+        }
+    }
+    for (int i = 0; i < width; i++)
+        if (mat_isnan_f64(sums[i]) || mat_isinf_f64(sums[i])) return 0;
+    return 1;
+}
+
+/* The right-aligned rolling mean of an outer x length x inner block along its
+   middle axis, into out, contiguous in that order: out[o][t][i] is the mean
+   of in[o][t-window+1..t][i], and the first window - 1 positions along the
+   axis, which have no full window, are NaN, the frame's mark for a missing
+   number.
+
+   Along a single lane a window of at most MAT_ROLLING_DIRECT_MAX elements is
+   summed on its own, in mreal: a NaN or an infinity affects exactly the
+   windows that hold it, and a window of zeros averages to exactly zero.
+   Across a block of lanes, and along a lane for a wider window, summing each
+   window costs more than sliding (see MAT_ROLLING_DIRECT_MAX), so the sum
+   slides instead, in double, restarting from a directly summed window every
+   `window` outputs so that its rounding cannot accumulate past one window's
+   worth. A window's worth of slid means that came out NaN or infinite is
+   summed window by window again, since a NaN or an infinity that leaves the
+   window cannot be subtracted back out. Whether one entered is read off the
+   running sums at the end of each window's worth, where it cannot have
+   disappeared; scanning the inputs for one instead took a call on 10
+   columns at window 4 from 19.5 to 25.2 ms.
+
+   Lanes, column chunks and stretches along the axis do not depend on each
+   other, so they are what is split across threads, and the result does not
+   depend on the thread count. */
+static inline void _mat_rolling_mean_kernel(const mreal *in, ptrdiff_t in_outer, ptrdiff_t in_axis, ptrdiff_t in_inner,
+                                            mreal *out, int outer, int length, int inner, int window) {
+    assert(window >= 1 && "rolling mean: the window must hold at least one element");
+    int first = window - 1, missing = first < length ? first : length;
+    mreal nan = (mreal)NAN;
+    for (int o = 0; o < outer; o++)
+        for (size_t e = 0; e < (size_t)missing * inner; e++) out[(size_t)o * length * inner + e] = nan;
+    if (length <= first || inner == 0 || outer == 0) return;
+
+    int direct = window <= (inner == 1 ? MAT_ROLLING_DIRECT_MAX : 1);
+    /* A piece of a slide covers whole windows, at least MAT_ROLLING_SLIDE_SPAN
+       outputs, restarting from a directly summed window at each one. */
+    int span = direct ? MAT_ROLLING_TILE
+                      : window * ((MAT_ROLLING_SLIDE_SPAN + window - 1) / window);
+    int pieces = (length - first + span - 1) / span;
+    int chunks = (inner + MAT_CUMSUM_CHUNK - 1) / MAT_CUMSUM_CHUNK;
+    long units = (long)outer * chunks * pieces;
+    size_t total = (size_t)outer * length * inner;
+    int threaded = units > 1 && total >= MAT_ROLLING_OMP_MIN && total <= MAT_ROLLING_OMP_MAX;
+    #pragma omp parallel for schedule(static) if(threaded)
+    for (long unit = 0; unit < units; unit++) {
+        int o = (int)(unit / ((long)chunks * pieces));
+        int rest = (int)(unit % ((long)chunks * pieces));
+        int i0 = (rest / pieces) * MAT_CUMSUM_CHUNK, piece = rest % pieces;
+        int width = inner - i0 < MAT_CUMSUM_CHUNK ? inner - i0 : MAT_CUMSUM_CHUNK;
+        int t0 = first + piece * span, t1 = t0 + span < length ? t0 + span : length;
+        const mreal *src = in + o * in_outer + i0 * in_inner;
+        mreal *dst = out + (size_t)o * length * inner + i0;
+        if (direct) {
+            _mat_rolling_direct(src, in_axis, in_inner, dst, inner, width, window, t0, t1);
+            continue;
+        }
+        for (int start = t0; start < t1; start += window) {
+            int end = start + window < t1 ? start + window : t1;
+            /* A NaN or an infinity that entered these windows cannot be
+               subtracted back out when it leaves, so they are summed one by
+               one instead. */
+            if (!_mat_rolling_slide(src, in_axis, in_inner, dst, inner, width, window, start, end))
+                _mat_rolling_direct(src, in_axis, in_inner, dst, inner, width, window, start, end);
+        }
+    }
+}
+
+/* The right-aligned rolling mean of m over `window` consecutive elements along
+   axis 0, down each column, or axis 1, along each row: polars'
+   rolling_mean(window) and zoo's rollmean(k = window, align = "right",
+   fill = NA). The result has m's shape; the first window - 1 positions along
+   the axis are NaN. See _mat_rolling_mean_kernel for how each mean is
+   summed. */
+static inline Mat mat_rolling_mean(Mat m, int window, int axis) {
+    assert((axis == 0 || axis == 1) && "mat_rolling_mean: axis is 0 (down each column) or 1 (along each row)");
+    Mat o = _mat_alloc(m.r, m.c);
+    if (axis == 0) _mat_rolling_mean_kernel(m.d, 0, m.stride, 1, o.d, 1, m.r, m.c, window);
+    else _mat_rolling_mean_kernel(m.d, m.stride, 1, 1, o.d, m.r, m.c, 1, window);
+    return o;
+}
+
 /* Is every element finite: no NaN and no infinity.
 
    This is the check a caller owes before handing a sample to anything that

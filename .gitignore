@@ -56,6 +56,7 @@ tests/correctness/mcs_size_and_power_candidate
 tests/correctness/test_mcs_variance_candidate
 tests/performance/qvarma_*
 tests/performance/cumsum_threshold
+tests/performance/rolling_mean_threshold
 tests/performance/eig_sym_status
 tests/performance/lbfgs_candidates
 tests/performance/lbfgs_performance
