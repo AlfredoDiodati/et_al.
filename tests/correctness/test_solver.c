@@ -620,8 +620,62 @@ static void test_band_solve(void) {
     puts("band solve");
 }
 
+/* mat_band_solve against vec_band_solve column by column: the same
+   factorization and the same eliminations per column, so the two agree to
+   rounding. The draws are made diagonally dominant so the answers are well
+   determined and a disagreement is the kernel's, not the conditioning's;
+   pivoting is exercised by test_band_solve above, through the same _gbtf2.
+   Column counts of 2, 7 and 40, one right-hand side through the matrix entry
+   point, a strided b, and a NaN in one column that must not reach the
+   others. */
+static void test_band_solve_many(void) {
+    for (int trial = 0; trial < 60; trial++) {
+        int size = 3 + rand() % 40;
+        int kl = rand() % 4, ku = rand() % 4;
+        if (kl > size - 1) kl = size - 1;
+        if (ku > size - 1) ku = size - 1;
+        Mat a = mat_new(size, size);
+        for (int i = 0; i < size; i++)
+            for (int j = 0; j < size; j++)
+                if (i - j <= kl && j - i <= ku) AT(a, i, j) = (mreal)(rand() % 2000 - 1000) / 1000.0f;
+        for (int i = 0; i < size; i++) AT(a, i, i) += (mreal)(kl + ku + 1);
+        Mat packed = mat_band_pack(a, kl, ku);
+        int widths[3] = { 2, 7, 40 };
+        int nrhs = widths[trial % 3];
+        Mat parent = rand_mat(size, nrhs + 3);
+        Mat b = mat_slice(parent, 0, size, 1, 1 + nrhs);
+        Mat many = mat_band_solve(packed, kl, ku, b);
+        assert(many.r == size && many.c == nrhs);
+        for (int r = 0; r < nrhs; r++) {
+            Mat column = mat_new(size, 1);
+            for (int i = 0; i < size; i++) AT(column, i, 0) = AT(b, i, r);
+            Vec one = vec_band_solve(packed, kl, ku, column);
+            for (int i = 0; i < size; i++)
+                assert(MABS(AT(many, i, r) - AT(one, i, 0)) <= 16 * MEPS * (1 + MABS(AT(one, i, 0))));
+            mat_free(one); mat_free(column);
+        }
+        Mat single = mat_band_solve(packed, kl, ku, mat_slice(b, 0, size, 0, 1));
+        Mat column = mat_new(size, 1);
+        for (int i = 0; i < size; i++) AT(column, i, 0) = AT(b, i, 0);
+        Vec one = vec_band_solve(packed, kl, ku, column);
+        assert(memcmp(single.d, one.d, (size_t)size * sizeof(mreal)) == 0);
+        mat_free(single); mat_free(one); mat_free(column);
+
+        if (nrhs > 1) {
+            AT(b, size / 2, 0) = (mreal)NAN;
+            Mat poisoned = mat_band_solve(packed, kl, ku, b);
+            for (int i = 0; i < size; i++)
+                for (int r = 1; r < nrhs; r++) assert(AT(poisoned, i, r) == AT(many, i, r));
+            mat_free(poisoned);
+        }
+        mat_free(many); mat_free(parent); mat_free(packed); mat_free(a);
+    }
+    puts("band solve, many right-hand sides");
+}
+
 int main(void) {
     test_band_solve();
+    test_band_solve_many();
     test_vec_solve();
     test_vec_solve_sym();
     test_reuse_solve();

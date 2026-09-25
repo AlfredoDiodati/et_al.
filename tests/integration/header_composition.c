@@ -50,6 +50,7 @@ the lot as unused.
 #include "../../frame/gzip.h"
 #include "../../basis/poly.h"
 #include "../../basis/spline.h"
+#include "../../filter/hp.h"
 #include "../../inference/mcs.h"
 #include "../../inference/unit_root.h"
 #include "../../inference/cointegration.h"
@@ -76,6 +77,7 @@ the lot as unused.
 #include "../../sd/qvarma.h"
 #include "../../sd/score_driven_location.h"
 #include "../../varima/var.h"
+#include "../../lp/lp.h"
 
 #include <stdio.h>
 
@@ -204,12 +206,24 @@ static int touch_every_module(void) {
     if (sdloc_n_theta(2) < 1) problems++;
     sdloc_params_free(&sdloc_shape);
 
+    Mat hp_series = mat_lit(4, 1, 1.f, 2.f, 3.f, 4.f);
+    Mat hp_line = mat_hp_trend(hp_series, 1600, 0);
+    if (MABS(AT(hp_line, 3, 0) - 4.f) > 1e-2f) problems++;
+    mat_free(hp_line); mat_free(hp_series);
+
     VarSpec var_spec = { 2, 1, VAR_SIGMA_ML };
     Mat var_nu = mat_new(2, 1), var_A = mat_new(2, 2), var_Sigma = mat_eye(2);
     Var var_model = var_new(&var_spec, var_nu, var_A, var_Sigma);
     Mat shock = var_shock_matrix(&var_model);
     if (AT(shock, 1, 1) != 1) problems++;
     mat_free(shock); var_free(&var_model); mat_free(var_nu); mat_free(var_A); mat_free(var_Sigma);
+
+    Mat lp_data = mat_new(2, 16);
+    for (int t = 0; t < 16; t++) { AT(lp_data, 0, t) = (mreal)sin(0.7 * t); AT(lp_data, 1, t) = (mreal)cos(1.3 * t); }
+    LpSpec lp_spec = { 2, 1, 3, LP_SHOCK_UNIT, VAR_SIGMA_ML };
+    LpLinFit lp_fit = lp_lin(lp_data, lp_spec);
+    if (lp_fit.irf_lin_mean.shape[1] != 4) problems++;
+    lp_lin_fit_free(&lp_fit); mat_free(lp_data);
 
     df_free(&joined); df_free(&queried); df_free(&frame);
     mat_free(mv_density); mat_free(mean); mat_free(observation); mat_free(covariance);

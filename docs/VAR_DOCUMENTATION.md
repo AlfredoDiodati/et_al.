@@ -24,6 +24,7 @@ Implemented:
 - both of Lutkepohl's estimators of `Sigma_u`, chosen by a field of the specification;
 - `var_new`, which builds a model from its parameters for a caller who wants to simulate one;
 - the unit shock matrix of `lpirfs`;
+- impulse responses to any shock matrix, from the moving average recursion;
 - the simulator, reading the same specification and coefficient layout as the estimator;
 - a cache of fits tied to the data they were computed from;
 - a Monte Carlo study of parameter recovery, `tests/correctness/var_recovery.c`.
@@ -32,7 +33,7 @@ Not implemented:
 
 - **A filter and a forecast function.** They are postponed to future work, for when a Kalman filter is implemented. The Gaussian log-likelihood, restricted estimation, missing observations and forecasting all come from that filter, and writing a separate recursion now would give two to keep in agreement.
 - **`save_params` and `load_params`.** The guide in `docs/IMPLEMENTING_A_MODEL.md` has them for a caller who wants a starting point, and a closed-form estimator has no starting point.
-- **Standard errors, impulse responses beyond impact, lag-order selection.**
+- **Standard errors of the coefficients or of the impulse responses, and lag-order selection.**
 - **Deterministic terms other than the intercept.** The intercept is always included.
 
 ## Design
@@ -53,19 +54,25 @@ A closed-form fit has no convergence report. It has fit notes (see `docs/IMPLEME
 
 - `ols_status`: 0 when the design has full column rank, and the coefficients are then its QR solution. Above 0 the design was rank deficient, the coefficients are the minimum-norm least squares solution, and the value is the first dependent column of the design, counted from 1 with the intercept first and then `1 + (i-1)K + j` for lag `i` of variable `j`. -1 when `y` holds a NaN or an infinity, in which case nothing else is computed or allocated.
 - `rank`: the numerical rank of the design, `1 + K p` when `ols_status` is 0.
-- `residuals_are_zero`: one flag per equation, from `ols_residuals_are_zero`.
-- `model.chol_status`: whether `mat_chol` accepted `Sigma_u`.
+- `residuals_are_zero`: one flag per equation, from `ols_all_residuals_are_zero`, which gives each equation the verdict of `ols_residuals_are_zero`.
+- `model.chol_status`: whether `mat_chol` accepted `Sigma_u`, or, when the residuals span fewer dimensions than there are variables, that dimension plus 1 (see below).
 
 The usual causes, measured in `tests/correctness/var_correctness.c`:
 
 - **A series that never moves.** Its lags are multiples of the intercept. With `K = 3`, `p = 2` and the second series stuck at `0.25`, `ols_status` is 3, its first lag, the rank is 5, and that series' own equation is flagged as fitted exactly.
 - **Shocks tied** so that one residual is the sum of two others. The design has full rank, but `Sigma_u` is singular and is rejected at pivot 3.
 
+- **Fewer residual dimensions than variables.** The residuals lie in a space of dimension `T_e` minus the rank of the design, so when that is below `K` `Sigma_u` is singular in exact arithmetic. Its computed pivots are then rounding noise amplified by the design's conditioning, and can exceed `mat_chol`'s tolerance: 15 residuals of a 13-column design with `K = 3` gave a third pivot of `9.4e-14` relative to its diagonal, against a tolerance of `1.9e-15`. `var_fit` therefore rejects such a `Sigma_u` without asking `mat_chol`, with `chol_status` set to that dimension plus 1, the first pivot that vanishes in exact arithmetic. Over `K` from 2 to 4, `p` from 1 to 4 and 20 seeds each, 251 of the 720 such fits passed `mat_chol` before this rule.
+
 What a pipeline does with such a draw is its own decision. The notes are what it decides on.
 
 ### The shock matrix
 
 `var_shock_matrix(model)` returns the `lpirfs` shock matrix with `shock_type = 1`: column `j` is column `j` of `P` divided by `P[j][j]`. That is a unit shock to variable `j` and its contemporaneous effect on every variable, under the recursive ordering of `y`'s rows. The diagonal is exactly one. Dividing by the diagonal cancels any common scale of `Sigma_u`, so the two estimators give the same matrix to rounding, which the tests check.
+
+### Impulse responses
+
+`var_impulse_responses(spec, model, d, horizon)` returns the responses to the shocks in the columns of `d`, as a `K x (horizon + 1) x shocks` tensor indexed `[response][horizon][shock]`. They are the moving average matrices `Phi_h` of Lutkepohl's chapter 2 times `d`, computed as `Theta_h = sum_i A_i Theta_{h-i}` with `Theta_0 = d`, so `Phi_h` is never formed. With `d` from `var_shock_matrix` these are the recursively identified responses to unit shocks. The layout is the one `lp/lp.h` uses for its responses, so a VAR's responses and local projections compare entry by entry; at horizon 1 the two are the same regression.
 
 ### The simulator
 
@@ -107,7 +114,8 @@ void var_free(Var *model);
 VarFit var_fit(Mat y, VarSpec spec);
 void   var_fit_free(VarFit *fit);
 
-Mat var_shock_matrix(const Var *model);
+Mat    var_shock_matrix(const Var *model);
+Tensor var_impulse_responses(const VarSpec *spec, const Var *model, Mat d, int horizon);
 Mat var_simulate(Rng *rng, const VarSpec *spec, const Var *model, int T, int burn_in);
 
 double var_data_fingerprint(Mat y);
@@ -134,7 +142,7 @@ The reference is `lpirfs` 0.2.5 on R 4.6.1, the code used to compute local proje
 - the fit against a long double reference written in the test from Lutkepohl's formulas: the design built by explicit indexing, the normal equations solved by Gaussian elimination, the residuals, both covariance estimators, the Cholesky factor and the log-determinant, to `1e-11` or better;
 - a strided view against a copy, byte for byte;
 - the two covariance estimators differing by exactly their divisors, and the shock matrix the same under both;
-- the fit notes on a stuck series, tied shocks and a NaN, with the values stated above;
+- the fit notes on a stuck series, tied shocks, fewer residual dimensions than variables and a NaN, with the values stated above; removing the residual-dimension rule fails 251 checks;
 - `var_new` for `K = 1..4`: `P` equal to the lower triangular factor `Sigma_u` was built from, the log-determinant, a copy of its inputs rather than a view of them, and a singular `Sigma_u` reported through `chol_status` with no `P`;
 - the simulator against the model: the residuals the model's own equation implies for a simulated path must equal `P e_t` for the standard normals drawn again from the same seed, and without burn-in the first period is `nu + P e`;
 - the cache:
@@ -176,6 +184,8 @@ Mutations run against the two files:
 - The two covariance divisors swapped inside the fit fails the correctness test with 41 checks.
 
   The recovery study first missed that last mutation, because it derived the maximum likelihood covariance from the least squares one instead of fitting it. It now fits both, and the swap fails it with 6 checks.
+
+`var_impulse_responses` is tested in `tests/correctness/lp_correctness.c`: against `A^h d` for a VAR(1), against the powers of the companion matrix for a VAR(2), and against local projections at horizon 1, where the regression is the VAR's own.
 
 `tests/correctness/lag_matrix_layout.c` covers `lag_matrix` itself. See `docs/REGRESSION_DOCUMENTATION.md`.
 

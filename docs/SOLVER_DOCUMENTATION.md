@@ -19,6 +19,7 @@ Vec vec_lu_solve(Mat lu, MatPivot *piv, Vec b)
 Vec vec_chol_solve(Mat l, Vec b)
 Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char diag)
 Vec vec_band_solve(Mat band, int kl, int ku, Vec b)
+Mat mat_band_solve(Mat band, int kl, int ku, Mat b)
 Mat mat_lstsq(Mat a, Mat b, int *status)
 Mat mat_lstsq_rd(Mat a, Mat b, int *rank_out)
 ```
@@ -43,7 +44,9 @@ Solves `a*x = b` where `a` is banded with `kl` subdiagonals and `ku` superdiagon
 
 **When not to use it.** When the matrix is not banded, or when the bandwidth is a large fraction of `n`: the working array is `n x (2*kl + ku + 1)`, so at `kl = ku = n-1` it is three times the dense matrix and the factorization does the dense work anyway. `mat_bandwidth` is how to find out which case you are in.
 
-Not provided: a transposed solve, multiple right-hand sides, and a reusable factored form of the kind `mat_lu`/`vec_lu_solve` are for one another. Each is a small addition when a caller needs one; none has one today. See `docs/FACTOR_DOCUMENTATION.md`'s `_gbtf2` section for the kernel and
+`mat_band_solve` solves the same system against every column of an `n x nrhs` `b` at once, factoring `a` once. One column goes through `_gbtrs`, as `vec_band_solve` always has, and `vec_band_solve` is now `mat_band_solve` on its one column, so a vector's answer is unchanged. Several columns go through `linalg/factor.h`'s `_gbtrs_rhs`, which applies each elimination to a whole row of `b` at once: the work is vectorised across the right-hand sides instead of walked one column at a time. Each column goes through the same eliminations as `_gbtrs` on that column alone, but the compiler may contract a multiply and a subtract differently in the two loops, so they agree to rounding rather than bit for bit. A NaN in one column reaches no other. `filter/hp.h` is the first caller: every series along an axis shares the Hodrick-Prescott matrix, so a thousand series cost one factorization and one pass over the band. `tests/correctness/test_solver.c`'s `test_band_solve_many` checks it against `vec_band_solve` column by column, with 2, 7 and 40 right-hand sides, a strided `b`, a single column bit for bit, and a NaN in one column.
+
+Not provided: a transposed solve, and a reusable factored form of the kind `mat_lu`/`vec_lu_solve` are for one another. Each is a small addition when a caller needs one; none has one today. See `docs/FACTOR_DOCUMENTATION.md`'s `_gbtf2` section for the kernel and
 `docs/BASIS_PERFORMANCE_DOCUMENTATION.md` for the caller it was written for.
 
 ### `vec_triangular_solve`
@@ -67,6 +70,8 @@ The test is on `a` itself, one column at a time, so rescaling a column changes n
 What the test does not cover, and two things it adds. A design with a NaN or infinite entry is rejected at the first column holding one. That is checked on the design itself, through `mat_all_finite`, before anything is computed from it, because nothing computed from it can be trusted to carry the value: in a float32 `-ffast-math` build (GCC 15.2) `_gels` treats a column holding a NaN as if its norm were zero, skips its reflector, leaves the NaN below `R` and returns finite numbers. A column of finite entries whose norm overflows is rejected too, from a second check on the entries of `R` as they are read. The exact-zero rule solved an infinite entry into finite, meaningless numbers. A full-rank but ill-conditioned design is solved without comment, and in least squares with a nonzero residual the solution's sensitivity grows with the square of the condition number of `a` rather than the condition number itself, which a per-column rank test does not bound.
 
 Each column is divided by its largest entry in `R` before its norm is squared. Without that, float64 entries beyond about `1e154` square to infinity and below about `1e-154` to zero, and the rule rejected a well-conditioned design at `1e200` and `1e-200` while missing a dependent one at the same scale. `tests/correctness/singularity_rule_comparison.c` found it; the exact-zero rule had no such problem because it never squares. The scaling costs a pass for the column maxima and one division per column. Timed against the unscaled check on 2026-09-24 (AMD Ryzen 7 4800H, 16 threads, OpenBLAS 0.3.33 OpenMP build, float32, 12 alternating pairs in each order), `mat_lstsq` was 2.6 and 4.5 per cent slower at 119 x 6, 1.4 and 2.7 at 200 x 21, 6.6 and 2.4 at 128 x 64, and within noise at 512 x 256. A version that squared unscaled and rescaled only when a norm came out outside `[1e-250, 1e250]` or non-finite measured the same, 2.0 to 3.7 per cent at the three smaller shapes, and was not kept.
+
+The unblocked part of the QR applies each Householder reflector with a plain loop, `_reflect_columns`, rather than a `?gemv` and `?ger` pair, because the OpenMP build of OpenBLAS threaded that pair at sizes where one thread is faster. At 16 threads `mat_lstsq` now takes 0.42 to 0.94 of its former time on designs of 100 to 5000 rows and 10 to 100 columns with 6 right-hand sides; the setup and the full table are item 21 of `docs/PERFORMANCE_BACKLOG.md`.
 
 What the tolerance buys over the exact-zero rule, from the same file, on matrices built from small integers so that a singular one is singular in exact arithmetic and any nonzero pivot is rounding alone:
 

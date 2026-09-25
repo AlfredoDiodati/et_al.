@@ -36,7 +36,11 @@ What this file establishes:
                   cancelling kind that defeats a scale of ||y|| alone, a
                   residual at 100 times the tolerance as real and at a
                   hundredth as zero, the same verdicts at scales of 1e+-200
-                  (1e+-15 in float32), and an all-zero response
+                  (1e+-15 in float32), and an all-zero response;
+                  ols_all_residuals_are_zero gives, for every column, the
+                  verdict ols_residuals_are_zero gives for that column alone,
+                  on designs from 12 x 3 to 300 x 80 with up to 100 responses
+                  mixing exact fits, noise, zeros and scaled columns
   non-finite      a NaN or an infinity in x or y gives status -1 and nothing
                   allocated
 
@@ -480,6 +484,52 @@ static void test_residuals_are_zero(Rng *rng) {
     mat_free(a); mat_free(zeros);
 }
 
+static void test_all_residuals_are_zero(Rng *rng) {
+    puts("ols_all_residuals_are_zero against ols_residuals_are_zero column by column");
+    int shapes[3][3] = { { 12, 3, 5 }, { 200, 25, 6 }, { 300, 80, 100 } };
+    double big = sizeof(mreal) == sizeof(double) ? 1e100 : 1e15;
+    for (int s = 0; s < 3; s++) {
+        int m = shapes[s][0], n = shapes[s][1], k = shapes[s][2];
+        Mat x = mat_new(m, n), y = mat_new(m, k);
+        for (int i = 0; i < m * n; i++) x.d[i] = (mreal)small_int(rng, 5);
+        /* column j of y: an exact integer combination of x's columns when
+           j % 4 is 0, noise when 1, zeros when 2, and an exact fit scaled
+           by big or 1 / big when 3 */
+        for (int j = 0; j < k; j++) {
+            int kind = j % 4;
+            double scale = kind == 3 ? (j % 8 == 3 ? big : 1 / big) : 1;
+            for (int i = 0; i < m; i++) {
+                double value = 0;
+                if (kind == 0 || kind == 3)
+                    for (int c = 0; c < n; c++) value += ((c + j) % 3 - 1) * (double)AT(x, i, c);
+                if (kind == 1) value = rng_normal(rng);
+                AT(y, i, j) = (mreal)(scale * value);
+            }
+        }
+        OlsFit fit = ols(x, y);
+        CHECK(fit.status == 0, "%d x %d: status %d", m, n, fit.status);
+        int *all = malloc((size_t)k * sizeof(int));
+        ols_all_residuals_are_zero(x, y, &fit, all);
+        for (int j = 0; j < k; j++) {
+            int alone = ols_residuals_are_zero(x, y, &fit, j), expected = j % 4 != 1;
+            CHECK(all[j] == alone, "%d x %d, response %d: all %d, alone %d", m, n, j, all[j], alone);
+            CHECK(all[j] == expected, "%d x %d, response %d: flag %d, expected %d", m, n, j, all[j], expected);
+        }
+        /* a strided view of y answers as its copy does */
+        Mat parent = mat_new(m, k + 3);
+        Mat view = mat_slice(parent, 0, m, 2, 2 + k);
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < k; j++) AT(view, i, j) = AT(y, i, j);
+        OlsFit view_fit = ols(x, view);
+        int *from_view = malloc((size_t)k * sizeof(int));
+        ols_all_residuals_are_zero(x, view, &view_fit, from_view);
+        CHECK(memcmp(from_view, all, (size_t)k * sizeof(int)) == 0, "%d x %d: a strided y differs from its copy", m, n);
+        free(all); free(from_view);
+        ols_free(&fit); ols_free(&view_fit);
+        mat_free(parent); mat_free(x); mat_free(y);
+    }
+}
+
 static void test_non_finite(Rng *rng) {
     puts("NaN and infinite entries");
     int m = 12;
@@ -508,6 +558,7 @@ int main(void) {
     test_threshold(&rng);
     test_views(&rng);
     test_residuals_are_zero(&rng);
+    test_all_residuals_are_zero(&rng);
     test_non_finite(&rng);
     return check_report();
 }

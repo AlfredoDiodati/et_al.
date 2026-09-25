@@ -2166,3 +2166,58 @@ A trap met on the way: a harness that ended its timed loop with
 old code, and `abort()` in its place, or no test, made the gap 1 to 3 per
 cent. A single-binary comparison, as for KPSS above, is how to tell a real
 cost from this.
+
+## 21. OpenBLAS threading inside the unblocked QR (`linalg/factor.h`, `_reflect_columns`) - fixed for up to 32 columns
+
+Found while timing `lp/lp.h`: `tests/correctness/lp_recovery` used 28 s of CPU
+for 1.9 s of wall time, and 0.8 s of CPU for 1.4 s of wall time with
+`OMP_NUM_THREADS=1`. This machine's OpenBLAS is the OpenMP build
+(`openblas_get_parallel()` returns 2), so that variable sets its threads too.
+
+The cause was the unblocked QR panel, `_geqr2`, and the narrow application of
+`Q^T`, `_ormq2_cm`. Each applied one Householder reflector per column through a
+`?gemv` and `?ger` pair, and OpenBLAS splits those across all 16 threads once
+the block is large enough, for a few microseconds of work each.
+
+Setup: AMD Ryzen 7 4800H, 16 hardware threads, OpenBLAS 0.3.33 OpenMP build,
+`-O3 -march=native -ffast-math -fopenmp -DMAT_DOUBLE`, `mat_lstsq` on a
+Gaussian design (`rng_new(3, 0)`) with 6 right-hand sides, each time the best
+of 5 batches of at least 20 ms, every call allocating its result.
+
+Before the change, default threads against `OMP_NUM_THREADS=1`: equal up to
+200 rows with at most 49 columns, then 1.29 slower at 200 x 100, 1.42 at
+500 x 49, 1.98 at 1000 x 25, 2.35 at 2000 x 25, 1.47 at 5000 x 49.
+
+The change: `_reflect_columns` applies a reflector with a plain loop, four
+columns per pass. Old against new at default threads, three runs of each
+build alternating, then three more in the opposite order, new time over old,
+both orders:
+
+| rows | 10 columns | 25 columns | 49 columns | 100 columns |
+|---|---|---|---|---|
+| 100 | 0.80, 0.78 | 0.76, 0.76 | 0.82, 0.81 | - |
+| 200 | 0.91, 0.90 | 0.89, 0.87 | 0.94, 0.92 | 0.93, 0.94 |
+| 500 | 0.94, 0.93 | 0.55, 0.55 | 0.70, 0.68 | 0.75, 0.75 |
+| 1000 | 0.75, 0.73 | 0.50, 0.52 | 0.72, 0.73 | 0.78, 0.79 |
+| 2000 | 0.44, 0.49 | 0.42, 0.45 | 0.71, 0.71 | 0.77, 0.80 |
+| 5000 | 0.50, 0.57 | 0.51, 0.55 | 0.80, 0.77 | 0.85, 0.84 |
+
+`lp_lin` and `lp_nl` with 6 variables, 200 observations, 4 lags and horizon
+15 went from 695 to 604 and from 2165 to 1987 microseconds, and at 500 observations default threads now cost the same
+as one.
+
+Rejected, with numbers from the same setup:
+
+- one column per pass: up to 6 per cent slower than the `?gemv` and `?ger`
+  pair at 200 rows (200 x 25: 40.9 against 37.6 microseconds);
+- the pair below 8192 entries and the loop above: lost 10 to 20 per cent at
+  100 rows against the loop alone and won 3 to 5 at 200;
+- the `?gemv` in `_larft` replaced by a loop: the threaded ratio did not
+  move and 2000 x 49 went from 1909 to 2014 microseconds.
+
+Still open: past 32 columns the blocked path's `_larfb` goes through `?gemm`
+and `?trmm`, and those are still threaded where one thread is faster: with the
+change, default threads against one thread are 1.30 slower at 200 x 100, 1.15
+at 2000 x 49 and 1.12 at 5000 x 49. `_org2r` (forming `Q`) and `_larf_left` and
+`_larf_right` (bidiagonal and Hessenberg reductions) still use the pair and
+were not measured.

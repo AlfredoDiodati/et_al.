@@ -827,6 +827,47 @@ static inline void _gbtrs(const mreal *ab, int n, int kl, int ku, int ldab,
     }
 }
 
+/* Solve a*X = B for nrhs right-hand sides over the factorization _gbtf2 left
+   in ab: _gbtrs's two sweeps, with every row of B updated across all of its
+   columns at once, so the work is vectorised across the right-hand sides
+   rather than walked one column at a time. B is n rows of nrhs, row-major
+   with row stride ldb, and is overwritten with X. Each column goes through
+   the same eliminations as _gbtrs on that column alone; the compiler may
+   contract a multiply and subtract differently in the two loops, so they
+   agree to rounding rather than bit for bit. */
+static inline void _gbtrs_rhs(const mreal *ab, int n, int kl, int ku, int ldab,
+                              const MatPivot *piv, mreal *b, int ldb, int nrhs) {
+    int kv = ku + kl;
+    if (kl > 0)
+        for (int j = 0; j < n - 1; j++) {
+            int below = n - 1 - j < kl ? n - 1 - j : kl;
+            int row = (int)piv[j] - 1;
+            mreal *restrict current = b + (size_t)j * ldb;
+            if (row != j) {
+                mreal *restrict other = b + (size_t)row * ldb;
+                for (int r = 0; r < nrhs; r++) { mreal swap = other[r]; other[r] = current[r]; current[r] = swap; }
+            }
+            const mreal *restrict column = &ab[(size_t)j * ldab];
+            for (int i = 1; i <= below; i++) {
+                mreal multiplier = column[kv + i];
+                mreal *restrict target = b + (size_t)(j + i) * ldb;
+                for (int r = 0; r < nrhs; r++) target[r] -= current[r] * multiplier;
+            }
+        }
+    for (int j = n - 1; j >= 0; j--) {
+        const mreal *restrict column = &ab[(size_t)j * ldab];
+        mreal *restrict current = b + (size_t)j * ldb;
+        mreal pivot = column[kv];
+        for (int r = 0; r < nrhs; r++) current[r] /= pivot;
+        int first = j - kv < 0 ? 0 : j - kv;
+        for (int i = j - 1; i >= first; i--) {
+            mreal coefficient = column[kv + i - j];
+            mreal *restrict target = b + (size_t)i * ldb;
+            for (int r = 0; r < nrhs; r++) target[r] -= current[r] * coefficient;
+        }
+    }
+}
+
 /* Factor and solve in one call, the banded counterpart of _gesv. ab is
    overwritten with the factorization and b with the solution. */
 static inline int _gbsv(mreal *ab, int n, int kl, int ku, int ldab,
@@ -908,6 +949,46 @@ static inline void _larfg(int n, mreal *alpha, mreal *x, int incx, mreal *tau) {
     *alpha = beta;
 }
 
+/* Apply H = I - tau v v^T from the left to the m x n column-major block c,
+   four columns at a time: v is read once for four dot products, which run
+   as four independent sums, and each column is updated while it is still
+   in cache. v[0] must hold 1.
+
+   This replaced a ?gemv and ?ger pair. The OpenMP build of OpenBLAS splits
+   both across every thread from about 10^4 entries on, which at a panel's
+   sizes made mat_lstsq up to 2.35 times slower at the default thread count
+   than on one thread. Against that pair, at 16 threads, mat_lstsq with six
+   right-hand sides takes 0.42 to 0.94 of the time over designs of 100 to
+   5000 rows and 10 to 100 columns; one column at a time instead was up to
+   6 per cent slower at 200 rows. */
+static inline void _reflect_columns(int m, int n, const mreal *v, mreal tau, mreal *c, int ldc) {
+    int k = 0;
+    for (; k + 4 <= n; k += 4) {
+        mreal *c0 = &c[(size_t)k * ldc], *c1 = c0 + ldc, *c2 = c1 + ldc, *c3 = c2 + ldc;
+        mreal dot0 = 0, dot1 = 0, dot2 = 0, dot3 = 0;
+        for (int i = 0; i < m; i++) {
+            dot0 += v[i] * c0[i];
+            dot1 += v[i] * c1[i];
+            dot2 += v[i] * c2[i];
+            dot3 += v[i] * c3[i];
+        }
+        mreal scale0 = tau * dot0, scale1 = tau * dot1, scale2 = tau * dot2, scale3 = tau * dot3;
+        for (int i = 0; i < m; i++) {
+            c0[i] -= scale0 * v[i];
+            c1[i] -= scale1 * v[i];
+            c2[i] -= scale2 * v[i];
+            c3[i] -= scale3 * v[i];
+        }
+    }
+    for (; k < n; k++) {
+        mreal *ck = &c[(size_t)k * ldc];
+        mreal dot = 0;
+        for (int i = 0; i < m; i++) dot += v[i] * ck[i];
+        mreal scale = tau * dot;
+        for (int i = 0; i < m; i++) ck[i] -= scale * v[i];
+    }
+}
+
 /* QR of an m x n COLUMN-MAJOR block, in place and unblocked, following
    ?geqr2: on return the upper triangle holds R and the Householder
    vectors are packed below the diagonal, with tau[j] the scalar for
@@ -916,8 +997,7 @@ static inline void _larfg(int n, mreal *alpha, mreal *x, int incx, mreal *tau) {
    Column-major for the same reason the LU kernel is: a Householder vector
    is a column, and generating it, computing its norm and applying it all
    read down that column. In row-major every one of those is strided. */
-static inline void _geqr2(mreal *t, int m, int n, int ldt, mreal *tau,
-                          mreal *work) {
+static inline void _geqr2(mreal *t, int m, int n, int ldt, mreal *tau) {
     int mn = m < n ? m : n;
     for (int j = 0; j < mn; j++) {
         mreal *cj = &t[(size_t)j * ldt];
@@ -927,13 +1007,7 @@ static inline void _geqr2(mreal *t, int m, int n, int ldt, mreal *tau,
             mreal saved = cj[j];
             cj[j] = 1; /* v[0] is an implicit 1 in the packed form */
 
-            /* work = A[j:m, j+1:n]^T * v, then A -= tau * v * work^T */
-            MBLAS(gemv)(CblasColMajor, CblasTrans, m - j, n - j - 1,
-                        1, &t[(size_t)(j + 1) * ldt + j], ldt,
-                        &cj[j], 1, 0, work, 1);
-            MBLAS(ger)(CblasColMajor, m - j, n - j - 1,
-                       -tau[j], &cj[j], 1, work, 1,
-                       &t[(size_t)(j + 1) * ldt + j], ldt);
+            _reflect_columns(m - j, n - j - 1, &cj[j], tau[j], &t[(size_t)(j + 1) * ldt + j], ldt);
 
             cj[j] = saved;
         }
@@ -1066,15 +1140,15 @@ static inline void _larfb(char trans, int m, int n, int k,
    _geqr2, which factors each panel; the block reflector for that panel
    then updates every column to its right in one _larfb. */
 static inline void _geqrf_cm(mreal *t, int m, int n, int ldt, mreal *tau,
-                             mreal *work, mreal *tmat, mreal *wbuf) {
+                             mreal *tmat, mreal *wbuf) {
     int mn = m < n ? m : n;
-    if (mn <= QR_NB) { _geqr2(t, m, n, ldt, tau, work); return; }
+    if (mn <= QR_NB) { _geqr2(t, m, n, ldt, tau); return; }
 
     for (int j = 0; j < mn; j += QR_NB) {
         int jb = mn - j < QR_NB ? mn - j : QR_NB;
         mreal *panel = &t[(size_t)j * ldt + j];
 
-        _geqr2(panel, m - j, jb, ldt, &tau[j], work);
+        _geqr2(panel, m - j, jb, ldt, &tau[j]);
 
         if (j + jb < n) {
             _larft(m - j, jb, panel, ldt, &tau[j], tmat, jb);
@@ -1149,7 +1223,7 @@ static inline int _geqrf(mreal *a, int m, int n, int lda, mreal *tau) {
     mreal *wbuf = tmat + (size_t)QR_NB * QR_NB;
 
     _to_colmajor(a, m, n, lda, t);
-    _geqrf_cm(t, m, n, m, tau, work, tmat, wbuf);
+    _geqrf_cm(t, m, n, m, tau, tmat, wbuf);
     _from_colmajor(t, m, n, a, lda);
 
     free(buf);
@@ -1193,7 +1267,7 @@ static inline int _orgqr(mreal *a, int m, int n, int k, int lda,
    purely from building a T it then used once per column. */
 static inline void _ormq2_cm(char trans, int m, int n, int k,
                              const mreal *v, int ldv, const mreal *tau,
-                             mreal *c, int ldc, mreal *work) {
+                             mreal *c, int ldc) {
     for (int q = 0; q < k; q++) {
         int j = (trans == 'T') ? q : k - 1 - q;
         if (tau[j] == 0) continue;
@@ -1203,10 +1277,7 @@ static inline void _ormq2_cm(char trans, int m, int n, int k,
         mreal saved = vj[0];
         vj[0] = 1;
 
-        MBLAS(gemv)(CblasColMajor, CblasTrans, m - j, n,
-                    1, &c[j], ldc, vj, 1, 0, work, 1);
-        MBLAS(ger)(CblasColMajor, m - j, n,
-                   -tau[j], vj, 1, work, 1, &c[j], ldc);
+        _reflect_columns(m - j, n, vj, tau[j], &c[j], ldc);
 
         vj[0] = saved;
     }
@@ -1221,7 +1292,7 @@ static inline void _ormqr_cm(char trans, int m, int n, int k,
                              const mreal *v, int ldv, const mreal *tau,
                              mreal *c, int ldc, mreal *tmat, mreal *wbuf) {
     if (n < ORMQR_NARROW) {
-        _ormq2_cm(trans, m, n, k, v, ldv, tau, c, ldc, wbuf);
+        _ormq2_cm(trans, m, n, k, v, ldv, tau, c, ldc);
         return;
     }
     if (k <= QR_NB) {
@@ -1274,25 +1345,24 @@ static inline int _gels(int m, int n, int nrhs, mreal *a, int lda,
                                               has to hold whichever is wider */
     if (kb < 1) kb = 1;
 
-    /* One allocation rather than six. On a small problem the arithmetic is
+    /* One allocation rather than five. On a small problem the arithmetic is
        a few dozen operations and what gets measured is the allocator: six
        separate mallocs, one of them a full QR_NB by QR_NB block a
        two-column problem never touches, was enough to lose to ?gels at
        4x2. */
     size_t need = (size_t)m * n + (size_t)m * nrhs + (size_t)n
-                + (size_t)wide + (size_t)kb * kb + (size_t)wide * kb;
+                + (size_t)kb * kb + (size_t)wide * kb;
     mreal *buf = (mreal*)malloc(need * sizeof(mreal));
     mreal *av = buf;
     mreal *bv = av + (size_t)m * n;
     mreal *tau = bv + (size_t)m * nrhs;
-    mreal *work = tau + n;
-    mreal *tmat = work + wide;
+    mreal *tmat = tau + n;
     mreal *wbuf = tmat + (size_t)kb * kb;
 
     _to_colmajor(a, m, n, lda, av);
     _to_colmajor(b, m, nrhs, ldb, bv);
 
-    _geqrf_cm(av, m, n, m, tau, work, tmat, wbuf);
+    _geqrf_cm(av, m, n, m, tau, tmat, wbuf);
 
     int info = 0;
     for (int i = 0; i < n; i++)

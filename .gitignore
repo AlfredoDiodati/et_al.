@@ -47,6 +47,10 @@ tests/correctness/qvarma_analytic_agreement
 tests/correctness/qvarma_gaussian_limit
 tests/correctness/qvarma_fixed_parameter_fit
 tests/correctness/var_recovery
+tests/correctness/lp_recovery
+liblp_f64.so
+liblp_f32.so
+tests/correctness/hp_filter_recovery
 tests/correctness/lag_matrix_layout
 tests/correctness/mcs_primitives
 tests/correctness/ad_tensor_gradients

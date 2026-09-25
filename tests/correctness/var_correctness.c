@@ -13,7 +13,9 @@ Does varima/var.h compute what it says, on inputs where the answer is known.
   a series stuck at a constant (rank deficient at a known column, rank
   known, that equation fitted exactly), shocks tied so that one residual is
   the sum of two others (a full-rank design, Sigma_u rejected at pivot 3),
-  and a NaN (nothing computed, nothing allocated).
+  fewer residual dimensions than variables (Sigma_u rejected at the first
+  pivot that vanishes in exact arithmetic, for K from 2 to 4 and p from 1
+  to 4, 20 seeds each), and a NaN (nothing computed, nothing allocated).
 - The shock matrix against its definition.
 - var_new: a copy of its inputs, P equal to the Cholesky factor Sigma_u was
   built from, the log-determinant, and a singular Sigma_u reported through
@@ -227,6 +229,32 @@ static void test_fit_notes(void) {
         mat_free(y);
     }
     {
+        /* Fewer residual dimensions (T_e minus the design's rank) than
+           variables: Sigma_u is singular by construction and is rejected at
+           the first pivot that vanishes, whatever its rounding. With K + m
+           more periods than regressors it is accepted. Over K 2..4, p 1..4
+           and 20 seeds each. */
+        int rejected = 0, accepted = 0;
+        for (int k = 2; k <= 4; k++)
+            for (int lags = 1; lags <= 4; lags++)
+                for (int seed = 0; seed < 20; seed++) {
+                    Rng rng = rng_new(16, (uint64_t)(100 * k + 10 * lags + seed));
+                    int n = 1 + k * lags;
+                    for (int dimension = 0; dimension <= k; dimension++) {
+                        Mat y = normal_series(&rng, k, lags + n + dimension);
+                        VarFit fit = var_fit(y, (VarSpec){ k, lags, VAR_SIGMA_ML });
+                        int want = dimension < k ? dimension + 1 : 0;
+                        CHECK(fit.ols_status == 0 && fit.model.chol_status == want && (want != 0) == (fit.model.P.d == NULL),
+                              "K %d, p %d, %d residual dimensions: chol_status %d, want %d", k, lags, dimension,
+                              fit.model.chol_status, want);
+                        if (want) rejected++; else accepted++;
+                        var_fit_free(&fit);
+                        mat_free(y);
+                    }
+                }
+        printf("  residual dimensions below K: %d fits rejected, %d at K accepted\n", rejected, accepted);
+    }
+    {
         Rng rng = rng_new(15, 0);
         Mat y = normal_series(&rng, K, T);
         AT(y, 2, 40) = check_non_finite(0);
@@ -354,42 +382,6 @@ static void test_simulate(void) {
     mat_free(short_path);
     mat_free(y);
     var_free(&model);
-}
-
-static void replace_in_file(const char *path, const char *old, const char *new_text) {
-    FILE *f = fopen(path, "r");
-    assert(f);
-    char buffer[65536];
-    size_t n = fread(buffer, 1, sizeof buffer - 1, f);
-    fclose(f);
-    buffer[n] = 0;
-    char *at = strstr(buffer, old);
-    assert(at && "replace_in_file: text not found");
-    char out[65536];
-    size_t head = (size_t)(at - buffer);
-    memcpy(out, buffer, head);
-    strcpy(out + head, new_text);
-    strcat(out, at + strlen(old));
-    f = fopen(path, "w");
-    fputs(out, f);
-    fclose(f);
-}
-
-static void write_text(const char *path, const char *text) {
-    FILE *f = fopen(path, "w");
-    assert(f);
-    fputs(text, f);
-    fclose(f);
-}
-
-static void truncate_file(const char *path) {
-    FILE *f = fopen(path, "r");
-    char buffer[65536];
-    size_t n = fread(buffer, 1, sizeof buffer, f);
-    fclose(f);
-    f = fopen(path, "w");
-    fwrite(buffer, 1, n / 2, f);
-    fclose(f);
 }
 
 static void test_cache(void) {

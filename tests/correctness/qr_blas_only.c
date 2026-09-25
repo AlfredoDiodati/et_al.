@@ -353,7 +353,7 @@ static void test_blocked_matches_unblocked(void) {
         mreal *work = (mreal*)malloc((size_t)n * sizeof(mreal));
 
         _geqrf(blocked, m, n, n, tb);
-        _geqr2(plain, m, n, m, tu, work);
+        _geqr2(plain, m, n, m, tu);
 
         for (int i = 0; i < k; i++) {
             snprintf(what, sizeof what, "blocked vs unblocked %dx%d tau[%d]", m, n, i);

@@ -61,19 +61,20 @@ BASIS_DEPS := basis/poly.h basis/spline.h stats.h special.h linalg/solver.h lina
 UNIT_ROOT_DEPS := inference/unit_root.h stats.h random/random.h linalg/solver.h linalg/decomp.h linalg/mat.h tests/check.h
 COINTEGRATION_DEPS := inference/cointegration.h $(UNIT_ROOT_DEPS)
 SDLOC_DEPS := sd/score_driven_location.h solver/lbfgs.h ad.h json.h special.h random/random.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
-VAR_DEPS := varima/var.h regression.h json.h random/random.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
+VAR_DEPS := varima/var.h regression.h json.h random/random.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/tensor.h linalg/mat.h
+LP_MODEL_DEPS := lp/lp.h filter/hp.h frame/frame.h $(VAR_DEPS)
 QVARMA_DEPS := sd/qvarma.h solver/lbfgs.h ad.h json.h special.h random/random.h stats.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
 
 # --- installation tiers: see README.md's "Installation tiers" policy.
 # core:  linalg/*.h (mat.h, decomp.h, solver.h), random/*.h (random.h, lhs.h),
-#        ad.h, dist/*.h, solver/*.h,
+#        ad.h, dist/*.h, solver/*.h, filter/*.h (trend-cycle filters),
 #        and the hypothesis tests in inference/ (unit_root.h, cointegration.h,
 #        qlr_test.h, mcs.h) - math and general-purpose statistics, no model
 #        implementations.
 #        Note solver.h (linalg/, "solving Ax=b") and solver/ (this dir, the
 #        Optimizer interface + Adam) are deliberately unrelated despite the
 #        shared name - see README's "Adding files and headers" policy for why.
-# model: core, plus nn/*.h, sd/*.h and varima/*.h - model architectures with fitting APIs.
+# model: core, plus nn/*.h, sd/*.h, varima/*.h and lp/*.h - model architectures with fitting APIs.
 # development: everything else (tests/, examples/, scripts/) - never
 #        installed, only relevant when working on ET_AL. itself.
 VERSION := 0.1.0
@@ -82,8 +83,8 @@ INCDIR  := $(PREFIX)/include/et_al.
 PKGCONFIGDIR := $(PREFIX)/lib/pkgconfig
 
 CORE_HEADERS := ad.h json.h special.h stats.h regression.h
-CORE_SUBDIRS := linalg random dist dist/mv solver frame cluster inference basis
-MODEL_SUBDIRS := nn sd varima
+CORE_SUBDIRS := linalg random dist dist/mv solver frame cluster inference basis filter
+MODEL_SUBDIRS := nn sd varima lp
 
 # --- examples ---
 
@@ -244,6 +245,12 @@ tests/performance/bench_sql_v6: tests/performance/bench_sql_v6.c frame/sql.h fra
 # of `test`/`bench.sh`.
 tests/performance/bench_sql_groupby: tests/performance/bench_sql_groupby.c frame/sql.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/performance/bench_sql_groupby.c $(LDLIBS) -o tests/performance/bench_sql_groupby
+
+liblpbench.so: tests/performance/bench_lp.c $(LP_MODEL_DEPS)
+	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/performance/bench_lp.c $(LDLIBS) -o liblpbench.so
+
+libhpbench.so: tests/performance/bench_hp_filter.c filter/hp.h linalg/solver.h linalg/factor.h linalg/tensor.h linalg/mat.h frame/frame.h
+	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/performance/bench_hp_filter.c $(LDLIBS) -o libhpbench.so
 
 librollingbench.so: tests/performance/bench_rolling_mean.c linalg/mat.h linalg/tensor.h frame/frame.h
 	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/performance/bench_rolling_mean.c $(LDLIBS) -o librollingbench.so
@@ -574,6 +581,12 @@ libcumsum_f32.so: $(CUMSUM_DEPS)
 test-cumsum-python: libcumsum_f64.so libcumsum_f32.so
 	$(or $(PYTHON),python3) tests/correctness/cumsum_reference_agreement.py
 
+tests/correctness/hp_filter_correctness: tests/correctness/hp_filter_correctness.c filter/hp.h tests/check.h linalg/solver.h linalg/factor.h linalg/tensor.h linalg/mat.h frame/frame.h random/random.h
+	$(CC) $(CFLAGS) tests/correctness/hp_filter_correctness.c $(LDLIBS) -o tests/correctness/hp_filter_correctness
+
+tests/correctness/hp_filter_recovery: tests/correctness/hp_filter_recovery.c filter/hp.h tests/check.h linalg/solver.h linalg/factor.h linalg/tensor.h linalg/mat.h frame/frame.h random/random.h
+	$(CC) $(STAT_CFLAGS) tests/correctness/hp_filter_recovery.c $(LDLIBS) -o tests/correctness/hp_filter_recovery
+
 tests/correctness/rolling_mean_correctness: tests/correctness/rolling_mean_correctness.c tests/check.h linalg/mat.h linalg/tensor.h frame/frame.h random/random.h
 	$(CC) $(CFLAGS) tests/correctness/rolling_mean_correctness.c $(LDLIBS) -o tests/correctness/rolling_mean_correctness
 
@@ -584,6 +597,26 @@ librolling_f64.so: $(ROLLING_DEPS)
 	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/correctness/rolling_mean_reference_agreement.c $(LDLIBS) -o librolling_f64.so
 librolling_f32.so: $(ROLLING_DEPS)
 	$(CC) $(filter-out -DMAT_DOUBLE,$(CFLAGS)) -shared -fPIC tests/correctness/rolling_mean_reference_agreement.c $(LDLIBS) -o librolling_f32.so
+# Checks filter/hp.h against statsmodels and lpirfs' algorithm in both
+# precisions: make test-hp-filter-python PYTHON=...
+HP_DEPS := tests/correctness/hp_filter_reference_agreement.c filter/hp.h linalg/solver.h linalg/factor.h linalg/tensor.h linalg/mat.h frame/frame.h
+libhp_f64.so: $(HP_DEPS)
+	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/correctness/hp_filter_reference_agreement.c $(LDLIBS) -o libhp_f64.so
+libhp_f32.so: $(HP_DEPS)
+	$(CC) $(filter-out -DMAT_DOUBLE,$(CFLAGS)) -shared -fPIC tests/correctness/hp_filter_reference_agreement.c $(LDLIBS) -o libhp_f32.so
+test-hp-filter-python: libhp_f64.so libhp_f32.so
+	$(or $(PYTHON),python3) tests/correctness/hp_filter_reference_agreement.py
+
+# Checks lp/lp.h against lpirfs 0.2.5 itself, in both precisions; needs R with
+# the lpirfs R package installed: make test-lp-python PYTHON=...
+LP_DEPS := tests/correctness/lp_reference_agreement.c lp/lp.h varima/var.h filter/hp.h regression.h linalg/solver.h linalg/factor.h linalg/tensor.h linalg/mat.h frame/frame.h json.h
+liblp_f64.so: $(LP_DEPS)
+	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/correctness/lp_reference_agreement.c $(LDLIBS) -o liblp_f64.so
+liblp_f32.so: $(LP_DEPS)
+	$(CC) $(filter-out -DMAT_DOUBLE,$(CFLAGS)) -shared -fPIC tests/correctness/lp_reference_agreement.c $(LDLIBS) -o liblp_f32.so
+test-lp-python: liblp_f64.so liblp_f32.so
+	$(or $(PYTHON),python3) tests/correctness/lp_reference_agreement.py
+
 test-rolling-mean-python: librolling_f64.so librolling_f32.so
 	$(or $(PYTHON),python3) tests/correctness/rolling_mean_reference_agreement.py
 
@@ -682,6 +715,12 @@ tests/correctness/var_correctness: tests/correctness/var_correctness.c $(VAR_DEP
 tests/correctness/var_recovery: tests/correctness/var_recovery.c $(VAR_DEPS) tests/check.h
 	$(CC) $(STAT_CFLAGS) tests/correctness/var_recovery.c $(LDLIBS) -o tests/correctness/var_recovery
 
+tests/correctness/lp_correctness: tests/correctness/lp_correctness.c $(LP_MODEL_DEPS) tests/check.h
+	$(CC) $(STAT_CFLAGS) tests/correctness/lp_correctness.c $(LDLIBS) -o tests/correctness/lp_correctness
+
+tests/correctness/lp_recovery: tests/correctness/lp_recovery.c $(LP_MODEL_DEPS) tests/check.h
+	$(CC) $(STAT_CFLAGS) tests/correctness/lp_recovery.c $(LDLIBS) -o tests/correctness/lp_recovery
+
 tests/correctness/qvarma_fixed_parameter_fit: tests/correctness/qvarma_fixed_parameter_fit.c $(QVARMA_DEPS) special.h tests/check.h
 	$(CC) $(STAT_CFLAGS) tests/correctness/qvarma_fixed_parameter_fit.c $(LDLIBS) -o tests/correctness/qvarma_fixed_parameter_fit
 
@@ -733,7 +772,7 @@ tests/integration/npz_to_statistics: tests/integration/npz_to_statistics.c $(FRA
 # together; the second includes them in the reverse order and links against the
 # first, which is what would catch a duplicate external symbol.
 HEADER_COMPOSITION_SRC := tests/integration/header_composition.c tests/integration/header_composition_reverse.c
-ALL_HEADERS := $(CORE_HEADERS) $(wildcard linalg/*.h random/*.h dist/*.h dist/mv/*.h solver/*.h frame/*.h cluster/*.h inference/*.h basis/*.h nn/*.h sd/*.h varima/*.h)
+ALL_HEADERS := $(CORE_HEADERS) $(wildcard linalg/*.h random/*.h dist/*.h dist/mv/*.h solver/*.h frame/*.h cluster/*.h inference/*.h basis/*.h filter/*.h nn/*.h sd/*.h varima/*.h lp/*.h)
 
 tests/integration/header_composition: $(HEADER_COMPOSITION_SRC) $(ALL_HEADERS)
 	$(CC) $(STAT_CFLAGS) -I. $(HEADER_COMPOSITION_SRC) $(LDLIBS) -o tests/integration/header_composition
@@ -1075,10 +1114,10 @@ ad-asan:
 lapack-comparison-bench: $(LAPACK_COMPARISON_BENCH)
 	for b in $(LAPACK_COMPARISON_BENCH); do ./$$b || exit 1; done
 
-test: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery $(INTEGRATION_TESTS)
+test: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/hp_filter_correctness tests/correctness/hp_filter_recovery tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery tests/correctness/lp_correctness tests/correctness/lp_recovery $(INTEGRATION_TESTS)
 	for t in $^; do ./$$t || exit 1; done
 
-test-stress: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery $(INTEGRATION_TESTS)
+test-stress: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/hp_filter_correctness tests/correctness/hp_filter_recovery tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery tests/correctness/lp_correctness tests/correctness/lp_recovery $(INTEGRATION_TESTS)
 	for t in $^; do STRESS=1 ./$$t || exit 1; done
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754
@@ -1143,7 +1182,7 @@ install-core:
 
 install-model: install-core
 	@for d in $(MODEL_SUBDIRS); do install -d $(INCDIR)/$$d; install -m 644 $$d/*.h $(INCDIR)/$$d/; done
-	@printf 'prefix=%s\nincludedir=$${prefix}/include/et_al.\n\nName: et_al.-model\nDescription: ET_AL. model layer - model architectures with fitting APIs (nn/, sd/, varima/)\nVersion: %s\nRequires: et_al.-core\nCflags: -I$${includedir}\nLibs:\n' \
+	@printf 'prefix=%s\nincludedir=$${prefix}/include/et_al.\n\nName: et_al.-model\nDescription: ET_AL. model layer - model architectures with fitting APIs (nn/, sd/, varima/, lp/)\nVersion: %s\nRequires: et_al.-core\nCflags: -I$${includedir}\nLibs:\n' \
 		"$(PREFIX)" "$(VERSION)" > $(PKGCONFIGDIR)/et_al.-model.pc
 	$(call tier_summary,model,$(MODEL_SUBDIRS),under $(addsuffix /,$(MODEL_SUBDIRS)))
 	@printf '  %-12s et_al.-core$(COMMA) so naming this alone pulls in both tiers\n' "requires"
@@ -1163,4 +1202,4 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: bench-rolling_mean_threshold bench-cumsum_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model
+.PHONY: bench-rolling_mean_threshold bench-cumsum_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model

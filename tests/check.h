@@ -4,6 +4,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <assert.h>
 
 /*
 What the unit root, co-integration and break test files share with the
@@ -198,3 +200,40 @@ static inline Mat system_of_known_rank(Rng *rng, int n, int rank, int periods) {
     return full;
 }
 
+/* Editing a file in place, for the suites that check a cache refuses a
+   damaged one. Files up to 64 KiB. */
+static inline void replace_in_file(const char *path, const char *old, const char *new_text) {
+    FILE *f = fopen(path, "r");
+    assert(f);
+    char buffer[65536];
+    size_t n = fread(buffer, 1, sizeof buffer - 1, f);
+    fclose(f);
+    buffer[n] = 0;
+    char *at = strstr(buffer, old);
+    assert(at && "replace_in_file: text not found");
+    char out[65536];
+    size_t head = (size_t)(at - buffer);
+    memcpy(out, buffer, head);
+    strcpy(out + head, new_text);
+    strcat(out, at + strlen(old));
+    f = fopen(path, "w");
+    fputs(out, f);
+    fclose(f);
+}
+
+static inline void write_text(const char *path, const char *text) {
+    FILE *f = fopen(path, "w");
+    assert(f);
+    fputs(text, f);
+    fclose(f);
+}
+
+static inline void truncate_file(const char *path) {
+    FILE *f = fopen(path, "r");
+    char buffer[65536];
+    size_t n = fread(buffer, 1, sizeof buffer, f);
+    fclose(f);
+    f = fopen(path, "w");
+    fwrite(buffer, 1, n / 2, f);
+    fclose(f);
+}

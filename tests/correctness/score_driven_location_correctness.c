@@ -596,13 +596,6 @@ written into the model and then reported as not loaded.
    refused like a missing one. Before json_parse returned NULL on malformed
    text, a truncated cache aborted inside the parser, and a root or field of
    the wrong type aborted inside the accessors. */
-static void write_text(const char *path, const char *text) {
-    FILE *f = fopen(path, "w");
-    assert(f);
-    fputs(text, f);
-    fclose(f);
-}
-
 static void test_cache_refuses_a_damaged_file(void) {
     printf("a truncated cache, and one whose values have the wrong type, are refused\n");
     int K = 2, T = 120;

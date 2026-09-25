@@ -1,5 +1,6 @@
 #pragma once
 #include "../regression.h"
+#include "../linalg/tensor.h"
 #include "../json.h"
 #include "../random/random.h"
 
@@ -176,7 +177,10 @@ series that never moves makes its own lags a multiple of the intercept and
 is the usual cause. residuals_are_zero flags each equation fitted exactly,
 whose residuals are rounding noise: the same stuck series, as a response. A
 Sigma_u built from such residuals is singular in exact arithmetic, and
-model.chol_status says whether mat_chol rejected it. See
+model.chol_status says whether mat_chol rejected it. So is a Sigma_u from
+fewer residual dimensions (T_e minus the rank of the design) than variables,
+and that is reported without asking mat_chol: chol_status is then that
+dimension plus 1, the first pivot that vanishes in exact arithmetic. See
 docs/REGRESSION_DOCUMENTATION.md for what ols decides and why.
 */
 static inline VarFit var_fit(Mat y, VarSpec spec) {
@@ -196,8 +200,7 @@ static inline VarFit var_fit(Mat y, VarSpec spec) {
     fit.rank = regression.rank;
     fit.residuals_are_zero = (int*)malloc((size_t)K * sizeof(int));
     assert(fit.residuals_are_zero);
-    for (int k = 0; k < K; k++)
-        fit.residuals_are_zero[k] = ols_residuals_are_zero(design, response, &regression, k);
+    ols_all_residuals_are_zero(design, response, &regression, fit.residuals_are_zero);
 
     fit.model.nu = mat_new(K, 1);
     fit.model.A = mat_new(K, Kp);
@@ -207,7 +210,16 @@ static inline VarFit var_fit(Mat y, VarSpec spec) {
     }
     fit.residuals = mat_T(regression.residuals);
     fit.model.Sigma_u = _var_sigma(regression.residuals, &spec);
-    _var_derive(&fit.model);
+    /* The residuals lie in a space of dimension T_e - rank, so with fewer
+       dimensions than variables Sigma_u is singular in exact arithmetic.
+       Its computed pivots are then rounding noise amplified by the design's
+       conditioning, which can exceed mat_chol's tolerance: 15 residuals of
+       a 13-column design gave a third pivot of 9.4e-14 relative, against a
+       tolerance of 1.9e-15. So it is rejected here, at the first pivot that
+       vanishes in exact arithmetic, T_e - rank + 1. */
+    int residual_dimension = (y.c - spec.p) - regression.rank;
+    if (residual_dimension < K) fit.model.chol_status = residual_dimension + 1;
+    else _var_derive(&fit.model);
 
     ols_free(&regression);
     mat_free(design); mat_free(response);
@@ -229,6 +241,46 @@ static inline Mat var_shock_matrix(const Var *model) {
         for (int i = j + 1; i < K; i++) AT(d, i, j) = AT(model->P, i, j) / AT(model->P, j, j);
     }
     return d;
+}
+
+/*
+The impulse responses of the model to the shocks in the columns of d, over
+horizons 0..horizon: a K x (horizon + 1) x K tensor whose entry [k][h][j] is
+the response of variable k, h periods after an impact of column j of d.
+That is Theta_h = Phi_h d, with Phi_0 = I and
+Phi_h = sum_{i=1}^{min(h, p)} A_i Phi_{h-i}, the moving-average coefficients
+of Lutkepohl's chapter 2; the recursion is run on Theta directly,
+Theta_h = sum_i A_i Theta_{h-i}. With d from var_shock_matrix these are the
+recursively identified responses to unit shocks; any other d, such as P for
+responses to one-standard-deviation orthogonal shocks, is the caller's. The
+layout is the one lp/lp.h's irf_lin_mean uses, so the two compare entry by
+entry.
+*/
+static inline Tensor var_impulse_responses(const VarSpec *spec, const Var *model, Mat d, int horizon) {
+    _var_check_spec(spec);
+    int K = spec->K, p = spec->p, shocks = d.c;
+    assert(d.r == K && horizon >= 0 && model->A.r == K && model->A.c == K * p);
+    Mat *theta = (Mat*)malloc((size_t)(horizon + 1) * sizeof(Mat));
+    assert(theta);
+    theta[0] = mat_copy(d);
+    for (int h = 1; h <= horizon; h++) {
+        theta[h] = mat_new(K, shocks);
+        for (int i = 1; i <= p && i <= h; i++)
+            for (int k = 0; k < K; k++)
+                for (int s = 0; s < shocks; s++) {
+                    double sum = 0;
+                    for (int j = 0; j < K; j++) sum += (double)AT(model->A, k, (i - 1) * K + j) * (double)AT(theta[h - i], j, s);
+                    AT(theta[h], k, s) += (mreal)sum;
+                }
+    }
+    Tensor responses = tensor_zeros(K, horizon + 1, shocks);
+    for (int h = 0; h <= horizon; h++) {
+        for (int k = 0; k < K; k++)
+            for (int s = 0; s < shocks; s++) TAT3(responses, k, h, s) = AT(theta[h], k, s);
+        mat_free(theta[h]);
+    }
+    free(theta);
+    return responses;
 }
 
 /*

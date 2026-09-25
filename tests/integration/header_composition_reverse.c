@@ -10,6 +10,7 @@ is written in header_composition.c; this file is the other half of it and
 carries no checks of its own beyond compiling and linking.
 */
 
+#include "../../lp/lp.h"
 #include "../../varima/var.h"
 #include "../../sd/score_driven_location.h"
 #include "../../sd/qvarma.h"
@@ -33,6 +34,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../dist/gauss.h"
 #include "../../dist/broadcast.h"
 #include "../../inference/qlr_test.h"
+#include "../../filter/hp.h"
 #include "../../basis/spline.h"
 #include "../../basis/poly.h"
 #include "../../inference/cointegration.h"

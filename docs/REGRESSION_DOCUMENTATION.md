@@ -21,6 +21,7 @@ typedef struct {
 OlsFit ols(Mat x, Mat y);
 mreal  ols_sum_squared_residuals(const OlsFit *fit, int column);
 int    ols_residuals_are_zero(Mat x, Mat y, const OlsFit *fit, int column);
+void   ols_all_residuals_are_zero(Mat x, Mat y, const OlsFit *fit, int *flags);
 mreal  ols_unscaled_variance(Mat x, int column);
 Mat    lag_matrix(Mat y, int p);
 void   ols_free(OlsFit *fit);
@@ -29,6 +30,8 @@ void   ols_free(OlsFit *fit);
 `ols_residuals_are_zero(x, y, &fit, j)` is 1 when column `j` of `y` is fitted exactly: its residuals are zero up to rounding, so it has nothing left over to call a shock or an error. A series that never moves, next to an intercept, is the case it exists for. The test is the package's rank rule: the residual norm at most `mat_rank_tolerance(m)` times the larger of `||y_j||` and `sum_k ||x_k|| * |b_kj|`. The second term is the size of what the fitted values are summed from; the rounding in a residual scales with it, and it exceeds `||y_j||` whenever the coefficients cancel. Measured on exact fits stored exactly (small integers, `y = x * beta`, 300 per kind and shape, 5 to 2000 rows, both precisions), the ratio never exceeded 1.55 in units of `sqrt(m) * MEPS`, against the rule's 10; measured against `||y_j||` alone, fits through cancelling coefficients reached 12.2 at 5 rows and would have been missed. The verdict does not depend on units: rescaling `y_j` scales every term, and rescaling a column of `x` scales its coefficient inversely. All norms are taken after dividing by the largest entry, so values near the ends of the range neither overflow nor vanish. An all-zero column of `y` is reported, since anything fits it exactly.
 
 It is a function the caller runs when it wants the answer, not a field `ols` fills on every call. As a field it made every unit root and co-integration statistic 11 to 16 per cent slower (float64, one simulated series or 3-variable system of 200 observations, 16 threads, 6 alternating pairs in each order), and none of them reads it.
+
+`ols_all_residuals_are_zero(x, y, &fit, flags)` writes that verdict for every column of `y` into `flags`. It computes the column norms of `x` once, where calling `ols_residuals_are_zero` per column computes them once per column, and every norm is taken row by row, since the matrices are row-major. Both functions share the norm and the verdict code, and `tests/correctness/ols_pseudo_inverse_fallback.c` checks that they agree column by column. In `lp/lp.h`, which asks for the flags at every horizon, the per-column function made `lp_lin` 33 per cent slower and `lp_nl` 19 per cent (6 variables, 200 observations, 4 lags, horizon 15, float64, 16 threads); this one costs 8 and 4 per cent.
 
 `ols_unscaled_variance(x, j)` is `[(x^T x)^-1]_jj`, the variance of coefficient `j` per unit of error variance: a classical standard error is its square root times the residual standard deviation, a HAC one uses a long-run variance in place of the residual variance. It comes from one solve of `x^T x` against a unit vector, never an inverse. It needs full column rank, which a fit with status 0 establishes, and forming `x^T x` squares the condition number, so a design close to the boundary loses digits here that the fit itself kept.
 

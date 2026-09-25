@@ -56,21 +56,23 @@ typedef struct {
                           or infinite entry, nothing computed or allocated */
 } OlsFit;
 
-/* Euclidean norm of n entries spaced stride apart, divided by the largest
-   before squaring so an entry beyond about 1e154 in float64 does not
-   overflow and one below 1e-154 does not vanish. */
-static inline double _ols_scaled_norm(const mreal *p, int n, int stride) {
-    double largest = 0, sum = 0;
-    for (int i = 0; i < n; i++) {
-        double entry = fabs((double)p[(size_t)i * stride]);
-        if (entry > largest) largest = entry;
-    }
-    if (largest == 0) return 0;
-    for (int i = 0; i < n; i++) {
-        double scaled = (double)p[(size_t)i * stride] / largest;
-        sum += scaled * scaled;
-    }
-    return largest * sqrt(sum);
+/* The Euclidean norm of every column of m, each divided by its largest
+   entry before squaring so an entry beyond about 1e154 in float64 does not
+   overflow and one below 1e-154 does not vanish. Row by row, since m is
+   row-major; largest is scratch of m.c entries. */
+static inline void _ols_column_norms(Mat m, double *norms, double *largest) {
+    for (int j = 0; j < m.c; j++) { largest[j] = 0; norms[j] = 0; }
+    for (int i = 0; i < m.r; i++)
+        for (int j = 0; j < m.c; j++) largest[j] = fmax(largest[j], fabs((double)AT(m, i, j)));
+    /* largest becomes its reciprocal, 0 for a column of zeros, whose norm
+       is then 0 */
+    for (int j = 0; j < m.c; j++) largest[j] = largest[j] > 0 ? 1 / largest[j] : 0;
+    for (int i = 0; i < m.r; i++)
+        for (int j = 0; j < m.c; j++) {
+            double scaled = (double)AT(m, i, j) * largest[j];
+            norms[j] += scaled * scaled;
+        }
+    for (int j = 0; j < m.c; j++) norms[j] = largest[j] > 0 ? sqrt(norms[j]) / largest[j] : 0;
 }
 
 /* x is m x n with m >= n, y is m x k. Neither is modified; either may be a
@@ -114,22 +116,56 @@ static inline mreal ols_sum_squared_residuals(const OlsFit *fit, int column) {
     return total;
 }
 
+/* The verdict of ols_residuals_are_zero for one column of y, from the column
+   norms of x and the norms of that column of y and of its residuals. */
+static inline int _ols_residual_is_zero(const double *x_norms, double y_norm, double residual_norm, const OlsFit *fit,
+                                        int column, int rows) {
+    double fitted_terms = 0;
+    for (int k = 0; k < fit->coefficients.r; k++) fitted_terms += x_norms[k] * fabs((double)AT(fit->coefficients, k, column));
+    double scale = fitted_terms > y_norm ? fitted_terms : y_norm;
+    return residual_norm <= mat_rank_tolerance(rows) * scale;
+}
+
 /* 1 when column `column` of y is fitted exactly by fit, the ols fit of y on
    x: its residual norm is at most mat_rank_tolerance(m) times the larger of
    ||y_column|| and sum_k ||x_k|| * |b_k,column| (see the header comment). A
    function the caller runs when it wants the answer rather than a field ols
    fills on every call: its passes over x, y and the residuals made every
    unit root and co-integration statistic 11 to 16 per cent slower, and none
-   of them reads it. */
+   of them reads it. A caller that wants every column calls
+   ols_all_residuals_are_zero, which reads x once rather than once per
+   column. */
 static inline int ols_residuals_are_zero(Mat x, Mat y, const OlsFit *fit, int column) {
     assert(fit->status >= 0 && fit->coefficients.d && column >= 0 && column < y.c);
     assert(x.r == y.r && fit->coefficients.r == x.c && fit->residuals.c == y.c);
-    double scale = _ols_scaled_norm(&AT(y, 0, column), y.r, y.stride), fitted_terms = 0;
-    for (int k = 0; k < x.c; k++)
-        fitted_terms += _ols_scaled_norm(&AT(x, 0, k), x.r, x.stride) * fabs((double)AT(fit->coefficients, k, column));
-    if (fitted_terms > scale) scale = fitted_terms;
-    double residual = _ols_scaled_norm(&AT(fit->residuals, 0, column), fit->residuals.r, fit->residuals.stride);
-    return residual <= mat_rank_tolerance(x.r) * scale;
+    double small_buffer[128];
+    double *x_norms = x.c <= 64 ? small_buffer : (double*)malloc(2 * (size_t)x.c * sizeof(double));
+    assert(x_norms);
+    double y_norm, residual_norm, largest;
+    _ols_column_norms(x, x_norms, x_norms + x.c);
+    _ols_column_norms(mat_slice(y, 0, y.r, column, column + 1), &y_norm, &largest);
+    _ols_column_norms(mat_slice(fit->residuals, 0, y.r, column, column + 1), &residual_norm, &largest);
+    int zero = _ols_residual_is_zero(x_norms, y_norm, residual_norm, fit, column, x.r);
+    if (x_norms != small_buffer) free(x_norms);
+    return zero;
+}
+
+/* ols_residuals_are_zero for every column of y, written to flags (y.c
+   entries). */
+static inline void ols_all_residuals_are_zero(Mat x, Mat y, const OlsFit *fit, int *flags) {
+    assert(fit->status >= 0 && fit->coefficients.d);
+    assert(x.r == y.r && fit->coefficients.r == x.c && fit->residuals.c == y.c);
+    int wider = x.c > y.c ? x.c : y.c;
+    double small_buffer[256];
+    size_t need = (size_t)x.c + 2 * (size_t)y.c + (size_t)wider;
+    double *buffer = need <= 256 ? small_buffer : (double*)malloc(need * sizeof(double));
+    assert(buffer);
+    double *x_norms = buffer, *y_norms = x_norms + x.c, *residual_norms = y_norms + y.c, *largest = residual_norms + y.c;
+    _ols_column_norms(x, x_norms, largest);
+    _ols_column_norms(y, y_norms, largest);
+    _ols_column_norms(fit->residuals, residual_norms, largest);
+    for (int j = 0; j < y.c; j++) flags[j] = _ols_residual_is_zero(x_norms, y_norms[j], residual_norms[j], fit, j, x.r);
+    if (buffer != small_buffer) free(buffer);
 }
 
 /* [(x^T x)^-1] at (column, column): the variance of that coefficient per unit

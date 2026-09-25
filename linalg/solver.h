@@ -55,11 +55,24 @@ static inline Vec vec_solve(Mat a, Vec b) {
    than a did, and the extra rows are scratch the factorization fills in.
    That is why the packed input needs only kl + ku + 1 and this allocates
    more. */
+static inline Mat mat_band_solve(Mat band, int kl, int ku, Mat b);
+
 static inline Vec vec_band_solve(Mat band, int kl, int ku, Vec b) {
+    assert(b.c == 1);
+    return mat_band_solve(band, kl, ku, b);
+}
+
+/* The same system against every column of b at once: a*X = B, b n x nrhs,
+   a factored once. One column goes through _gbtrs as vec_band_solve always
+   has; several go through _gbtrs_rhs, which updates each row across all the
+   columns together, so solving many right-hand sides costs one pass over
+   the band rather than one per column. b may be a strided view and is not
+   modified; the result is an n x nrhs owner. */
+static inline Mat mat_band_solve(Mat band, int kl, int ku, Mat b) {
     int n = band.r;
     assert(kl >= 0 && ku >= 0 && n >= 1);
     assert(band.c == kl + ku + 1 && "band storage must be n x (kl + ku + 1)");
-    assert(b.r == n && b.c == 1);
+    assert(b.r == n && b.c >= 1);
 
     int ldab = 2 * kl + ku + 1;
     mreal *ab = (mreal*)calloc((size_t)n * ldab, sizeof(mreal));
@@ -69,9 +82,12 @@ static inline Vec vec_band_solve(Mat band, int kl, int ku, Vec b) {
         memcpy(&ab[(size_t)j * ldab + kl], &AT(band, j, 0),
                (size_t)(kl + ku + 1) * sizeof(mreal));
 
-    Vec x = mat_copy(b);
-    int info = _gbsv(ab, n, kl, ku, ldab, piv, x.d);
+    int info = _gbtf2(ab, n, kl, ku, ldab, piv);
     assert(info == 0); /* a is singular */
+    (void)info;
+    Mat x = mat_copy(b);
+    if (x.c == 1) _gbtrs(ab, n, kl, ku, ldab, piv, x.d);
+    else _gbtrs_rhs(ab, n, kl, ku, ldab, piv, x.d, x.stride, x.c);
 
     free(piv); free(ab);
     return x;
@@ -181,7 +197,7 @@ static inline Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char
    which mat_free accepts).
 
    factor.h's _gels computes this against CBLAS alone; it replaced a
-   LAPACKE ?gels call and is 1.40x to 2.29x faster across the shapes in
+   LAPACKE ?gels call and is 1.49x to 4.32x faster across the shapes in
    tests/performance/lstsq_lapack_removal.c. */
 static inline Mat mat_lstsq(Mat a, Mat b, int *status) {
     assert(a.r >= a.c && b.r == a.r);
