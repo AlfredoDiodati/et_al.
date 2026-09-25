@@ -256,14 +256,23 @@ Above the thresholds below the call goes to OpenBLAS with `CblasRowMajor` and `l
 
 Below them the product is three nested loops in this file, and that is not a contradiction of the pitfall but the size at which it stops applying. A 5x5 by 5x1 product is 50 floating point operations and cost 153 ns through OpenBLAS, which is 0.33 GFLOP/s: the dispatch, not the arithmetic, was the whole cost. It gets worse under concurrency, because OpenBLAS keeps one buffer table per process: four threads issuing that same call each paid 1375 ns, which is what made an OpenMP loop over independent model fits slower than a serial one. The loop shares nothing and scales with the cores.
 
-Two thresholds, because a single output column crosses over far later than a square product - its arithmetic is `m*k` rather than `m*n*k`, so the call overhead still dominates where a square product has long since become worth handing over:
+Two main thresholds, because a single output column crosses over far later than a square product - its arithmetic is `m*k` rather than `m*n*k`, so the call overhead still dominates where a square product has long since become worth handing over:
 
 ```c
 #define MAT_GEMM_SMALL  8    // every dimension at or below this, for a general product
 #define MAT_GEMM_VECTOR 64   // m and k at or below this, when n == 1
 ```
 
-Both are crossovers measured in `tests/performance/small_blas_threshold.c`, which times the loop against the call across dimensions from one caller and from one caller per hardware thread and writes `out/small_blas_threshold_float32.txt` and the float64 name. At `MAT_GEMM_SMALL` a square product is 1.04x (float64) to 1.49x (float32) faster as a loop at one thread and 8.1x to 11.2x at four; at 10 it loses at one thread in both builds (0.93x and 0.80x), which is where the threshold sits. `MAT_GEMM_VECTOR` is where the measurement stops rather than where the loop starts losing - a 64x64 by 64x1 product still runs 3.2x faster as a loop in float64 and 3.8x in float32 - so raising it needs the benchmark extended first. The `n == 1` case gets its own loop inside the kernel, running along the contraction index, because the general `i,l,j` order leaves a one-element innermost loop there and nothing vectorizes.
+Both are crossovers measured in `tests/performance/small_blas_threshold.c`, which times the loop against the call across dimensions from one caller and from one caller per hardware thread and writes `out/small_blas_threshold_float32.txt` and the float64 name. At `MAT_GEMM_SMALL` a square product is 1.04x (float64) to 1.49x (float32) faster as a loop at one thread and 8.1x to 11.2x at four; at 10 it loses at one thread in both builds (0.93x and 0.80x), which is where the threshold sits. `MAT_GEMM_VECTOR` is where the measurement stops rather than where the loop starts losing - a 64x64 by 64x1 product still runs 3.2x faster as a loop in float64 and 3.8x in float32 - so raising it needs the benchmark extended first. A third pair extends the matrix-by-column case to tall, thin products, the shape of a regression's fitted values:
+
+```c
+#define MAT_GEMM_THIN 8
+#define MAT_GEMM_THIN_ROWS 10000   // when n == 1: k at or below MAT_GEMM_THIN and m at or below this
+```
+
+Measured in the same benchmark's tall matrix-vector table, with the transpose flag read at run time so the loop is not specialized to one form: at `k <= 8` the loop beats OpenBLAS at every `m` from 64 to 10000, in both precisions and for both `A` and `A^T`, by 1.02x (float32, `A^T`, `k = 8`) to 4.6x; at `k = 12` float32 is at parity from 500 rows and loses on `A^T`, and from `k = 21` the call wins. 10000 is where the measurement stops. The rule is one function, `_mat_gemm_runs_loop(m, n, k)`, which `linalg/tensor.h`'s `tensor_matmul` also calls to decide whether a batch of products is threaded over the batch, so the two cannot disagree about which products run as a loop. Before they shared it, `tensor_matmul` kept its own copy without the thin clause and sent a batch of 64 tall products to OpenBLAS one at a time: through the shared rule the same batch runs 1.3x to 11x faster (float64, 16 threads, 12 alternating pairs in each order, `m` in 100, 1000, 10000 and `k` in 4, 8; the largest gain at `m = 1000, k = 8`, the smallest at `m = 10000`).
+
+The `n == 1` case gets its own loop inside the kernel, running along the contraction index, because the general `i,l,j` order leaves a one-element innermost loop there and nothing vectorizes.
 
 `tests/correctness/test_mat.c`'s `test_gemm` checks `mat_gemm` directly against a reference written on raw pointers, at 1, 2, 7, 8, 9, 13, 63, 64 and 65 - either side of both thresholds and at each of them - crossed with both transpose flags on each operand, `n == 1` against `n == m`, two values of `alpha` and `beta` at 0, 1 and 2. A test at one size would exercise one of the two implementations and report on both. Leading dimensions wider than the operands are checked separately, since a kernel walking rows by the column count instead of the stride still returns a plausible matrix; so are a zero contraction length, which must leave `C` scaled by `beta` alone, and `beta == 0` over an uninitialized `C`, which must overwrite rather than read what is there. The transposed forms and the accumulating `beta` are otherwise reached only from `ad.h`'s `ad_matmul_backward`.
 
@@ -315,15 +324,15 @@ Do not use `isnan()`, `isinf()`, `__builtin_isnan()` or `__builtin_isinf()` in n
 
 ## Known limitations and future work
 
-### The four dispatch thresholds are measured on one machine
+### The dispatch thresholds are measured on one machine
 
-`MAT_GEMM_SMALL`, `MAT_GEMM_VECTOR` (here) and `TRSM_SMALL_N`,
+`MAT_GEMM_SMALL`, `MAT_GEMM_VECTOR`, `MAT_GEMM_THIN`, `MAT_GEMM_THIN_ROWS` (here) and `TRSM_SMALL_N`,
 `TRSM_SMALL_NRHS` (`linalg/factor.h`) are crossovers measured on one Intel
 i5-7400, against one build of OpenBLAS 0.3.26, at `-O3 -march=native
 -ffast-math`. They are not properties of the arithmetic, and this is the one
 place in the library where a constant was chosen from a measurement on the
 machine it was developed on. This section is the cross-cutting note for all
-four; `linalg/factor.h`'s two are the same fact in a different kernel.
+six; `linalg/factor.h`'s two are the same fact in a different kernel.
 
 What does carry to other hardware, and does not need re-measuring:
 
@@ -355,7 +364,7 @@ What does not carry:
   Nothing in the library detects which BLAS it is linked against.
 
 What to do about it: run `make bench-small_blas_threshold` on the new machine.
-It re-derives all four crossovers from one caller and from one caller per
+It re-derives all six crossovers from one caller and from one caller per
 hardware thread, in both precisions,
 and prints the constants currently compiled in, so the answer is one command
 rather than an argument. Changing a constant needs nothing but the `#define`.
@@ -405,7 +414,7 @@ serial code and 1.1 to 1.3 ms from inside such a region. The one-caller cells
 now run outside any parallel region, with OpenBLAS at its default thread count
 as README's performance policy requires, and no thread variable is needed.
 
-What the corrected run says about the four constants, and why none was
+What the corrected run says about the four older constants, and why none was
 changed, is item 19 of `docs/PERFORMANCE_BACKLOG.md`.
 
 ### Other limitations

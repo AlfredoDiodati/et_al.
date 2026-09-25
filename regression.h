@@ -29,7 +29,22 @@
    so a status above zero comes with a rank below the number of columns,
    except where rounding in the last digits puts the two computed ratios on
    opposite sides of the tolerance; the fit then reports the full rank it
-   found. */
+   found.
+
+   Responses fitted exactly. When a column of y lies in the span of x, as a
+   series that never moves does next to an intercept, its residuals are
+   zero up to rounding and it has nothing left over to call a shock or an
+   error. ols_residuals_are_zero says so for one column, by the package's
+   rank rule: the residuals count as zero when their norm is at most
+   mat_rank_tolerance(m) times the larger of ||y_j|| and
+   sum_k ||x_k|| * |b_kj|. The second term is the size of what the fitted
+   values are summed from, and the rounding in a residual scales with it,
+   not with ||y_j||, which is smaller whenever the terms cancel; measured
+   against ||y_j|| alone an exact fit through cancelling coefficients came
+   out above the tolerance at 5 rows. Rescaling y_j scales every term, and
+   rescaling a column of x scales its coefficient inversely, so the verdict
+   does not depend on units. A column of y that is all zeros is flagged,
+   since it is fitted exactly by anything. */
 
 typedef struct {
     Mat coefficients;  /* x.c x y.c */
@@ -41,12 +56,32 @@ typedef struct {
                           or infinite entry, nothing computed or allocated */
 } OlsFit;
 
+/* Euclidean norm of n entries spaced stride apart, divided by the largest
+   before squaring so an entry beyond about 1e154 in float64 does not
+   overflow and one below 1e-154 does not vanish. */
+static inline double _ols_scaled_norm(const mreal *p, int n, int stride) {
+    double largest = 0, sum = 0;
+    for (int i = 0; i < n; i++) {
+        double entry = fabs((double)p[(size_t)i * stride]);
+        if (entry > largest) largest = entry;
+    }
+    if (largest == 0) return 0;
+    for (int i = 0; i < n; i++) {
+        double scaled = (double)p[(size_t)i * stride] / largest;
+        sum += scaled * scaled;
+    }
+    return largest * sqrt(sum);
+}
+
 /* x is m x n with m >= n, y is m x k. Neither is modified; either may be a
    strided view. The fit owns its matrices, released by ols_free. */
 static inline OlsFit ols(Mat x, Mat y) {
     assert(x.r >= x.c && x.c >= 1 && y.r == x.r && y.c >= 1);
     OlsFit fit = {0};
-    if (!mat_all_finite(x) || !mat_all_finite(y)) {
+    /* y is checked here; x is checked by mat_lstsq, and looked at again only
+       when that reports a problem, to tell a non-finite x from a collinear
+       one. */
+    if (!mat_all_finite(y)) {
         fit.status = -1;
         return fit;
     }
@@ -54,13 +89,75 @@ static inline OlsFit ols(Mat x, Mat y) {
     fit.coefficients = mat_lstsq(x, y, &status);
     fit.rank = x.c;
     if (status != 0) {
+        if (!mat_all_finite(x)) {
+            fit.status = -1;
+            return fit;
+        }
         fit.coefficients = mat_lstsq_rd(x, y, &fit.rank);
         fit.status = status;
     }
-    Mat fitted = mat_mul(x, fit.coefficients);
-    fit.residuals = mat_sub(y, fitted);
-    mat_free(fitted);
+    /* residuals = y - x * coefficients, in one product into a copy of y */
+    fit.residuals = mat_copy(y);
+    mat_gemm(0, 0, x.r, y.c, x.c, (mreal)-1, x.d, x.stride, fit.coefficients.d, fit.coefficients.stride,
+             (mreal)1, fit.residuals.d, fit.residuals.stride);
     return fit;
+}
+
+/* Sum of the squared residuals of column `column`, over rows in order. A
+   function rather than a field for the reason ols_residuals_are_zero is one:
+   filled on every call it was an allocation and a pass that most callers
+   never read. */
+static inline mreal ols_sum_squared_residuals(const OlsFit *fit, int column) {
+    assert(fit->status >= 0 && fit->residuals.d && column >= 0 && column < fit->residuals.c);
+    mreal total = 0;
+    for (int i = 0; i < fit->residuals.r; i++) total += AT(fit->residuals, i, column) * AT(fit->residuals, i, column);
+    return total;
+}
+
+/* 1 when column `column` of y is fitted exactly by fit, the ols fit of y on
+   x: its residual norm is at most mat_rank_tolerance(m) times the larger of
+   ||y_column|| and sum_k ||x_k|| * |b_k,column| (see the header comment). A
+   function the caller runs when it wants the answer rather than a field ols
+   fills on every call: its passes over x, y and the residuals made every
+   unit root and co-integration statistic 11 to 16 per cent slower, and none
+   of them reads it. */
+static inline int ols_residuals_are_zero(Mat x, Mat y, const OlsFit *fit, int column) {
+    assert(fit->status >= 0 && fit->coefficients.d && column >= 0 && column < y.c);
+    assert(x.r == y.r && fit->coefficients.r == x.c && fit->residuals.c == y.c);
+    double scale = _ols_scaled_norm(&AT(y, 0, column), y.r, y.stride), fitted_terms = 0;
+    for (int k = 0; k < x.c; k++)
+        fitted_terms += _ols_scaled_norm(&AT(x, 0, k), x.r, x.stride) * fabs((double)AT(fit->coefficients, k, column));
+    if (fitted_terms > scale) scale = fitted_terms;
+    double residual = _ols_scaled_norm(&AT(fit->residuals, 0, column), fit->residuals.r, fit->residuals.stride);
+    return residual <= mat_rank_tolerance(x.r) * scale;
+}
+
+/* [(x^T x)^-1] at (column, column): the variance of that coefficient per unit
+   of error variance, so a classical standard error is its square root times
+   the residual standard deviation, and a HAC one uses a long-run variance in
+   place of the residual variance. One solve of x^T x against a unit vector,
+   never an inverse. x must have full column rank, which an ols fit with
+   status 0 establishes; forming x^T x squares its condition number, so a
+   design close to that boundary loses digits here that the fit itself
+   kept. */
+static inline mreal ols_unscaled_variance(Mat x, int column) {
+    assert(column >= 0 && column < x.c);
+    Mat transpose = mat_T(x);
+    Mat cross = mat_mul(transpose, x);
+    /* The unit vector lives on the stack for up to 64 columns: this is called
+       once per candidate in the break-date searches, and an allocation per
+       call showed in them. vec_solve_sym copies it before solving. */
+    mreal small_selector[64];
+    mreal *selector_data = x.c <= 64 ? small_selector : (mreal*)malloc((size_t)x.c * sizeof(mreal));
+    assert(selector_data);
+    for (int j = 0; j < x.c; j++) selector_data[j] = 0;
+    selector_data[column] = 1;
+    Vec selector = { x.c, 1, 1, selector_data };
+    Vec solved = vec_solve_sym(cross, selector);
+    mreal value = solved.d[column];
+    mat_free(transpose); mat_free(cross); mat_free(solved);
+    if (selector_data != small_selector) free(selector_data);
+    return value;
 }
 
 static inline void ols_free(OlsFit *fit) {

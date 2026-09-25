@@ -31,6 +31,12 @@ What this file establishes:
                   the tenth is where a cutoff out of step with the flag would
                   report full rank
   views           strided x and y give what their copies give
+  exact fits      ols_residuals_are_zero reports a series that never moves and
+                  only it, every one of 3600 exact integer fits including the
+                  cancelling kind that defeats a scale of ||y|| alone, a
+                  residual at 100 times the tolerance as real and at a
+                  hundredth as zero, the same verdicts at scales of 1e+-200
+                  (1e+-15 in float32), and an all-zero response
   non-finite      a NaN or an infinity in x or y gives status -1 and nothing
                   allocated
 
@@ -333,6 +339,147 @@ static void test_views(Rng *rng) {
     mat_free(x_copy); mat_free(y_copy); mat_free(wide);
 }
 
+/* The scale ols_residuals_are_zero measures against, restated from regression.h:
+   the larger of ||y_j|| and sum_k ||x_k|| |b_kj|. */
+static double documented_scale(Mat x, Mat y, Mat b, int j) {
+    double yy = 0, terms = 0;
+    for (int i = 0; i < y.r; i++) yy += (double)AT(y, i, j) * AT(y, i, j);
+    for (int k = 0; k < x.c; k++) {
+        double c = 0;
+        for (int i = 0; i < x.r; i++) c += (double)AT(x, i, k) * AT(x, i, k);
+        terms += sqrt(c) * fabs((double)AT(b, k, j));
+    }
+    return sqrt(yy) > terms ? sqrt(yy) : terms;
+}
+
+/* ols_residuals_are_zero: a series the design fits exactly is reported,
+   and only that series.
+
+   The exact fits are small integers, y = x * beta stored exactly, of three
+   kinds: plain; cancelling, where two nearly equal columns carry large
+   coefficients of opposite sign so y is far smaller than the terms it is
+   summed from; and collinear, which takes the pseudo-inverse. The
+   cancelling kind at 5 rows is where a residual measured against ||y||
+   alone came out above the tolerance. */
+static void test_residuals_are_zero(Rng *rng) {
+    puts("responses fitted exactly");
+
+    /* An intercept and one lag of three series, the second of which never
+       moves: its equation is fitted exactly by the intercept. */
+    int periods = 120, rows = periods - 1;
+    Mat level = mat_new(3, periods);
+    for (int t = 0; t < periods; t++)
+        for (int k = 0; k < 3; k++)
+            AT(level, k, t) = k == 1 ? (mreal)0.25 : (mreal)(0.5 * (t ? AT(level, k, t - 1) : 0) + rng_normal(rng));
+    Mat x = mat_new(rows, 4), y = mat_new(rows, 3);
+    for (int row = 0; row < rows; row++) {
+        AT(x, row, 0) = 1;
+        for (int k = 0; k < 3; k++) { AT(x, row, 1 + k) = AT(level, k, row); AT(y, row, k) = AT(level, k, row + 1); }
+    }
+    OlsFit fit = ols(x, y);
+    CHECK(fit.status == 3, "the stuck series' lag is collinear with the intercept (status %d)", fit.status);
+    int exact[3];
+    for (int k = 0; k < 3; k++) exact[k] = ols_residuals_are_zero(x, y, &fit, k);
+    CHECK(exact[0] == 0 && exact[1] == 1 && exact[2] == 0,
+          "only the stuck series is fitted exactly (%d %d %d)", exact[0], exact[1], exact[2]);
+    ols_free(&fit);
+    mat_free(level); mat_free(x); mat_free(y);
+
+    int shapes[][2] = { {5, 2}, {20, 4}, {119, 6}, {500, 21} };
+    int missed = 0, total = 0;
+    for (int s = 0; s < 4; s++)
+        for (int kind = 0; kind < 3; kind++)
+            for (int draw = 0; draw < 300; draw++) {
+                int m = shapes[s][0], n = shapes[s][1];
+                Mat a = mat_new(m, n), b = mat_new(m, 1);
+                double beta[32];
+                for (int j = 0; j < n; j++) beta[j] = small_int(rng, 5);
+                if (kind == 1) { beta[0] = small_int(rng, 1000); beta[1] = -beta[0]; }
+                for (int i = 0; i < m; i++) {
+                    for (int j = 0; j < n; j++) AT(a, i, j) = (mreal)small_int(rng, 8);
+                    if (kind == 1) AT(a, i, 1) = AT(a, i, 0) + (mreal)small_int(rng, 1);
+                    if (kind == 2) AT(a, i, n - 1) = AT(a, i, 0) - AT(a, i, 1);
+                    double v = 0;
+                    for (int j = 0; j < n; j++) v += beta[j] * AT(a, i, j);
+                    AT(b, i, 0) = (mreal)v;
+                }
+                OlsFit exact = ols(a, b);
+                if (!ols_residuals_are_zero(a, b, &exact, 0)) missed++;
+                total++;
+                ols_free(&exact);
+                mat_free(a); mat_free(b);
+            }
+    printf("  %d exact fits, %d not reported\n", total, missed);
+    CHECK(missed == 0, "every exact fit is reported (%d of %d missed)", missed, total);
+
+    /* A residual orthogonal to the design, sized against the documented
+       scale: at 100 times the tolerance it is a real residual, at a
+       hundredth of it it is not. */
+    int sizes[] = { 10, 200 };
+    for (int si = 0; si < 2; si++) {
+        int m = sizes[si], n = 3;
+        double tolerance = mat_rank_tolerance(m);
+        double factors[] = { 100 * tolerance, tolerance / 100 };
+        for (int f = 0; f < 2; f++) {
+            Mat a = mat_new(m, n), clean = mat_new(m, 1), coefficients = mat_new(n, 1);
+            for (int i = 0; i < m * n; i++) a.d[i] = (mreal)rng_normal(rng);
+            for (int j = 0; j < n; j++) AT(coefficients, j, 0) = (mreal)(j + 1);
+            Mat fitted = mat_mul(a, coefficients);
+            for (int i = 0; i < m; i++) AT(clean, i, 0) = AT(fitted, i, 0);
+            OlsFit direction = ols(a, clean);
+            /* a residual direction: a fresh vector minus its projection */
+            Mat noise = mat_new(m, 1);
+            for (int i = 0; i < m; i++) AT(noise, i, 0) = (mreal)rng_normal(rng);
+            OlsFit projected = ols(a, noise);
+            double noise_norm = 0;
+            for (int i = 0; i < m; i++) noise_norm += (double)AT(projected.residuals, i, 0) * AT(projected.residuals, i, 0);
+            noise_norm = sqrt(noise_norm);
+            double scale = documented_scale(a, clean, direction.coefficients, 0);
+            Mat response = mat_new(m, 1);
+            for (int i = 0; i < m; i++)
+                AT(response, i, 0) = (mreal)((double)AT(clean, i, 0) + factors[f] * scale * AT(projected.residuals, i, 0) / noise_norm);
+            OlsFit fit_near = ols(a, response);
+            int expected = f == 1;
+            int reported = ols_residuals_are_zero(a, response, &fit_near, 0);
+            CHECK(reported == expected, "%d rows, residual %g of the tolerance: reported %d, expected %d",
+                  m, factors[f] / tolerance, reported, expected);
+            ols_free(&fit_near); ols_free(&direction); ols_free(&projected);
+            mat_free(a); mat_free(clean); mat_free(coefficients); mat_free(fitted); mat_free(noise); mat_free(response);
+        }
+    }
+
+    /* Units: the stuck series and an ordinary one, with y scaled and one
+       design column rescaled, far toward both ends of the range. */
+    double scales_double[] = { 1e200, 1e-200 };
+    double scales_float[] = { 1e15, 1e-15 };
+    double *scales = sizeof(mreal) == sizeof(double) ? scales_double : scales_float;
+    for (int t = 0; t < 2; t++) {
+        int m = 60;
+        Mat a = mat_new(m, 3), b = mat_new(m, 2);
+        for (int i = 0; i < m; i++) {
+            AT(a, i, 0) = 1;
+            AT(a, i, 1) = (mreal)(rng_normal(rng) * scales[t]);
+            AT(a, i, 2) = (mreal)rng_normal(rng);
+            AT(b, i, 0) = (mreal)(0.25 * scales[t]);
+            AT(b, i, 1) = (mreal)(rng_normal(rng) * scales[t]);
+        }
+        OlsFit scaled = ols(a, b);
+        int constant = ols_residuals_are_zero(a, b, &scaled, 0), ordinary = ols_residuals_are_zero(a, b, &scaled, 1);
+        CHECK(constant == 1 && ordinary == 0, "at scale %g: constant reported, ordinary not (%d %d)", scales[t],
+              constant, ordinary);
+        ols_free(&scaled);
+        mat_free(a); mat_free(b);
+    }
+
+    /* A response of zeros is fitted exactly by anything. */
+    Mat a = mat_new(10, 2), zeros = mat_new(10, 1);
+    for (int i = 0; i < 20; i++) a.d[i] = (mreal)rng_normal(rng);
+    OlsFit zero_fit = ols(a, zeros);
+    CHECK(ols_residuals_are_zero(a, zeros, &zero_fit, 0) == 1, "an all-zero response is reported");
+    ols_free(&zero_fit);
+    mat_free(a); mat_free(zeros);
+}
+
 static void test_non_finite(Rng *rng) {
     puts("NaN and infinite entries");
     int m = 12;
@@ -360,6 +507,7 @@ int main(void) {
     test_against_reference(&rng);
     test_threshold(&rng);
     test_views(&rng);
+    test_residuals_are_zero(&rng);
     test_non_finite(&rng);
     return check_report();
 }

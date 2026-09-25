@@ -59,19 +59,6 @@ static inline void johansen_result_free(JohansenResult *r) {
     mat_free(r->max_statistic);
 }
 
-/* The residual of target after regressing it on covariates, column by column.
-   Returns a new rows x target.c matrix. */
-static inline Mat _residualize(Mat target, Mat covariates) {
-    Mat coefficients = mat_lstsq(covariates, target, NULL);
-    Mat fitted = mat_mul(covariates, coefficients);
-    Mat residual = mat_new(target.r, target.c);
-    for (int i = 0; i < target.r; i++)
-        for (int j = 0; j < target.c; j++)
-            AT(residual, i, j) = AT(target, i, j) - AT(fitted, i, j);
-    mat_free(coefficients);
-    mat_free(fitted);
-    return residual;
-}
 
 /* left' right / rows, for two matrices with the same number of rows. */
 static inline Mat _cross_moment(Mat left, Mat right) {
@@ -131,8 +118,13 @@ static inline JohansenResult johansen(Mat data, int lags) {
         AT(covariates, row, covariate_columns - 1) = 1;
     }
 
-    Mat difference_residual = _residualize(difference, covariates);
-    Mat level_residual = _residualize(level, covariates);
+    /* Each block regressed on the short-run covariates, column by column. */
+    OlsFit difference_fit = ols(covariates, difference);
+    OlsFit level_fit = ols(covariates, level);
+    assert(difference_fit.status == 0 && level_fit.status == 0
+           && "johansen: the short-run covariates are numerically rank deficient");
+    Mat difference_residual = difference_fit.residuals;
+    Mat level_residual = level_fit.residuals;
     Mat s00 = _cross_moment(difference_residual, difference_residual);
     Mat s01 = _cross_moment(difference_residual, level_residual);
     Mat s11 = _cross_moment(level_residual, level_residual);
@@ -180,7 +172,7 @@ static inline JohansenResult johansen(Mat data, int lags) {
     }
 
     mat_free(difference); mat_free(level); mat_free(covariates);
-    mat_free(difference_residual); mat_free(level_residual);
+    ols_free(&difference_fit); ols_free(&level_fit);
     mat_free(s00); mat_free(s01); mat_free(s11);
     mat_free(weighted); mat_free(s01_transpose); mat_free(product);
     mat_free(lower); mat_free(half); mat_free(half_transpose); mat_free(symmetric);
@@ -303,12 +295,11 @@ static inline EngleGrangerResult engle_granger(Mat data, int dependent, int lags
         }
         AT(target, t, 0) = AT(data, dependent, t);
     }
-    Mat coefficients = mat_lstsq(design, target, NULL);
-    Mat fitted = mat_mul(design, coefficients);
+    OlsFit fit = ols(design, target);
+    assert(fit.status == 0 && "engle_granger: the co-integrating regression is numerically rank deficient");
 
     Mat residual = mat_new(1, periods);
-    for (int t = 0; t < periods; t++)
-        AT(residual, 0, t) = AT(target, t, 0) - AT(fitted, t, 0);
+    for (int t = 0; t < periods; t++) AT(residual, 0, t) = AT(fit.residuals, t, 0);
 
     AdfResult second = adf_with_deterministic(residual, lags, 1 + lags,
                                               second_step_deterministic);
@@ -320,15 +311,15 @@ static inline EngleGrangerResult engle_granger(Mat data, int dependent, int lags
     result.dependent = dependent;
     result.n_variables = n;
     result.second_step_deterministic = second_step_deterministic;
-    result.intercept = AT(coefficients, 0, 0);
+    result.intercept = AT(fit.coefficients, 0, 0);
     result.bic = second.bic;
     result.relation = mat_new(n, 1);
     int column = 1;
     for (int k = 0; k < n; k++)
-        result.relation.d[k] = k == dependent ? 1 : -AT(coefficients, column++, 0);
+        result.relation.d[k] = k == dependent ? 1 : -AT(fit.coefficients, column++, 0);
 
-    mat_free(design); mat_free(target); mat_free(coefficients);
-    mat_free(fitted); mat_free(residual);
+    mat_free(design); mat_free(target); mat_free(residual);
+    ols_free(&fit);
     return result;
 }
 
@@ -489,23 +480,19 @@ static inline void _maki_evaluate(Mat data, int dependent, int model, int lags,
     Mat target = mat_new(periods, 1);
     for (int t = 0; t < periods; t++) AT(target, t, 0) = AT(data, dependent, t);
 
-    Mat coefficients = mat_lstsq(design, target, NULL);
-    Mat fitted = mat_mul(design, coefficients);
+    OlsFit fit = ols(design, target);
+    assert(fit.status == 0 && "maki: the co-integrating regression is numerically rank deficient");
     Mat residual = mat_new(1, periods);
-    mreal total = 0;
-    for (int t = 0; t < periods; t++) {
-        mreal e = AT(target, t, 0) - AT(fitted, t, 0);
-        AT(residual, 0, t) = e;
-        total += e * e;
-    }
+    for (int t = 0; t < periods; t++) AT(residual, 0, t) = AT(fit.residuals, t, 0);
+    mreal total = ols_sum_squared_residuals(&fit, 0);
     AdfResult second = adf_with_deterministic(residual, lags, 1 + lags, ADF_NO_CONSTANT);
 
     *sum_squared_residual = total;
     *statistic = second.statistic;
     *observations = second.observations;
 
-    mat_free(design); mat_free(target); mat_free(coefficients);
-    mat_free(fitted); mat_free(residual);
+    mat_free(design); mat_free(target); mat_free(residual);
+    ols_free(&fit);
 }
 
 /* Whether a candidate date is far enough from the sample ends and from every

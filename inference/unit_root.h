@@ -1,5 +1,6 @@
 #pragma once
 #include "../linalg/solver.h"
+#include "../regression.h"
 #include "../random/random.h"
 #include "../stats.h"
 #include <math.h>
@@ -168,28 +169,15 @@ static inline AdfResult adf_with_deterministic(Mat series, int lags, int first_o
                                              - stats_series_at(series, t - i - 1);
     }
 
-    Mat coefficients = mat_lstsq(design, target, NULL);
-    Mat fitted = mat_mul(design, coefficients);
-    mreal sum_squared_residual = 0;
-    for (int row = 0; row < rows; row++) {
-        mreal residual = AT(target, row, 0) - AT(fitted, row, 0);
-        sum_squared_residual += residual * residual;
-    }
-
-    /* The standard error needs one diagonal entry of the inverse of X'X, which
-       is e' (X'X)^-1 e for the tested coefficient's unit vector, so it comes
-       from a solve rather than an inverse. */
-    Mat design_transpose = mat_T(design);
-    Mat cross = mat_mul(design_transpose, design);
-    Vec selector = mat_new(columns, 1);
-    selector.d[level_column] = 1;
-    Vec column_of_inverse = vec_solve_sym(cross, selector);
+    OlsFit fit = ols(design, target);
+    assert(fit.status == 0 && "adf: the regression design is numerically rank deficient");
+    mreal sum_squared_residual = ols_sum_squared_residuals(&fit, 0);
     mreal variance = sum_squared_residual / (mreal)(rows - columns);
 
     AdfResult result;
-    result.coefficient = AT(coefficients, level_column, 0);
+    result.coefficient = AT(fit.coefficients, level_column, 0);
     result.standard_error = (mreal)sqrt((double)(variance
-                                                 * column_of_inverse.d[level_column]));
+                                                 * ols_unscaled_variance(design, level_column)));
     result.statistic = result.coefficient / result.standard_error;
     result.lags = lags;
     result.observations = rows;
@@ -202,9 +190,8 @@ static inline AdfResult adf_with_deterministic(Mat series, int lags, int first_o
         result.critical[level] = n_deterministic >= 1
             ? adf_critical_value_for(rows, level, deterministic) : (mreal)NAN;
 
-    mat_free(design); mat_free(target); mat_free(coefficients); mat_free(fitted);
-    mat_free(design_transpose); mat_free(cross);
-    mat_free(selector); mat_free(column_of_inverse);
+    mat_free(design); mat_free(target);
+    ols_free(&fit);
     return result;
 }
 
@@ -282,7 +269,10 @@ static inline KpssResult kpss(Mat series, int bandwidth, int deterministic) {
     assert(bandwidth >= 0 && bandwidth < n);
     assert(mat_all_finite(series) && "kpss: non-finite element in the series");
 
-    Vec residual = mat_new(n, 1);
+    /* The trend case keeps the fit's own residuals, an n x 1 owner, rather
+       than copying them into a second vector. */
+    Vec residual;
+    OlsFit fit = {0};
     if (deterministic == KPSS_TREND) {
         Mat design = mat_new(n, 2);
         Mat target = mat_new(n, 1);
@@ -291,12 +281,12 @@ static inline KpssResult kpss(Mat series, int bandwidth, int deterministic) {
             AT(design, t, 1) = (mreal)(t + 1);
             AT(target, t, 0) = stats_series_at(series, t);
         }
-        Mat coefficients = mat_lstsq(design, target, NULL);
-        for (int t = 0; t < n; t++)
-            residual.d[t] = stats_series_at(series, t) - AT(coefficients, 0, 0)
-                          - AT(coefficients, 1, 0) * (mreal)(t + 1);
-        mat_free(design); mat_free(target); mat_free(coefficients);
+        fit = ols(design, target);
+        assert(fit.status == 0 && "kpss: the trend regression is numerically rank deficient");
+        residual = fit.residuals;
+        mat_free(design); mat_free(target);
     } else {
+        residual = mat_new(n, 1);
         mreal mean = stats_mean(series);
         for (int t = 0; t < n; t++) residual.d[t] = stats_series_at(series, t) - mean;
     }
@@ -327,7 +317,8 @@ static inline KpssResult kpss(Mat series, int bandwidth, int deterministic) {
         result.critical[3] = (mreal)0.739;
     }
 
-    mat_free(residual);
+    if (deterministic == KPSS_TREND) ols_free(&fit);
+    else mat_free(residual);
     return result;
 }
 
@@ -397,7 +388,9 @@ static inline Mat _qd_detrend(Mat series, Mat deterministic, mreal c_bar) {
         AT(target, t, 0) = t == 0 ? stats_series_at(series, 0)
                                   : stats_series_at(series, t) - alpha_bar * stats_series_at(series, t - 1);
     }
-    Mat psi = mat_lstsq(design, target, NULL);
+    OlsFit fit = ols(design, target);
+    assert(fit.status == 0 && "dfgls: the quasi-differenced design is numerically rank deficient");
+    Mat psi = fit.coefficients;
 
     Mat detrended = mat_new(1, n);
     for (int t = 0; t < n; t++) {
@@ -405,7 +398,8 @@ static inline Mat _qd_detrend(Mat series, Mat deterministic, mreal c_bar) {
         for (int j = 0; j < k; j++) fitted += AT(psi, j, 0) * AT(deterministic, t, j);
         AT(detrended, 0, t) = stats_series_at(series, t) - fitted;
     }
-    mat_free(design); mat_free(target); mat_free(psi);
+    mat_free(design); mat_free(target);
+    ols_free(&fit);
     return detrended;
 }
 
@@ -786,15 +780,10 @@ static inline mreal _hlt_trend_wald(Mat series) {
     mreal sum_squared[2];
     Mat design[2] = { unrestricted, restricted };
     for (int which = 0; which < 2; which++) {
-        Mat coefficients = mat_lstsq(design[which], target, NULL);
-        Mat fitted = mat_mul(design[which], coefficients);
-        mreal total = 0;
-        for (int t = 0; t < n; t++) {
-            mreal e = AT(target, t, 0) - AT(fitted, t, 0);
-            total += e * e;
-        }
-        sum_squared[which] = total;
-        mat_free(coefficients); mat_free(fitted);
+        OlsFit fit = ols(design[which], target);
+        assert(fit.status == 0 && "the break regression design is numerically rank deficient");
+        sum_squared[which] = ols_sum_squared_residuals(&fit, 0);
+        ols_free(&fit);
     }
     mat_free(unrestricted); mat_free(restricted); mat_free(target);
     return (sum_squared[1] - sum_squared[0]) / sum_squared[0];
@@ -1010,19 +999,12 @@ static inline void _hlt_candidate(Mat series, int break_at, int model, int bandw
         AT(design, t, column) = (t + 1) > break_at ? (mreal)((t + 1) - break_at) : 0;
         AT(target, t, 0) = stats_series_at(series, t);
     }
-    Mat coefficients = mat_lstsq(design, target, NULL);
-    Mat fitted = mat_mul(design, coefficients);
-    Vec residual = mat_new(n, 1);
-    for (int t = 0; t < n; t++) residual.d[t] = AT(target, t, 0) - AT(fitted, t, 0);
+    OlsFit fit = ols(design, target);
+    assert(fit.status == 0 && "hlt: the levels regression is numerically rank deficient");
+    Vec residual = fit.residuals;
     mreal variance = _bartlett_long_run_variance(residual.d, n, bandwidth);
-
-    Mat transpose = mat_T(design);
-    Mat cross = mat_mul(transpose, design);
-    Vec selector = mat_new(level_columns, 1);
-    selector.d[level_columns - 1] = 1;
-    Vec inverse_column = vec_solve_sym(cross, selector);
-    *t0 = AT(coefficients, level_columns - 1, 0)
-        / (mreal)sqrt((double)(variance * inverse_column.d[level_columns - 1]));
+    *t0 = AT(fit.coefficients, level_columns - 1, 0)
+        / (mreal)sqrt((double)(variance * ols_unscaled_variance(design, level_columns - 1)));
 
     if (stationarity_levels) {
         mreal partial = 0, total = 0;
@@ -1032,9 +1014,8 @@ static inline void _hlt_candidate(Mat series, int break_at, int model, int bandw
         }
         *stationarity_levels = total / ((mreal)n * (mreal)n * variance);
     }
-    mat_free(design); mat_free(target); mat_free(coefficients); mat_free(fitted);
-    mat_free(residual); mat_free(transpose); mat_free(cross);
-    mat_free(selector); mat_free(inverse_column);
+    mat_free(design); mat_free(target);
+    ols_free(&fit);
 
     /* The differenced regression, and the t ratio on its last coefficient. */
     int rows = n - 1;
@@ -1049,23 +1030,14 @@ static inline void _hlt_candidate(Mat series, int break_at, int model, int bandw
         AT(difference_design, row, column) = (t + 1) > break_at ? 1 : 0;
         AT(difference_target, row, 0) = stats_series_at(series, t) - stats_series_at(series, t - 1);
     }
-    Mat difference_coefficients = mat_lstsq(difference_design, difference_target, NULL);
-    Mat difference_fitted = mat_mul(difference_design, difference_coefficients);
-    Vec difference_residual = mat_new(rows, 1);
-    for (int row = 0; row < rows; row++)
-        difference_residual.d[row] = AT(difference_target, row, 0)
-                                   - AT(difference_fitted, row, 0);
+    OlsFit difference_fit = ols(difference_design, difference_target);
+    assert(difference_fit.status == 0 && "hlt: the differenced regression is numerically rank deficient");
+    Vec difference_residual = difference_fit.residuals;
     mreal difference_variance = _bartlett_long_run_variance(difference_residual.d, rows,
                                                             bandwidth);
-
-    Mat difference_transpose = mat_T(difference_design);
-    Mat difference_cross = mat_mul(difference_transpose, difference_design);
-    Vec difference_selector = mat_new(difference_columns, 1);
-    difference_selector.d[difference_columns - 1] = 1;
-    Vec difference_inverse = vec_solve_sym(difference_cross, difference_selector);
-    *t1 = AT(difference_coefficients, difference_columns - 1, 0)
+    *t1 = AT(difference_fit.coefficients, difference_columns - 1, 0)
         / (mreal)sqrt((double)(difference_variance
-                               * difference_inverse.d[difference_columns - 1]));
+                               * ols_unscaled_variance(difference_design, difference_columns - 1)));
 
     if (stationarity_differences) {
         mreal partial = 0, total = 0;
@@ -1077,10 +1049,7 @@ static inline void _hlt_candidate(Mat series, int break_at, int model, int bandw
             / ((mreal)rows * (mreal)rows * difference_variance);
     }
     mat_free(difference_design); mat_free(difference_target);
-    mat_free(difference_coefficients); mat_free(difference_fitted);
-    mat_free(difference_residual); mat_free(difference_transpose);
-    mat_free(difference_cross); mat_free(difference_selector);
-    mat_free(difference_inverse);
+    ols_free(&difference_fit);
 }
 
 static inline HltBreakResult hlt_break(Mat series, int model, int level,
@@ -1310,15 +1279,11 @@ static inline mreal _hhlt_first_difference_fraction(Mat series, mreal trim_lower
     for (int candidate = first; candidate <= last; candidate++) {
         for (int row = 0; row < rows; row++)
             AT(design, row, 1) = (row + 1) > candidate ? 1 : 0;
-        Mat coefficients = mat_lstsq(design, target, NULL);
-        Mat fitted = mat_mul(design, coefficients);
-        mreal total = 0;
-        for (int row = 0; row < rows; row++) {
-            mreal e = AT(target, row, 0) - AT(fitted, row, 0);
-            total += e * e;
-        }
+        OlsFit fit = ols(design, target);
+        assert(fit.status == 0 && "the break-date regression design is numerically rank deficient");
+        mreal total = ols_sum_squared_residuals(&fit, 0);
         if (candidate == first || total < lowest) { lowest = total; best = candidate; }
-        mat_free(coefficients); mat_free(fitted);
+        ols_free(&fit);
     }
     mat_free(design); mat_free(target);
     return (mreal)best / (mreal)n;
@@ -1350,15 +1315,10 @@ static inline mreal _hhlt_wald(Mat series, mreal fraction) {
     mreal sum_squared[2];
     Mat design[2] = { unrestricted, restricted };
     for (int which = 0; which < 2; which++) {
-        Mat coefficients = mat_lstsq(design[which], target, NULL);
-        Mat fitted = mat_mul(design[which], coefficients);
-        mreal total = 0;
-        for (int t = 0; t < n; t++) {
-            mreal e = AT(target, t, 0) - AT(fitted, t, 0);
-            total += e * e;
-        }
-        sum_squared[which] = total;
-        mat_free(coefficients); mat_free(fitted);
+        OlsFit fit = ols(design[which], target);
+        assert(fit.status == 0 && "the break regression design is numerically rank deficient");
+        sum_squared[which] = ols_sum_squared_residuals(&fit, 0);
+        ols_free(&fit);
     }
     mat_free(unrestricted); mat_free(restricted); mat_free(target);
     /* Unrestricted first, restricted second, so the ratio is RSS_R / RSS_U. */
@@ -1537,9 +1497,7 @@ static inline ZivotAndrewsResult zivot_andrews(Mat series, int lags, int model,
 
     Mat design = mat_new(rows, columns);
     Mat target = mat_new(rows, 1);
-    Vec selector = mat_new(columns, 1);
     int level_column = 2 + has_level + has_slope;
-    selector.d[level_column] = 1;
 
     /* Everything except the two break columns is the same at every candidate,
        so it is filled once and only the break columns are rewritten. */
@@ -1571,20 +1529,12 @@ static inline ZivotAndrewsResult zivot_andrews(Mat series, int lags, int model,
             if (has_slope) AT(design, row, column) = after ? (mreal)(t - candidate) : 0;
         }
 
-        Mat coefficients = mat_lstsq(design, target, NULL);
-        Mat fitted = mat_mul(design, coefficients);
-        mreal sum_squared_residual = 0;
-        for (int row = 0; row < rows; row++) {
-            mreal residual = AT(target, row, 0) - AT(fitted, row, 0);
-            sum_squared_residual += residual * residual;
-        }
-        Mat design_transpose = mat_T(design);
-        Mat cross = mat_mul(design_transpose, design);
-        Vec column_of_inverse = vec_solve_sym(cross, selector);
-        mreal variance = sum_squared_residual / (mreal)(rows - columns);
+        OlsFit fit = ols(design, target);
+        assert(fit.status == 0 && "zivot_andrews: the regression design is numerically rank deficient");
+        mreal variance = ols_sum_squared_residuals(&fit, 0) / (mreal)(rows - columns);
         mreal standard_error = (mreal)sqrt((double)(variance
-                                                    * column_of_inverse.d[level_column]));
-        mreal statistic = AT(coefficients, level_column, 0) / standard_error;
+                                                    * ols_unscaled_variance(design, level_column)));
+        mreal statistic = AT(fit.coefficients, level_column, 0) / standard_error;
 
         if (result.candidates == 0 || statistic < result.statistic) {
             result.statistic = statistic;
@@ -1592,12 +1542,11 @@ static inline ZivotAndrewsResult zivot_andrews(Mat series, int lags, int model,
         }
         result.candidates++;
 
-        mat_free(coefficients); mat_free(fitted);
-        mat_free(design_transpose); mat_free(cross); mat_free(column_of_inverse);
+        ols_free(&fit);
     }
     result.break_fraction = (mreal)result.break_index / (mreal)n;
 
-    mat_free(design); mat_free(target); mat_free(selector);
+    mat_free(design); mat_free(target);
     return result;
 }
 

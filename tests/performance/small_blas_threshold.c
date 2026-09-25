@@ -9,10 +9,11 @@ Three kernels are compared, each against the BLAS routine it replaces:
     triangular solve     _trtrs_small           against cblas_?trsm
     Cholesky solve       two _trtrs_small       against two cblas_?trsm
 
-The crossovers are what MAT_GEMM_SMALL and MAT_GEMM_VECTOR (linalg/mat.h) and
-TRSM_SMALL_N and TRSM_SMALL_NRHS (linalg/factor.h) are set from, so this file
-is where those four constants come from rather than a guess written next to
-them. Rows past a threshold are kept in the table rather than trimmed: they
+The crossovers are what MAT_GEMM_SMALL, MAT_GEMM_VECTOR, MAT_GEMM_THIN and
+MAT_GEMM_THIN_ROWS (linalg/mat.h) and TRSM_SMALL_N and TRSM_SMALL_NRHS
+(linalg/factor.h) are set from, so this file is where those six constants
+come from rather than a guess written next to them.
+Rows past a threshold are kept in the table rather than trimmed: they
 are what says the threshold is in the right place, and the wide-right-hand-side
 rows are the one case where the two builds disagree about which side wins.
 
@@ -56,10 +57,10 @@ name, since the crossover is a property of the element size and both builds
 are compared.
 
 Every number here is one machine's, against one build of OpenBLAS, so this is
-the file to run first on new hardware: the four constants it reports at the
+the file to run first on new hardware: the six constants it reports at the
 bottom are what is compiled in, and the table above them says whether they are
 still in the right place. What travels and what does not is written out in
-docs/MATRIX_DOCUMENTATION.md, "The four dispatch thresholds are measured on one
+docs/MATRIX_DOCUMENTATION.md, "The dispatch thresholds are measured on one
 machine".
 
 Standalone, no Python driver. Build and run:
@@ -309,6 +310,74 @@ static void report_wide_solves(FILE *out) {
     fprintf(out, "gain is blas time over loop time: above one the loop wins.\n\n");
 }
 
+/* One matrix-vector product, y = op(A) x with op(A) m x k, from one caller
+   with OpenBLAS at its default thread count: ?gemm, the loop kernel, and
+   mat_gemm as shipped. The transpose flag is read through a volatile, so the
+   loop is the general kernel a call site with a runtime flag gets rather
+   than one the compiler specialized for a constant; a constant flag makes
+   the loop faster still, so this is its worse case. Clock read once per
+   batch, batch doubled until it takes budget seconds, best of rounds. */
+static volatile int runtime_transpose;
+
+static double time_matvec(int arm, int transpose, int m, int k, const mreal *a, const mreal *x,
+                          mreal *y, int rounds, double budget) {
+    runtime_transpose = transpose;
+    int ta = runtime_transpose, lda = ta ? m : k;
+    long calls = 1;
+    double best = 0;
+    for (int round = 0; round < rounds; ) {
+        double start = now();
+        for (long call = 0; call < calls; call++) {
+            if (arm == 0)
+                MBLAS(gemm)(CblasRowMajor, ta ? CblasTrans : CblasNoTrans, CblasNoTrans, m, 1, k,
+                            (mreal)1, a, lda, x, 1, (mreal)0, y, 1);
+            else if (arm == 1)
+                _mat_gemm_small(ta, 0, m, 1, k, (mreal)1, a, lda, x, 1, (mreal)0, y, 1);
+            else
+                mat_gemm(ta, 0, m, 1, k, (mreal)1, a, lda, x, 1, (mreal)0, y, 1);
+        }
+        double elapsed = now() - start;
+        if (elapsed < budget) { calls *= 2; continue; }
+        double per_call = elapsed / (double)calls;
+        if (round == 0 || per_call < best) best = per_call;
+        round++;
+    }
+    return best;
+}
+
+/* Tall, thin matrix-vector products, the shape of a regression's fitted
+   values: where the loop still beats the call once the rows run past
+   MAT_GEMM_VECTOR, which is what MAT_GEMM_THIN and MAT_GEMM_THIN_ROWS are
+   set from. */
+static void report_tall_matvec(FILE *out) {
+    int rows[] = { 64, 200, 1000, 10000 };
+    int inner[] = { 1, 2, 4, 6, 8, 12, 21, 32, 64 };
+    int rounds = 5;
+    double budget = 0.02;
+    fprintf(out, "tall matrix-vector product op(A) x from one caller, OpenBLAS at %d threads, best of %d rounds\n",
+            blas_default_threads, rounds);
+    fprintf(out, "%3s %5s %3s %12s %12s %12s %8s\n", "op", "m", "k", "blas_ns", "loop_ns", "shipped_ns", "gain");
+    for (int transpose = 0; transpose < 2; transpose++)
+        for (int ki = 0; ki < (int)(sizeof inner / sizeof inner[0]); ki++)
+            for (int mi = 0; mi < (int)(sizeof rows / sizeof rows[0]); mi++) {
+                int m = rows[mi], k = inner[ki];
+                mreal *a = (mreal*)malloc((size_t)m * k * sizeof(mreal));
+                mreal *x = (mreal*)malloc((size_t)k * sizeof(mreal));
+                mreal *y = (mreal*)malloc((size_t)m * sizeof(mreal));
+                for (int i = 0; i < m * k; i++) a[i] = (mreal)((i % 7) - 3);
+                for (int i = 0; i < k; i++) x[i] = (mreal)((i % 5) - 2);
+                double blas = time_matvec(0, transpose, m, k, a, x, y, rounds, budget);
+                double loop = time_matvec(1, transpose, m, k, a, x, y, rounds, budget);
+                double shipped = time_matvec(2, transpose, m, k, a, x, y, rounds, budget);
+                fprintf(out, "%3s %5d %3d %12.1f %12.1f %12.1f %8.2f\n", transpose ? "A^T" : "A", m, k,
+                        1e9 * blas, 1e9 * loop, 1e9 * shipped, blas / loop);
+                fflush(out);
+                free(a); free(x); free(y);
+            }
+    fprintf(out, "gain is blas time over loop time: above one the loop wins.\n");
+    fprintf(out, "current thresholds: MAT_GEMM_THIN %d, MAT_GEMM_THIN_ROWS %d\n\n", MAT_GEMM_THIN, MAT_GEMM_THIN_ROWS);
+}
+
 /* Measured once and written to the file; the terminal gets a copy of the
    file rather than a second run, so the two cannot disagree. */
 int main(void) {
@@ -322,6 +391,7 @@ int main(void) {
     report(file);
     fprintf(file, "\n");
     report_wide_solves(file);
+    report_tall_matvec(file);
     fclose(file);
 
     file = fopen(path, "r");

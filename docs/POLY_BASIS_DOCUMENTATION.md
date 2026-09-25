@@ -14,7 +14,7 @@ sits directly above `linalg/decomp.h` (for the QR the fit is read off) and
 depends on nothing else in this project.
 
 Rows are observations and columns are basis functions, the orientation
-`stats.h` uses and the one `mat_lstsq` wants of a design matrix. The input `x`
+`stats.h` uses and the one `regression.h`'s `ols` wants of a design matrix. The input `x`
 is read as a flat sample over every element of its `Mat`, any shape and strided
 views included, the way `stats_median` reads one.
 

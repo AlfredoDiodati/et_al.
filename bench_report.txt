@@ -1,538 +1,571 @@
-bench run: do  3 sep 2026 18:14:03 CEST (Python 3.14.4)
+bench run: do 24 sep 2026 20:31:48 CEST (Python 3.14.4)
 
 === bench_mat: done ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_mat.c -lm -lopenblas -o libmat.so
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_mat.c -lm -lopenblas -o libmat.so
 
 Matmul, square (mat_mul vs numpy.matmul - both OpenBLAS)
            shape      C ms     NP ms    C GF/s   NP GF/s    max err
 ----------------------------------------------------------------------
-        32x32x32     0.012     0.004      5.32     15.24   0.00e+00
-        64x64x64     0.018     0.010     29.08     50.88   0.00e+00
-     128x128x128     0.042     0.024    100.12    171.95   0.00e+00
-     256x256x256     0.116     0.124    290.29    270.75   0.00e+00
-     512x512x512     0.654     0.743    410.37    361.44   0.00e+00
-  1024x1024x1024     5.894     6.328    364.34    339.34   0.00e+00
+        32x32x32     0.012     0.004      5.42     15.25   0.00e+00
+        64x64x64     0.017     0.010     30.31     53.18   0.00e+00
+     128x128x128     0.046     0.021     91.48    202.80   0.00e+00
+     256x256x256     0.119     0.110    281.24    304.42   0.00e+00
+     512x512x512     0.634     0.698    423.32    384.32   0.00e+00
+  1024x1024x1024     5.751     5.860    373.42    366.46   0.00e+00
 
 Matmul, rectangular (batch x in_features x out_features)
            shape      C ms     NP ms    C GF/s   NP GF/s    max err
 ----------------------------------------------------------------------
-      64x784x256     0.119     0.125    215.69    206.01   0.00e+00
-      64x256x128     0.054     0.028     77.61    151.32   0.00e+00
-       64x128x64     0.035     0.017     29.89     60.23   0.00e+00
-    256x1024x512     0.741     0.801    362.04    335.12   0.00e+00
-     512x512x512     0.767     0.805    350.17    333.62   0.00e+00
+      64x784x256     0.117     0.113    219.01    227.79   0.00e+00
+      64x256x128     0.048     0.026     86.90    160.81   0.00e+00
+       64x128x64     0.038     0.016     27.87     66.99   0.00e+00
+    256x1024x512     0.721     0.752    372.49    357.01   0.00e+00
+     512x512x512     0.714     0.763    375.93    351.93   0.00e+00
 
 Element-wise (mat_add/mat_emul/mat_exp/mat_tanh vs numpy, allocating)
         op / n       C ms      NP ms    C/NP        C ms      NP ms    C/NP    max err
                      --- contiguous ---            --- strided view ---    
 --------------------------------------------------------------------------------------------
-       add 256      0.028      0.016    1.76       0.023      0.027    0.86   0.00e+00
-      emul 256      0.026      0.015    1.72       0.023      0.028    0.84   0.00e+00
-       exp 256      0.044      0.110    0.40       0.044      0.116    0.38   9.54e-07
-      tanh 256      0.080      0.182    0.44       0.080      0.187    0.43   5.96e-08
-      add 1024      0.881      0.799    1.10       0.926      1.238    0.75   0.00e+00
-     emul 1024      0.927      0.850    1.09       0.926      1.237    0.75   0.00e+00
-      exp 1024      0.877      1.988    0.44       0.870      2.191    0.40   1.43e-06
-     tanh 1024      1.284      3.011    0.43       1.376      3.372    0.41   5.96e-08
-      add 2048      3.568      3.026    1.18       3.811      4.460    0.85   0.00e+00
-     emul 2048      3.660      3.166    1.16       3.771      4.237    0.89   0.00e+00
-      exp 2048      3.762      7.516    0.50       3.700      8.854    0.42   1.43e-06
-     tanh 2048      5.325     11.441    0.47       4.970     12.702    0.39   5.96e-08
+       add 256      0.027      0.015    1.82       0.021      0.025    0.86   0.00e+00
+      emul 256      0.025      0.014    1.77       0.021      0.024    0.88   0.00e+00
+       exp 256      0.040      0.098    0.41       0.040      0.108    0.37   9.54e-07
+      tanh 256      0.073      0.167    0.44       0.073      0.171    0.43   5.96e-08
+      add 1024      0.906      0.818    1.11       0.948      1.245    0.76   0.00e+00
+     emul 1024      0.915      0.825    1.11       0.957      1.245    0.77   0.00e+00
+      exp 1024      0.852      1.933    0.44       0.862      2.116    0.41   1.43e-06
+     tanh 1024      1.280      2.691    0.48       1.269      3.054    0.42   5.96e-08
+      add 2048      3.679      3.140    1.17       3.750      4.518    0.83   0.00e+00
+     emul 2048      3.734      3.192    1.17       3.926      4.298    0.91   0.00e+00
+      exp 2048      3.791      7.531    0.50       3.667      8.252    0.44   1.43e-06
+     tanh 2048      5.018     10.586    0.47       4.834     12.005    0.40   5.96e-08
 
 Element-wise, continued (mat_sub/mat_ediv/mat_log/mat_abs/mat_sqrt)
         op / n       C ms      NP ms    C/NP        C ms      NP ms    C/NP    max err
                      --- contiguous ---            --- strided view ---    
 --------------------------------------------------------------------------------------------
-       sub 256      0.025      0.014    1.72       0.022      0.026    0.86   0.00e+00
-      ediv 256      0.025      0.016    1.54       0.023      0.026    0.89   3.91e-03
-       log 256      0.045      0.124    0.36       0.044      0.127    0.35   2.38e-07
-       abs 256      0.018      0.010    1.85       0.016      0.016    1.00   0.00e+00
-      sqrt 256      0.019      0.024    0.79       0.019      0.031    0.59   2.38e-07
-      sub 1024      0.842      0.775    1.09       0.918      1.208    0.76   0.00e+00
-     ediv 1024      0.845      0.768    1.10       0.899      1.209    0.74   1.25e-01
-      log 1024      0.842      2.119    0.40       0.824      2.414    0.34   2.38e-07
-      abs 1024      0.632      0.569    1.11       0.680      0.830    0.82   0.00e+00
-     sqrt 1024      0.685      0.631    1.09       0.675      0.891    0.76   2.38e-07
-      sub 2048      3.641      3.161    1.15       3.615      4.475    0.81   0.00e+00
-     ediv 2048      3.739      3.188    1.17       3.533      4.416    0.80   1.25e-01
-      log 2048      3.548      8.347    0.43       3.359      9.262    0.36   2.38e-07
-      abs 2048      3.106      2.928    1.06       4.105      4.136    0.99   0.00e+00
-     sqrt 2048      4.035      3.002    1.34       3.723      3.437    1.08   2.38e-07
+       sub 256      0.024      0.013    1.79       0.020      0.023    0.89   0.00e+00
+      ediv 256      0.023      0.016    1.41       0.021      0.023    0.91   3.91e-03
+       log 256      0.041      0.124    0.33       0.041      0.121    0.34   2.38e-07
+       abs 256      0.018      0.010    1.87       0.015      0.015    0.95   0.00e+00
+      sqrt 256      0.019      0.024    0.77       0.018      0.031    0.59   2.38e-07
+      sub 1024      1.010      0.923    1.09       0.983      1.237    0.79   0.00e+00
+     ediv 1024      1.022      0.915    1.12       0.962      1.235    0.78   1.25e-01
+      log 1024      0.836      2.176    0.38       0.807      2.329    0.35   2.38e-07
+      abs 1024      0.729      0.674    1.08       0.715      0.854    0.84   0.00e+00
+     sqrt 1024      0.690      0.629    1.10       0.690      0.907    0.76   2.38e-07
+      sub 2048      3.809      3.285    1.16       3.907      4.548    0.86   0.00e+00
+     ediv 2048      3.774      3.200    1.18       3.692      4.527    0.82   1.25e-01
+      log 2048      3.722      8.337    0.45       3.522      9.089    0.39   2.38e-07
+      abs 2048      3.026      2.502    1.21       3.109      3.170    0.98   0.00e+00
+     sqrt 2048      3.211      2.639    1.22       2.951      3.344    0.88   2.38e-07
 
 Reductions (mat_sum/mat_max vs numpy; err is relative)
         op / n       C ms      NP ms    C/NP        C ms      NP ms    C/NP    max err
                      --- contiguous ---            --- strided view ---    
 --------------------------------------------------------------------------------------------
-       sum 256      0.013      0.017    0.76       0.011      0.024    0.44   4.48e-06
-       max 256      0.049      0.009    5.76       0.045      0.015    3.06   0.00e+00
-      sum 1024      0.158      0.231    0.68       0.169      0.418    0.40   7.31e-06
-      max 1024      0.733      0.134    5.46       0.665      0.291    2.29   0.00e+00
-      sum 2048      0.945      1.120    0.84       0.937      1.963    0.48   1.20e-05
-      max 2048      3.161      1.012    3.12       2.710      1.325    2.04   0.00e+00
+       sum 256      0.011      0.015    0.76       0.010      0.023    0.45   4.48e-06
+       max 256      0.047      0.008    6.12       0.041      0.014    2.93   0.00e+00
+      sum 1024      0.155      0.228    0.68       0.170      0.413    0.41   7.31e-06
+      max 1024      0.699      0.126    5.55       0.634      0.270    2.35   0.00e+00
+      sum 2048      0.947      0.999    0.95       0.934      1.856    0.50   1.20e-05
+      max 2048      2.905      0.930    3.12       2.424      1.306    1.86   0.00e+00
 
 Reductions, continued (mat_mean/mat_min vs numpy; err is relative)
         op / n       C ms      NP ms    C/NP        C ms      NP ms    C/NP    max err
                      --- contiguous ---            --- strided view ---    
 --------------------------------------------------------------------------------------------
-      mean 256      0.012      0.022    0.55       0.011      0.030    0.37   2.33e-10
-       min 256      0.044      0.009    5.03       0.047      0.016    2.95   0.00e+00
-     mean 1024      0.176      0.273    0.64       0.186      0.573    0.33   1.40e-09
-      min 1024      0.889      0.144    6.17       0.726      0.277    2.62   0.00e+00
-     mean 2048      0.963      1.157    0.83       0.949      2.006    0.47   2.91e-11
-      min 2048      3.291      0.927    3.55       2.730      1.364    2.00   0.00e+00
+      mean 256      0.012      0.020    0.58       0.010      0.028    0.37   2.33e-10
+       min 256      0.047      0.008    6.13       0.041      0.014    2.94   0.00e+00
+     mean 1024      0.152      0.248    0.61       0.171      0.434    0.39   1.40e-09
+      min 1024      0.693      0.127    5.47       0.637      0.272    2.34   0.00e+00
+     mean 2048      0.952      1.036    0.92       0.941      1.887    0.50   2.91e-11
+      min 2048      2.894      0.922    3.14       2.415      1.299    1.86   0.00e+00
 
 Scalar-parameterized (mat_scale/mat_pow vs numpy, scalar=2.0)
         op / n       C ms      NP ms    C/NP        C ms      NP ms    C/NP    max err
                      --- contiguous ---            --- strided view ---    
 --------------------------------------------------------------------------------------------
-     scale 256      0.020      0.011    1.90       0.017      0.018    0.91   0.00e+00
-       pow 256      0.032      0.031    1.04       0.035      0.039    0.90   0.00e+00
-    scale 1024      0.734      0.698    1.05       0.747      0.936    0.80   0.00e+00
-      pow 1024      0.757      0.719    1.05       0.797      0.988    0.81   0.00e+00
-    scale 2048      3.109      2.748    1.13       4.352      4.314    1.01   0.00e+00
-      pow 2048      3.680      3.096    1.19       3.566      3.930    0.91   0.00e+00
+     scale 256      0.018      0.009    2.06       0.015      0.015    0.95   0.00e+00
+       pow 256      0.029      0.029    1.01       0.031      0.036    0.87   0.00e+00
+    scale 1024      0.734      0.708    1.04       0.719      0.913    0.79   0.00e+00
+      pow 1024      0.773      0.783    0.99       0.790      1.040    0.76   0.00e+00
+    scale 2048      3.059      2.656    1.15       3.052      3.402    0.90   0.00e+00
+      pow 2048      3.085      2.824    1.09       3.255      3.729    0.87   0.00e+00
 
 Structural (mat_vcat/mat_hcat/mat_T vs numpy, contiguous only)
     op / n       C ms      NP ms    C/NP    max err
 --------------------------------------------------
-  vcat 256      0.031      0.017    1.77   0.00e+00
-  hcat 256      0.031      0.022    1.38   0.00e+00
-     T 256      0.197      0.069    2.86   0.00e+00
- vcat 1024      1.759      0.802    2.19   0.00e+00
- hcat 1024      1.794      1.730    1.04   0.00e+00
-    T 1024      8.564      6.735    1.27   0.00e+00
- vcat 2048     10.073      6.709    1.50   0.00e+00
- hcat 2048     10.092      9.442    1.07   0.00e+00
-    T 2048     67.622     31.897    2.12   0.00e+00
+  vcat 256      0.027      0.016    1.69   0.00e+00
+  hcat 256      0.028      0.020    1.38   0.00e+00
+     T 256      0.184      0.065    2.83   0.00e+00
+ vcat 1024      1.700      0.842    2.02   0.00e+00
+ hcat 1024      1.640      1.669    0.98   0.00e+00
+    T 1024      8.869      6.737    1.32   0.00e+00
+ vcat 2048      9.264      6.252    1.48   0.00e+00
+ hcat 2048      9.278      8.643    1.07   0.00e+00
+    T 2048     61.187     35.161    1.74   0.00e+00
 
 Vector/whole-matrix reductions (vec_dot/vec_norm/mat_trace/mat_norm; err is relative)
         op / n       C ms      NP ms    C/NP        err
 -------------------------------------------------------
-       dot 256      0.008      0.002    3.71   0.00e+00
- norm(vec) 256      0.005      0.004    1.43   0.00e+00
-      dot 1024      0.008      0.002    3.64   0.00e+00
-norm(vec) 1024      0.005      0.004    1.45   0.00e+00
-      dot 2048      0.008      0.002    3.57   0.00e+00
-norm(vec) 2048      0.005      0.004    1.46   8.20e-08
-     trace 256      0.005      0.004    1.39   0.00e+00
-   norm(F) 256      0.010      0.008    1.16   0.00e+00
-   norm(1) 256      0.010      0.023    0.44   0.00e+00
-   norm(I) 256      0.011      0.030    0.38   0.00e+00
-   norm(M) 256      0.009      0.015    0.60   0.00e+00
-    trace 1024      0.006      0.005    1.25   1.22e-07
-  norm(F) 1024      0.167      0.155    1.07   0.00e+00
-  norm(1) 1024      0.147      0.974    0.15   0.00e+00
-  norm(I) 1024      0.177      0.984    0.18   0.00e+00
-  norm(M) 1024      0.154      0.905    0.17   0.00e+00
-    trace 2048      0.008      0.007    1.17   5.50e-07
-  norm(F) 2048      0.991      0.990    1.00   0.00e+00
-  norm(1) 2048      0.710      3.541    0.20   0.00e+00
-  norm(I) 2048      1.015      3.852    0.26   0.00e+00
-  norm(M) 2048      1.052      3.820    0.28   0.00e+00
+       dot 256      0.007      0.002    3.28   0.00e+00
+ norm(vec) 256      0.005      0.004    1.35   0.00e+00
+      dot 1024      0.008      0.002    3.25   0.00e+00
+norm(vec) 1024      0.005      0.004    1.38   0.00e+00
+      dot 2048      0.008      0.002    3.13   0.00e+00
+norm(vec) 2048      0.005      0.004    1.38   8.20e-08
+     trace 256      0.005      0.004    1.32   0.00e+00
+   norm(F) 256      0.009      0.008    1.12   0.00e+00
+   norm(1) 256      0.009      0.022    0.41   0.00e+00
+   norm(I) 256      0.010      0.028    0.37   0.00e+00
+   norm(M) 256      0.008      0.013    0.62   0.00e+00
+    trace 1024      0.006      0.005    1.21   1.22e-07
+  norm(F) 1024      0.144      0.146    0.98   0.00e+00
+  norm(1) 1024      0.130      0.898    0.14   0.00e+00
+  norm(I) 1024      0.154      0.929    0.17   0.00e+00
+  norm(M) 1024      0.139      0.835    0.17   0.00e+00
+    trace 2048      0.008      0.007    1.14   5.50e-07
+  norm(F) 2048      0.902      0.896    1.01   0.00e+00
+  norm(1) 2048      0.767      3.356    0.23   0.00e+00
+  norm(I) 2048      0.905      3.451    0.26   0.00e+00
+  norm(M) 2048      0.891      3.291    0.27   0.00e+00
+
+=== bench_tensor: done ===
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_tensor.c -lm -lopenblas -o libtensor.so
+linalg/tensor.h vs NumPy 2.3.3  (float32)
+
+add                                64x64x64                  0.0192 ms     0.0454 ms  2.36x faster   max err 0.00e+00
+multiply                           64x64x64                  0.0198 ms     0.0452 ms  2.28x faster   max err 0.00e+00
+exp                                64x64x64                  0.0285 ms     0.4013 ms  14.10x faster  max err 1.02e-07
+add                                32x32x32x8                0.0202 ms     0.0475 ms  2.35x faster   max err 0.00e+00
+multiply                           32x32x32x8                0.0206 ms     0.0515 ms  2.50x faster   max err 0.00e+00
+exp                                32x32x32x8                0.0294 ms     0.4102 ms  13.94x faster  max err 9.21e-08
+add, broadcast                     128x64x32 + 64x1          0.0259 ms     0.0969 ms  3.73x faster   max err 0.00e+00
+sum, whole tensor                  128x128x64                0.0203 ms     0.2278 ms  11.23x faster  max err 1.01e-05
+sum over axis 0                    128x128x64                0.0451 ms     0.1866 ms  4.13x faster   max err 0.00e+00
+sum over axis 2                    128x128x64                0.0340 ms     0.4510 ms  13.27x faster  max err 1.05e-07
+max over axis 1                    128x128x64                0.3133 ms     0.5354 ms  1.71x faster   max err 0.00e+00
+permuted copy                      128x128x64 -> 201         0.8354 ms     2.3020 ms  2.76x faster   max err 0.00e+00
+batched matmul                     2048 x 5x5                0.0552 ms     0.4297 ms  7.79x faster   max err 0.00e+00
+einsum tij,tjk->tik                2048 x 5x5                0.0556 ms     0.8205 ms  14.74x faster  max err 0.00e+00
+  same, numpy optimize=True        2048 x 5x5                0.0556 ms     0.8275 ms  14.87x faster  max err 0.00e+00
+batched matmul                     512 x 16x16               0.2315 ms     0.2317 ms  1.00x faster   max err 0.00e+00
+einsum tij,tjk->tik                512 x 16x16               0.2285 ms     1.3822 ms  6.05x faster   max err 0.00e+00
+  same, numpy optimize=True        512 x 16x16               0.2285 ms     1.3939 ms  6.10x faster   max err 0.00e+00
+batched matmul                     64 x 64x64                0.0966 ms     0.5473 ms  5.67x faster   max err 0.00e+00
+einsum tij,tjk->tik                64 x 64x64                0.0993 ms     3.4342 ms  34.59x faster  max err 0.00e+00
+  same, numpy optimize=True        64 x 64x64                0.0993 ms     3.3738 ms  33.98x faster  max err 0.00e+00
+tensordot over 2 axes              64x32x16 . 32x16x48       0.0483 ms     0.0401 ms  1.20x slower   max err 4.16e-07
+einsum ti,ij,tj->t                 4096 x 8                  0.1183 ms     0.6237 ms  5.27x faster   max err 2.05e-07
+  same, numpy optimize=True        4096 x 8                  0.1183 ms     0.1338 ms  1.13x faster   max err 2.05e-07
+einsum tii->t (trace per t)        512 x 3x3                 0.0076 ms     0.0056 ms  1.37x slower   max err 0.00e+00
+stack                              512 x 8x8                 0.0415 ms     0.2655 ms  6.39x faster   max err 0.00e+00
+
+24 of 26 measurements at or ahead of NumPy
 
 === bench_decomp: done ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_decomp.c -lm -lopenblas -o libdecomp.so
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_decomp.c -lm -lopenblas -o libdecomp.so
 In file included from tests/performance/../../linalg/decomp.h:2,
                  from tests/performance/../../linalg/solver.h:2,
                  from tests/performance/bench_decomp.c:1:
 In function ‘mat_new’,
-    inlined from ‘mat_lstsq_rd’ at tests/performance/../../linalg/solver.h:181:13,
+    inlined from ‘mat_lstsq_rd’ at tests/performance/../../linalg/solver.h:309:13,
     inlined from ‘c_lstsq_rd’ at tests/performance/bench_decomp.c:172:13:
-tests/performance/../../linalg/mat.h:133:5: warning: ‘memset’ specified bound between 18446744065119617024 and 18446744073709551612 exceeds maximum object size 9223372036854775807 [-Wstringop-overflow=]
-  133 |     memset(d, 0, n * sizeof(mreal));
-      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+tests/performance/../../linalg/mat.h:140:5: warning: ‘memset’ specified bound between 18446744065119617024 and 18446744073709551612 exceeds maximum object size 9223372036854775807 [-Wstringop-overflow=]
+  140 |     memset(m.d, 0, (size_t)r * c * sizeof(mreal));
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Cholesky (c_chol vs numpy.linalg.cholesky)
        n       ours ms      numpy ms       max err
 ----------------------------------------------------
-      64        0.0173        0.0251      9.54e-07
-     128        0.0526        0.1294      1.91e-06
-     256        0.3068        1.5104      3.81e-06
-     512        1.1673        9.9495      3.81e-06
+      64        0.0148        0.0215      9.54e-07
+     128        0.0428        0.1368      1.91e-06
+     256        0.1932        1.3015      3.81e-06
+     512        0.7289        8.5252      3.81e-06
 
 LU (c_lu; no direct numpy equivalent to compare against)
        n       ours ms
 ------------------------
-      64        0.0220
-     128        0.1194
-     256        0.4239
-     512        1.9055
+      64        0.0190
+     128        0.0924
+     256        0.3263
+     512        1.3960
 
 Solve (c_solve vs numpy.linalg.solve)
        n       ours ms      numpy ms       max err
 ----------------------------------------------------
-      64        0.0281        0.0402      8.94e-08
-     128        0.1356        0.1418      5.96e-08
-     256       26.6558        0.7823      2.98e-08
-     512       23.6190        7.2903      2.24e-08
+      64        0.0242        0.0348      8.94e-08
+     128        0.1048        0.1250      5.96e-08
+     256        0.3630        0.6560      2.98e-08
+     512        1.4154        6.8379      2.24e-08
 
 QR (c_qr vs numpy.linalg.qr, reduced) - reconstruction err, not raw Q
        n       ours ms      numpy ms   |QR-A| ours  |QR-A| numpy
 ------------------------------------------------------------------
-      64        8.9830        0.2826      2.15e-06      7.15e-07
-     128       10.6531       54.3597      2.62e-06      9.54e-07
-     256        7.0768       15.7636      3.10e-06      1.34e-06
+      64        0.2477        0.2457      2.15e-06      7.15e-07
+     128        0.8707        3.0966      2.62e-06      9.54e-07
+     256        4.6492       10.9984      3.10e-06      1.34e-06
 
 Least squares (c_lstsq vs numpy.linalg.lstsq)
        n       ours ms      numpy ms       max err
 ----------------------------------------------------
-      64        0.2077        0.8542      1.19e-07
-     128        0.6928        7.3575      1.38e-07
-     256        3.5040       27.5986      1.12e-07
+      64        0.1571        0.7531      1.19e-07
+     128        0.4853        5.3204      1.38e-07
+     256        2.3638       22.1232      1.12e-07
 
 Symmetric eig (c_eig_sym vs numpy.linalg.eigh)
        n       ours ms      numpy ms    eigval err
 ----------------------------------------------------
-      64        0.3964        0.5536      3.03e-07
-     128       10.6189        3.1547      4.65e-06
-     256        5.7035       10.9432      4.21e-06
-     512       20.1203       49.8110      5.93e-06
+      64        0.3012        0.4222      3.03e-07
+     128        1.0414        2.1468      4.65e-06
+     256        3.6957        8.0035      4.21e-06
+     512       14.6594       37.5625      5.93e-06
 
 SVD (c_svd vs numpy.linalg.svd, square)
        n       ours ms      numpy ms        sv err
 ----------------------------------------------------
-      64        0.6368        1.3726      2.47e-06
-     128        2.2937        6.5475      3.89e-06
-     256        9.7412       24.3385      2.42e-06
+      64        0.4984        1.0105      2.47e-06
+     128        1.8055        4.2074      3.89e-06
+     256        7.4410       16.9990      2.42e-06
 
 Inverse (c_inv vs numpy.linalg.inv)
        n       ours ms      numpy ms    |AX-I| err
 ----------------------------------------------------
-      64        0.0667        0.0916      4.77e-07
-     128        0.2261        0.5615      7.15e-07
-     256        0.8042        3.9705      9.54e-07
-     512        5.2460       20.0647      1.55e-06
+      64        0.0501        0.0767      4.77e-07
+     128        0.1552        0.3839      7.15e-07
+     256        0.5444        2.0642      9.54e-07
+     512        3.8851       11.6631      1.55e-06
 
 Determinant (c_det vs numpy.linalg.det)
        n       ours ms      numpy ms       rel err
 ----------------------------------------------------
-      64        0.0202        0.0373      1.79e-07
-     128        0.1209        0.1409      4.17e-07
-     256        0.7627        0.6028      1.73e-06
-     512        2.5933        6.3488      2.80e-06
+      64        0.0172        0.0335      1.79e-07
+     128        0.0928        0.1240      4.17e-07
+     256        0.3449        0.5300      1.73e-06
+     512        1.4286        4.4333      2.80e-06
 
 Condition number (c_cond vs numpy.linalg.cond)
        n       ours ms      numpy ms       rel err
 ----------------------------------------------------
-      64        0.6784        0.2774      1.13e-06
-     128        3.0196        3.3635      1.03e-06
-     256       11.8668       12.3001      2.22e-06
-     512       50.3207       66.3967      1.73e-06
+      64        0.5600        0.2462      1.13e-06
+     128        1.9219        2.0440      1.03e-06
+     256        7.4750        8.1358      2.22e-06
+     512       39.2192       49.6842      1.73e-06
 
 Rank (c_rank vs numpy.linalg.matrix_rank)
        n       ours ms      numpy ms    rank match
 ----------------------------------------------------
-      64        0.8117        0.2794            ok
-     128        2.6931        2.7676            ok
-     256       10.1601       11.2053            ok
-     512       53.9314       72.5215            ok
+      64        0.5200        0.2509            ok
+     128        1.8732        2.0628            ok
+     256        7.8335        8.4258            ok
+     512       40.7119       50.7929            ok
 
 General eig, eigenvalues only (c_eig vs numpy.linalg.eigvals)
        n       ours ms      numpy ms    eigval err
 ----------------------------------------------------
-      64        0.4725        1.0755      1.43e-06
-     128        3.7326       12.6964      1.68e-06
-     256       21.1166       62.0932      6.77e-06
-     512       85.0820      439.0949      5.93e-06
+      64        0.4127        0.9238      1.43e-06
+     128        3.0939       10.4632      1.68e-06
+     256       14.6224       51.6587      6.77e-06
+     512       72.3843      358.8829      5.93e-06
 
 Symmetric indefinite solve (c_solve_sym vs numpy.linalg.solve - numpy has no symmetry-specialized solver in its base API, so this isn't an apples-to-apples speed comparison, just a correctness cross-check plus a general-solve reference point)
        n       ours ms      numpy ms       max err
 ----------------------------------------------------
-      64        0.0421        0.0433      7.27e-06
-     128        0.3150        0.1564      7.82e-05
-     256        1.4671        0.8387      1.66e-04
-     512        7.0004        6.3334      1.33e-04
+      64        0.0371        0.0400      7.27e-06
+     128        0.2126        0.1447      7.82e-05
+     256        1.0270        0.7522      1.66e-04
+     512        5.1971        5.9055      1.33e-04
 
 Factor-once, solve x50 (vec_lu_solve/vec_chol_solve reuse vs re-factoring via vec_solve every time)
        n      naive ms   lu-reuse ms  chol-reuse ms    lu speedup  chol speedup
 --------------------------------------------------------------------------------
-      64        0.8026        0.1380        0.1347        5.82x        5.96x
-     128       15.1958        0.8022        0.4893       18.94x       31.06x
-     256       24.5211        2.5594        2.7586        9.58x        8.89x
-     512      135.8484       14.9943       23.2126        9.06x        5.85x
+      64        0.7144        0.1267        0.1210        5.64x        5.90x
+     128        4.7629        0.5235        0.4288        9.10x       11.11x
+     256       18.5765        2.0202        2.0411        9.20x        9.10x
+     512       71.4205        6.9822        7.2545       10.23x        9.84x
 
 Rank-deficient least squares (c_lstsq_rd; no direct numpy equivalent to compare against - correctness via residual and recovered rank instead, same precedent as LU above)
        n       ours ms  rank (expect n/2)  |Ax-b| resid
 ----------------------------------------------------
-      64        0.2385                  32        9.5874
-     128      169.1086                  64       14.0636
-     256       54.0064                 128       19.6928
+      64        0.2084                  32        9.5874
+     128        1.3790                  64       14.0636
+     256        6.6128                 128       19.6928
 
 === bench_dist: done ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_dist.c -lm -lopenblas -o libdist.so
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_dist.c -lm -lopenblas -o libdist.so
 
 gauss_logpdf, scalar params / broadcast path (vs scipy.stats.norm.logpdf)
          n     ours ms      ref ms       ratio     max err
 ------------------------------------------------------------
-     10000       0.009       0.216        0.04    5.76e-07
-    100000       0.025       3.082        0.01    6.58e-07
-   1000000       0.662      28.013        0.02    1.09e-06
+     10000       0.007       0.184        0.04    5.76e-07
+    100000       0.020       2.696        0.01    6.58e-07
+   1000000       0.623      26.450        0.02    1.09e-06
 
 gauss_logpdf, n x 1 params / same-shape fast path (vs scipy, vector params)
          n     ours ms      ref ms       ratio     max err
 ------------------------------------------------------------
-     10000       0.023       0.165        0.14    7.41e-07
-    100000       0.111       1.723        0.06    1.04e-06
-   1000000       1.181      24.002        0.05    1.08e-06
+     10000       0.020       0.148        0.13    7.41e-07
+    100000       0.093       1.565        0.06    1.04e-06
+   1000000       1.120      23.332        0.05    1.08e-06
 
 gauss_dlogpdf_loc (score; vs the numpy formula (x-loc)/scale^2)
          n     ours ms      ref ms       ratio     max err
 ------------------------------------------------------------
-    100000       0.022       0.029        0.76    2.38e-07
-   1000000       0.653       1.272        0.51    2.38e-07
+    100000       0.020       0.026        0.75    2.38e-07
+   1000000       0.640       1.244        0.51    2.38e-07
 
 student_logpdf, scalar params (vs scipy.stats.t.logpdf)
          n     ours ms      ref ms       ratio     max err
 ------------------------------------------------------------
-     10000       0.018       0.817        0.02    4.71e-07
-    100000       0.124       7.584        0.02    5.51e-07
-   1000000       1.285      94.883        0.01    7.19e-07
+     10000       0.015       0.723        0.02    4.71e-07
+    100000       0.104       7.065        0.01    5.51e-07
+   1000000       1.109      86.794        0.01    7.19e-07
 
 mvgauss_logpdf, d=5 (vs scipy.stats.multivariate_normal.logpdf)
          n     ours ms      ref ms       ratio     max err
 ------------------------------------------------------------
-      1000       0.036       0.145        0.25    6.41e-07
-     10000       0.138       0.507        0.27    6.79e-07
-    100000       1.087       6.952        0.16    7.82e-07
+      1000       0.018       0.132        0.14    6.41e-07
+     10000       0.129       0.449        0.29    6.79e-07
+    100000       1.010       6.084        0.17    7.82e-07
 
 gauss_sample (vs Generator.normal)
          n     ours ms       np ms       ratio    mean err
 ------------------------------------------------------------
-    100000       1.032       1.316        0.78    8.47e-03
-   1000000      10.767      12.920        0.83    8.89e-04
+    100000       0.928       1.153        0.80    8.47e-03
+   1000000       9.230      11.362        0.81    8.89e-04
 
 student_sample, nu=5 (vs Generator.standard_t)
          n     ours ms       np ms       ratio    mean err
 ------------------------------------------------------------
-    100000       3.532       3.640        0.97    8.65e-03
-   1000000      34.845      37.111        0.94    5.69e-04
+    100000       3.256       3.204        1.02    8.65e-03
+   1000000      32.464      32.841        0.99    5.69e-04
 
 mvgauss_sample, d=5 (vs Generator.multivariate_normal)
          n     ours ms       np ms       ratio    mean err
 ------------------------------------------------------------
-     10000       0.579       0.811        0.71    5.00e-02
-    100000      10.277      10.065        1.02    1.92e-02
+     10000       0.528       0.664        0.80    5.00e-02
+    100000       6.951      11.008        0.63    1.92e-02
 
 === bench_ad: done ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_ad.c -lm -lopenblas -o libad.so
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_ad.c -lm -lopenblas -o libad.so
 
 Gradient of depth-4 tanh(A@H) chain wrt A (ours = full tape lifecycle per call)
      n     ours ms   jax jit ms   jax eager ms   vs jit   vs eager   grad err
 ----------------------------------------------------------------------------
-    16       0.021        0.048          5.700     0.43       0.00   2.33e-07
-    64       0.139        0.210          6.018     0.66       0.02   2.24e-07
-   128       1.394        1.508          5.584     0.92       0.25   4.45e-07
-   256       5.182        2.099          7.629     2.47       0.68   6.08e-07
+    16       0.017        0.032          4.337     0.53       0.00   2.33e-07
+    64       0.116        0.171          4.474     0.68       0.03   2.24e-07
+   128       1.133        1.425          4.721     0.79       0.24   4.45e-07
+   256       4.801        1.911          6.754     2.51       0.71   6.08e-07
 
 Multivariate Gaussian total log-likelihood gradient wrt (cov, loc), n=200 observations
       method / d     ours ms   jax jit ms   jax eager ms   vs jit   vs eager   grad err
 --------------------------------------------------------------------------------------
-       solve d=8       0.299        0.166          9.979     1.80       0.03   3.46e-07
-   cholsolve d=8       0.178        0.159         14.819     1.12       0.01   2.60e-07
-         inv d=8       0.088        0.046          7.555     1.92       0.01   4.10e-07
-      solve d=32       3.405        0.371         13.411     9.18       0.25   8.08e-07
-  cholsolve d=32       1.648        0.412         19.697     4.00       0.08   3.07e-07
-        inv d=32       0.685        0.415         14.738     1.65       0.05   8.89e-07
+       solve d=8       0.256        0.166          9.035     1.54       0.03   3.46e-07
+   cholsolve d=8       0.152        0.159          8.611     0.95       0.02   2.60e-07
+         inv d=8       0.072        0.040          6.039     1.79       0.01   4.10e-07
+      solve d=32       2.585        0.161          9.919    16.04       0.26   8.08e-07
+  cholsolve d=32       1.004        0.135          9.066     7.46       0.11   3.07e-07
+        inv d=32       0.343        0.180         10.906     1.91       0.03   8.89e-07
 
 Elementwise loss/activation op -> sum -> gradient, at n (ours = full tape lifecycle per call)
           op / n     ours ms   jax jit ms   jax eager ms   vs jit   vs eager   grad err
 --------------------------------------------------------------------------------------
-   huber n=10000       0.021        0.020          4.668     1.05       0.00   0.00e+00
- logcosh n=10000       0.052        0.037          3.881     1.42       0.01   1.46e-11
-   swish n=10000       0.029        0.025          1.507     1.18       0.02   2.17e-07
-  lgamma n=10000       0.362        0.129          2.255     2.80       0.16   1.41e-07
- huber n=1000000       7.709        0.968         27.258     7.97       0.28   0.00e+00
-logcosh n=1000000      10.425        0.956         23.164    10.91       0.45   1.55e-13
- swish n=1000000       8.424        0.516          7.962    16.31       1.06   3.25e-07
-lgamma n=1000000      44.027        4.217         11.411    10.44       3.86   1.83e-07
+   huber n=10000       0.017        0.025          3.704     0.70       0.00   0.00e+00
+ logcosh n=10000       0.043        0.034          3.214     1.29       0.01   1.46e-11
+   swish n=10000       0.024        0.022          1.132     1.08       0.02   2.17e-07
+  lgamma n=10000       0.322        0.147          1.842     2.18       0.17   1.41e-07
+ huber n=1000000       6.179        0.687         23.214     9.00       0.27   0.00e+00
+logcosh n=1000000       7.946        0.698         17.761    11.38       0.45   1.55e-13
+ swish n=1000000       3.043        0.305          7.363     9.98       0.41   3.25e-07
+lgamma n=1000000      36.733        3.293          9.587    11.16       3.83   1.83e-07
 
 === bench_frame: done ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_frame.c -lm -lopenblas -o libframe.so
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_frame.c -lm -lopenblas -o libframe.so
 
 df_read_csv (vs pandas.read_csv, all-numeric + header)
    rows x cols     ours ms      ref ms    ratio
 ------------------------------------------------
-       10000x8      23.510       8.325     2.82
-      100000x8     248.159      77.947     3.18
-     1000000x8    2376.824     683.256     3.48
+       10000x8      19.089       6.929     2.75
+      100000x8     204.120      62.873     3.25
+     1000000x8    2005.829     558.602     3.59
 
 df_read_txt (vs numpy.loadtxt, whitespace-delimited)
    rows x cols     ours ms      ref ms    ratio
 ------------------------------------------------
-       10000x8      21.452       6.733     3.19
-      100000x8     211.015      66.029     3.20
+       10000x8      18.042       5.880     3.07
+      100000x8     184.075      58.508     3.15
 
 df_read_npy (vs numpy.load; float32 2-D - must match the build's mreal)
    rows x cols     ours ms      ref ms    ratio
 ------------------------------------------------
-      100000x8       0.379       1.337     0.28
-     1000000x8       6.466       7.486     0.86
+      100000x8       0.288       1.054     0.27
+     1000000x8       4.927       5.554     0.89
 
 df_sql filter, no sort (vs pandas boolean mask on a loaded frame)
    rows x cols     ours ms      ref ms    ratio
 ------------------------------------------------
-      100000x8       1.494       1.677     0.89
-     1000000x8      11.512      10.045     1.15
+      100000x8       1.141       1.263     0.90
+     1000000x8       8.488       8.195     1.04
 
 df_sql filter+ORDER BY (vs pandas mask+sort_values)
    rows x cols     ours ms      ref ms    ratio
 ------------------------------------------------
-       10000x8       0.149       0.809     0.18
-      100000x8       2.316       3.256     0.71
-                measured ORDER BY scaling exponent (x10 n): 1.19
-     1000000x8      26.324      46.123     0.57
-                measured ORDER BY scaling exponent (x10 n): 1.06
+       10000x8       0.130       0.622     0.21
+      100000x8       1.901       3.130     0.61
+                measured ORDER BY scaling exponent (x10 n): 1.17
+     1000000x8      23.224      43.182     0.54
+                measured ORDER BY scaling exponent (x10 n): 1.09
 
 df_write_csv (vs DataFrame.to_csv, all-numeric)
    rows x cols     ours ms      ref ms    ratio
 ------------------------------------------------
-       10000x8      23.187      67.023     0.35
-      100000x8     226.715     652.556     0.35
-     1000000x8    2261.431    6616.320     0.34
+       10000x8      21.407      62.810     0.34
+      100000x8     212.829     624.540     0.34
+     1000000x8    2114.318    6193.961     0.34
 
 df_write_txt (vs numpy.savetxt, all-numeric)
    rows x cols     ours ms      ref ms    ratio
 ------------------------------------------------
-       10000x8      21.836      55.999     0.39
-      100000x8     216.533     557.479     0.39
+       10000x8      20.887      54.689     0.38
+      100000x8     209.040     548.950     0.38
 
 df_write_npy (vs numpy.save, all-numeric)
    rows x cols     ours ms      ref ms    ratio
 ------------------------------------------------
-      100000x8       0.378       0.496     0.76
-     1000000x8       6.676       9.387     0.71
+      100000x8       0.380       0.477     0.80
+     1000000x8       6.393       8.936     0.72
 
 df_sql GROUP BY + SUM/AVG (vs pandas .groupby().agg())
    rows x cols     ours ms      ref ms    ratio
 ------------------------------------------------
-       10000x8       0.248       2.510     0.10
-      100000x8       1.608       3.879     0.41
+       10000x8       0.238       2.359     0.10
+      100000x8       1.528       3.679     0.42
                 measured GROUP BY scaling exponent (x10 n): 0.81
-     1000000x8      18.991      18.315     1.04
-                measured GROUP BY scaling exponent (x10 n): 1.07
+     1000000x8      14.422      16.102     0.90
+                measured GROUP BY scaling exponent (x10 n): 0.98
 
 df_read_csv / df_write_csv, numeric+string columns (vs pandas)
    rows x cols     ours ms      ref ms    ratio
 ------------------------------------------------
-  read 10000x2       3.962       2.449     1.62
- write 10000x2       3.467      13.534     0.26
- read 100000x2      41.973      16.822     2.50
-write 100000x2      34.017     126.941     0.27
+  read 10000x2       3.368       2.120     1.59
+ write 10000x2       3.028      11.747     0.26
+ read 100000x2      35.602      14.051     2.53
+write 100000x2      29.966     114.548     0.26
 
 === bench_random: done ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_random.c -lm -lopenblas -o librandom.so
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_random.c -lm -lopenblas -o librandom.so
 
 Bulk draw throughput by n (Mdraws/s, higher is better) - small n exposes
 per-call/loop-setup overhead that's invisible at the original n=1e6 point
      variate / n    ours ms      np ms   ours Md/s     np Md/s   mean check
 ---------------------------------------------------------------------------
-    uniform 1000      0.007      0.006       141.0       170.6     9.76e-03
-     normal 1000      0.013      0.013        75.7        74.8     9.00e-03
-gamma k=2.5 1000      0.021      0.025        48.7        39.4     6.60e-02
-gamma k=0.5 1000      0.041      0.050        24.6        19.9     2.55e-02
-  uniform 100000      0.195      0.362       511.9       276.4     4.79e-04
-   normal 100000      0.912      1.092       109.6        91.6     5.64e-03
-gamma k=2.5 100000      1.844      2.277        54.2        43.9     3.69e-03
-gamma k=0.5 100000      3.506      4.547        28.5        22.0     5.67e-04
- uniform 1000000      2.015      3.632       496.2       275.3     5.11e-04
-  normal 1000000      9.148     10.791       109.3        92.7     5.93e-04
-gamma k=2.5 1000000     18.215     22.184        54.9        45.1     1.92e-03
-gamma k=0.5 1000000     35.166     45.963        28.4        21.8     1.80e-04
+    uniform 1000      0.007      0.006       150.3       176.6     9.76e-03
+     normal 1000      0.012      0.012        82.2        81.1     9.00e-03
+gamma k=2.5 1000      0.019      0.022        53.3        45.2     6.60e-02
+gamma k=0.5 1000      0.036      0.045        27.8        22.4     2.55e-02
+  uniform 100000      0.180      0.331       556.5       301.8     4.79e-04
+   normal 100000      0.863      0.995       115.8       100.5     5.64e-03
+gamma k=2.5 100000      1.679      1.950        59.6        51.3     3.69e-03
+gamma k=0.5 100000      3.248      4.183        30.8        23.9     5.67e-04
+ uniform 1000000      1.776      3.270       563.1       305.8     5.11e-04
+  normal 1000000      8.625      9.902       115.9       101.0     5.93e-04
+gamma k=2.5 1000000     16.790     19.521        59.6        51.2     1.92e-03
+gamma k=0.5 1000000     32.374     41.783        30.9        23.9     1.80e-04
 
 === bench_stats: done ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_stats.c -lm -lopenblas -o libstats.so
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_stats.c -lm -lopenblas -o libstats.so
 
 Scalar statistics on an n-vector (float32 data, double accumulation)
             op / n    ours ms      np ms    ratio        err
 ------------------------------------------------------------
-       mean 100000      0.022      0.049     0.45   1.66e-10
-        var 100000      0.044      0.152     0.29   1.79e-08
-autocorr l=1 100000      0.083      2.095     0.04   2.41e-11
-       corr 100000      0.082      2.083     0.04   2.02e-09
-     median 100000      0.971      1.122     0.87   0.00e+00
-      mean 1000000      0.212      0.433     0.49   1.14e-11
-       var 1000000      0.434      3.091     0.14   3.81e-09
-autocorr l=1 1000000      0.794     12.919     0.06   2.43e-12
-      corr 1000000      0.934     13.460     0.07   2.34e-08
-    median 1000000     11.315     10.528     1.07   0.00e+00
-     mean 10000000      2.334      4.391     0.53   2.60e-12
-      var 10000000      4.679     32.750     0.14   2.24e-08
-autocorr l=1 10000000      8.632    105.095     0.08   4.31e-12
-     corr 10000000     10.495    123.588     0.08   4.11e-09
-   median 10000000     83.965    117.744     0.71   0.00e+00
+       mean 100000      0.020      0.040     0.49   1.66e-10
+        var 100000      0.037      0.116     0.32   1.79e-08
+autocorr l=1 100000      0.072      1.827     0.04   2.41e-11
+       corr 100000      0.075      1.797     0.04   2.02e-09
+     median 100000      0.879      1.000     0.88   0.00e+00
+      mean 1000000      0.181      0.400     0.45   1.14e-11
+       var 1000000      0.374      2.956     0.13   3.81e-09
+autocorr l=1 1000000      0.739     12.632     0.06   2.43e-12
+      corr 1000000      0.930     12.624     0.07   2.34e-08
+    median 1000000     10.842     10.276     1.06   0.00e+00
+     mean 10000000      2.161      4.086     0.53   2.60e-12
+      var 10000000      4.387     30.309     0.14   2.24e-08
+autocorr l=1 10000000      8.379    101.950     0.08   4.31e-12
+     corr 10000000      8.571    101.795     0.08   4.11e-09
+   median 10000000     76.671    113.769     0.67   0.00e+00
 
 Lag-1 autocovariance matrix, n x d sample (vs numpy centered X0.T @ X1 gemm)
              n x d    ours ms      np ms    ratio    max err
 ------------------------------------------------------------
-          200000x2      1.594      4.423     0.36   1.86e-09
-      200000x2 f32      1.325      4.423     0.30   5.24e-10
-          200000x8      2.654      7.002     0.38   3.26e-09
-      200000x8 f32      2.488      7.002     0.36   4.66e-10
-         200000x32     25.276     16.363     1.54   6.05e-09
-     200000x32 f32     11.343     16.363     0.69   9.31e-10
-         50000x128     31.873     17.903     1.78   9.31e-09
-     50000x128 f32     13.453     17.903     0.75   4.66e-09
+          200000x2      1.416      4.106     0.34   1.86e-09
+      200000x2 f32      1.170      4.106     0.28   5.24e-10
+          200000x8      2.413      6.327     0.38   3.26e-09
+      200000x8 f32      2.195      6.327     0.35   4.66e-10
+         200000x32     22.124     14.637     1.51   6.05e-09
+     200000x32 f32     10.538     14.637     0.72   9.31e-10
+         50000x128     23.962     14.770     1.62   9.31e-09
+     50000x128 f32     11.129     14.770     0.75   4.66e-09
 
 Rank / Spearman correlation on an n-vector (vs scipy.stats.rankdata, average-tie method)
             op / n    ours ms     ref ms    ratio    max err
 ------------------------------------------------------------
-       rank 100000     13.016     11.385     1.14   0.00e+00
-   spearman 100000     25.191     22.876     1.10   1.11e-08
-      rank 1000000    151.884    168.604     0.90   0.00e+00
-  spearman 1000000    289.489    329.907     0.88   8.85e-09
-     rank 10000000   1779.356   2278.535     0.78   0.00e+00
- spearman 10000000   3484.823   4487.497     0.78   1.43e-08
+       rank 100000     11.331      9.923     1.14   0.00e+00
+   spearman 100000     22.200     20.286     1.09   1.11e-08
+      rank 1000000    134.676    149.587     0.90   0.00e+00
+  spearman 1000000    268.156    299.779     0.89   8.85e-09
+     rank 10000000   1661.364   2020.967     0.82   0.00e+00
+ spearman 10000000   3336.591   4125.368     0.81   1.43e-08
 
 Prediction-quality metrics on an (actual, predicted) pair (float32 data, double accumulation)
             op / n    ours ms      np ms    ratio        err
 ------------------------------------------------------------
-        mae 100000      0.039      0.117     0.33   5.53e-08
-        mse 100000      0.038      0.121     0.31   2.65e-07
-       rmse 100000      0.038      0.123     0.31   6.44e-08
-      medae 100000      0.852      0.927     0.92   0.00e+00
-       mape 100000      0.044      0.201     0.22   4.22e-09
-      rmsle 100000      1.123      0.979     1.15   2.61e-08
-         r2 100000      0.059      0.203     0.29   2.12e-08
-huber d=1.0 100000      0.048      0.696     0.07   6.68e-08
-       mae 1000000      0.468      5.222     0.09   8.19e-08
-       mse 1000000      0.446      5.118     0.09   5.13e-07
-      rmse 1000000      0.450      4.907     0.09   2.38e-07
-     medae 1000000     12.038     12.015     1.00   0.00e+00
-      mape 1000000      0.489      8.896     0.06   6.84e-09
-     rmsle 1000000     11.816     13.561     0.87   1.90e-09
-        r2 1000000      0.737      5.215     0.14   1.17e-08
-huber d=1.0 1000000      0.529     12.556     0.04   1.10e-07
-      mae 10000000      4.488     67.874     0.07   1.10e-07
-      mse 10000000      4.330     57.082     0.08   1.08e-07
-     rmse 10000000      4.363     55.931     0.08   5.43e-08
-    medae 10000000    112.178    130.867     0.86   0.00e+00
-     mape 10000000      4.686    103.821     0.05   4.67e-09
-    rmsle 10000000    120.651    149.370     0.81   1.75e-08
-       r2 10000000      6.748     52.793     0.13   2.18e-08
-huber d=1.0 10000000      5.501    146.815     0.04   1.54e-08
+        mae 100000      0.037      0.109     0.34   5.53e-08
+        mse 100000      0.035      0.111     0.32   2.65e-07
+       rmse 100000      0.035      0.112     0.32   6.44e-08
+      medae 100000      0.830      0.922     0.90   0.00e+00
+       mape 100000      0.042      0.203     0.21   4.22e-09
+      rmsle 100000      1.093      0.958     1.14   2.61e-08
+         r2 100000      0.058      0.188     0.31   2.12e-08
+huber d=1.0 100000      0.046      0.625     0.07   6.68e-08
+       mae 1000000      0.405      4.645     0.09   8.19e-08
+       mse 1000000      0.394      4.354     0.09   5.13e-07
+      rmse 1000000      0.395      4.363     0.09   2.38e-07
+     medae 1000000     11.477     11.509     1.00   0.00e+00
+      mape 1000000      0.444      7.920     0.06   6.84e-09
+     rmsle 1000000     10.925     12.245     0.89   1.90e-09
+        r2 1000000      0.644      4.764     0.14   1.17e-08
+huber d=1.0 1000000      0.467     11.411     0.04   1.10e-07
+      mae 10000000      4.062     59.966     0.07   1.10e-07
+      mse 10000000      3.912     51.786     0.08   1.08e-07
+     rmse 10000000      3.893     50.527     0.08   5.43e-08
+    medae 10000000    103.177    124.634     0.83   0.00e+00
+     mape 10000000      4.219     97.459     0.04   4.67e-09
+    rmsle 10000000    108.525    145.593     0.75   1.75e-08
+       r2 10000000      6.341     50.591     0.13   2.18e-08
+huber d=1.0 10000000      4.420    136.188     0.03   1.54e-08
 
 === bench_adam: done ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_adam.c -lm -lopenblas -o libadam.so
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_adam.c -lm -lopenblas -o libadam.so
 
 adam_step throughput, 200 consecutive steps per call (ms/step, lower is better)
        len    ours ms      np ms    ratio   ours ms/step   np ms/step    max err
 --------------------------------------------------------------------------------
-       100      0.037      3.338    0.011        0.00019      0.01669   1.44e-05
-     10000      1.571     18.045    0.087        0.00786      0.09023   2.04e-05
-   1000000    278.718   3995.901    0.070        1.39359     19.97950   2.27e-05
+       100      0.023      1.969    0.012        0.00012      0.00984   1.44e-05
+     10000      0.981      9.827    0.100        0.00491      0.04914   2.04e-05
+   1000000    264.744   3701.622    0.072        1.32372     18.50811   2.27e-05
 
 === bench_special: done ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -fopenmp  -shared -fPIC tests/performance/bench_special.c -lm -lopenblas -o libspecial.so
+make: 'libspecial.so' is up to date.
 
 digamma throughput by x regime (Mcalls/s, higher is better)
             x regime          n    ours ms   scipy ms   ours M/s  scipy M/s    max err
 ----------------------------------------------------------------------------------
-  near-pole (1e-3,1)     100000      1.704      1.619       58.7       61.8   8.98e-12
-  near-pole (1e-3,1)    1000000     10.419     10.029       96.0       99.7   8.98e-12
-           mid (1,6)     100000      1.512      1.701       66.2       58.8   8.76e-12
-           mid (1,6)    1000000     15.165     16.975       65.9       58.9   8.76e-12
-     large (1e3,1e6)     100000      0.649      1.299      154.0       77.0   1.78e-15
-     large (1e3,1e6)    1000000      7.003     12.694      142.8       78.8   1.78e-15
+  near-pole (1e-3,1)     100000      1.135      1.089       88.1       91.8   8.98e-12
+  near-pole (1e-3,1)    1000000     11.354     10.836       88.1       92.3   8.98e-12
+           mid (1,6)     100000      1.633      1.813       61.2       55.2   8.76e-12
+           mid (1,6)    1000000     16.224     17.980       61.6       55.6   8.76e-12
+     large (1e3,1e6)     100000      0.689      1.292      145.2       77.4   1.78e-15
+     large (1e3,1e6)    1000000      6.808     12.920      146.9       77.4   1.78e-15
 
 === bench_json: done ===
 make: 'libjson.so' is up to date.
@@ -540,19 +573,19 @@ make: 'libjson.so' is up to date.
 json_parse (vs json.loads)
              shape    ours ms  py json ms    ratio
 --------------------------------------------------
-       flat n=1000      0.259       0.193     1.34
-     flat n=100000     20.149      14.454     1.39
-     records m=200      0.174       0.150     1.16
-   records m=20000     17.981      17.210     1.04
+       flat n=1000      0.152       0.140     1.09
+     flat n=100000     18.445      13.932     1.32
+     records m=200      0.169       0.150     1.12
+   records m=20000     17.258      16.914     1.02
 
 json_write (vs json.dumps; tree/object already built, write only)
              shape    ours ms  py json ms    ratio
 --------------------------------------------------
-       flat n=1000      0.290       0.309     0.94
-     flat n=100000     28.875      30.125     0.96
-     records m=200      0.130       0.166     0.78
-   records m=20000     14.391      16.609     0.87
+       flat n=1000      0.287       0.307     0.94
+     flat n=100000     28.377      30.293     0.94
+     records m=200      0.130       0.164     0.79
+   records m=20000     13.766      16.214     0.85
 
 
 === summary ===
-10 ran to completion, 0 failed
+11 ran to completion, 0 failed

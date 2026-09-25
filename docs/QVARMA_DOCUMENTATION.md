@@ -1405,7 +1405,7 @@ the setup stated per number.
   added while the analytic arm's keeps rising. The i5 had four cores, so its
   parallel column was that machine at full width and understates what the
   contention costs on a wider one. See "The same benchmark on a second machine"
-  above, and `docs/MATRIX_DOCUMENTATION.md`'s "The four dispatch thresholds are
+  above, and `docs/MATRIX_DOCUMENTATION.md`'s "The dispatch thresholds are
   measured on one machine"; on new hardware run `make bench-small_blas_threshold`
   and `make bench-qvarma_analytic_filter` before quoting any number in this file.
 - **The line search costs one and a half to three gradient evaluations per

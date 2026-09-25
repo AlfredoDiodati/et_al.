@@ -60,7 +60,7 @@ with core count and which another BLAS may not have, and the core count is
 this machine's rather than the one the table it is compared against was made
 on. Run
 tests/performance/small_blas_threshold.c first on a new machine, then this;
-docs/MATRIX_DOCUMENTATION.md's "The four dispatch thresholds are measured on
+docs/MATRIX_DOCUMENTATION.md's "The dispatch thresholds are measured on
 one machine" is the full statement.
 
 Standalone, no Python driver. Build and run:

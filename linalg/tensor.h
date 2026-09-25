@@ -1319,8 +1319,7 @@ static inline Tensor tensor_matmul(Tensor a, Tensor b) {
     int ta = 0, lda = 0, tb = 0, ldb = 0;
     int ready_a = _tensor_gemm_ready(a2, &ta, &lda);
     int in_place = ready_a && _tensor_gemm_ready(b2, &tb, &ldb);
-    int small = (n == 1) ? (m <= MAT_GEMM_VECTOR && k <= MAT_GEMM_VECTOR)
-                         : (m <= MAT_GEMM_SMALL && n <= MAT_GEMM_SMALL && k <= MAT_GEMM_SMALL);
+    int small = _mat_gemm_runs_loop(m, n, k);
     /* the middle band, where the product is OpenBLAS's but OpenBLAS will not
        thread it - every dimension has to be inside it, since the shortest one
        is what decides how long the call takes */

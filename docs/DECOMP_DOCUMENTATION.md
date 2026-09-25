@@ -25,6 +25,7 @@ Every rank or singularity decision in the library uses one rule: a quantity is n
 | `mat_lstsq` (and `ols`'s choice of path) | `|R[j][j]|` of `a == Q * R` | `||a_j||` | `m` |
 | `mat_chol` | `L[k][k]^2` | `a[k][k]` | `n` |
 | `mat_rank`, `mat_lstsq_rd` (and `ols`'s pseudo-inverse) | each singular value | the largest | `max(m, n)` |
+| `ols_residuals_are_zero` | a residual norm | the larger of the response's norm and `sum_k ||x_k|| |b_k|` | `m` |
 | `sd/qvarma.h`, `sd/score_driven_location.h` standard errors | each Hessian eigenvalue | the largest in size | number of parameters |
 
 Why `sqrt(length)`: under the probabilistic rounding model (Higham and Mary, 2019) the error of a reduction over `length` terms grows like `sqrt(length) * MEPS`, not the worst-case `length * MEPS`, and the worst-case form is far too loose for a long sample: at float32 with 50000 rows it would call a column dependent while 0.6 per cent of it is still independent of the others. Why 10: on exactly singular matrices stored exactly (small integers), at both precisions, the computed quantity never exceeded, in units of `sqrt(length) * MEPS`, 1.9 for the QR column test (`m = 3..2000`, `n = 2..21`, 2000 draws per shape), 2.2 for the Cholesky pivot (`n = 2..40`, 2000 draws), 0.71 for the smallest singular value and 1.13 for the smallest eigenvalue of a Gram matrix (`m = 3..2000`, `n = 2..30`, 500 draws). 10 leaves at least 4.5 times the worst case.

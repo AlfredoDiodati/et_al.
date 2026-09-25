@@ -227,7 +227,7 @@ Neither rewrite has a dedicated entry in `bench_ad.py` isolated from JAX-compari
   indirection are arithmetic and memory, and carry anywhere, while the share
   that comes from `mat_gemm` and `_trtrs` not calling BLAS at small sizes
   depends on a crossover that is a property of the machine and the BLAS build.
-  `docs/MATRIX_DOCUMENTATION.md`'s "The four dispatch thresholds are measured
+  `docs/MATRIX_DOCUMENTATION.md`'s "The dispatch thresholds are measured
   on one machine" states what to re-measure and when.
 
 - No raw factorization adjoints (`mat_lu`/`mat_chol` themselves as differentiable tape ops) - see Scope above.

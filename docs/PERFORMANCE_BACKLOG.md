@@ -2100,3 +2100,69 @@ Not done: a second rule in the dispatch, loop when OpenBLAS would thread
 `n * n * nrhs <= 65536`. It would depend on an OpenBLAS internal constant,
 would need `openblas_get_parallel` and `omp_in_parallel`, which the library
 does not call today, and would save a few microseconds per call.
+
+## 20. What the rank checks and `ols` cost against the code before them (`linalg/solver.h`, `linalg/decomp.h`, `regression.h`)
+
+Open, as a record of a cost that was paid knowingly. On 2026-09-24 `mat_lstsq`
+and `mat_chol` gained the rank rule and the NaN and infinity checks
+(`docs/DECOMP_DOCUMENTATION.md`, "The rank rule"), and every regression in
+`inference/` moved onto `ols`. This item compares that against commit
+`03d9017`, the code of the same morning.
+
+Setup: AMD Ryzen 7 4800H, 16 hardware threads, OpenBLAS 0.3.33 OpenMP build
+at its default thread count, `-O3 -march=native -ffast-math -fopenmp`. Each
+harness reads the clock once per batch, doubles the batch until it takes
+50 ms, and reports the best of 5 batches. The two builds run alternately, 12
+runs each, 6 with the old build first and 6 with the new one first. The
+ratio is new over old, the median in each order. A change counts only when
+both medians are on the same side of 1 by more than 1.5 per cent. Inputs:
+one simulated random walk of 200 observations (seed 4), or three of them
+co-integrated through the first, for the inference routines; designs of
+standard normals with a column of ones for `mat_lstsq`; `B B^T + n I` with
+`B` standard normal for `mat_chol`.
+
+Where it stands, float64 unless marked:
+
+- ADF 1.01 and 0.99, Johansen 0.99 and 0.99, Engle-Granger 0.99 and 0.99:
+  no change.
+- KPSS 1.18 and 1.18: 0.4 microseconds more on 2.6. With the old and the new
+  `kpss` compiled into one binary, so that binary layout is the same for
+  both, the difference is 280 ns (2620 against 2900 ns). That is the `ols`
+  layer at KPSS's shape (200 by 2, one response): `ols` takes about 260 ns
+  more than `mat_lstsq` alone, of which the check of `y` for NaN and
+  infinity is 40 to 70 ns and the residuals as a copy of `y` and one product
+  about 90 ns. The old `kpss` wrote its residuals from the trend formula
+  directly, a shortcut only KPSS could take.
+- Zivot-Andrews 1.06 and 1.06: 0.1 ms more on 1.6 ms, the same layer paid
+  once per candidate break date.
+- `mat_lstsq` alone: 1.03 to 1.05 at 200 by 2, 195 by 6 and 119 by 6, in
+  both precisions, 50 to 180 ns. This is the checks: the same code with the
+  finiteness check and the rank test removed runs 0.95 of the code with
+  them. The scan of `a` for NaN and infinity is most of it, 35 ns for 200
+  float64 entries and 210 ns for 1170, measured on its own.
+- `mat_chol` at `n = 5`: 1.05 (92 against 96 ns) and in float32 1.07 (85
+  against 90 ns). Removing the pivot test gains at most 2 ns. From `n = 21`
+  up there is no change or the new code is faster.
+
+Kept, each measured faster in pairs: the tall matrix-vector rule
+`MAT_GEMM_THIN` (ADF, KPSS and Engle-Granger 3.5 to 4.5 per cent faster);
+`ols_sum_squared_residuals` and `ols_residuals_are_zero` as functions called
+on demand rather than fields filled on every fit (as fields they cost every
+inference routine 11 to 16 per cent); `mat_copy` without zeroing memory it
+overwrites (ADF 0.97, KPSS 0.98); a stack buffer in `ols_unscaled_variance`;
+and `tensor_matmul` asking `mat_gemm`'s own dispatch function whether to
+thread a batch (1.3x to 11x on batches of 64 tall products, see
+`docs/TENSOR_DOCUMENTATION.md`).
+
+Rejected: copying and checking for NaN and infinity in one pass
+(`_mat_copy_all_finite`), for the copies `mat_lstsq` and `ols` already make.
+On its own it is faster (289 against 214 ns for 1170 float64 entries, 83
+against 52 in float32). Inside the routines the sign changes from one case
+to the next: KPSS 1.06 slower, Zivot-Andrews, Johansen and Engle-Granger
+1.02 faster, `mat_lstsq` between 0.97 and 1.03. It was reverted.
+
+A trap met on the way: a harness that ended its timed loop with
+`if (status) return 1;` made `mat_lstsq` look 21 per cent slower than the
+old code, and `abort()` in its place, or no test, made the gap 1 to 3 per
+cent. A single-binary comparison, as for KPSS above, is how to tell a real
+cost from this.

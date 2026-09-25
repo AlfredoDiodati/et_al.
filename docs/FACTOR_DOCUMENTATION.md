@@ -355,7 +355,7 @@ first row forwards; that is the only thing the four combinations change.
 
 Both bounds are crossovers measured on one machine against one build of
 OpenBLAS, and what does and does not carry to other hardware is written once
-in `docs/MATRIX_DOCUMENTATION.md`'s "The four dispatch thresholds are measured
+in `docs/MATRIX_DOCUMENTATION.md`'s "The dispatch thresholds are measured
 on one machine", which covers these two as well as `MAT_GEMM_SMALL` and
 `MAT_GEMM_VECTOR`. The short version: the mechanism is general, the numbers
 are not, and `make bench-small_blas_threshold` re-derives them.

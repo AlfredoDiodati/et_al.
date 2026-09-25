@@ -2,7 +2,7 @@
 #include "frame/csv.h"
 #include "basis/poly.h"
 #include "basis/spline.h"
-#include "linalg/solver.h"
+#include "regression.h"
 #include "stats.h"
 
 /* Fit a curve to data without choosing a functional form for it, four ways,
@@ -108,7 +108,9 @@ int main(void) {
 
     PolyBasis polynomial = poly_basis(train_x, POLY_DEGREE);
     Mat poly_design = with_intercept(polynomial.basis);
-    Mat poly_beta = mat_lstsq(poly_design, train_y, NULL);
+    OlsFit poly_fit = ols(poly_design, train_y);
+    assert(poly_fit.status == 0 && "the poly design is rank deficient");
+    Mat poly_beta = poly_fit.coefficients;
     Mat poly_in = mat_mul(poly_design, poly_beta);
 
     /* Predicting means reusing the fit's own coefs. Building a fresh basis on
@@ -139,7 +141,9 @@ int main(void) {
        motivates the basis in the first place */
     Mat raw = poly_raw(train_x, POLY_DEGREE);
     Mat raw_design = with_intercept(raw);
-    Mat raw_beta = mat_lstsq(raw_design, train_y, NULL);
+    OlsFit raw_fit = ols(raw_design, train_y);
+    assert(raw_fit.status == 0 && "the raw design is rank deficient");
+    Mat raw_beta = raw_fit.coefficients;
     Mat raw_in = mat_mul(raw_design, raw_beta);
     double raw_condition = mat_cond(raw_design);
     double orthogonal_condition = mat_cond(poly_design);
@@ -148,7 +152,9 @@ int main(void) {
 
     BsBasis bs = bs_basis(train_x, (BsOptions){ .df = SPLINE_DF });
     Mat bs_design = with_intercept(bs.basis);
-    Mat bs_beta = mat_lstsq(bs_design, train_y, NULL);
+    OlsFit bs_fit = ols(bs_design, train_y);
+    assert(bs_fit.status == 0 && "the bs design is rank deficient");
+    Mat bs_beta = bs_fit.coefficients;
     Mat bs_in = mat_mul(bs_design, bs_beta);
     Mat bs_test_basis = bs_predict(&bs.spec, test_x);
     Mat bs_test_design = with_intercept(bs_test_basis);
@@ -159,7 +165,9 @@ int main(void) {
 
     NsBasis ns = ns_basis(train_x, (NsOptions){ .df = SPLINE_DF });
     Mat ns_design = with_intercept(ns.basis);
-    Mat ns_beta = mat_lstsq(ns_design, train_y, NULL);
+    OlsFit ns_fit = ols(ns_design, train_y);
+    assert(ns_fit.status == 0 && "the ns design is rank deficient");
+    Mat ns_beta = ns_fit.coefficients;
     Mat ns_in = mat_mul(ns_design, ns_beta);
     Mat ns_test_basis = ns_predict(&ns.spec, test_x);
     Mat ns_test_design = with_intercept(ns_test_basis);
@@ -391,14 +399,14 @@ int main(void) {
     mat_free(coarse_x); mat_free(coarse_y);
     mat_free(ns_curve); mat_free(ns_grid_design); mat_free(ns_grid_basis);
     mat_free(ns_out); mat_free(ns_test_design); mat_free(ns_test_basis);
-    mat_free(ns_in); mat_free(ns_beta); mat_free(ns_design); ns_free(&ns);
+    mat_free(ns_in); ols_free(&ns_fit); mat_free(ns_design); ns_free(&ns);
     mat_free(bs_curve); mat_free(bs_grid_design); mat_free(bs_grid_basis);
     mat_free(bs_out); mat_free(bs_test_design); mat_free(bs_test_basis);
-    mat_free(bs_in); mat_free(bs_beta); mat_free(bs_design); bs_free(&bs);
-    mat_free(raw_in); mat_free(raw_beta); mat_free(raw_design); mat_free(raw);
+    mat_free(bs_in); ols_free(&bs_fit); mat_free(bs_design); bs_free(&bs);
+    mat_free(raw_in); ols_free(&raw_fit); mat_free(raw_design); mat_free(raw);
     mat_free(poly_curve); mat_free(poly_grid_design); mat_free(poly_grid_basis);
     mat_free(poly_out); mat_free(poly_test_design); mat_free(poly_test_basis);
-    mat_free(poly_in); mat_free(poly_beta); mat_free(poly_design); poly_free(&polynomial);
+    mat_free(poly_in); ols_free(&poly_fit); mat_free(poly_design); poly_free(&polynomial);
     mat_free(grid); mat_free(gdp); mat_free(consumption);
     return 0;
 }

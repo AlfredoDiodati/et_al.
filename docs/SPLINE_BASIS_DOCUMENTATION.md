@@ -16,7 +16,7 @@ above `stats.h`, whose `stats_quantile` places interior knots when a caller
 asks for a basis by degrees of freedom.
 
 Rows are observations and columns are basis functions, matching `basis/poly.h`
-and what `mat_lstsq` wants of a design matrix. A series of knots or of
+and what `regression.h`'s `ols` wants of a design matrix. A series of knots or of
 evaluation points is read as a flat sample over all elements of its `Mat`,
 strided views included.
 

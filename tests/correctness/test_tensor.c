@@ -728,6 +728,24 @@ static void test_matmul(void) {
         }
     }
 
+    {   /* a batch of tall matrix-vector products either side of
+           MAT_GEMM_THIN: past MAT_GEMM_VECTOR in rows, so at k = 8 the batch
+           is threaded over the loop and at k = 9 each product is an OpenBLAS
+           call made in turn */
+        int rows[2] = { MAT_GEMM_VECTOR + 1, 1000 };
+        int inner[2] = { MAT_GEMM_THIN, MAT_GEMM_THIN + 1 };
+        for (int r = 0; r < 2; r++)
+            for (int i = 0; i < 2; i++) {
+                int sa[3] = { 12, rows[r], inner[i] }, sb[3] = { 12, inner[i], 1 };
+                Tensor a = rand_tensor(3, sa);
+                Tensor b = rand_tensor(3, sb);
+                Tensor got = tensor_matmul(a, b);
+                Tensor exp = ref_batched_matmul(a, b);
+                check_eq(got, exp, TOL_MUL);
+                tensor_free(a); tensor_free(b); tensor_free(got); tensor_free(exp);
+            }
+    }
+
     {   /* a broadcast batch: one matrix against a stack of them */
         int sa[3] = { 6, 3, 3 }, sb[2] = { 3, 3 };
         Tensor a = rand_tensor(3, sa);

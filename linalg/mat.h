@@ -126,12 +126,19 @@ typedef Mat Vec;
 
 
 /* Allocate an r x c zero matrix with 32-byte alignment for SIMD. Caller must mat_free(). */
-static inline Mat mat_new(int r, int c) {
+/* An r x c owner whose contents are left as the allocator returns them,
+   for callers that write every element before reading any. */
+static inline Mat _mat_alloc(int r, int c) {
     size_t n = (size_t)r * c;
     size_t sz = (n * sizeof(mreal) + 31) & ~(size_t)31;
     mreal *d = (mreal*)aligned_alloc(32, sz);
-    memset(d, 0, n * sizeof(mreal));
     return (Mat){ r, c, c, d };
+}
+
+static inline Mat mat_new(int r, int c) {
+    Mat m = _mat_alloc(r, c);
+    memset(m.d, 0, (size_t)r * c * sizeof(mreal));
+    return m;
 }
 /* Free the heap storage owned by m. Do NOT call on slices. */
 static inline void mat_free(Mat m) { free(m.d); }
@@ -149,7 +156,8 @@ static inline Mat mat_from(int r, int c, mreal *data) {
 
 /* Return a deep copy of m. Caller must mat_free(). */
 static inline Mat mat_copy(Mat m) {
-    Mat o = mat_new(m.r, m.c);
+    /* Every element is written below, so the zeroing mat_new does is skipped. */
+    Mat o = _mat_alloc(m.r, m.c);
     if (m.stride == m.c) {
         memcpy(o.d, m.d, (size_t)m.r * m.c * sizeof(mreal));
     } else {
@@ -250,6 +258,18 @@ static inline Mat mat_sub(Mat a, Mat b) {
 #define MAT_GEMM_SMALL 8
 #define MAT_GEMM_VECTOR 64
 
+/* A matrix-vector product with at most MAT_GEMM_THIN columns stays in the
+   loop up to MAT_GEMM_THIN_ROWS rows, past MAT_GEMM_VECTOR: the shape of a
+   regression's fitted values, a long sample on a few regressors. Measured
+   in the same benchmark's tall matrix-vector table, with the transpose flag
+   read at run time so the loop is not specialized: at k <= 8 it beats
+   OpenBLAS at every m from 64 to 10000, both precisions, A and A^T, by 1.02x
+   (float32, A^T, k = 8) to 4.6x; at k = 12 float32 is at parity from 500
+   rows and loses on A^T, and from k = 21 the call wins. 10000 is where the
+   measurement stops. */
+#define MAT_GEMM_THIN 8
+#define MAT_GEMM_THIN_ROWS 10000
+
 /* C := alpha*op(A)*op(B) + beta*C by three nested loops, no BLAS. The i,l,j
    order keeps the innermost loop a unit-stride walk along a row of B and a
    row of C, which is what the compiler vectorizes; a transposed B breaks
@@ -292,6 +312,17 @@ static inline void _mat_gemm_small(int transa, int transb, int m, int n, int k,
     }
 }
 
+/* Whether mat_gemm computes an m x k by k x n product in its own loop rather
+   than calling OpenBLAS, from the constants above. linalg/tensor.h asks the
+   same question to decide whether to thread a batch of products, and has to
+   get the same answer. */
+static inline int _mat_gemm_runs_loop(int m, int n, int k) {
+    if (n == 1)
+        return (m <= MAT_GEMM_VECTOR && k <= MAT_GEMM_VECTOR)
+            || (k <= MAT_GEMM_THIN && m <= MAT_GEMM_THIN_ROWS);
+    return m <= MAT_GEMM_SMALL && n <= MAT_GEMM_SMALL && k <= MAT_GEMM_SMALL;
+}
+
 /* C := alpha*op(A)*op(B) + beta*C, the cblas_?gemm interface with the layout
    argument dropped, since every matrix in this library is row-major. transa
    and transb are 0 for op(X) = X and 1 for op(X) = X^T. op(A) is m x k,
@@ -305,9 +336,7 @@ static inline void mat_gemm(int transa, int transb, int m, int n, int k,
                             mreal alpha, const mreal *a, int lda,
                             const mreal *b, int ldb,
                             mreal beta, mreal *c, int ldc) {
-    int small = n == 1 ? (m <= MAT_GEMM_VECTOR && k <= MAT_GEMM_VECTOR)
-                       : (m <= MAT_GEMM_SMALL && n <= MAT_GEMM_SMALL && k <= MAT_GEMM_SMALL);
-    if (small) {
+    if (_mat_gemm_runs_loop(m, n, k)) {
         _mat_gemm_small(transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
         return;
     }

@@ -466,7 +466,9 @@ static void test_gemm(void) {
     puts("mat_gemm");
     srand(7);
 
-    /* sizes straddling MAT_GEMM_SMALL (8) and MAT_GEMM_VECTOR (64) */
+    /* sizes straddling MAT_GEMM_SMALL (8) and MAT_GEMM_VECTOR (64); the tall
+       matrix-vector block below straddles MAT_GEMM_THIN and
+       MAT_GEMM_THIN_ROWS */
     int dims[] = { 1, 2, 7, 8, 9, 13, 63, 64, 65 };
     int n_dims = (int)(sizeof dims / sizeof dims[0]);
     mreal alphas[] = { (mreal)1, (mreal)-0.5 };
@@ -495,6 +497,29 @@ static void test_gemm(void) {
                             mat_free(a); mat_free(b); mat_free(got); mat_free(exp);
                         }
         }
+    }
+
+    /* Matrix-vector products either side of MAT_GEMM_THIN (8) and
+       MAT_GEMM_THIN_ROWS (10000): tall enough to pass MAT_GEMM_VECTOR, so the
+       thin rule alone decides between the loop and OpenBLAS. */
+    {
+        int thin[] = { MAT_GEMM_THIN, MAT_GEMM_THIN + 1 };
+        int tall[] = { MAT_GEMM_VECTOR + 1, MAT_GEMM_THIN_ROWS, MAT_GEMM_THIN_ROWS + 1 };
+        for (int ki = 0; ki < 2; ki++)
+            for (int mi = 0; mi < 3; mi++)
+                for (int ta = 0; ta < 2; ta++)
+                    for (int ai = 0; ai < 2; ai++)
+                        for (int bi = 0; bi < 3; bi++) {
+                            int m = tall[mi], k = thin[ki];
+                            Mat a = rand_mat(ta ? k : m, ta ? m : k);
+                            Mat b = rand_mat(k, 1);
+                            Mat got = rand_mat(m, 1);
+                            Mat exp = mat_copy(got);
+                            mat_gemm(ta, 0, m, 1, k, alphas[ai], a.d, a.c, b.d, b.c, betas[bi], got.d, got.c);
+                            ref_gemm(ta, 0, m, 1, k, alphas[ai], a.d, a.c, b.d, b.c, betas[bi], exp.d, exp.c);
+                            check_eq(got, exp, TOL_MUL);
+                            mat_free(a); mat_free(b); mat_free(got); mat_free(exp);
+                        }
     }
 
     /* Leading dimensions larger than the widths, which is what a strided view

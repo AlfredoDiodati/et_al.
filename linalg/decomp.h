@@ -29,6 +29,10 @@
      mat_lstsq_rd, mat_rank, ols
                            a singular value against the largest, length
                            max(m, n)
+     ols_residuals_are_zero
+                           a residual norm against the larger of the
+                           response's norm and the size of the terms its
+                           fitted values are summed from, length m
      sd/qvarma.h, sd/score_driven_location.h
                            a Hessian eigenvalue against the largest in size,
                            length the number of parameters

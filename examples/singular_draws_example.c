@@ -1,5 +1,5 @@
 #include <sys/stat.h>
-#include "linalg/solver.h"
+#include "regression.h"
 #include "random/random.h"
 
 /* Run a batch of estimations over simulated draws, some of which cannot be
@@ -12,14 +12,20 @@
    and the batch has to record that and move on rather than stop.
 
    Each draw simulates five AR(1) series over 120 periods and fits a VAR(1)
-   by least squares: every series on an intercept and one lag of all five.
+   by ols (regression.h): every series on an intercept and one lag of all
+   five.
    The residual covariance is then factored by Cholesky, which is what a
    recursive identification of shocks needs. Four kinds of draw:
 
    1. Ordinary.
    2. Stuck: series 3 sits at 0.25 for the whole sample, so its lag is a
-      multiple of the intercept. mat_lstsq reports the design as rank
-      deficient at column 4, the lag of series 3.
+      multiple of the intercept. ols reports the design as rank deficient at
+      column 4, the lag of series 3, and estimates it by the pseudo-inverse
+      at rank 5. Series 3 is then fitted exactly: its residual is rounding
+      noise of order 1e-16 and it has no shock to identify. mat_chol would
+      accept the residual covariance anyway, because it judges each pivot
+      against that variable's own variance, which is the same noise, so the
+      draw is caught before that step by ols_residuals_are_zero.
    3. Tied shocks: series 5 is hit by the sum of the shocks to series 1 and
       2. Every series is an AR(1), which the VAR(1) contains exactly, so the
       residual of series 5 is exactly the sum of theirs while the lags stay
@@ -90,14 +96,10 @@ static void build_regression(Mat y, Mat *design, Mat *response) {
 }
 
 /* E^T * E / ROWS with E the residuals of the fit. */
-static Mat residual_covariance(Mat design, Mat response, Mat coefficients) {
-    Mat fitted = mat_mul(design, coefficients);
-    Mat residuals = mat_sub(response, fitted);
+static Mat residual_covariance(Mat residuals) {
     Mat transposed = mat_T(residuals);
     Mat covariance = mat_mul(transposed, residuals);
     for (int i = 0; i < SERIES * SERIES; i++) covariance.d[i] /= ROWS;
-    mat_free(fitted);
-    mat_free(residuals);
     mat_free(transposed);
     return covariance;
 }
@@ -105,7 +107,7 @@ static Mat residual_covariance(Mat design, Mat response, Mat coefficients) {
 int main(void) {
     Rng rng = rng_new(2026, 0);
     int fitted_by_kind[4] = {0}, draws_by_kind[4] = {0};
-    int rank_deficient = 0, not_positive_definite = 0;
+    int pseudo_inverse = 0, fitted_exactly = 0, not_positive_definite = 0;
     double persistence_sum[SERIES] = {0};
     int persistence_count = 0;
 
@@ -116,7 +118,7 @@ int main(void) {
     fprintf(out, "%d draws of five AR(1) series over %d periods, each fitted by a VAR(%d)\n", DRAWS, PERIODS, LAGS);
     fprintf(out, "on an intercept and %d lag%s of every series (%d regressors, %d rows).\n\n",
             LAGS, LAGS == 1 ? "" : "s", REGRESSORS, ROWS);
-    fprintf(out, "Draws that could not be estimated:\n");
+    fprintf(out, "Draws that were not ordinary:\n");
 
     for (int draw = 0; draw < DRAWS; draw++) {
         DrawKind kind = kind_of(draw);
@@ -125,29 +127,43 @@ int main(void) {
         Mat design, response;
         build_regression(y, &design, &response);
 
-        int status;
-        Mat coefficients = mat_lstsq(design, response, &status);
-        if (status != 0) {
-            fprintf(out, "  draw %3d (%s): design rank deficient at column %d\n", draw, kind_names[kind], status);
-            rank_deficient++;
-        } else {
-            Mat covariance = residual_covariance(design, response, coefficients);
-            Mat factor = mat_chol(covariance, &status);
-            if (status != 0) {
-                fprintf(out, "  draw %3d (%s): residual covariance not positive-definite at pivot %d\n",
-                        draw, kind_names[kind], status);
-                not_positive_definite++;
-            } else {
-                fitted_by_kind[kind]++;
-                if (kind == ORDINARY) {
-                    for (int k = 0; k < SERIES; k++) persistence_sum[k] += AT(coefficients, 1 + k, k);
-                    persistence_count++;
-                }
-            }
-            mat_free(factor);
-            mat_free(covariance);
+        OlsFit fit = ols(design, response);
+        assert(fit.status >= 0 && "the simulated data are finite");
+        if (fit.status > 0) {
+            fprintf(out, "  draw %3d (%s): design rank deficient at column %d, estimated by the pseudo-inverse at rank %d\n",
+                    draw, kind_names[kind], fit.status, fit.rank);
+            pseudo_inverse++;
         }
-        mat_free(coefficients);
+        int exact_series = 0;
+        for (int k = 0; k < SERIES && !exact_series; k++)
+            if (ols_residuals_are_zero(design, response, &fit, k)) exact_series = k + 1;
+        if (exact_series) {
+            fprintf(out, "  draw %3d (%s): series %d fitted exactly, no shock to identify\n",
+                    draw, kind_names[kind], exact_series);
+            fitted_exactly++;
+            ols_free(&fit);
+            mat_free(design);
+            mat_free(response);
+            mat_free(y);
+            continue;
+        }
+        int status;
+        Mat covariance = residual_covariance(fit.residuals);
+        Mat factor = mat_chol(covariance, &status);
+        if (status != 0) {
+            fprintf(out, "  draw %3d (%s): residual covariance not positive-definite at pivot %d\n",
+                    draw, kind_names[kind], status);
+            not_positive_definite++;
+        } else {
+            fitted_by_kind[kind]++;
+            if (kind == ORDINARY) {
+                for (int k = 0; k < SERIES; k++) persistence_sum[k] += AT(fit.coefficients, 1 + k, k);
+                persistence_count++;
+            }
+        }
+        mat_free(factor);
+        mat_free(covariance);
+        ols_free(&fit);
         mat_free(design);
         mat_free(response);
         mat_free(y);
@@ -156,8 +172,9 @@ int main(void) {
     fprintf(out, "\nOutcome by kind of draw:\n");
     for (int kind = 0; kind < 4; kind++)
         fprintf(out, "  %-12s %3d draws, %3d estimated\n", kind_names[kind], draws_by_kind[kind], fitted_by_kind[kind]);
-    fprintf(out, "\n%d draws rejected at the regression, %d at the Cholesky factor, %d estimated.\n",
-            rank_deficient, not_positive_definite, DRAWS - rank_deficient - not_positive_definite);
+    fprintf(out, "\n%d draws needed the pseudo-inverse, %d had a series fitted exactly, %d were rejected at the\n"
+                 "Cholesky factor, %d estimated.\n",
+            pseudo_inverse, fitted_exactly, not_positive_definite, DRAWS - fitted_exactly - not_positive_definite);
 
     fprintf(out, "\nOwn-lag coefficient averaged over the %d ordinary draws, against the value simulated\n", persistence_count);
     fprintf(out, "(least squares on an autoregression is biased toward zero in a sample this short):\n");
