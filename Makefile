@@ -135,6 +135,27 @@ examples/cluster_example: examples/cluster_example.c cluster/cluster.h random/ra
 examples/rdata_example: examples/rdata_example.c frame/rdata.h frame/gzip.h frame/csv.h frame/frame.h stats.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/rdata_example.c $(LDLIBS) -o examples/rdata_example
 
+examples/cumsum_rolling_mean_example: examples/cumsum_rolling_mean_example.c frame/frame.h linalg/tensor.h linalg/mat.h random/random.h
+	$(CC) $(CFLAGS) -I. examples/cumsum_rolling_mean_example.c $(LDLIBS) -o examples/cumsum_rolling_mean_example
+
+examples/hp_filter_example: examples/hp_filter_example.c filter/hp.h linalg/solver.h linalg/factor.h linalg/tensor.h linalg/mat.h frame/frame.h random/random.h
+	$(CC) $(STAT_CFLAGS) -I. examples/hp_filter_example.c $(LDLIBS) -o examples/hp_filter_example
+
+examples/band_solve_example: examples/band_solve_example.c linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
+	$(CC) $(CFLAGS) -I. examples/band_solve_example.c $(LDLIBS) -o examples/band_solve_example
+
+examples/var_example: examples/var_example.c $(VAR_DEPS)
+	$(CC) $(STAT_CFLAGS) -I. examples/var_example.c $(LDLIBS) -o examples/var_example
+
+examples/ols_covariance_example: examples/ols_covariance_example.c regression.h stats.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
+	$(CC) $(STAT_CFLAGS) -I. examples/ols_covariance_example.c $(LDLIBS) -o examples/ols_covariance_example
+
+examples/lp_example: examples/lp_example.c $(LP_MODEL_DEPS)
+	$(CC) $(STAT_CFLAGS) -I. examples/lp_example.c $(LDLIBS) -o examples/lp_example
+
+examples/csv_missing_values_example: examples/csv_missing_values_example.c frame/csv.h frame/frame.h linalg/mat.h
+	$(CC) $(STAT_CFLAGS) -I. examples/csv_missing_values_example.c $(LDLIBS) -o examples/csv_missing_values_example
+
 examples/join_example: examples/join_example.c frame/join.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/join_example.c $(LDLIBS) -o examples/join_example
 
