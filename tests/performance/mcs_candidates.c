@@ -82,34 +82,39 @@
 
 static const MCSArmCase cases[] = {
     /* name, n, m, bootstrap, block, hac_lag, alpha, TR?, variance,
-       seed, stream, data_seed, phi, spread, stress_only */
-    { "tmax_bootstrap", 250, 5, 2000, 10, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 123, 0, 11, 0.5, 0.06, 0, 0, 0 },
-    { "tmax_hac", 250, 5, 2000, 10, -1, 0.05, 0, MCS_ARM_VAR_HAC, 123, 0, 11, 0.5, 0.06, 0, 0, 0 },
-    { "tmax_hac_resample", 250, 5, 500, 10, -1, 0.05, 0, MCS_ARM_VAR_HAC_RESAMPLE, 123, 0, 11, 0.5, 0.06, 0, 0, 0 },
-    { "tr_bootstrap", 300, 8, 1000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 7, 1, 12, 0.3, 0.05, 0, 0, 0 },
-    { "tr_hac", 300, 8, 1000, 12, -1, 0.05, 1, MCS_ARM_VAR_HAC, 7, 1, 12, 0.3, 0.05, 0, 0, 0 },
-    { "tmax_long", 1500, 12, 1500, 25, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 31, 2, 13, 0.7, 0.03, 0, 0, 0 },
-    { "tr_wide", 200, 16, 1500, 10, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 14, 0.4, 0.02, 0, 0, 0 },
+       seed, stream, data_seed, phi, spread, stress_only, candidate_only,
+       light_fingerprint, noisy_scale */
+    { "tmax_bootstrap", 250, 5, 2000, 10, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 123, 0, 11, 0.5, 0.06, 0, 0, 0, 0 },
+    { "tmax_hac", 250, 5, 2000, 10, -1, 0.05, 0, MCS_ARM_VAR_HAC, 123, 0, 11, 0.5, 0.06, 0, 0, 0, 0 },
+    { "tmax_hac_resample", 250, 5, 500, 10, -1, 0.05, 0, MCS_ARM_VAR_HAC_RESAMPLE, 123, 0, 11, 0.5, 0.06, 0, 0, 0, 0 },
+    { "tr_bootstrap", 300, 8, 1000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 7, 1, 12, 0.3, 0.05, 0, 0, 0, 0 },
+    { "tr_hac", 300, 8, 1000, 12, -1, 0.05, 1, MCS_ARM_VAR_HAC, 7, 1, 12, 0.3, 0.05, 0, 0, 0, 0 },
+    { "tmax_long", 1500, 12, 1500, 25, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 31, 2, 13, 0.7, 0.03, 0, 0, 0, 0 },
+    { "tr_wide", 200, 16, 1500, 10, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 14, 0.4, 0.02, 0, 0, 0, 0 },
+    /* One model with twenty times the others' noise, above the model
+       count where the draw scan starts skipping rows. */
+    { "tr_noisy", 200, 40, 1000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 53, 12, 24, 0.4, 0.02, 0, 0, 0, 20 },
     /* A ladder across the model count, which is what any change to the
        per-pair scan has to be judged on: the pair count grows as the
        square of it, so a change can lose at one end of this and win at
        the other. */
-    { "tr_m24_stress", 200, 24, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 41, 9, 21, 0.4, 0.02, 1, 0, 0 },
-    { "tr_m32_stress", 200, 32, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 43, 10, 22, 0.4, 0.02, 1, 0, 0 },
-    { "tr_m34_stress", 120, 34, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 15, 0.4, 0.02, 1, 0, 0 },
-    { "tmax_m60_stress", 500, 60, 2000, 20, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 9, 4, 16, 0.5, 0.01, 1, 0, 0 },
+    { "tr_m24_stress", 200, 24, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 41, 9, 21, 0.4, 0.02, 1, 0, 0, 0 },
+    { "tr_m32_stress", 200, 32, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 43, 10, 22, 0.4, 0.02, 1, 0, 0, 0 },
+    { "tr_m34_stress", 120, 34, 2000, 12, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 5, 3, 15, 0.4, 0.02, 1, 0, 0, 0 },
+    { "tmax_m60_stress", 500, 60, 2000, 20, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 9, 4, 16, 0.5, 0.01, 1, 0, 0, 0 },
     /* The rungs that show where the pair count starts to hurt, and the
        MCS_TMAX rung at the same size. */
-    { "tr_m50_stress", 200, 50, 1000, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 17, 5, 17, 0.4, 0.015, 1, 0, 0 },
-    { "tr_m120_stress", 200, 120, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 23, 6, 18, 0.4, 0.006, 1, 0, 0 },
-    { "tmax_m120_stress", 200, 120, 500, 15, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 47, 11, 23, 0.4, 0.006, 1, 0, 0 },
+    { "tr_m50_stress", 200, 50, 1000, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 17, 5, 17, 0.4, 0.015, 1, 0, 0, 0 },
+    { "tr_m120_stress", 200, 120, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 23, 6, 18, 0.4, 0.006, 1, 0, 0, 0 },
+    { "tmax_m120_stress", 200, 120, 500, 15, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 47, 11, 23, 0.4, 0.006, 1, 0, 0, 0 },
+    { "tr_noisy_m120_stress", 200, 120, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 59, 13, 25, 0.4, 0.006, 1, 0, 0, 20 },
     /* Past here the shipped header is the thing that cannot be waited
        for, so only the candidate runs and only its cost is reported.
        Agreement is settled at the rungs above, where both arms fit. */
-    { "tr_m250_candidate", 250, 250, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 29, 7, 19, 0.4, 0.003, 1, 1, 1 },
-    { "tr_m1000_candidate", 1000, 1000, 2000, 20, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 31, 8, 20, 0.4, 0.001, 1, 1, 1 },
-    { "tmax_m250_candidate", 250, 250, 500, 15, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 29, 7, 19, 0.4, 0.003, 1, 1, 1 },
-    { "tmax_m1000_candidate", 1000, 1000, 2000, 20, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 31, 8, 20, 0.4, 0.001, 1, 1, 1 },
+    { "tr_m250_candidate", 250, 250, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 29, 7, 19, 0.4, 0.003, 1, 1, 1, 0 },
+    { "tr_m1000_candidate", 1000, 1000, 2000, 20, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 31, 8, 20, 0.4, 0.001, 1, 1, 1, 0 },
+    { "tmax_m250_candidate", 250, 250, 500, 15, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 29, 7, 19, 0.4, 0.003, 1, 1, 1, 0 },
+    { "tmax_m1000_candidate", 1000, 1000, 2000, 20, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 31, 8, 20, 0.4, 0.001, 1, 1, 1, 0 },
 };
 
 #define N_CASES ((int)(sizeof cases / sizeof cases[0]))
@@ -136,7 +141,8 @@ static void simulate_losses(const MCSArmCase *c, double *out) {
     for (int t = -50; t < c->n; t++)
         for (int j = 0; j < c->m; j++) {
             state[j] = c->phi * state[j] + innovation_sd * rng_normal(&rng);
-            if (t >= 0) out[(size_t)t * c->m + j] = 3.0 + c->spread * j + state[j];
+            double scale = c->noisy_scale > 0 && j == c->m / 2 ? c->noisy_scale : 1.0;
+            if (t >= 0) out[(size_t)t * c->m + j] = 3.0 + c->spread * j + scale * state[j];
         }
     free(state);
 }

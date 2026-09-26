@@ -283,6 +283,15 @@ static inline void _mcs_block_starts(Rng *rng, int n, int block_length, int *sta
     for (int q = 0; q < blocks; q++) starts[q] = (int)rng_below(rng, (uint64_t)n_starts);
 }
 
+/* The row indices a resample held as block starts names, in the order
+   mcs_block_indices lists them for the same draws: start, start + 1, ...
+   for each block, the last block cut off at n. out must hold n ints. */
+static inline void _mcs_expand_starts(const int *restrict starts, int n, int block_length,
+                                      int *restrict out) {
+    for (int filled = 0, q = 0; filled < n; q++)
+        for (int k = 0; k < block_length && filled < n; k++) out[filled++] = starts[q] + k;
+}
+
 /* How many loss-differential series a given statistic forms from m
    models: one per unordered pair for MCS_TR, one per model for
    MCS_TMAX. The pair series are indexed in the order (0,1), (0,2), ...,
@@ -480,6 +489,16 @@ typedef struct {
     double *scratch;
     double *resampled;
     int *idx;
+    /* Per-piece working buffers for the general path, which splits each
+       chunk of draws into n_pieces pieces run on separate threads. Piece
+       0 uses idx, resampled and scratch above; piece p >= 1 uses n ints
+       of piece_idx and, under MCS_VARIANCE_HAC_RESAMPLE, 2n doubles of
+       piece_buf (its resampled series, then its centered copy), both at
+       offset p - 1. n_pieces 1 leaves both NULL and runs the path on one
+       thread. */
+    int *piece_idx;
+    double *piece_buf;
+    int n_pieces;
     /* Block starts for draw_chunk draws at a time, starts_per_draw per
        draw. mcs_round fills a chunk from rng in the order and count a
        one-block-at-a-time loop would have drawn them, so the stream is
@@ -509,12 +528,30 @@ typedef struct {
     const int *active;
     int m0;
     /* One spread per original model pair, in the (0,1), (0,2), ...
-       order mcs_n_series documents for m0 models, formed once and fixed
-       for the run; and one reciprocal standard error per surviving pair,
-       read out of var_all again at the start of every round. MCS_TR
-       only; under MCS_TMAX inv_se holds one entry per surviving model. */
+       order mcs_n_series documents for m0 models, and its reciprocal
+       standard error, both formed once and fixed for the run. While the
+       spreads are being accumulated, inv_se_all holds each pair's partial
+       sum over one piece of the draws. MCS_TR only. */
     double *var_all;
+    double *inv_se_all;
+    /* Per original model, the largest reciprocal standard error among all
+       of its pairs, and the offset at which its row of pairs starts in
+       var_all and inv_se_all less its own index, so that pair (g,h) with
+       g < h sits at row_start[g] + h. Both fixed for the run. MCS_TR
+       only. */
+    double *model_bound;
+    int *row_start;
+    /* One reciprocal standard error per surviving model under MCS_TMAX.
+       Under MCS_TR, one per surviving pair in the order the round lists
+       them, written only in a round below MCS_ROW_PRUNE_MIN_MODELS, whose
+       scan walks the pairs in that order. */
     double *inv_se;
+    /* Whether a MCS_TR round on the shared path writes var and dbar for
+       its surviving pairs. 1 from the allocator, which is what mcs_round
+       documents; mcs() sets it to 0, because its loop reads only t, and at
+       a thousand models the two copies are most of a round's memory
+       traffic. */
+    int pair_copies;
     /* Per active model, the largest reciprocal standard error among the
        pairs stored in that model's row. A row whose widest possible
        deviation still falls short of the observed statistic against this
@@ -533,15 +570,19 @@ typedef struct {
        mcs_round call fills them; later ones read them. */
     int shared_ready;
     /* MCS_VAR_PIECES partial spread accumulators, one per piece of the
-       draw index, k_max long each: one entry per pair under MCS_TR and
-       per surviving model under MCS_TMAX. */
+       draw index, k_max long each: one entry per surviving model under
+       MCS_TMAX, and one per pair under MCS_TR when there are at most
+       MCS_SPREAD_BLOCK_PAIRS pairs. Past that MCS_TR accumulates its pairs
+       a block of rows at a time instead, in inv_se_all, and this is not
+       allocated. */
     double *var_part;
     /* How many doubles bmean holds per draw. The general path steps
        through bmean by it; the shared path steps by m0 and only
        checks that m0 fits. mcs() allocates it at the model count for that
        path and at the pair count otherwise - see mcs_round. */
     int bmean_stride;
-    /* How many series dbar, var, t, var_all and inv_se were sized for. */
+    /* How many series dbar, var, t, var_all, inv_se_all and inv_se were
+       sized for. */
     int k_max;
 } MCSScratch;
 
@@ -569,6 +610,37 @@ typedef struct {
    count instead would make the p-value depend on the hardware. */
 #define MCS_VAR_PIECES 16
 
+/* How many pairs MCS_TR accumulates at once while forming the pairs'
+   spreads: a block's partial sums and running totals are two doubles per
+   pair, 256 KiB at this size, which stays in a core's cache while every
+   draw is streamed past it. Accumulating every pair at once instead
+   swept tens of megabytes per draw at a thousand models. */
+#define MCS_SPREAD_BLOCK_PAIRS 16384
+
+/* How many blocks of rows the spreads are cut into at least, when they are
+   formed on several threads, so that a model count whose pairs fit in one
+   block still gives every thread rows to work on. */
+#define MCS_SPREAD_MIN_BLOCKS 64
+
+/* The factor the weighted row bound in MCS_TR's draw scan is widened by.
+   That bound adds two rounded products where a pair's standardised
+   deviation is one rounded product, so in exact arithmetic it is at least
+   the pair's value but after rounding it can fall a few units in the last
+   place below it; widened by one part in 10^12 it stays above. The
+   distance-to-extremes bound needs no such factor: it rounds the same
+   subtraction the pair does and multiplies by a factor at least the
+   pair's own. */
+#define MCS_WEIGHTED_BOUND_SLACK (1.0 + 1e-12)
+
+/* Surviving pairs from which a MCS_TR round's table of t-statistics, and
+   the choice of the model it drops, are formed on several threads.
+   Measured on the whole mcs() call, MCS_TR under the bootstrap variance,
+   6 alternating runs per value: at a thousand models over a thousand
+   observations with 2000 draws, 0.95 s at 4096 and at 16384 pairs, 0.97 s
+   at 65536 and 1.14 s at 262144; at 250 models over 250 observations
+   with 500 draws, medians of 15.0 ms at 4096 and 19.7 ms at 16384. */
+#define MCS_PAIR_PARALLEL_MIN 4096
+
 /* Model count from which a draw's pair scan is worth pruning row by row.
    The row test costs one comparison per row and saves up to m(m-1)/2
    pair visits, so it pays once the rows are long and costs when they are
@@ -587,6 +659,24 @@ typedef struct {
    was the team and not the chunking. */
 #define MCS_PARALLEL_MIN_WORK 262144
 
+/* How many pieces the general path, which the two HAC variants take,
+   splits a chunk of draws into so that they run on separate threads.
+   Every piece writes its own draws' entries of bmean, or adds its own
+   exceedances to an integer count, so the answer does not depend on
+   this number; it bounds how many threads the path can use and how many
+   per-observation buffers it holds, one per piece beyond the first. */
+#define MCS_GENERAL_PIECES 16
+
+/* The work in one chunk of the general path, in the units
+   MCS_PARALLEL_MIN_WORK is measured in: one gathered element per
+   observation per series per draw, and under MCS_VARIANCE_HAC_RESAMPLE
+   hac_lag + 1 more per observation for the HAC variance each resampled
+   series is divided by. */
+static inline size_t _mcs_general_work(int chunk, int k_count, int n, MCSVariance variance, int hac_lag) {
+    size_t per_obs = variance == MCS_VARIANCE_HAC_RESAMPLE ? (size_t)hac_lag + 2 : 1;
+    return (size_t)chunk * (size_t)k_count * (size_t)n * per_obs;
+}
+
 /* The allocator both mcs_scratch_new and mcs() reach, differing in how
    much of each buffer they need.
 
@@ -597,14 +687,22 @@ typedef struct {
    per model where the general path needs one per pair, and at a thousand
    models those differ by a factor of five hundred.
 
-   chunk_draws 0 leaves out the draw chunk and every table only the
-   shared path reads. want_pair_tables adds the pair spreads and row
-   bounds MCS_TR reads there, want_totals the per-draw totals MCS_TMAX
-   reads there; mcs_scratch_new asks for both. */
+   chunk_draws 0 leaves out the draw chunk. The tables only the shared
+   path reads are allocated when there is a chunk, draws are kept, and
+   at least one of want_pair_tables and want_totals is set:
+   want_pair_tables adds the pair spreads and row bounds MCS_TR reads
+   there, want_totals the per-draw totals MCS_TMAX reads there;
+   mcs_scratch_new asks for both.
+
+   n_pieces is how many pieces the general path splits a chunk of draws
+   into, 1 for one thread; piece_bufs adds the two per-observation
+   series each extra piece needs under MCS_VARIANCE_HAC_RESAMPLE. */
 static inline MCSScratch _mcs_scratch_alloc(int n, int k_max, int m_max,
                                             int d_series, int keep_draws, int chunk_draws,
-                                            int starts_per_draw, int want_pair_tables, int want_totals) {
+                                            int starts_per_draw, int want_pair_tables, int want_totals,
+                                            int n_pieces, int piece_bufs) {
     assert(n >= 1 && k_max >= 1 && m_max >= 1 && d_series >= 0 && keep_draws >= 0);
+    assert(n_pieces >= 1 && (n_pieces == 1 || d_series));
     MCSScratch sc;
     sc.d = d_series ? (double *)malloc((size_t)d_series * n * sizeof *sc.d) : NULL;
     sc.dbar = (double *)malloc((size_t)k_max * sizeof *sc.dbar);
@@ -615,14 +713,25 @@ static inline MCSScratch _mcs_scratch_alloc(int n, int k_max, int m_max,
     sc.resampled = d_series ? (double *)malloc((size_t)n * sizeof *sc.resampled) : NULL;
     sc.idx = d_series ? (int *)malloc((size_t)n * sizeof *sc.idx) : NULL;
     assert(starts_per_draw >= 1 && starts_per_draw <= n);
-    sc.draw_chunk = chunk_draws && keep_draws ? (keep_draws < chunk_draws ? keep_draws : chunk_draws) : 0;
+    sc.n_pieces = n_pieces;
+    sc.piece_idx = n_pieces > 1 ? (int *)malloc((size_t)(n_pieces - 1) * n * sizeof *sc.piece_idx) : NULL;
+    sc.piece_buf = n_pieces > 1 && piece_bufs
+                   ? (double *)malloc((size_t)(n_pieces - 1) * 2 * n * sizeof *sc.piece_buf) : NULL;
+    sc.draw_chunk = keep_draws && keep_draws < chunk_draws ? keep_draws : chunk_draws;
     sc.draws = sc.draw_chunk ? (int *)malloc((size_t)sc.draw_chunk * starts_per_draw * sizeof *sc.draws) : NULL;
     sc.starts_per_draw = starts_per_draw;
-    int shared = sc.draw_chunk > 0;
+    int shared = sc.draw_chunk > 0 && keep_draws > 0 && (want_pair_tables || want_totals);
     sc.ref = shared ? (double *)malloc((size_t)m_max * sizeof *sc.ref) : NULL;
-    sc.var_part = shared ? (double *)malloc((size_t)MCS_VAR_PIECES * k_max * sizeof *sc.var_part) : NULL;
-    sc.inv_se = shared ? (double *)malloc((size_t)k_max * sizeof *sc.inv_se) : NULL;
+    sc.var_part = shared && (want_totals || k_max <= MCS_SPREAD_BLOCK_PAIRS)
+                  ? (double *)malloc((size_t)MCS_VAR_PIECES * k_max * sizeof *sc.var_part) : NULL;
+    int unpruned_pairs = (MCS_ROW_PRUNE_MIN_MODELS - 1) * (MCS_ROW_PRUNE_MIN_MODELS - 2) / 2;
+    int inv_se_len = want_totals || k_max < unpruned_pairs ? k_max : unpruned_pairs;
+    sc.inv_se = shared ? (double *)malloc((size_t)inv_se_len * sizeof *sc.inv_se) : NULL;
     sc.var_all = shared && want_pair_tables ? (double *)malloc((size_t)k_max * sizeof *sc.var_all) : NULL;
+    sc.inv_se_all = shared && want_pair_tables ? (double *)malloc((size_t)k_max * sizeof *sc.inv_se_all) : NULL;
+    sc.model_bound = shared && want_pair_tables ? (double *)malloc((size_t)m_max * sizeof *sc.model_bound) : NULL;
+    sc.row_start = shared && want_pair_tables ? (int *)malloc((size_t)m_max * sizeof *sc.row_start) : NULL;
+    sc.pair_copies = 1;
     sc.row_bound = shared && want_pair_tables ? (double *)malloc((size_t)m_max * sizeof *sc.row_bound) : NULL;
     sc.draw_total = shared && want_totals ? (double *)malloc((size_t)keep_draws * sizeof *sc.draw_total) : NULL;
     sc.losses = NULL;
@@ -634,9 +743,11 @@ static inline MCSScratch _mcs_scratch_alloc(int n, int k_max, int m_max,
     assert(sc.dbar && sc.var && sc.t);
     assert(!d_series || (sc.d && sc.scratch && sc.resampled && sc.idx));
     assert(!keep_draws || sc.bmean);
-    assert(!shared || (sc.draws && sc.ref && sc.var_part && sc.inv_se));
-    assert(!(shared && want_pair_tables) || (sc.var_all && sc.row_bound));
-    assert(!(shared && want_totals) || sc.draw_total);
+    assert(n_pieces == 1 || (sc.piece_idx && (!piece_bufs || sc.piece_buf)));
+    assert(!shared || (sc.draws && sc.ref));
+    assert(!(shared && want_pair_tables)
+           || (sc.var_all && sc.inv_se_all && sc.row_bound && sc.model_bound && sc.row_start && sc.inv_se));
+    assert(!(shared && want_totals) || (sc.draw_total && sc.var_part && sc.inv_se));
     return sc;
 }
 
@@ -645,21 +756,29 @@ static inline MCSScratch _mcs_scratch_alloc(int n, int k_max, int m_max,
    shape where the model count exceeds the pair count. Everywhere else
    the pair count already covers it, so this costs nothing. */
 static inline MCSScratch mcs_scratch_new(int n, int k_max, int keep_draws) {
-    return _mcs_scratch_alloc(n, k_max, k_max < 2 ? 2 : k_max, k_max, keep_draws, MCS_DRAW_CHUNK, n, 1, 1);
+    return _mcs_scratch_alloc(n, k_max, k_max < 2 ? 2 : k_max, k_max, keep_draws, MCS_DRAW_CHUNK, n, 1, 1, 1, 0);
 }
 
 static inline void mcs_scratch_free(MCSScratch *sc) {
     free(sc->d); free(sc->dbar); free(sc->var); free(sc->t);
     free(sc->bmean); free(sc->scratch); free(sc->resampled); free(sc->idx);
     free(sc->draws); free(sc->ref); free(sc->var_part);
-    free(sc->var_all); free(sc->inv_se); free(sc->row_bound); free(sc->draw_total);
+    free(sc->var_all); free(sc->inv_se_all); free(sc->model_bound); free(sc->row_start);
+    free(sc->inv_se); free(sc->row_bound); free(sc->draw_total);
+    free(sc->piece_idx); free(sc->piece_buf);
     sc->d = sc->dbar = sc->var = sc->t = sc->bmean = NULL;
     sc->scratch = sc->resampled = NULL;
     sc->idx = NULL;
     sc->draws = NULL;
     sc->ref = NULL;
     sc->var_part = NULL;
-    sc->var_all = sc->inv_se = sc->row_bound = sc->draw_total = NULL;
+    sc->var_all = sc->inv_se_all = sc->inv_se = sc->row_bound = sc->draw_total = NULL;
+    sc->model_bound = NULL;
+    sc->row_start = NULL;
+    sc->piece_idx = NULL;
+    sc->piece_buf = NULL;
+    sc->n_pieces = 0;
+    sc->pair_copies = 0;
     sc->losses = NULL;
     sc->active = NULL;
     sc->m0 = 0;
@@ -752,22 +871,55 @@ static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
 
     int exceedances = 0;
 
+    /* Both HAC variants and a caller's own bootstrap loop draw their
+       blocks a chunk at a time, serially and in the order a
+       one-block-at-a-time loop would have drawn them, so the stream is
+       consumed identically; the chunk is then cut into pieces that run
+       on separate threads, each with its own index and series buffers.
+       A draw's arithmetic is the same whichever piece runs it. */
+    int general_starts = 0;
+    if (!factored) {
+        general_starts = _mcs_n_block_starts(n, opt.block_length);
+        assert(sc->draws && sc->draw_chunk >= 1 && general_starts <= sc->starts_per_draw
+               && "mcs_round: the general path needs a draw chunk");
+    }
+
     if (opt.variance == MCS_VARIANCE_HAC_RESAMPLE) {
         for (int k = 0; k < k_count; k++) sc->t[k] = sc->dbar[k] / sqrt(sc->var[k]);
         double t_emp = mcs_reduce(sc->t, k_count, opt.stat);
-        for (int b = 0; b < opt.bootstrap; b++) {
-            mcs_block_indices(rng, n, opt.block_length, sc->idx);
-            double t_star = -DBL_MAX;
-            for (int k = 0; k < k_count; k++) {
-                const double *restrict src = sc->d + (size_t)k * n;
-                for (int i = 0; i < n; i++) sc->resampled[i] = src[sc->idx[i]];
-                double mu;
-                double v = mcs_hac_var_mean(sc->resampled, n, hac_lag, sc->scratch, &mu);
-                double tk = (mu - sc->dbar[k]) / sqrt(v);
-                double val = opt.stat == MCS_TR ? fabs(tk) : tk;
-                if (val > t_star) t_star = val;
+        for (int b0 = 0; b0 < opt.bootstrap; b0 += sc->draw_chunk) {
+            int chunk = opt.bootstrap - b0;
+            if (chunk > sc->draw_chunk) chunk = sc->draw_chunk;
+            for (int c = 0; c < chunk; c++)
+                _mcs_block_starts(rng, n, opt.block_length, sc->draws + (size_t)c * general_starts);
+            int pieces = 1;
+            if (_mcs_general_work(chunk, k_count, n, opt.variance, hac_lag) >= MCS_PARALLEL_MIN_WORK)
+                pieces = sc->n_pieces < chunk ? sc->n_pieces : chunk;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) reduction(+:exceedances) if (pieces > 1)
+#endif
+            for (int piece = 0; piece < pieces; piece++) {
+                int *restrict idx = piece ? sc->piece_idx + (size_t)(piece - 1) * n : sc->idx;
+                double *restrict resampled = piece ? sc->piece_buf + (size_t)(piece - 1) * 2 * n
+                                                   : sc->resampled;
+                double *restrict centered = piece ? resampled + n : sc->scratch;
+                int c0 = (int)((long)piece * chunk / pieces);
+                int c1 = (int)((long)(piece + 1) * chunk / pieces);
+                for (int c = c0; c < c1; c++) {
+                    _mcs_expand_starts(sc->draws + (size_t)c * general_starts, n, opt.block_length, idx);
+                    double t_star = -DBL_MAX;
+                    for (int k = 0; k < k_count; k++) {
+                        const double *restrict src = sc->d + (size_t)k * n;
+                        for (int i = 0; i < n; i++) resampled[i] = src[idx[i]];
+                        double mu;
+                        double v = mcs_hac_var_mean(resampled, n, hac_lag, centered, &mu);
+                        double tk = (mu - sc->dbar[k]) / sqrt(v);
+                        double val = opt.stat == MCS_TR ? fabs(tk) : tk;
+                        if (val > t_star) t_star = val;
+                    }
+                    if (t_star > t_emp) exceedances++;
+                }
             }
-            if (t_star > t_emp) exceedances++;
         }
         *stat_out = t_emp;
         return (double)exceedances / opt.bootstrap;
@@ -817,8 +969,9 @@ static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
         const int *restrict active = sc->active;
         int all_pairs = m0 * (m0 - 1) / 2;
         assert(active && m0 >= m);
-        assert(sc->draws && sc->ref && sc->var_part && sc->inv_se
-               && (opt.stat == MCS_TMAX || (sc->var_all && sc->row_bound))
+        assert(sc->draws && sc->ref
+               && (opt.stat == MCS_TMAX ? sc->var_part && sc->inv_se && sc->draw_total
+                                        : sc->var_all && sc->inv_se_all && sc->row_bound)
                && "mcs_round: the shared path needs a scratch allocated for it");
         assert(m0 <= sc->bmean_stride && (opt.stat == MCS_TR ? all_pairs : m0) <= sc->k_max
                && "mcs_round: scratch is too small for the shared tables");
@@ -853,42 +1006,109 @@ static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
                                      sc->bmean + (size_t)(b0 + c) * m0);
             }
 
-            /* Every original pair's spread, one piece of the draw index
-               at a time. Within a piece the draws are walked in order
-               with that draw's own m0 doubles hot and the accumulator
-               walked in order; the pieces are then added in order, so
-               the answer does not move with the core count. */
-            int pieces = 1;
-            if ((size_t)opt.bootstrap * (size_t)all_pairs >= MCS_PARALLEL_MIN_WORK)
-                pieces = MCS_VAR_PIECES < opt.bootstrap ? MCS_VAR_PIECES : opt.bootstrap;
-            if (opt.stat != MCS_TR) pieces = 0;
+            /* Every original pair's spread, under MCS_TR, and its
+               reciprocal standard error: a pair's spread does not change
+               as the set shrinks, so both are formed here once rather than
+               once per round.
+
+               The draw index is cut into MCS_VAR_PIECES fixed pieces; a
+               pair's squared deviations are summed in order within each
+               piece, and the pieces' sums are added in order, so the
+               answer does not move with the core count. Up to
+               MCS_SPREAD_BLOCK_PAIRS pairs, every piece keeps its own
+               accumulator over all pairs and the pieces run on separate
+               threads. Beyond it the pairs are taken a block of rows at a
+               time instead, each block's partial sums in inv_se_all and
+               running totals in var_all, so that both stay in cache while
+               the draws stream past, and the blocks run on separate
+               threads. The two orders of work add the same numbers in the
+               same order, so they give the same bits. */
+            if (opt.stat == MCS_TR) {
+                int pieces = 1;
+                if ((size_t)opt.bootstrap * (size_t)all_pairs >= MCS_PARALLEL_MIN_WORK)
+                    pieces = MCS_VAR_PIECES < opt.bootstrap ? MCS_VAR_PIECES : opt.bootstrap;
+                if (all_pairs <= MCS_SPREAD_BLOCK_PAIRS) {
+                    assert(sc->var_part && "mcs_round: the per-piece spreads need their accumulators");
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) if (pieces > 1)
 #endif
-            for (int piece = 0; piece < pieces; piece++) {
-                int b0 = (int)((long)piece * opt.bootstrap / pieces);
-                int b1 = (int)((long)(piece + 1) * opt.bootstrap / pieces);
-                double *restrict acc = sc->var_part + (size_t)piece * all_pairs;
-                for (int k = 0; k < all_pairs; k++) acc[k] = 0;
-                for (int b = b0; b < b1; b++) {
-                    const double *restrict u = sc->bmean + (size_t)b * m0;
-                    int k = 0;
-                    for (int g = 0; g < m0; g++) {
-                        double ug = u[g];
-                        for (int h = g + 1; h < m0; h++) {
-                            double e = ug - u[h];
-                            acc[k++] += e * e;
+                    for (int piece = 0; piece < pieces; piece++) {
+                        int b0 = (int)((long)piece * opt.bootstrap / pieces);
+                        int b1 = (int)((long)(piece + 1) * opt.bootstrap / pieces);
+                        double *restrict acc = sc->var_part + (size_t)piece * all_pairs;
+                        for (int k = 0; k < all_pairs; k++) acc[k] = 0;
+                        for (int b = b0; b < b1; b++) {
+                            const double *restrict u = sc->bmean + (size_t)b * m0;
+                            int k = 0;
+                            for (int g = 0; g < m0; g++) {
+                                double ug = u[g];
+                                for (int h = g + 1; h < m0; h++) {
+                                    double e = ug - u[h];
+                                    acc[k++] += e * e;
+                                }
+                            }
                         }
+                    }
+                    for (int k = 0; k < all_pairs; k++) {
+                        double ss = 0;
+                        for (int piece = 0; piece < pieces; piece++)
+                            ss += sc->var_part[(size_t)piece * all_pairs + k];
+                        sc->var_all[k] = mcs_floor_var(ss / opt.bootstrap);
+                        sc->inv_se_all[k] = 1.0 / sqrt(sc->var_all[k]);
+                    }
+                }
+                int rows_per_block = MCS_SPREAD_BLOCK_PAIRS / (m0 - 1);
+                if (pieces > 1 && rows_per_block > (m0 - 1) / MCS_SPREAD_MIN_BLOCKS)
+                    rows_per_block = (m0 - 1) / MCS_SPREAD_MIN_BLOCKS;
+                if (rows_per_block < 1) rows_per_block = 1;
+                int blocks = all_pairs <= MCS_SPREAD_BLOCK_PAIRS ? 0 : (m0 - 1 + rows_per_block - 1) / rows_per_block;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 1) if (pieces > 1)
+#endif
+                for (int block = 0; block < blocks; block++) {
+                    int g0 = block * rows_per_block;
+                    int g1 = g0 + rows_per_block < m0 - 1 ? g0 + rows_per_block : m0 - 1;
+                    int k0 = g0 * m0 - g0 * (g0 + 1) / 2;
+                    int k1 = g1 * m0 - g1 * (g1 + 1) / 2;
+                    double *restrict total = sc->var_all + k0;
+                    double *restrict part = sc->inv_se_all + k0;
+                    for (int k = 0; k < k1 - k0; k++) total[k] = 0;
+                    for (int piece = 0; piece < pieces; piece++) {
+                        int b0 = (int)((long)piece * opt.bootstrap / pieces);
+                        int b1 = (int)((long)(piece + 1) * opt.bootstrap / pieces);
+                        for (int k = 0; k < k1 - k0; k++) part[k] = 0;
+                        for (int b = b0; b < b1; b++) {
+                            const double *restrict u = sc->bmean + (size_t)b * m0;
+                            int k = 0;
+                            for (int g = g0; g < g1; g++) {
+                                double ug = u[g];
+                                for (int h = g + 1; h < m0; h++) {
+                                    double e = ug - u[h];
+                                    part[k++] += e * e;
+                                }
+                            }
+                        }
+                        for (int k = 0; k < k1 - k0; k++) total[k] += part[k];
+                    }
+                    for (int k = 0; k < k1 - k0; k++) {
+                        total[k] = mcs_floor_var(total[k] / opt.bootstrap);
+                        part[k] = 1.0 / sqrt(total[k]);
                     }
                 }
             }
-            if (opt.stat == MCS_TR)
-                for (int k = 0; k < all_pairs; k++) {
-                    double ss = 0;
-                    for (int piece = 0; piece < pieces; piece++)
-                        ss += sc->var_part[(size_t)piece * all_pairs + k];
-                    sc->var_all[k] = mcs_floor_var(ss / opt.bootstrap);
-                }
+            /* Each model's largest reciprocal standard error over all of
+               its pairs, which the row test in the draw scan weights a
+               model's deviation by. */
+            if (opt.stat == MCS_TR) {
+                for (int g = 0; g < m0; g++) sc->model_bound[g] = 0;
+                for (int g = 0; g < m0; g++) sc->row_start[g] = g * m0 - g * (g + 1) / 2 - g - 1;
+                for (int g = 0, k = 0; g < m0; g++)
+                    for (int h = g + 1; h < m0; h++, k++) {
+                        double w = sc->inv_se_all[k];
+                        if (w > sc->model_bound[g]) sc->model_bound[g] = w;
+                        if (w > sc->model_bound[h]) sc->model_bound[h] = w;
+                    }
+            }
             sc->shared_ready = 1;
         }
 
@@ -970,76 +1190,112 @@ static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
 
         /* This round's surviving pairs, read out of the shared tables.
            The original index of pair (i,j) of the active set follows
-           from active being ascending. */
-        {
-            int k = 0;
-            for (int i = 0; i < m; i++) {
-                int g = active[i];
-                int base = g * m0 - g * (g + 1) / 2 - g - 1;
-                double widest = 0;
-                for (int j = i + 1; j < m; j++) {
-                    int h = active[j];
-                    double v = sc->var_all[base + h];
-                    sc->var[k] = v;
-                    sc->dbar[k] = sc->ref[g] - sc->ref[h];
-                    sc->inv_se[k] = 1.0 / sqrt(v);
-                    sc->t[k] = sc->dbar[k] * sc->inv_se[k];
-                    if (sc->inv_se[k] > widest) widest = sc->inv_se[k];
-                    k++;
+           from active being ascending, and row i of the active set
+           starts at i*m - i(i+1)/2 in this round's order, so the rows
+           are independent and are split across threads. The observed
+           statistic is their largest |t|, which is order free. Below
+           MCS_ROW_PRUNE_MIN_MODELS the draw scan walks the pairs in this
+           order, so their reciprocal standard errors are copied into
+           inv_se in it; above, the scan reads inv_se_all directly. */
+        const double *restrict inv_se_all = sc->inv_se_all;
+        int pair_copies = sc->pair_copies;
+        int prune = m >= MCS_ROW_PRUNE_MIN_MODELS;
+        double t_emp_tr = -DBL_MAX;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 16) reduction(max:t_emp_tr) \
+    if ((size_t)k_count >= MCS_PAIR_PARALLEL_MIN)
+#endif
+        for (int i = 0; i < m; i++) {
+            int g = active[i];
+            const double *restrict w_row = inv_se_all + sc->row_start[g];
+            int k = i * m - i * (i + 1) / 2;
+            double widest = 0;
+            for (int j = i + 1; j < m; j++, k++) {
+                int h = active[j];
+                double dbar = sc->ref[g] - sc->ref[h];
+                double w = w_row[h];
+                if (pair_copies) {
+                    sc->var[k] = sc->var_all[sc->row_start[g] + h];
+                    sc->dbar[k] = dbar;
                 }
-                sc->row_bound[i] = widest;
+                sc->t[k] = dbar * w;
+                if (!prune) sc->inv_se[k] = w;
+                if (w > widest) widest = w;
+                double a = fabs(sc->t[k]);
+                if (a > t_emp_tr) t_emp_tr = a;
             }
+            sc->row_bound[i] = widest;
         }
-        double t_emp_tr = mcs_reduce(sc->t, k_count, MCS_TR);
 
         /* Only whether a draw's statistic exceeds the observed one is
            needed, never the statistic itself, so a draw stops at its
-           first exceeding pair, and a row that cannot hold one is never
-           entered.
+           first exceeding pair, and from MCS_ROW_PRUNE_MIN_MODELS on a
+           row that cannot hold one is never entered.
 
-           The row test is exact rather than a heuristic. Model i's
-           largest possible deviation against any other active model is
-           its distance to whichever of the two extremes is further, and
-           every pair in its row divides by at least the row's smallest
-           standard error; if that product still falls short of the
-           observed statistic then no pair in the row can exceed it. So
-           the count is the same count, and skipping costs one pass over
-           the draw to find its extremes and one comparison per row,
-           against the m(m-1)/2 visits it replaces. Under a round
-           that rejects, most draws do not exceed and most rows are
-           skipped, which is where the time went.
+           The row test is exact rather than a heuristic. Row i holds the
+           pairs of model i with the models after it, and every pair in it
+           is multiplied by a reciprocal standard error w_ih of at most
+           row_bound[i]. Two bounds on the row's
+           largest standardised deviation are formed from the models after
+           i, which is why the rows are walked from the last one up:
+           model i's distance to the further of their two extremes, times
+           row_bound[i]; and |u_i| times row_bound[i] plus the largest
+           |u_h| times model_bound[h] among them, since
+           |u_i - u_h| w_ih <= |u_i| w_ih + |u_h| w_ih and w_ih is at most
+           both bounds. The second keeps a single very noisy model, whose
+           deviations are large but whose pairs all have large standard
+           errors, from making the first too wide to skip anything. If the
+           smaller of the two still falls short of the observed statistic
+           then no pair in the row can exceed it, so the count is the same
+           count.
 
            The count is an integer sum and the maximum is order free, so
            the answer does not depend on the thread count. */
-        int prune = m >= MCS_ROW_PRUNE_MIN_MODELS;
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) reduction(+:exceedances) \
     if ((size_t)opt.bootstrap * (size_t)k_count >= MCS_PARALLEL_MIN_WORK)
 #endif
         for (int b = 0; b < opt.bootstrap; b++) {
             const double *restrict u = sc->bmean + (size_t)b * m0;
-            double lo = 0, hi = 0;
-            if (prune) {
-                lo = hi = u[active[0]];
-                for (int i = 1; i < m; i++) {
-                    double x = u[active[i]];
-                    if (x < lo) lo = x;
-                    else if (x > hi) hi = x;
+            if (!prune) {
+                int over = 0, k = 0;
+                for (int i = 0; i < m - 1 && !over; i++) {
+                    double ug = u[active[i]];
+                    for (int j = i + 1; j < m; j++)
+                        if (fabs(ug - u[active[j]]) * sc->inv_se[k + j - i - 1] > t_emp_tr) {
+                            over = 1;
+                            break;
+                        }
+                    k += m - 1 - i;
                 }
+                exceedances += over;
+                continue;
             }
-            int over = 0, k = 0;
-            for (int i = 0; i < m - 1 && !over; i++) {
-                double ug = u[active[i]];
-                if (prune) {
-                    double reach = ug - lo > hi - ug ? ug - lo : hi - ug;
-                    if (reach * sc->row_bound[i] <= t_emp_tr) { k += m - 1 - i; continue; }
-                }
-                for (int j = i + 1; j < m; j++)
-                    if (fabs(ug - u[active[j]]) * sc->inv_se[k + j - i - 1] > t_emp_tr) {
-                        over = 1;
-                        break;
+            int last = active[m - 1];
+            double lo = u[last], hi = u[last];
+            double later_weighted = fabs(u[last]) * sc->model_bound[last];
+            int over = 0;
+            for (int i = m - 2; i >= 0 && !over; i--) {
+                int g = active[i];
+                double ug = u[g];
+                double reach = ug - lo > hi - ug ? ug - lo : hi - ug;
+                double bound = reach * sc->row_bound[i];
+                double weighted = (fabs(ug) * sc->row_bound[i] + later_weighted) * MCS_WEIGHTED_BOUND_SLACK;
+                if (weighted < bound) bound = weighted;
+                if (bound > t_emp_tr) {
+                    const double *restrict w_row = inv_se_all + sc->row_start[g];
+                    for (int j = i + 1; j < m; j++) {
+                        int h = active[j];
+                        if (fabs(ug - u[h]) * w_row[h] > t_emp_tr) {
+                            over = 1;
+                            break;
+                        }
                     }
-                k += m - 1 - i;
+                }
+                if (ug < lo) lo = ug;
+                if (ug > hi) hi = ug;
+                double weighted_here = fabs(ug) * sc->model_bound[g];
+                if (weighted_here > later_weighted) later_weighted = weighted_here;
             }
             exceedances += over;
         }
@@ -1047,18 +1303,35 @@ static inline double mcs_round(int n, int k_count, MCSOptions opt, int hac_lag,
         return (double)exceedances / opt.bootstrap;
     }
 
-    /* Left serial and one draw at a time. It serves MCS_VARIANCE_HAC,
-       and the bootstrap variance only for a caller's own loop that has
-       not set losses; mcs() takes the shared path above for the bootstrap
-       variance under either statistic. */
-    for (int b = 0; b < opt.bootstrap; b++) {
-        mcs_block_indices(rng, n, opt.block_length, sc->idx);
-        double *restrict row = sc->bmean + (size_t)b * sc->bmean_stride;
-        for (int k = 0; k < k_count; k++) {
-            const double *restrict src = sc->d + (size_t)k * n;
-            double mu = 0;
-            for (int i = 0; i < n; i++) mu += src[sc->idx[i]];
-            row[k] = mu / n - sc->dbar[k];
+    /* Serves MCS_VARIANCE_HAC, and the bootstrap variance only for a
+       caller's own loop that has not set losses; mcs() takes the shared
+       path above for the bootstrap variance under either statistic. Each
+       piece writes only its own draws' rows of bmean. */
+    for (int b0 = 0; b0 < opt.bootstrap; b0 += sc->draw_chunk) {
+        int chunk = opt.bootstrap - b0;
+        if (chunk > sc->draw_chunk) chunk = sc->draw_chunk;
+        for (int c = 0; c < chunk; c++)
+            _mcs_block_starts(rng, n, opt.block_length, sc->draws + (size_t)c * general_starts);
+        int pieces = 1;
+        if (_mcs_general_work(chunk, k_count, n, opt.variance, hac_lag) >= MCS_PARALLEL_MIN_WORK)
+            pieces = sc->n_pieces < chunk ? sc->n_pieces : chunk;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (pieces > 1)
+#endif
+        for (int piece = 0; piece < pieces; piece++) {
+            int *restrict idx = piece ? sc->piece_idx + (size_t)(piece - 1) * n : sc->idx;
+            int c0 = (int)((long)piece * chunk / pieces);
+            int c1 = (int)((long)(piece + 1) * chunk / pieces);
+            for (int c = c0; c < c1; c++) {
+                _mcs_expand_starts(sc->draws + (size_t)c * general_starts, n, opt.block_length, idx);
+                double *restrict row = sc->bmean + (size_t)(b0 + c) * sc->bmean_stride;
+                for (int k = 0; k < k_count; k++) {
+                    const double *restrict src = sc->d + (size_t)k * n;
+                    double mu = 0;
+                    for (int i = 0; i < n; i++) mu += src[idx[i]];
+                    row[k] = mu / n - sc->dbar[k];
+                }
+            }
         }
     }
     if (opt.variance == MCS_VARIANCE_BOOTSTRAP)
@@ -1117,7 +1390,7 @@ static inline void mcs_tstats(const DataFrame *losses, MCSOptions opt, double *t
     int factored = opt.variance == MCS_VARIANCE_BOOTSTRAP;
     MCSScratch sc = factored ? _mcs_scratch_alloc(n, k_count, m, 0, keep, MCS_DRAW_CHUNK,
                                                   _mcs_n_block_starts(n, opt.block_length),
-                                                  opt.stat == MCS_TR, opt.stat == MCS_TMAX)
+                                                  opt.stat == MCS_TR, opt.stat == MCS_TMAX, 1, 0)
                              : mcs_scratch_new(n, k_count, keep);
     double *buf = (double *)malloc((size_t)n * m * sizeof *buf);
     int *identity = (int *)malloc((size_t)m * sizeof *identity);
@@ -1178,14 +1451,24 @@ static inline int mcs_worst_from_tstats(const double *restrict t, int m, MCSStat
             if (t[i] > best) { best = t[i]; worst = i; }
         return worst;
     }
-    for (int i = 0; i < m; i++) rowmax[i] = -DBL_MAX;
-    int k = 0;
-    for (int i = 0; i < m; i++)
-        for (int j = i + 1; j < m; j++) {
-            if (t[k] > rowmax[i]) rowmax[i] = t[k];
-            if (-t[k] > rowmax[j]) rowmax[j] = -t[k];
-            k++;
+    /* Each model's maximum is formed on its own, from the pairs above it
+       in its column and the pairs in its row, so the models are
+       independent and are split across threads; a maximum is order free,
+       so the answer does not depend on the thread count. */
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 16) if ((size_t)m * (size_t)(m - 1) / 2 >= MCS_PAIR_PARALLEL_MIN)
+#endif
+    for (int i = 0; i < m; i++) {
+        double r = -DBL_MAX;
+        for (int j = 0; j < i; j++) {
+            double v = -t[j * m - j * (j + 1) / 2 + (i - j - 1)];
+            if (v > r) r = v;
         }
+        const double *restrict row = t + (i * m - i * (i + 1) / 2);
+        for (int j = i + 1; j < m; j++)
+            if (row[j - i - 1] > r) r = row[j - i - 1];
+        rowmax[i] = r;
+    }
     for (int i = 0; i < m; i++)
         if (rowmax[i] > best) { best = rowmax[i]; worst = i; }
     return worst;
@@ -1381,10 +1664,26 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
        buffers alone would take sized by pairs, and at 23 MiB under
        MCS_TMAX. */
     int factored = opt.variance == MCS_VARIANCE_BOOTSTRAP;
+    /* The general path holds one index buffer per piece, and a
+       resampled and a centered series per piece under
+       MCS_VARIANCE_HAC_RESAMPLE, only when its first round, the largest,
+       is large enough to be split across threads at all. */
+    int chunk = MCS_DRAW_CHUNK;
+    if (!factored) {
+        size_t per_draw = _mcs_general_work(1, k_max, n, opt.variance, hac_lag);
+        size_t reach = (MCS_PARALLEL_MIN_WORK + per_draw - 1) / per_draw;
+        if (reach > (size_t)chunk) chunk = reach > (size_t)opt.bootstrap ? opt.bootstrap : (int)reach;
+    }
+    if (chunk > opt.bootstrap) chunk = opt.bootstrap;
+    int general_pieces = !factored && _mcs_general_work(chunk, k_max, n, opt.variance, hac_lag)
+                                          >= MCS_PARALLEL_MIN_WORK ? MCS_GENERAL_PIECES : 1;
     MCSScratch sc = factored ? _mcs_scratch_alloc(n, k_max, m0, 0, keep, MCS_DRAW_CHUNK,
                                                   _mcs_n_block_starts(n, opt.block_length),
-                                                  opt.stat == MCS_TR, opt.stat == MCS_TMAX)
-                             : _mcs_scratch_alloc(n, k_max, k_max, k_max, keep, 0, n, 0, 0);
+                                                  opt.stat == MCS_TR, opt.stat == MCS_TMAX, 1, 0)
+                             : _mcs_scratch_alloc(n, k_max, k_max, k_max, keep, chunk,
+                                                  _mcs_n_block_starts(n, opt.block_length), 0, 0,
+                                                  general_pieces,
+                                                  opt.variance == MCS_VARIANCE_HAC_RESAMPLE);
     double *all = (double *)malloc((size_t)n * m0 * sizeof *all);
     double *active_losses = factored ? NULL
                                      : (double *)malloc((size_t)n * m0 * sizeof *active_losses);
@@ -1431,6 +1730,7 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
         sc.losses = all;
         sc.active = active;
         sc.m0 = m0;
+        sc.pair_copies = 0;
     }
 
     while (m >= 2) {

@@ -211,6 +211,56 @@ The `MCS_TR` rows are unchanged. Every complete-null coverage figure in `docs/MC
 
 **The rest of the gate.** The 62 suites of `./check.sh`; `test_mcs`, `test_mcs_variance`, `mcs_primitives` and `mcs_size_and_power` under `STRESS=1`, both as built and under `-fsanitize=address,undefined` with OpenMP on; the full result of `mcs()` - every round's statistic, p-value and dropped model, every MCS p-value - byte-identical at 1, 3 and 16 threads on `MCS_TMAX` and `MCS_TR` at 120 models over 200 observations and 300 models over 500; and the harness with both arms built from the adopted header, which read `identical` and "no difference" or noise on every default case. `mcs_primitives.c` gained a check of the general path across a whole elimination, which only `test_mcs_variance.c` otherwise reaches, one round at a time; changing its variance divisor to `opt.bootstrap - 1` fails all four of its shapes, and the same change in the `MCS_TMAX` shared path fails its two `MCS_TMAX` shapes.
 
+## Fix 5: threads on the HAC path, pair tables formed once, and a tighter row test
+
+**What it was.** Four serial or repeated pieces of work, found with a phase clock (one `clock_gettime` pair around each phase, a few thousand reads against a run of seconds) on `MCS_TR`, bootstrap variance, a thousand models over a thousand observations, 2000 draws, blocks of 20, 16 threads: the pair spreads took 1.04 s of the 3.3 s run, the per-round table fill 1.02 s, the draw scan 0.69 s, the choice of the model to drop 0.28 s. And the general path, which both HAC variants take, ran on one thread.
+
+**What changed.** All exact: every result is bit for bit what it was.
+
+- *The general path runs on threads.* Its blocks are drawn a chunk at a time, serially and in the order the one-draw-at-a-time loop drew them, and the chunk is cut into `MCS_GENERAL_PIECES` pieces, each with its own index buffer and, under `MCS_VARIANCE_HAC_RESAMPLE`, its own resampled and centred series. A chunk holds at least `MCS_DRAW_CHUNK` draws and, when that is below `MCS_PARALLEL_MIN_WORK`, as many as reach it; the per-piece buffers are allocated only when the first round reaches it.
+- *The pair spreads are accumulated a block of rows at a time.* The draw index is still cut into `MCS_VAR_PIECES` fixed pieces summed in order, but the loop runs over blocks of `MCS_SPREAD_BLOCK_PAIRS` pairs, the pieces inside a block, so a block's partial sums and totals stay in cache while the draws stream past; the blocks run on threads. The 16 accumulators over every pair are gone: at a thousand models they were 64 MiB. Up to `MCS_SPREAD_BLOCK_PAIRS` pairs the old order is kept, since there it fits in cache already and a single block would run on one thread.
+- *A pair's reciprocal standard error is formed once, beside its spread, and read in place.* The per-round fill no longer takes a square root per pair, and `mcs()` no longer copies each surviving pair's variance, mean differential and reciprocal standard error: it reads `t` only, and the scan reads the fixed table through each model's stored row offset. A caller's own loop still gets `var` and `dbar`, as `mcs_round` documents. Below `MCS_ROW_PRUNE_MIN_MODELS` the scan keeps the compact per-round copy, which measured faster there. The fill and the choice of the model to drop run on threads from `MCS_PAIR_PARALLEL_MIN` surviving pairs.
+- *The row test uses only the models the row pairs with, and a second, weighted bound.* Row `i` holds model `i`'s pairs with the models after it, so the scan walks the rows from the last up and keeps the extremes of the models seen so far, instead of the whole set's. The second bound is `|u_i|` times the row's largest reciprocal standard error plus the largest `|u_h|` times model `h`'s largest reciprocal standard error over all its pairs, among the models after `i`; the row is skipped when the smaller bound is at most the observed statistic. It is widened by `MCS_WEIGHTED_BOUND_SLACK`, one part in `10^12`, because it adds two rounded products where the pair's own value is one.
+
+**Why the weighted bound matters.** With one model much noisier than the rest, that model sits at an extreme of nearly every draw, so the distance-to-extremes bound is wide for every row and nothing is skipped; its own pairs all have large standard errors, so weighting its deviation by them takes it back out. Rows scanned, as a share of rows met by the test, one build per bound with an atomic counter, `MCS_TR`, bootstrap variance, the losses of the model at index `m/2` scaled by the factor given:
+
+| models, T, draws, block | noise factor | whole-set extremes | own-pair extremes | both bounds |
+|---|---|---|---|---|
+| 120, 200, 500, 15 | 1 | 2.9% | 2.1% | 1.7% |
+| 120, 200, 500, 15 | 20 | 77.2% | 58.6% | 3.5% |
+| 1000, 1000, 2000, 20 | 1 | 0.46% | 0.19% | 0.18% |
+| 1000, 1000, 2000, 20 | 5 | 4.6% | 4.4% | 0.28% |
+| 1000, 1000, 2000, 20 | 20 | 50.8% | 40.5% | 0.36% |
+
+**Measured, the harness.** `STRESS=1 MCS_ROUNDS=8`, both arms in one binary, `float32` build, 16 threads, best of 8 rounds after a discarded warmup, arms alternated. `tr_noisy` and `tr_noisy_m120_stress` are cases added with this change: the model at index `m/2` carries twenty times the others' noise.
+
+| case | before ms | after ms | speedup | before KiB | after KiB |
+|---|---|---|---|---|---|
+| `tmax_hac` | 6.374 | 5.233 | 1.22x | 112.8 | 147.9 |
+| `tmax_hac_resample` | 4.076 | 0.926 | 4.40x | 34.6 | 114.1 |
+| `tr_hac` | 19.146 | 7.523 | 2.54x | 328.9 | 352.8 |
+| `tr_noisy` | 2.928 | 2.312 | 1.27x | 510.7 | 513.2 |
+| `tr_m50_stress` | 2.223 | 1.927 | 1.15x | 677.6 | 680.2 |
+| `tr_m120_stress` | 7.693 | 4.466 | 1.72x | 1841.7 | 1845.1 |
+| `tr_noisy_m120_stress` | 15.475 | 4.914 | 3.15x | 1841.7 | 1845.1 |
+
+The other nine cases read 0.99x to 1.05x, and the order check reads each of them as "no difference this machine can measure" or as noise whose sign flips with the order, except `tr_m32_stress` at 1.05x, faster in both orders. All 16 are `identical`, and the harness with both arms built from the adopted header agrees on all 16.
+
+**Measured, a thousand models.** Two binaries, one per header, run alternately 6 times per setting on the harness's generator, the whole `mcs()` call timed, medians:
+
+| statistic | models, T, draws, block | noise factor | before | after | peak before | peak after |
+|---|---|---|---|---|---|---|
+| `MCS_TR` | 1000, 1000, 2000, 20 | 1 | 3.57 s | 0.97 s | 103.0 MiB | 42.1 MiB |
+| `MCS_TR` | 1000, 1000, 2000, 20 | 20 | 23.4 s | 1.08 s | | |
+| `MCS_TR` | 250, 250, 500, 15 | 1 | 52 ms | 17 ms | | |
+| `MCS_TMAX` | 1000, 1000, 2000, 20 | 1 | 0.97 s | 0.98 s | 23.1 MiB | 23.1 MiB |
+
+`MCS_TMAX` at a thousand models came out slower in 5 of 6 pairs, by about 1.5%, below the harness's 5% floor; nothing on its path changed. The peaks are the harness's exact allocation counts.
+
+**The rest of the gate.** The whole result of `mcs()` compared at 1, 3 and 16 threads against the previous header, on six settings: both statistics at a thousand models, `MCS_TR` at a thousand and at 250 models with one model at twenty times the noise, `MCS_TR` under `MCS_VARIANCE_HAC` and `MCS_TMAX` under `MCS_VARIANCE_HAC_RESAMPLE` at 30 models, all identical. The 94 suites of `./check.sh`; the four MCS suites under `STRESS=1` as built, without `-fopenmp`, and under `-fsanitize=address,undefined` with OpenMP on; `make test-integration-asan`; `examples/mcs_example`'s four output files byte-identical to the previous header's; `make study-mcs_settings`'s output byte-identical to its previous run.
+
+**Tried and rejected on the way**, each against the shipped header in the harness, `STRESS=1 MCS_ROUNDS=8`. Reading the fixed table in the scan at every model count, with row offsets stored, left `tr_wide` (16 models, below the row test) at 0.92x to 0.93x over two runs; the compact copy below `MCS_ROW_PRUNE_MIN_MODELS` brought it to 1.02x. Recomputing each model's row offset in the scan instead of storing it read 0.87x there. The block-of-rows spread loop at every pair count, measured together with the table read in the scan, read 0.85x, 0.88x and 0.93x at 24, 32 and 34 models, where the blocks are few and uneven; keeping the per-piece order up to `MCS_SPREAD_BLOCK_PAIRS` pairs and the compact copy is what took those cases to 1.03x to 1.05x. The fill threshold, `MCS_PAIR_PARALLEL_MIN`, was swept on the whole call, 6 alternating runs per value: at a thousand models 0.95 s at 4096 and 16384 pairs, 0.97 s at 65536, 1.14 s at 262144; at 250 models medians of 15.0 ms at 4096 and 19.7 ms at 16384.
+
 ## The size this was changed for
 
 `STRESS=1 MCS_HUGE=1 make bench-mcs_candidates` runs four rungs past where a paired A/B was affordable when they were added. They report the candidate's own cost and nothing else.
@@ -219,28 +269,28 @@ Setup: synthetic losses, model `j` with expected loss `3 + spread*j` plus an AR(
 
 | case | statistic | T | M | draws | block | seconds | peak |
 |---|---|---|---|---|---|---|---|
-| `tr_m250_candidate` | `MCS_TR` | 250 | 250 | 500 | 15 | 0.040 | 6.4 MiB |
-| `tr_m1000_candidate` | `MCS_TR` | 1000 | 1000 | 2000 | 20 | 2.96 | 103.0 MiB |
-| `tmax_m250_candidate` | `MCS_TMAX` | 250 | 250 | 500 | 15 | 0.031 | 1.5 MiB |
-| `tmax_m1000_candidate` | `MCS_TMAX` | 1000 | 1000 | 2000 | 20 | 0.88 | 23.1 MiB |
+| `tr_m250_candidate` | `MCS_TR` | 250 | 250 | 500 | 15 | 0.016 | 2.6 MiB |
+| `tr_m1000_candidate` | `MCS_TR` | 1000 | 1000 | 2000 | 20 | 1.08 | 42.1 MiB |
+| `tmax_m250_candidate` | `MCS_TMAX` | 250 | 250 | 500 | 15 | 0.041 | 1.5 MiB |
+| `tmax_m1000_candidate` | `MCS_TMAX` | 1000 | 1000 | 2000 | 20 | 0.95 | 23.1 MiB |
 
-After Fix 3 the two `MCS_TR` rungs measured 0.045 s at 6.5 MiB and 3.09 s at 103.2 MiB.
+Measured on the header after Fix 5, `STRESS=1 MCS_HUGE=1 MCS_ROUNDS=1`. After Fix 4 the four rungs measured 0.040 s at 6.4 MiB, 2.96 s at 103.0 MiB, 0.031 s at 1.5 MiB and 0.88 s at 23.1 MiB; after Fix 3 the two `MCS_TR` rungs measured 0.045 s at 6.5 MiB and 3.09 s at 103.2 MiB.
 
-**What that replaced, by arithmetic rather than by measurement.** For `MCS_TMAX`, production before Fix 4 gathered `bootstrap * n * (C(m0+1, 2) - 1)` = `1.0e12` additions at a thousand models, serially. Production measured `7.3e8` of them in 0.503 s on `tmax_m120_stress`, so that is on the order of twelve minutes; it was not run. Its memory was not the problem: `bmean` and `d` are 16 MiB and 8 MiB there. For `MCS_TR`, at a thousand models the version before Fix 1 allocated `8 * bootstrap * C(m0, 2)` for `bmean` and `8 * n * C(m0, 2)` for `d` - 8.0 GiB and 4.0 GiB, against the 103.0 MiB above. Its gather was `bootstrap * n * C(m0+1, 3)` = `3.3e14` additions, which at the roughly `1e9` per second per core this code sustains is days on sixteen cores. Neither figure was run, and neither is quoted as a speedup: a number nobody measured is not a measurement. What is measured is that the size runs, in three seconds and in a tenth of a gigabyte.
+**What that replaced, by arithmetic rather than by measurement.** For `MCS_TMAX`, production before Fix 4 gathered `bootstrap * n * (C(m0+1, 2) - 1)` = `1.0e12` additions at a thousand models, serially. Production measured `7.3e8` of them in 0.503 s on `tmax_m120_stress`, so that is on the order of twelve minutes; it was not run. Its memory was not the problem: `bmean` and `d` are 16 MiB and 8 MiB there. For `MCS_TR`, at a thousand models the version before Fix 1 allocated `8 * bootstrap * C(m0, 2)` for `bmean` and `8 * n * C(m0, 2)` for `d` - 8.0 GiB and 4.0 GiB, against the 42.1 MiB above. Its gather was `bootstrap * n * C(m0+1, 3)` = `3.3e14` additions, which at the roughly `1e9` per second per core this code sustains is days on sixteen cores. Neither figure was run, and neither is quoted as a speedup: a number nobody measured is not a measurement. What is measured is that the size runs, in about a second and in 42 MiB.
 
 **One pass carries about ten percent.** These are single measurements, enough to answer "does this size run, and in what order of time", not enough to quote to three digits.
 
-**Where the remaining time goes.** Measured under `MCS_TR`, after Fix 3, with a phase clock at a thousand models: 45% in the one-off precompute, 35% in the per-round table fill, 20% in the exceedance loop. The row prune of Fix 3 moved the exceedance loop from being nine tenths of the run to a fifth of it, so the per-round table fill - one reciprocal square root per surviving pair per round - is now the largest per-round term and is where a further change would have to look. `MCS_TMAX` has not been profiled by phase.
+**Where the remaining time goes.** Measured under `MCS_TR` after Fix 5, a phase clock around each phase of the whole `mcs()` call, a thousand models over a thousand observations, 2000 draws, blocks of 20, 16 threads, three runs: 0.47 s in the draw scan, 0.25 s in the one-off setup (0.22 s of it the per-model resampled means, 0.03 s the pair spreads), 0.14 s choosing the model to drop and 0.10 s in the per-round table fill, of 0.97 s. `MCS_TMAX` has not been profiled by phase.
 
 ## Threads
 
-The gather over draws, the spread accumulation and the exceedance scan carry `#ifdef _OPENMP` pragmas, under both statistics; `-fopenmp` is already on the compile line through openblas's own pkg-config metadata, so no dependency was added. `frame/sql.h`'s optional-OpenMP pattern is the precedent.
+The gather over draws, the spread accumulation and the exceedance scan carry `#ifdef _OPENMP` pragmas, under both statistics, and under `MCS_TR` so do the per-round table fill and the choice of the model to drop; on the general path the draws of a chunk are split into pieces across threads; `-fopenmp` is already on the compile line through openblas's own pkg-config metadata, so no dependency was added. `frame/sql.h`'s optional-OpenMP pattern is the precedent.
 
-**The answer does not depend on the core count, and that is a constraint the code is written around rather than a property it happens to have.** Each per-model resampled mean is summed over the same observations in the same order by one thread. Each pair's spread under `MCS_TR`, and each surviving model's spread under `MCS_TMAX` together with the per-draw totals, is accumulated in `MCS_VAR_PIECES` fixed pieces — fixed, not taken from the thread count — with each piece summed in order and the pieces added in order; below `MCS_PARALLEL_MIN_WORK` it is one piece, a single running sum, so a run too small for a thread team does no piecewise bookkeeping at all. The exceedance count is an integer sum and the round's maximum is order free.
+**The answer does not depend on the core count, and that is a constraint the code is written around rather than a property it happens to have.** Each per-model resampled mean is summed over the same observations in the same order by one thread. Each pair's spread under `MCS_TR`, whether its pieces run on separate threads or its pairs are taken a block of rows at a time, and each surviving model's spread under `MCS_TMAX` together with the per-draw totals, is accumulated in `MCS_VAR_PIECES` fixed pieces — fixed, not taken from the thread count — with each piece summed in order and the pieces added in order; below `MCS_PARALLEL_MIN_WORK` it is one piece, a single running sum, so a run too small for a thread team does no piecewise bookkeeping at all. The exceedance count is an integer sum, and the round's maximum and each model's worst comparison are order free. On the general path each draw is gathered, and under `MCS_VARIANCE_HAC_RESAMPLE` divided by its own HAC variance, by one piece with the same arithmetic whichever piece it is.
 
 The pragmas carry a work threshold rather than being unconditional. Starting and joining a thread team costs on the order of ten microseconds, more than a small round's whole gather: at five models over 250 observations a chunk is 80,000 additions, and spawning for that measured 30% slower than not spawning.
 
-Block starts are drawn a chunk of 64 draws at a time, serially and in the order a one-block-at-a-time loop would have drawn them, so the stream is consumed identically; a chunk costs `4 * 64 * ceil(n / block_length)` bytes whatever the draw count and the model count. The general path, which the two HAC variants take, has no pragmas.
+Block starts are drawn a chunk of 64 draws at a time, serially and in the order a one-block-at-a-time loop would have drawn them, so the stream is consumed identically; a chunk costs `4 * 64 * ceil(n / block_length)` bytes whatever the draw count and the model count. The general path, which the two HAC variants take, holds more draws per chunk when 64 of them fall short of `MCS_PARALLEL_MIN_WORK`, enough to reach it, and one index buffer per piece beyond the first, plus under `MCS_VARIANCE_HAC_RESAMPLE` two series of `n` doubles per piece; that is the memory `tmax_hac` and `tmax_hac_resample` gained in Fix 5.
 
 ## Tried and rejected
 
@@ -253,5 +303,5 @@ Block starts are drawn a chunk of 64 draws at a time, serially and in the order 
 ## Still open
 
 - **`MCS_TR` under the two HAC variants** is untouched and remains quadratic in `M` in both time and memory: those variants estimate each series' standard error from that series, so a pair's number cannot be reached through its two models'.
-- **The two HAC variants run on one thread.** The objection recorded above was the size of an index buffer; with block starts the chunk is a few kilobytes, so parallelising the general gather is worth measuring again. Not done.
+- **Under `MCS_VARIANCE_HAC` the general path redraws every round.** Its null deviations are linear in a model's resampled mean just as the bootstrap variance's are, and the variance it divides by comes from the data rather than from the draws, so the shared per-model table could serve it too. That changes which resamples later rounds see, so it would need the statistical gates of Fix 2 and Fix 4 rather than the harness alone. Not done.
 - **No comparison against another library.** See `docs/MCS_DOCUMENTATION.md`'s limitations.

@@ -1868,16 +1868,34 @@ same set in 100% and 95% of them against 98% and 92% for the same code under
 another stream, and every coverage figure in
 `docs/MCS_RELIABILITY_DOCUMENTATION.md` unchanged when rerun.
 
+**A fifth change**, exact, split the general path's draws across threads, so
+the two HAC variants no longer run on one thread; formed each `MCS_TR` pair's
+reciprocal standard error once rather than once per round and stopped copying
+per-round values `mcs()` never reads; accumulated the pair spreads a
+cache-sized block of pairs at a time, where 16 accumulators over every pair
+had swept 64 MiB per draw at a thousand models; threaded the per-round fill and
+the choice of the model to drop; and tightened the row test of the third change
+to the models a row actually pairs with, plus a bound that weights each model
+by its own largest reciprocal standard error, so one very noisy model no longer
+stops rows being skipped. `MCS_TR` at a thousand models over a thousand
+observations with 2000 draws went from 3.57 s to 0.97 s and from 103.0 MiB to
+42.1 MiB, and with one model at twenty times the others' noise from 23.4 s to
+1.08 s (medians of 6 alternating runs); `MCS_VARIANCE_HAC_RESAMPLE` at 5 models
+4.40x and `MCS_TR` under `MCS_VARIANCE_HAC` at 8 models 2.54x in the harness,
+for 80 KiB and 24 KiB more memory. Every harness case identical, the full
+result identical at 1, 3 and 16 threads. `docs/MCS_PERFORMANCE_DOCUMENTATION.md`
+has the setup behind each number, as Fix 5.
+
 **What is left.** `MCS_TR` under the two HAC variants is still quadratic in `M`
 in time and memory: those variants estimate each series' standard error from
-that series, so a pair's number cannot be reached through its two models'. The
-two HAC variants also run on one thread; the index buffer that made
-parallelising their gather cost memory is gone with the block starts, and it
-has not been measured again. Under `MCS_TR` with the bootstrap variance the
-profile measured after the third change was 45% one-off precompute, 35%
-per-round table fill, 20% exceedance loop, so the largest per-round term is one
-reciprocal square root per surviving pair per round. `MCS_TMAX` has not been
-profiled by phase.
+that series, so a pair's number cannot be reached through its two models'.
+`MCS_VARIANCE_HAC` still redraws every round, though the shared per-model table
+could serve it; that moves p-values by whole draws and needs the statistical
+gates the second and fourth changes had. Under `MCS_TR` at a thousand models
+the phase split after the fifth change is 0.47 s draw scan, 0.25 s one-off
+setup (0.22 s of it the per-model resampled means), 0.14 s choosing the model
+to drop, 0.10 s per-round fill, of 0.97 s. `MCS_TMAX` has not been profiled by
+phase.
 
 ## 14. Broadcast element-wise operations (`linalg/tensor.h`) - fixed
 

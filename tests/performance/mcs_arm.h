@@ -56,6 +56,10 @@ typedef struct {
        together, which at a thousand models under the shipped header is
        eight gigabytes for a fingerprint nobody reads at that size. */
     int light_fingerprint;
+    /* How many times the unit noise the model at index m / 2 carries; 0
+       leaves every model at unit noise. One model far noisier than the
+       rest is the case the draw scan's weighted row bound exists for. */
+    double noisy_scale;
 } MCSArmCase;
 
 /* What one run of one arm reports back.
