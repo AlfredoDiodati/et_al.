@@ -29,7 +29,7 @@ FAILED_NAMES=""
 # the path is particular to the machine that ran it.
 printf "bench run: %s (%s)\n\n" "$(date)" "$("$PYTHON" --version 2>&1)" >> "$REPORT"
 
-SUITES="bench_mat bench_cumsum bench_rolling_mean bench_hp_filter bench_lp bench_tensor bench_decomp bench_dist bench_ad bench_frame bench_random bench_stats bench_adam bench_special bench_json"
+SUITES="bench_mat bench_cumsum bench_rolling_mean bench_hp_filter bench_lp bench_ols_covariance bench_csv_missing_values bench_tensor bench_decomp bench_dist bench_ad bench_frame bench_random bench_stats bench_adam bench_special bench_json"
 
 for s in $SUITES; do
     printf "  %-16s" "$s"

@@ -391,30 +391,42 @@ static inline int frame_try_parse_numeric(const char *s, mreal *out) {
     return 1;
 }
 
+/* 1 when s is exactly one of the n_na_values markers. */
+static inline int frame_is_na_marker(const char *s, const char *const *na_values, int n_na_values) {
+    for (int k = 0; k < n_na_values; k++)
+        if (strcmp(s, na_values[k]) == 0) return 1;
+    return 0;
+}
+
 /* Builds a DataFrame from n_rows rows of n_cols raw string fields each
    (rows[i].items[j] is row i, column j) plus n_cols column names -
    inferring each column's type by checking every value against
    frame_try_parse_numeric: numeric if every value parses as a plain
-   number, string otherwise (including a column with an "NA"/empty/etc.
-   marker anywhere in it - see the note on missing values in
-   docs/FRAME_DOCUMENTATION.md for why this project does not represent
-   missing numeric values as NaN by default). Shared by frame/csv.h and
-   frame/txt.h - each loader's only job is turning its file format into
-   this rows/col_names shape; the inference itself is written once. */
-static inline DataFrame frame_build_from_rows(int n_rows, int n_cols, const StrList *rows, char *const *col_names) {
+   number or is exactly one of the n_na_values markers, which become NaN;
+   string otherwise. With no markers, a column with an "NA"/empty/etc.
+   marker anywhere in it is a string column - see the note on missing
+   values in docs/FRAME_DOCUMENTATION.md for why that is the default.
+   Shared by frame/csv.h and frame/txt.h - each loader's only job is
+   turning its file format into this rows/col_names shape; the inference
+   itself is written once. */
+static inline DataFrame frame_build_from_rows(int n_rows, int n_cols, const StrList *rows, char *const *col_names,
+                                              const char *const *na_values, int n_na_values) {
     DataFrame df = df_new(n_rows);
     for (int j = 0; j < n_cols; j++) {
         int all_numeric = 1;
         for (int i = 0; i < n_rows; i++) {
             mreal tmp;
-            if (!frame_try_parse_numeric(rows[i].items[j], &tmp)) { all_numeric = 0; break; }
+            if (!frame_try_parse_numeric(rows[i].items[j], &tmp)
+                && !frame_is_na_marker(rows[i].items[j], na_values, n_na_values)) { all_numeric = 0; break; }
         }
         if (all_numeric) {
             Vec col = mat_new(n_rows, 1);
+            mreal nan = (mreal)NAN;
             for (int i = 0; i < n_rows; i++) {
                 mreal val = 0;
-                frame_try_parse_numeric(rows[i].items[j], &val); /* already validated above */
-                col.d[i] = val;
+                /* already validated above: a number, or else a marker */
+                if (frame_try_parse_numeric(rows[i].items[j], &val)) col.d[i] = val;
+                else col.d[i] = nan;
             }
             df_add_numeric_col(&df, col_names[j], col);
             mat_free(col);
@@ -432,10 +444,11 @@ static inline DataFrame frame_build_from_rows(int n_rows, int n_cols, const StrL
    has_header, otherwise the first data row) into a DataFrame - extracting
    or generating column names, validating every data row has exactly as
    many fields as the header, then handing off to frame_build_from_rows
-   for type inference. Shared by frame/csv.h and frame/txt.h: each
-   loader's own code is only its tokenizer (frame_parse_csv/
-   frame_parse_txt) plus a thin call to this. */
-static inline DataFrame frame_rows_to_dataframe(StrList *rows, int n_rows_total, int has_header) {
+   for type inference, with the missing-value markers it is given. Shared
+   by frame/csv.h and frame/txt.h: each loader's own code is only its
+   tokenizer (frame_parse_csv/frame_parse_txt) plus a thin call to this. */
+static inline DataFrame frame_rows_to_dataframe(StrList *rows, int n_rows_total, int has_header, const char *const *na_values,
+                                                int n_na_values) {
     assert(n_rows_total > 0 && "frame: empty file");
     int n_cols = rows[0].n;
 
@@ -456,7 +469,7 @@ static inline DataFrame frame_rows_to_dataframe(StrList *rows, int n_rows_total,
     for (int i = data_start; i < n_rows_total; i++)
         assert(rows[i].n == n_cols && "frame: ragged row (inconsistent column count)");
 
-    DataFrame df = frame_build_from_rows(n_rows_total - data_start, n_cols, rows + data_start, col_names);
+    DataFrame df = frame_build_from_rows(n_rows_total - data_start, n_cols, rows + data_start, col_names, na_values, n_na_values);
 
     if (!has_header) for (int j = 0; j < n_cols; j++) free(col_names[j]);
     free(col_names);

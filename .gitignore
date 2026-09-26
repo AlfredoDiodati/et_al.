@@ -32,6 +32,10 @@ tests/correctness/lstsq_rank_deficiency
 tests/correctness/chol_singularity
 tests/correctness/singularity_rule_comparison
 tests/correctness/ols_pseudo_inverse_fallback
+tests/correctness/hac_covariance_correctness
+tests/correctness/csv_missing_values
+tests/correctness/ols_covariance_correctness
+tests/correctness/ols_covariance_recovery
 tests/correctness/rank_rule_consistency
 tests/correctness/mv_density_dispatch
 
@@ -48,6 +52,7 @@ tests/correctness/qvarma_gaussian_limit
 tests/correctness/qvarma_fixed_parameter_fit
 tests/correctness/var_recovery
 tests/correctness/lp_recovery
+tests/performance/lp_throughput
 liblp_f64.so
 liblp_f32.so
 tests/correctness/hp_filter_recovery

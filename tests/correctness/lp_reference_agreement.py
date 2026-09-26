@@ -37,6 +37,13 @@ fz. Two differences are known and accounted for:
   after dividing every column of the design by its norm, since neither
   solver's error depends on the columns' units, and for the largest design
   of the fit; e is the unit roundoff u of the build;
+- the bands, lpirfs' irf_lin_low and irf_lin_up and the four of lp_nl,
+  are compared the same way, with lp_lin_with_bands and lp_nl_with_bands at
+  lpirfs' defaults for the confint of 1.96 passed: Newey-West standard
+  errors at lag h, no adjustment. Each of the mean, low and up arrays of
+  each state gets its own scale per response-shock pair, and the bands'
+  scale is multiplied by sqrt(m), m the rows at horizon 1, since their
+  standard errors are built from sums of m scores in both implementations;
 - lpirfs' HP filter inverts a dense matrix (see HP_FILTER_DOCUMENTATION.md),
   so its cycle, and with it fz, differs from this library's by rounding
   amplified by up to 1 + 16 lambda. fz is compared first, within
@@ -69,13 +76,16 @@ endog <- data[, grep("^y", names(data)), drop = FALSE]
 if (spec$model == "lin") {
   r <- lp_lin(endog, lags_endog_lin = spec$lags_lin, trend = 0, shock_type = spec$shock_type,
               confint = 1.96, hor = spec$hor, num_cores = 1)
-  write.csv(data.frame(v = as.vector(aperm(r$irf_lin_mean, c(3, 2, 1)))), out, row.names = FALSE)
+  flat <- function(a) as.vector(aperm(a, c(3, 2, 1)))
+  write.csv(data.frame(v = c(flat(r$irf_lin_mean), flat(r$irf_lin_low), flat(r$irf_lin_up))), out, row.names = FALSE)
 } else {
   r <- lp_nl(endog, lags_endog_lin = spec$lags_lin, lags_endog_nl = spec$lags_nl, trend = 0,
              shock_type = spec$shock_type, confint = 1.96, hor = spec$hor, switching = data$switching,
              lag_switching = as.logical(spec$lag_switching), use_logistic = TRUE,
              use_hp = as.logical(spec$use_hp), lambda = spec$lambda, gamma = spec$gamma, num_cores = 1)
-  v <- c(as.vector(aperm(r$irf_s1_mean, c(3, 2, 1))), as.vector(aperm(r$irf_s2_mean, c(3, 2, 1))), r$fz)
+  flat <- function(a) as.vector(aperm(a, c(3, 2, 1)))
+  v <- c(flat(r$irf_s1_mean), flat(r$irf_s1_low), flat(r$irf_s1_up), flat(r$irf_s2_mean), flat(r$irf_s2_low),
+         flat(r$irf_s2_up), r$fz)
   write.csv(data.frame(v = v), out, row.names = FALSE)
 }
 '''
@@ -135,7 +145,7 @@ class Build:
     def lin(self, y, lags, hor, shock_type):
         K, T = y.shape
         data = np.ascontiguousarray(y, self.dtype)
-        out = np.empty(K * (hor + 1) * K, self.dtype)
+        out = np.empty(3 * K * (hor + 1) * K, self.dtype)
         status = self.lib.c_lp_lin(K, T, lags, hor, shock_type, data.ctypes.data_as(self.P), out.ctypes.data_as(self.P))
         return status, out.astype(np.float64)
 
@@ -143,7 +153,7 @@ class Build:
         K, T = y.shape
         data = np.ascontiguousarray(y, self.dtype)
         sw = np.ascontiguousarray(switching, self.dtype)
-        s1 = np.empty(K * (hor + 1) * K, self.dtype)
+        s1 = np.empty(3 * K * (hor + 1) * K, self.dtype)
         s2 = np.empty_like(s1)
         fz = np.empty(T, self.dtype)
         status = self.lib.c_lp_nl(K, T, lags_lin, lags_nl, hor, shock_type, 1, use_hp, lam, gamma, lag_switching,
@@ -152,7 +162,7 @@ class Build:
         return status, np.concatenate([s1, s2]).astype(np.float64), fz
 
 
-def compare(ours, theirs, condition, u, label, K, hor):
+def compare(ours, theirs, condition, u, label, K, hor, m):
     """Returns the largest bound used, or None when a bound was one or more."""
     global comparisons
     comparisons += 1
@@ -164,6 +174,10 @@ def compare(ours, theirs, condition, u, label, K, hor):
     theirs_by_pair = theirs.reshape(-1, K, hor + 1, K)
     scale = np.abs(theirs_by_pair).max(axis=2, keepdims=True)
     scale = np.maximum(scale, 1e-12 * np.abs(theirs).max())
+    # arrays come as mean, low, up per state; the bands' standard errors are
+    # built from sums of m scores, which carry sqrt(m) more rounding
+    band_factor = np.array([1.0 if block % 3 == 0 else np.sqrt(m) for block in range(ours_by_pair.shape[0])])
+    scale = scale * band_factor[:, None, None, None]
     relative_bound = 16 * condition * u
     if relative_bound >= 1:
         print(f"  {label}: bound {relative_bound:.2g} is not below one, checked for shape only")
@@ -248,7 +262,7 @@ for build in (Build("liblp_f64.so", np.float64), Build("liblp_f32.so", np.float3
                 T_e = T - lags
                 ours = ours * np.sqrt(T_e / (T_e - 1))
             label = f"{precision} {name} lp_lin shock_type {shock_type}"
-            share = compare(ours, theirs, cond_lin, build.u, label, K, hor)
+            share = compare(ours, theirs, cond_lin, build.u, label, K, hor, T - lags)
             if share is not None:
                 print(f"  {label}: largest gap {share:.2g} of its bound, cond {cond_lin:.2g}")
         if switching is None:
@@ -263,7 +277,7 @@ for build in (Build("liblp_f64.so", np.float64), Build("liblp_f32.so", np.float3
             theirs = run_lpirfs(y_cast, sw_cast, spec)
             # lpirfs returns fz on its estimation sample only, the rows na.omit
             # keeps, which start where this library's sample starts.
-            response_count = 2 * K * (hor + 1) * K
+            response_count = 6 * K * (hor + 1) * K
             theirs_fz = theirs[response_count:]
             theirs = theirs[:response_count]
             sample_start = max(lags_nl, lag_switching)
@@ -289,7 +303,7 @@ for build in (Build("liblp_f64.so", np.float64), Build("liblp_f32.so", np.float3
                 failures.append(label); print(f"  FAIL {label}: fz differs by {fz_gap:.3g} beyond {fz_allowed:.3g}")
             weights = np.where(np.isnan(fz), 0.5, fz)
             cond_nl = max(cond_lin, design_condition(y_cast, lags_nl, weights))
-            share = compare(ours, theirs, cond_nl, max(build.u, fz_gap), label, K, hor)
+            share = compare(ours, theirs, cond_nl, max(build.u, fz_gap), label, K, hor, T - lags)
             if share is not None:
                 print(f"  {label}: fz gap {fz_gap:.2g}, largest gap {share:.2g} of its bound, cond {cond_nl:.2g}")
 

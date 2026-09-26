@@ -28,6 +28,7 @@ Mat   stats_autocov_f32(Mat x, int lag); /* same, but float accumulation - see b
 typedef enum { STATS_HAC_BARTLETT, STATS_HAC_RECTANGULAR } StatsHACKernel;
 mreal stats_hac_var(Mat x, int lag_max, StatsHACKernel kernel);  /* vector only */
 double stats_hac_var_centered(const double *xc, int n, int lag_max, StatsHACKernel kernel);
+Mat   stats_hac_cov(Mat x, int lag_max, StatsHACKernel kernel);  /* n x d -> d x d */
 ```
 
 All functions are stride-aware and accept views (`mat_slice` output works directly). The two `Mat`-returning functions allocate; caller must `mat_free()`. `stats_dmean` also appears in the header but is the internal double-accumulating core the others share, not API.
@@ -40,6 +41,7 @@ Contracts, enforced by `assert` per the project's fail-loudly principle:
 - `stats_quantile`/`stats_quantile_inplace` require `0 <= p <= 1` and at least one element.
 - `stats_ljung_box` requires a vector and `1 <= lags <= n-2`, the limit `stats_autocorr` imposes at the largest lag it is asked for.
 - `stats_series_length`/`stats_series_at` require a vector; a general `r x c` matrix is a contract violation rather than being silently flattened.
+- `stats_hac_cov` requires at least one row and one column and `0 <= lag_max <= n-1`.
 - `stats_hac_var` requires a vector and `0 <= lag_max <= n-1`. Callers who compute `lag_max` from a rule of thumb clamp it themselves; the function does not silently shrink an out-of-range argument.
 
 ## Conventions
@@ -80,6 +82,17 @@ The **long-run variance** is what this returns; the variance of the *sample mean
 
 `stats_hac_var_centered` is the same computation over a plain, already-centered `double` buffer. It is the one function in this file that does not take a `Mat`, and the reason is that `inference/mcs.h`'s bootstrap evaluates it once per resampled series per replication — thousands of times per round on scratch it already owns — and this project does not allocate inside a hot loop. `stats_hac_var` is the `Mat` entry point everyone else uses, and is implemented on top of it. Passing an uncentered buffer makes `gamma_0` a raw second moment rather than a variance; that is a contract, not something the function checks.
 
+**HAC long-run covariance matrix.** `stats_hac_cov(x, lag_max, kernel)` is the matrix form of `stats_hac_var`, for an `n x d` sample whose rows are observations:
+
+```
+S = Gamma_0 + sum_{k=1..lag_max} w(k) * (Gamma_k + Gamma_k^T)
+Gamma_k = (1/n) * sum_{t=0..n-1-k} (x_{t+k} - xbar) (x_t - xbar)^T
+```
+
+with the same windows, the same centering and the same divisor `n` at every lag, so a one-column `x` gives exactly `stats_hac_var`'s value and `lag_max = 0` gives the population covariance matrix, `stats_autocov(x, 0)`. `S` is symmetric by construction. Under the Bartlett window it is positive semi-definite for any sample; under the rectangular window it need not be, and it is returned as computed. It is what `regression.h`'s HAC coefficient covariance uses; see `docs/REGRESSION_DOCUMENTATION.md`.
+
+It is computed without a product per lag. The weighted sum of the lagged products is `xc^T B xc / n`, with `xc` the centered sample and `B` the `n x n` banded Toeplitz matrix whose entry `(s, t)` is `w(|s - t|)` for `|s - t| <= lag_max`. `B xc` is built one lag at a time, each lag two updates of the contiguous centered buffer shifted by `k` rows in each direction, which is `O(n d lag_max)`. One `cblas_dgemm` then gives `xc^T (B xc)`. The product is symmetric in exact arithmetic, and its rounding asymmetry is removed by averaging it with its transpose. Accumulation is in double whatever the `mreal` build, as for `stats_autocov`.
+
 ## Testing
 
 `tests/correctness/test_stats.c` checks hand-computed known values (mean/variance of `[1,2,3,4]`; `corr = 1/2` on a 3-point example worked by hand; a linear ramp's autocorrelation exactly 1 at every lag and an alternating series' exactly −1; a 2×2 sample's lag-0 and lag-1 autocovariance matrices fully by hand); invariants (`corr(x,x) = 1`, shift/scale invariance of correlation, lag-0 autocovariance symmetric with the column variances on its diagonal, `d=1` autocovariance collapsing to `stats_var`, agreement with `mat_mean` to `mreal` tolerance, row-vector/column-vector autocorrelation agreement); every function through a non-contiguous view against its contiguous twin; adversarial inputs (magnitudes at `1e6`/`1e-6`, a near-constant series, single-element variance, the minimum-legal `lag = n-2`, a single-row sample); and 200 fixed-seed randomized runs comparing every function against independent double reference implementations written from the definitions over plain buffers, always through a strided interior view so the strided path is what's exercised. `STRESS=1` raises that to 400 runs at larger sizes.
@@ -87,6 +100,38 @@ The **long-run variance** is what this returns; the variance of the *sample mean
 `stats_hac_var` is checked against hand-computed Bartlett values on `[1,2,3,4]` at `lag_max = 0,1,2` (worked out term by term from the definition: `1.25`, `1.5625`, `1.25 + (4/3)(0.3125) - 0.25`) and the matching rectangular values (`1.875`, `1.125`), against `stats_var` at `lag_max = 0` where both kernels must also agree with each other, and for row-vector/column-vector agreement; invariants (a constant series gives 0 at every lag, shift invariance, scaling by `c^2`, and — the property the estimator exists for — an AR(1) with `rho = 0.7` over 4000 observations giving a lag-12 estimate more than 1.5x its own sample variance while `rho = -0.7` gives less than 0.7x, both landing within a 0.6-1.4x band of the theoretical `1/(1-rho)^2`); strided column and row views against contiguous copies; adversarial inputs (a single observation, the two-observation minimum, an exactly alternating series where every odd autocovariance is maximally negative, on which Bartlett must stay non-negative at all 64 legal lags while the rectangular estimate must actually go negative — hand-computed as exactly `-0.96875` at `lag_max = 1` for `n = 64`, the case `dm_test`'s `DM_NEGATIVE_VARIANCE` path exists for; and magnitudes at `1e6`/`1e-6`); and 300 fixed-seed randomized runs through a strided interior view against an independent double reference written from the definition, alternating between the two kernels run to run, each run also cross-checking `stats_hac_var_centered` against `stats_hac_var` on the same data. `STRESS=1` raises that to 600 runs at `n` up to 400.
 
 `stats_autocov`'s gemm path (`d >= STATS_AUTOCOV_GEMM_MIN_D`) gets its own dedicated coverage beyond the general fuzzer above, which never reaches `d >= 16`: known values, a strided view, and randomized runs against the same independent double reference at `d` at/just above/well above the threshold, plus a same-seed pass at `n=50,000` under `STRESS=1` (the sizes the benchmark itself uses). A dedicated instrumentation-based test (`test_autocov_gemm_single_centering_pass`, gated behind `STATS_TEST_INSTRUMENT`) checks that the gemm path centers the input exactly once (`n*d` writes), guarding against a real, if short-lived, performance defect found during development (see `docs/PERFORMANCE_BACKLOG.md` item 4) where an early version centered two overlapping buffers separately - never a wrong-output bug (both versions gave identical results), so only a check on the algorithm's actual work, not its output, could catch it. `stats_autocov_f32` gets the same known-value/view/randomized coverage, but the randomized comparison against the double reference uses a looser, combined absolute+relative tolerance appropriate for float32 accumulation (`1e-3` both) instead of this file's usual `1e-5f` - the larger discrepancy there is the accepted precision cost of that function, not a bug.
+
+`stats_hac_cov` has its own file, `tests/correctness/hac_covariance_correctness.c`, in `make test`, passing in both precisions:
+
+- **Known values:**
+  - `lag_max = 0` against `stats_autocov(x, 0)`;
+  - one column against `stats_hac_var` at every seventh lag and both windows;
+  - a two-column series worked by hand at lag 1, `S = [1.5625 1.5625; 1.5625 3.25]`.
+- **Invariants:**
+  - exact symmetry;
+  - Bartlett positive semi-definite (smallest eigenvalue above `-64 u` times the largest entry) at lags 0 to 20;
+  - an alternating series, positive semi-definite under Bartlett at all 64 lags, while its rectangular estimate is `-0.96875` in that column at lag 1 and not positive semi-definite;
+  - shift invariance, scaling column `j` by `c_j` scaling entry `(a, b)` by `c_a c_b`, and a column permutation permuting `S`.
+- **Views and adversarial inputs:**
+  - a strided view against its copy, bit for bit;
+  - one observation (zero);
+  - a constant column (a zero row and column);
+  - `lag_max = n - 1`;
+  - magnitudes of `1e6` and `1e-6`.
+- **A long double reference from the definition,** on 200 fixed-seed samples (2000 under `STRESS=1`) from `rng_new(47, r)`:
+  - `d` from 1 to 6, `n` from 2 to 300, `lag_max` anywhere in `[0, n - 1]`, both windows;
+  - in every third sample one column nearly equal to another.
+
+  The tolerance is `(8 u + 64 n (lag_max + 1) u_double) sqrt(Gamma_0(a, a) Gamma_0(b, b)) (1 + 2 lag_max)`, a bound on the sum of the absolute terms: a scale read off `S` itself does not work for the rectangular window, whose diagonal can cancel to nearly zero, and the first version of the test failed on exactly that.
+
+Mutations run against it:
+
+| mutation | failing checks |
+|---|---|
+| each lag added in one direction only | 224 |
+| divisor `n - 1` | 230 |
+| the Bartlett weight of `lag_max + 1` | 131 |
+| the shifted update one entry off | 154 |
 
 `stats_quantile` is checked against hand-computed interpolations on `1..5` where every order statistic is its own rank; against `stats_median` at `p = 0.5` for both odd and even counts; on a strided column view of a wider matrix; on the degenerate samples (one element, every element equal); on the invariant that the copying form does not disturb its input; and against a full-sort reference over 200 fixed-seed random samples of length 1 to 60 at 21 probabilities each, drawn from a small integer alphabet so ties are common — a selection that mishandles equal keys goes wrong there and never would on uniform noise. `stats_quantile_inplace` is checked against the same reference on the same data.
 
@@ -97,6 +142,21 @@ The statistics' detection power was verified by mutation when they were introduc
 ## Benchmark results
 
 `tests/performance/bench_stats.py` (wrappers in `bench_stats.c`) vs NumPy, float32 data. Scalar statistics on long vectors are well ahead: `stats_mean` at ~0.5x of `np.mean`'s time, `stats_var` at ~0.1-0.3x of `np.var` (both compared against NumPy called with `dtype=np.float64`, i.e. double accumulation on both sides), `stats_autocorr`/`stats_corr` both at ~0.03-0.05x of the `np.corrcoef` route (which allocates a 2x2 matrix pipeline per call). The lag-k autocovariance comparison against NumPy's gemm formulation (`centered X0.T @ X1 / (n-k)`) directly answers this file's design question: the hand-rolled `O(n d^2)` loop wins below d~8 (0.3-0.7x of NumPy's time), crosses over around d~16-32 (2.8x slower at d=32), and loses badly at d=128 (9x) - see the limitation below for the gemm fix, and note that unlike the scalar statistics above, this comparison is NOT double-vs-double: NumPy's `x.mean(axis=0)`/`xc.T @ xc` here stay in float32 throughout (no `dtype=np.float64` requested), while `stats_autocov` deliberately accumulates in double per this file's own policy - a real, permanent, ~2-2.5x cost this file accepts for numerical robustness, not something the gemm fix below removes. `stats_autocov_f32` is measured in the same benchmark run, back-to-back with `stats_autocov` and NumPy on identical data: at n=200,000/d=32 it runs at 0.70x of NumPy's time (vs. `stats_autocov`'s 2.73x slower in the same run) and at n=50,000/d=128 at 0.80x (vs. 2.66x slower) - genuinely beating NumPy's own float32 reference, since the two are now doing the same precision of arithmetic and `stats_autocov_f32` pays no Python/array-temporary overhead on top of it.
+
+`stats_hac_cov` against the same computation with one `cblas_dgemm` per lag, the two builds alternated three times in each order, float64, 16 threads, a Gaussian sample from `rng_new(4, 0)`, best of 5 batches of at least 20 ms. Time with the banded product over the time with a product per lag, the two orders:
+
+| `n x d`, lag | per lag | banded | ratio |
+|---|---|---|---|
+| 200 x 21, 4 | 35.6 us | 14.7 us | 0.41, 0.41 |
+| 200 x 21, 15 | 107 us | 28.2 us | 0.26, 0.26 |
+| 200 x 41, 15 | 277 us | 58.7 us | 0.21, 0.21 |
+| 1000 x 21, 4 | 176 us | 161 us | 0.92, 0.91 |
+| 1000 x 21, 15 | 541 us | 231 us | 0.43, 0.43 |
+| 10000 x 5, 15 | 906 us | 664 us | 0.73, 0.74 |
+| 500 x 1, 10 | 13.9 us | 4.2 us | 0.30, 0.30 |
+| 2000 x 3, 50 | 593 us | 111 us | 0.19, 0.19 |
+
+A first banded version walked the band row by row, `2 lag_max + 1` short updates of `d` entries per row. It won at 21 and 41 columns but lost at few columns, 1.55 times slower at `10000 x 5` and 1.8 at one column, because a loop of `d` entries does not vectorise when `d` is small. The version kept makes each lag two long contiguous updates instead.
 
 The prediction-quality metric family (added in the two most recent commits, previously untimed) is measured at n=100k/1M/10M against straightforward NumPy formulas: `stats_mae`/`stats_mse`/`stats_rmse`/`stats_r2`/`stats_huber_loss` are all comfortably ahead (0.04-0.30x of NumPy), `stats_mape` fastest of all (~0.02-0.06x), `stats_rmsle` closer to parity (0.3-0.9x, the extra `log()` per element per side narrows the gap). `stats_rank`/`stats_spearman` (vs `scipy.stats.rankdata`, average-tie method) are roughly at parity to slightly ahead (0.5-1.1x). `stats_median`/`stats_medae` used to be the one clear loss here - both `qsort`-based full sorts, 8-16x *slower* than NumPy's/SciPy's partition-based (introselect) median, an `O(n log n)` vs. `O(n)` gap. `stats_median` now selects the middle element(s) via quickselect (median-of-three pivot, no full sort) instead of `qsort`ing the whole array; `stats_medae` calls `stats_median` internally so it inherits the fix for free. Re-measured via `bench_stats.py` itself at n=100,000/1,000,000/10,000,000: `stats_median` runs at 0.88x/1.06x/0.71x `np.median`'s time (ahead at the small and large ends, essentially tied at 1M) and `stats_medae` at 0.92x/1.00x/0.93x - both a full reversal from 8-16x behind, with `max err` exactly `0` at every size (confirming the selection is exact, not just close). `stats_rank` is unaffected (correctly - see the limitation below for why a partition-based approach doesn't apply there).
 
@@ -116,7 +176,7 @@ The prediction-quality metric family (added in the two most recent commits, prev
   The fixed part of the check dominates at n=200 and the selection dominates above it. `stats_median` and `stats_quantile` fold the test into the copy loop they already run rather than making a second pass over the scratch buffer, which is worth 17% at n=2,000 and 38% at n=100,000 over copy-then-scan. `adf`, `kpss` and the other verdict-returning functions absorb their check entirely — it measured within noise of zero against the regression each of them runs (27.6 us against 28.3 us at n=200, 1382 against 1395 at n=2,000). `stats_quantile_inplace` deliberately does not check, so a caller taking several quantiles of one buffer pays once rather than once per quantile; `sd/qvarma.h`'s impulse bands are that caller.
 - `stats_autocov` used a hand-rolled `O((n-lag) * d^2)` loop for every `d`; the loop wins below d~8 but lost ~3x at d=32, ~9x at d=128 (see Benchmark results). **Fixed**: for `d >= STATS_AUTOCOV_GEMM_MIN_D` (16), it now centers the full `n x d` sample once into a double buffer and calls `cblas_dgemm` directly on two offset views into that one buffer (rows `0..n-lag-1` and rows `lag..n-1` - they overlap for all but `lag` rows, so centering them separately, as a first attempt at this fix did, roughly doubles the centering cost for nothing; NumPy's own `xc[:n-lag]`/`xc[lag:]` are views into one centered array for the same reason). `cblas_dgemm` (not `MBLAS(gemm)`) is called explicitly so this keeps the file's "double accumulation regardless of the mreal build" policy exactly as the loop did. Re-measured via `bench_stats.py`: 200,000x32 now runs at 2.96x slower (down from 3.28x), 50,000x128 at 2.61x slower (down from 11.03x). The remaining gap is not a bug: NumPy's own autocovariance benchmark here computes entirely in float32 (no `dtype=np.float64` requested), while `stats_autocov` accumulates in double throughout - confirmed directly with an isolated profiling harness that NumPy's own single-threaded float32 gemm path takes about half the time of an equivalent double-precision centering-plus-`dgemm` path on the same data, which is the real, permanent, and deliberate cost of this file's precision policy, not something a faster implementation could remove.
 - `stats_median` (and `stats_medae`, built on it) used to be 8-16x slower than NumPy's/SciPy's partition-based (`O(n)`) median via a full `qsort` (`O(n log n)`) - now fixed with a quickselect (see Benchmark results): median-of-three pivot rather than a random one, deliberately, so the algorithm stays free of libc's global `rand()` state (the same reason this project has its own `random/random.h` instead of relying on it elsewhere). `stats_rank` is a genuinely different problem - it needs every element's rank, not just a middle one or two, so a full sort is actually required there; it was already at parity with `scipy.stats.rankdata` (0.5-1.1x) and is unaffected by this change.
-- `stats_hac_var` supports the Bartlett and rectangular windows only. Parzen and quadratic-spectral are each a different weight sequence over the same autocovariances (`stats_hac_weight` is the one place to add one), added when something concretely needs them.
+- `stats_hac_var` and `stats_hac_cov` support the Bartlett and rectangular windows only. Parzen and quadratic-spectral are each a different weight sequence over the same autocovariances (`stats_hac_weight` is the one place to add one), added when something concretely needs them.
 - `stats_hac_var` has no automatic bandwidth selection (`lag_max` is always the caller's). The usual rules of thumb (`floor(4*(n/100)^(2/9))`, or Andrews' data-driven bandwidth) belong here when a caller needs one rather than having its own reason for a specific lag — `inference/mcs.h` ties the lag to its block length instead.
 - `stats_hac_var` is `O(n * lag_max)` by direct summation. An FFT-based autocovariance would be `O(n log n)` and independent of `lag_max`, which the reference Python implementation this was translated from does use; at the lags a block bootstrap implies (single digits) the direct loop is the faster of the two, and there is no FFT in this project to reach for anyway.
 - No higher-order sample moments (skewness, kurtosis) yet — each is a few lines on this file's accumulation pattern, added when something concretely needs them (the RNG tests currently compute raw moments inline where needed).

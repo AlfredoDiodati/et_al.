@@ -14,7 +14,10 @@ process per call through parallel::makeCluster. Its time is the best of 3
 batches of at least 2 s, the clock read once per batch, inside R. Starting
 and stopping that one-worker cluster alone is timed the same way and reported
 as "cluster start", to show how much of lpirfs' time is not estimation.
-et_al. is timed inside C: the best of 5 batches of at least 20 ms.
+et_al. is timed inside C: the best of 5 batches of at least 20 ms, without
+bands and with the bands lpirfs computes at the confint of 1.96 the calls
+pass (Newey-West standard errors at lag h), which is the like-for-like
+comparison, since lpirfs always computes them.
 
 Results go to out/bench_lp_report.txt.
 """
@@ -33,9 +36,9 @@ time.sleep(2)  # let the CPU settle after compilation
 lib = ctypes.CDLL(os.path.join(ROOT, "liblpbench.so"))
 D = ctypes.POINTER(ctypes.c_double)
 I = ctypes.c_int
-lib.c_time_lp_lin.argtypes = [I, I, I, I, D]
+lib.c_time_lp_lin.argtypes = [I, I, I, I, I, D]
 lib.c_time_lp_lin.restype = ctypes.c_double
-lib.c_time_lp_nl.argtypes = [I, I, I, I, ctypes.c_double, ctypes.c_double, D, D]
+lib.c_time_lp_nl.argtypes = [I, I, I, I, ctypes.c_double, ctypes.c_double, I, D, D]
 lib.c_time_lp_nl.restype = ctypes.c_double
 
 R_SCRIPT = r'''
@@ -84,7 +87,8 @@ def lpirfs_seconds(y, switching):
 
 rng = np.random.default_rng(0)
 K, lags, hor = 5, 4, 15
-lines = [__doc__.strip(), "", "| T | routine | et_al. (ms) | lpirfs (ms) | lpirfs / et_al. |", "|---|---|---|---|---|"]
+lines = [__doc__.strip(), "", "| T | routine | et_al. without bands (ms) | et_al. with bands (ms) | lpirfs (ms) | lpirfs / et_al. with bands |",
+         "|---|---|---|---|---|---|"]
 cluster_times = []
 for T in (200, 500):
     A = 0.5 * np.eye(K) + 0.1 * rng.standard_normal((K, K))
@@ -93,12 +97,14 @@ for T in (200, 500):
         y[:, t] = A @ y[:, t - 1] + rng.standard_normal(K)
     switching = 100 + np.cumsum(rng.standard_normal(T))
     y = np.ascontiguousarray(y)
-    ours_lin = 1e-6 * lib.c_time_lp_lin(K, T, lags, hor, y.ctypes.data_as(D))
-    ours_nl = 1e-6 * lib.c_time_lp_nl(K, T, lags, hor, 1600.0, 2.0, y.ctypes.data_as(D), switching.ctypes.data_as(D))
+    ours_lin = 1e-6 * lib.c_time_lp_lin(K, T, lags, hor, 0, y.ctypes.data_as(D))
+    ours_nl = 1e-6 * lib.c_time_lp_nl(K, T, lags, hor, 1600.0, 2.0, 0, y.ctypes.data_as(D), switching.ctypes.data_as(D))
+    bands_lin = 1e-6 * lib.c_time_lp_lin(K, T, lags, hor, 1, y.ctypes.data_as(D))
+    bands_nl = 1e-6 * lib.c_time_lp_nl(K, T, lags, hor, 1600.0, 2.0, 1, y.ctypes.data_as(D), switching.ctypes.data_as(D))
     theirs_lin, theirs_nl, cluster = (1e3 * v for v in lpirfs_seconds(y, switching))
     cluster_times.append(cluster)
-    lines.append(f"| {T} | lp_lin | {ours_lin:.3f} | {theirs_lin:.1f} | {theirs_lin / ours_lin:.0f} |")
-    lines.append(f"| {T} | lp_nl | {ours_nl:.3f} | {theirs_nl:.1f} | {theirs_nl / ours_nl:.0f} |")
+    lines.append(f"| {T} | lp_lin | {ours_lin:.3f} | {bands_lin:.3f} | {theirs_lin:.1f} | {theirs_lin / bands_lin:.0f} |")
+    lines.append(f"| {T} | lp_nl | {ours_nl:.3f} | {bands_nl:.3f} | {theirs_nl:.1f} | {theirs_nl / bands_nl:.0f} |")
 lines.append("")
 lines.append("cluster start: " + ", ".join(f"{v:.1f} ms" for v in cluster_times) + " (one per data set)")
 os.makedirs(os.path.join(ROOT, "out"), exist_ok=True)

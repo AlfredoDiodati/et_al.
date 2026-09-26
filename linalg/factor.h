@@ -1135,6 +1135,13 @@ static inline void _larfb(char trans, int m, int n, int k,
 /* Panel width for QR. Measured, not chosen: see
    tests/performance/qr_lapack_removal.c. */
 #define QR_NB 32
+/* Up to this many columns (the smaller of rows and columns) the QR is
+   factored without blocking. Measured with mat_lstsq, 6 right-hand sides,
+   float64, 16 threads, heights 100 to 2000: at 33 to 48 columns the
+   unblocked factorization takes 0.55 to 0.98 of the blocked one's time; at
+   52 to 64 the two are within 4 per cent at the default threads, and at 64
+   on one thread the blocked one is 12 to 16 per cent faster. */
+#define QR_UNBLOCKED_MAX 48
 
 /* Blocked QR of an m x n column-major block, in place. Same packing as
    _geqr2, which factors each panel; the block reflector for that panel
@@ -1142,7 +1149,7 @@ static inline void _larfb(char trans, int m, int n, int k,
 static inline void _geqrf_cm(mreal *t, int m, int n, int ldt, mreal *tau,
                              mreal *tmat, mreal *wbuf) {
     int mn = m < n ? m : n;
-    if (mn <= QR_NB) { _geqr2(t, m, n, ldt, tau); return; }
+    if (mn <= QR_UNBLOCKED_MAX) { _geqr2(t, m, n, ldt, tau); return; }
 
     for (int j = 0; j < mn; j += QR_NB) {
         int jb = mn - j < QR_NB ? mn - j : QR_NB;
@@ -1315,6 +1322,32 @@ static inline void _ormqr_cm(char trans, int m, int n, int k,
             _larft(m - j, jb, &v[j + (size_t)j * ldv], ldv, &tau[j], tmat, jb);
             _larfb('N', m - j, n, jb, &v[j + (size_t)j * ldv], ldv, tmat, jb,
                    &c[j], ldc, wbuf, n);
+        }
+    }
+}
+
+/* Append the row v (n entries, overwritten) to the matrix whose QR factor is
+   the n x n upper triangular r, row-major with leading dimension ldr, by
+   Givens rotations: on return r is the factor of the matrix with v as an
+   extra row. O(n^2), against O(m n^2) for factoring again. Each rotation's
+   length is formed from the larger of its two entries, so entries near the
+   ends of the range neither overflow nor vanish. The diagonal can come out
+   of either sign; r^T r is what is determined. */
+static inline void _qr_append_row(mreal *r, int n, int ldr, mreal *v) {
+    for (int j = 0; j < n; j++) {
+        mreal a = r[(size_t)j * ldr + j], b = v[j];
+        if (b == 0) continue;
+        mreal larger = MABS(a) > MABS(b) ? MABS(a) : MABS(b);
+        mreal ratio_a = a / larger, ratio_b = b / larger;
+        mreal length = larger * (mreal)sqrt((double)(ratio_a * ratio_a + ratio_b * ratio_b));
+        mreal c = a / length, s = b / length;
+        r[(size_t)j * ldr + j] = length;
+        v[j] = 0;
+        mreal *row = &r[(size_t)j * ldr];
+        for (int k = j + 1; k < n; k++) {
+            mreal upper = row[k], lower = v[k];
+            row[k] = c * upper + s * lower;
+            v[k] = c * lower - s * upper;
         }
     }
 }

@@ -1,46 +1,49 @@
-test run: vr 25 sep 2026 18:41:16 CEST
+test run: vr 25 sep 2026 22:04:37 CEST
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 87 suites
+make test and check.sh run the same 91 suites
 
 === build ===
-make: 'tests/correctness/poly_correctness' is up to date.
-make: 'tests/correctness/spline_design_correctness' is up to date.
-make: 'tests/correctness/spline_basis_correctness' is up to date.
-make: 'tests/correctness/spline_objects_correctness' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/poly_correctness.c -lm -lopenblas -o tests/correctness/poly_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_design_correctness.c -lm -lopenblas -o tests/correctness/spline_design_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_basis_correctness.c -lm -lopenblas -o tests/correctness/spline_basis_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_objects_correctness.c -lm -lopenblas -o tests/correctness/spline_objects_correctness
 make: 'tests/correctness/test_mat' is up to date.
 make: 'tests/correctness/test_tensor' is up to date.
 make: 'tests/correctness/test_tensor_serial' is up to date.
-make: 'tests/correctness/cumsum_correctness' is up to date.
-make: 'tests/correctness/rolling_mean_correctness' is up to date.
-make: 'tests/correctness/hp_filter_correctness' is up to date.
-make: 'tests/correctness/hp_filter_recovery' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/cumsum_correctness.c -lm -lopenblas -o tests/correctness/cumsum_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/rolling_mean_correctness.c -lm -lopenblas -o tests/correctness/rolling_mean_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/hp_filter_correctness.c -lm -lopenblas -o tests/correctness/hp_filter_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hp_filter_recovery.c -lm -lopenblas -o tests/correctness/hp_filter_recovery
 make: 'tests/correctness/test_mat_special' is up to date.
 make: 'tests/correctness/test_decomp' is up to date.
 make: 'tests/correctness/test_solver' is up to date.
 make: 'tests/correctness/lstsq_rank_deficiency' is up to date.
 make: 'tests/correctness/chol_singularity' is up to date.
 make: 'tests/correctness/singularity_rule_comparison' is up to date.
-make: 'tests/correctness/ols_pseudo_inverse_fallback' is up to date.
-make: 'tests/correctness/lag_matrix_layout' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/ols_pseudo_inverse_fallback.c -lm -lopenblas -o tests/correctness/ols_pseudo_inverse_fallback
+make: 'tests/correctness/hac_covariance_correctness' is up to date.
+make: 'tests/correctness/ols_covariance_correctness' is up to date.
+make: 'tests/correctness/ols_covariance_recovery' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/lag_matrix_layout.c -lm -lopenblas -o tests/correctness/lag_matrix_layout
 make: 'tests/correctness/rank_rule_consistency' is up to date.
 make: 'tests/correctness/test_special' is up to date.
-make: 'tests/correctness/test_stats' is up to date.
-make: 'tests/correctness/test_random' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_stats.c -lm -lopenblas -o tests/correctness/test_stats
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_random.c -lm -lopenblas -o tests/correctness/test_random
 make: 'tests/correctness/test_lhs' is up to date.
-make: 'tests/correctness/test_mcs' is up to date.
-make: 'tests/correctness/test_mcs_variance' is up to date.
-make: 'tests/correctness/mcs_primitives' is up to date.
-make: 'tests/correctness/mcs_size_and_power' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs.c -lm -lopenblas -o tests/correctness/test_mcs
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs_variance.c -lm -lopenblas -o tests/correctness/test_mcs_variance
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/mcs_primitives.c -lm -lopenblas -o tests/correctness/mcs_primitives
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/mcs_size_and_power.c -lm -lopenblas -o tests/correctness/mcs_size_and_power
 make: 'tests/correctness/test_broadcast' is up to date.
-make: 'tests/correctness/test_gauss' is up to date.
-make: 'tests/correctness/test_student' is up to date.
-make: 'tests/correctness/test_mvgauss' is up to date.
-make: 'tests/correctness/test_mvstudent' is up to date.
-make: 'tests/correctness/test_matgauss' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_gauss.c -lm -lopenblas -o tests/correctness/test_gauss
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_student.c -lm -lopenblas -o tests/correctness/test_student
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mvgauss.c -lm -lopenblas -o tests/correctness/test_mvgauss
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mvstudent.c -lm -lopenblas -o tests/correctness/test_mvstudent
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_matgauss.c -lm -lopenblas -o tests/correctness/test_matgauss
 make: 'tests/correctness/test_matgauss_recovery' is up to date.
 make: 'tests/correctness/mv_density_dispatch' is up to date.
 make: 'tests/correctness/test_ad' is up to date.
@@ -50,52 +53,78 @@ make: 'tests/correctness/test_adam' is up to date.
 make: 'tests/correctness/test_optimizer' is up to date.
 make: 'tests/correctness/test_cluster' is up to date.
 make: 'tests/correctness/test_mlp' is up to date.
-make: 'tests/correctness/test_frame' is up to date.
-make: 'tests/correctness/test_csv' is up to date.
-make: 'tests/correctness/test_txt' is up to date.
-make: 'tests/correctness/test_npy' is up to date.
-make: 'tests/correctness/test_npz' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_frame.c -lm -lopenblas -o tests/correctness/test_frame
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_csv.c -lm -lopenblas -o tests/correctness/test_csv
+make: 'tests/correctness/csv_missing_values' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_txt.c -lm -lopenblas -o tests/correctness/test_txt
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_npy.c -lm -lopenblas -o tests/correctness/test_npy
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_npz.c -lm -lopenblas -o tests/correctness/test_npz
 make: 'tests/correctness/test_json' is up to date.
-make: 'tests/correctness/test_sql' is up to date.
-make: 'tests/correctness/test_join' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_sql.c -lm -lopenblas -o tests/correctness/test_sql
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_join.c -lm -lopenblas -o tests/correctness/test_join
 make: 'tests/correctness/gzip_inflate' is up to date.
 make: 'tests/correctness/gzip_deflate' is up to date.
-make: 'tests/correctness/rdata_array_read' is up to date.
-make: 'tests/correctness/adf_correctness' is up to date.
-make: 'tests/correctness/kpss_correctness' is up to date.
-make: 'tests/correctness/dfgls_correctness' is up to date.
-make: 'tests/correctness/otto_correctness' is up to date.
-make: 'tests/correctness/hlt_union_correctness' is up to date.
-make: 'tests/correctness/hlt_break_correctness' is up to date.
-make: 'tests/correctness/hhlt_correctness' is up to date.
-make: 'tests/correctness/zivot_andrews_correctness' is up to date.
-make: 'tests/correctness/johansen_correctness' is up to date.
-make: 'tests/correctness/engle_granger_correctness' is up to date.
-make: 'tests/correctness/maki_correctness' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/rdata_array_read.c -lm -lopenblas -o tests/correctness/rdata_array_read
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/adf_correctness.c -lm -lopenblas -o tests/correctness/adf_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/kpss_correctness.c -lm -lopenblas -o tests/correctness/kpss_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/dfgls_correctness.c -lm -lopenblas -o tests/correctness/dfgls_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/otto_correctness.c -lm -lopenblas -o tests/correctness/otto_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hlt_union_correctness.c -lm -lopenblas -o tests/correctness/hlt_union_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hlt_break_correctness.c -lm -lopenblas -o tests/correctness/hlt_break_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hhlt_correctness.c -lm -lopenblas -o tests/correctness/hhlt_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/zivot_andrews_correctness.c -lm -lopenblas -o tests/correctness/zivot_andrews_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/johansen_correctness.c -lm -lopenblas -o tests/correctness/johansen_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/engle_granger_correctness.c -lm -lopenblas -o tests/correctness/engle_granger_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/maki_correctness.c -lm -lopenblas -o tests/correctness/maki_correctness
 make: 'tests/correctness/qlr_test_correctness' is up to date.
 make: 'tests/correctness/lbfgs_correctness' is up to date.
 make: 'tests/correctness/score_driven_location_correctness' is up to date.
-make: 'tests/correctness/qvarma_correctness' is up to date.
-make: 'tests/correctness/qvarma_analytic_agreement' is up to date.
-make: 'tests/correctness/qvarma_gaussian_limit' is up to date.
-make: 'tests/correctness/qvarma_identification' is up to date.
-make: 'tests/correctness/qvarma_fixed_parameter_fit' is up to date.
-make: 'tests/correctness/var_correctness' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -lopenblas -o tests/correctness/qvarma_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_analytic_agreement.c -lm -lopenblas -o tests/correctness/qvarma_analytic_agreement
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_gaussian_limit.c -lm -lopenblas -o tests/correctness/qvarma_gaussian_limit
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp tests/correctness/qvarma_identification.c -lm -lopenblas -o tests/correctness/qvarma_identification
+tests/correctness/qvarma_identification.c: In function ‘curvature_at’:
+tests/correctness/qvarma_identification.c:57:5: warning: missing initializer for field ‘workspace’ of ‘QvarmaFitContext’ [-Wmissing-field-initializers]
+   57 |     QvarmaFitContext context = { y, shape };
+      |     ^~~~~~~~~~~~~~~~
+In file included from tests/correctness/qvarma_identification.c:38:
+tests/correctness/../../sd/qvarma.h:1656:21: note: ‘workspace’ declared here
+ 1656 |     QvarmaAnalytic *workspace;
+      |                     ^~~~~~~~~
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_fixed_parameter_fit.c -lm -lopenblas -o tests/correctness/qvarma_fixed_parameter_fit
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/var_correctness.c -lm -lopenblas -o tests/correctness/var_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/var_recovery.c -lm -lopenblas -o tests/correctness/var_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/lp_correctness.c -lm -lopenblas -o tests/correctness/lp_correctness
+make: 'tests/correctness/lp_correctness' is up to date.
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/lp_recovery.c -lm -lopenblas -o tests/correctness/lp_recovery
-make: 'tests/integration/basis_to_regression' is up to date.
-make: 'tests/integration/frame_to_model' is up to date.
-make: 'tests/integration/frame_to_tensor' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/basis_to_regression.c -lm -lopenblas -o tests/integration/basis_to_regression
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -lopenblas -o tests/integration/frame_to_model
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_tensor.c -lm -lopenblas -o tests/integration/frame_to_tensor
 make: 'tests/integration/tensor_to_optimizer' is up to date.
-make: 'tests/integration/join_missing_values' is up to date.
-make: 'tests/integration/distributed_simulation' is up to date.
-make: 'tests/integration/optimizer_swap' is up to date.
-make: 'tests/integration/pipeline_ownership' is up to date.
-make: 'tests/integration/npz_to_statistics' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/join_missing_values.c -lm -lopenblas -o tests/integration/join_missing_values
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/distributed_simulation.c -lm -lopenblas -o tests/integration/distributed_simulation
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. tests/integration/optimizer_swap.c -lm -lopenblas -o tests/integration/optimizer_swap
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
-make: Nothing to be done for 'examples'.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/basis_example.c -lm -lopenblas -o examples/basis_example
+In file included from examples/basis_example.c:4:
+./basis/spline.h: In function ‘_periodic_spline.constprop’:
+./basis/spline.h:1143:16: warning: ‘sites’ may be used uninitialized [-Wmaybe-uninitialized]
+ 1143 |     Mat full = _spline_design_raw(knots, nk, sites, n, ord, &none, 1, 0);
+      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+./basis/spline.h:271:19: note: by argument 3 of type ‘const mreal *’ {aka ‘const double *’} to ‘_spline_design_raw.constprop’ declared here
+  271 | static inline Mat _spline_design_raw(const mreal *knots, int nk, const mreal *x, int nx,
+      |                   ^~~~~~~~~~~~~~~~~~
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/encoder.c -lm -lopenblas -o examples/encoder
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/join_example.c -lm -lopenblas -o examples/join_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/lhs_example.c -lm -lopenblas -o examples/lhs_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/mcs_example.c -lm -lopenblas -o examples/mcs_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_fixed_parameters_example.c -lm -lopenblas -o examples/qvarma_fixed_parameters_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/rdata_example.c -lm -lopenblas -o examples/rdata_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/tensor_example.c -lm -lopenblas -o examples/tensor_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/unit_root_example.c -lm -lopenblas -o examples/unit_root_example
 
 === poly_correctness: PASS ===
 basis/poly.h correctness, float32 build
@@ -362,6 +391,35 @@ responses fitted exactly
   3600 exact fits, 0 not reported
 ols_all_residuals_are_zero against ols_residuals_are_zero column by column
 NaN and infinite entries
+
+PASSED, 0 failures
+
+=== hac_covariance_correctness: PASS ===
+stats_hac_cov: the HAC long-run covariance matrix, float32 build
+
+known values: lag 0 is the covariance, one column is stats_hac_var, a two-column series by hand
+invariants: symmetric, Bartlett positive semi-definite, shift, scale and permutation
+a strided view, one observation, a constant column, lag n - 1, extreme magnitudes
+200 random samples against the long double reference
+  0 of 200 samples off
+
+PASSED, 0 failures
+
+=== ols_covariance_correctness: PASS ===
+ols_covariance and ols_coefficient_variances, float32 build
+
+known values: a four-point simple regression by hand
+150 designs against the long double reference, and the selected variances against the diagonal
+  largest gap 0.0513 of 64 cond(x^T x) u
+lag 0 against White's formula; scaled columns and responses
+strided views, one degree of freedom, lag m - 1, extreme columns, an exact fit
+
+PASSED, 0 failures
+
+=== ols_covariance_recovery: PASS ===
+classical and HAC coefficient variances against the Monte Carlo variance, float64 build
+
+  A: classical 1.057, HAC 1.036; B: classical 0.340, HAC 0.805; C: classical 0.534, White 1.049
 
 PASSED, 0 failures
 
@@ -814,6 +872,16 @@ unterminated quote at EOF: silently tolerated, not rejected (pinning current beh
 write/read round-trip: mixed numeric+string columns, values needing quoting
 write with write_header=0: no header row, columns get generated names on reread
 test_csv: all passed
+
+=== csv_missing_values: PASS ===
+frame/csv.h missing-value markers, float32 build
+
+known files, with and without markers
+the writer: na_rep, a quoted na_rep, and no na_rep
+200 random frames written with na_rep and read back
+  0 of 200 frames off
+
+PASSED, 0 failures
 
 === test_txt: PASS ===
 basic TXT: whitespace-separated numeric matrix, no header by default
@@ -1533,8 +1601,12 @@ NaN in y or the switching series, tied shocks, and a strided y
 var_impulse_responses: A^h d for a VAR(1), companion powers for a VAR(2)
 residuals_are_zero: y_2 at t is y_1 at t - 3, so it is fitted exactly at horizons 2 and 3 only
 cache: bit-for-bit round trip, refusals leave the fit untouched, cached loads, force_refit, no file without d
+bands: against the long double reference, the identities they satisfy, NaN where undefined, the cache
+lp_lin_and_nl: the linear fit bit for bit, the state-dependent one to rounding, the VAR fitted once
 300 random configurations against the long double reference, d computed independently
-  4050 horizons compared, 0 of them at a bound of one or more and skipped; 70 configurations at the shortest sample, 7 of them with a singular Sigma_u; largest gap 0.0319 of its bound
+  4050 horizons compared, 0 of them at a bound of one or more and skipped; 70 configurations at the shortest sample, 7 of them with a singular Sigma_u; largest gap 0.0109 of its bound
+near-exact fit: every horizon within 2 u (kappa + kappa^2 rho) of the reference, the accuracy of a QR solve
+  largest gap 0.00146 of the bound; u kappa^2 at least 1.08e+04 times the bound; reference error at most 0.000248 of it
 invariances: rescaled variables, shifted variables, an affine switching series, weights w and 1 - w
 the shortest sample allowed: the last horizon has as many rows as regressors and fits exactly
 lp_correctness: all passed
@@ -1682,4 +1754,4 @@ PASSED, 0 failures
 
 
 === summary ===
-90 passed, 0 failed
+94 passed, 0 failed

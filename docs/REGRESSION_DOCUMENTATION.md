@@ -25,9 +25,15 @@ void   ols_all_residuals_are_zero(Mat x, Mat y, const OlsFit *fit, int *flags);
 mreal  ols_unscaled_variance(Mat x, int column);
 Mat    lag_matrix(Mat y, int p);
 void   ols_free(OlsFit *fit);
+
+typedef enum { OLS_COVARIANCE_CLASSICAL, OLS_COVARIANCE_HAC } OlsCovarianceKind;
+typedef struct { OlsCovarianceKind kind; int lag_max; StatsHACKernel kernel; } OlsCovarianceSpec;
+Mat  ols_covariance(Mat x, const OlsFit *fit, int column, OlsCovarianceSpec spec);   /* n x n */
+void ols_coefficient_variances(Mat x, const OlsFit *fit, OlsCovarianceSpec spec,
+                               const int *coefficients, int count, Mat out);           /* count x (columns of y) */
 ```
 
-`ols_residuals_are_zero(x, y, &fit, j)` is 1 when column `j` of `y` is fitted exactly: its residuals are zero up to rounding, so it has nothing left over to call a shock or an error. A series that never moves, next to an intercept, is the case it exists for. The test is the package's rank rule: the residual norm at most `mat_rank_tolerance(m)` times the larger of `||y_j||` and `sum_k ||x_k|| * |b_kj|`. The second term is the size of what the fitted values are summed from; the rounding in a residual scales with it, and it exceeds `||y_j||` whenever the coefficients cancel. Measured on exact fits stored exactly (small integers, `y = x * beta`, 300 per kind and shape, 5 to 2000 rows, both precisions), the ratio never exceeded 1.55 in units of `sqrt(m) * MEPS`, against the rule's 10; measured against `||y_j||` alone, fits through cancelling coefficients reached 12.2 at 5 rows and would have been missed. The verdict does not depend on units: rescaling `y_j` scales every term, and rescaling a column of `x` scales its coefficient inversely. All norms are taken after dividing by the largest entry, so values near the ends of the range neither overflow nor vanish. An all-zero column of `y` is reported, since anything fits it exactly.
+`ols_residuals_are_zero(x, y, &fit, j)` is 1 when column `j` of `y` is fitted exactly: its residuals are zero up to rounding, so it has nothing left over to call a shock or an error. A series that never moves, next to an intercept, is the case it exists for. The test is the package's rank rule: the residual norm at most `mat_rank_tolerance(m)` times the larger of `||y_j||` and `sum_k ||x_k|| * |b_kj|`. The second term is the size of what the fitted values are summed from; the rounding in a residual scales with it, and it exceeds `||y_j||` whenever the coefficients cancel. Measured on exact fits stored exactly (small integers, `y = x * beta`, 300 per kind and shape, 5 to 2000 rows, both precisions), the ratio never exceeded 1.55 in units of `sqrt(m) * MEPS`, against the rule's 10; measured against `||y_j||` alone, fits through cancelling coefficients reached 12.2 at 5 rows and would have been missed. The verdict does not depend on units: rescaling `y_j` scales every term, and rescaling a column of `x` scales its coefficient inversely. The norms are summed in double in one pass; a column whose largest entry lies outside `[1e-150, 1e150]` is summed again with its entries divided by that largest one, so values near the ends of the range neither overflow nor vanish. The one pass made `lp_lin` 3 to 7 per cent faster at 200 observations against the version that always divided first (see `docs/LP_DOCUMENTATION.md`, "Speed"). An all-zero column of `y` is reported, since anything fits it exactly.
 
 It is a function the caller runs when it wants the answer, not a field `ols` fills on every call. As a field it made every unit root and co-integration statistic 11 to 16 per cent slower (float64, one simulated series or 3-variable system of 200 observations, 16 threads, 6 alternating pairs in each order), and none of them reads it.
 
@@ -46,6 +52,19 @@ It is a function the caller runs when it wants the answer, not a field `ols` fil
 - `-1`: `x` or `y` holds a NaN or an infinity. Nothing is computed and nothing is allocated. This is checked on the data itself through `mat_all_finite`, because nothing computed from it can be trusted to carry the value; see README's Pitfalls on `-ffast-math`.
 
 A shape violation (`m < n`, mismatched rows, an empty matrix) is a contract violation and asserts.
+
+## Coefficient covariance
+
+`ols_covariance(x, &fit, column, spec)` is the covariance of column `column`'s coefficients, `n x n`, from a fit with status 0:
+
+- `OLS_COVARIANCE_CLASSICAL`: `s^2 (x^T x)^-1`, `s^2` the sum of squared residuals over `m - n`. Right for homoskedastic errors without serial correlation.
+- `OLS_COVARIANCE_HAC`: `(x^T x)^-1 (m S) (x^T x)^-1`, `S = stats_hac_cov` of the scores `x_t u_t` at `lag_max` with the chosen window (see `docs/STATS_DOCUMENTATION.md`). With `STATS_HAC_BARTLETT` this is Newey and West (1987), W. K. Newey and K. D. West, "A Simple, Positive Semi-Definite, Heteroskedasticity and Autocorrelation Consistent Covariance Matrix", *Econometrica* 55(3), 1987, 703-708. At `lag_max = 0` it is White's heteroskedasticity-consistent covariance.
+
+`(x^T x)^-1` is `R^-1 R^-T`, with `R` from a QR of `x` and `R^-1` from one triangular solve against the identity, so the normal matrix is never formed and its condition number never squared. The scores sum to `x^T u`, which is zero at the least squares solution, so the centering `stats_hac_cov` applies changes only rounding. Neither estimator applies a finite-sample adjustment; a caller that wants one multiplies (`lp/lp.h`'s `adjust_se` is `m / (m - n)`).
+
+`ols_coefficient_variances(x, &fit, spec, coefficients, count, out)` gives the diagonal entries `ols_covariance` would hold for the listed coefficients, for every column of `y` at once, into `out` (`count x` columns of `y`), without building an `n x n` matrix per column. With `z_j` the coefficient's column of `(x^T x)^-1` (two triangular solves against unit vectors), the classical variance is `s^2 z_j[j]`. The HAC variance is `m` times the long-run variance of the scalar series `u_t x_t^T z_j`, one `m x n x count` product for all of them and then `O(m lag_max)` per entry. `lp/lp.h` reaches the same computation with the triangular factor it already holds, through an internal entry point.
+
+Contracts, asserted: the fit has status 0 (a rank-deficient fit has no unique covariance; see "Known limitations"); `m > n` for the classical estimator; `0 <= lag_max < m` for the HAC one.
 
 ## Who calls it
 
@@ -81,6 +100,8 @@ The reference is the R code that fits local projections for the calibration of a
 
 **A response fitted exactly.** When a series never moves, `lpirfs` stops at the VAR, as above. `ols` fits it, and that series' own residuals are rounding noise, which `mat_chol` does not reject (see "Known limitations"). What to do with such a draw is left to the caller, through `ols_residuals_are_zero`.
 
+**Coefficient covariance.** `lpirfs` builds its standard errors in `src/ols_diagnost.cpp` (classical, `s^2 inv(x^T x)` with divisor `m - n`) and `src/newey_west.cpp` (Newey-West, `inv(x^T x) G inv(x^T x)`, `G` summed from the uncentered scores). `ols_covariance` computes the same matrices, with `(x^T x)^-1` from `R^-1` rather than from `inv`, and with the scores centered, which changes only rounding since they sum to zero. statsmodels 0.14.6 (`cov_type="nonrobust"` and `cov_type="HAC"` with `use_correction=False`) computes them the same way as `lpirfs`, through a pseudo-inverse. Agreement with both is in Testing.
+
 **NaN and infinity.**
 
 - In the reference pipeline a level that reaches zero or below becomes `-Inf` or NaN through `log` (`src/main/arithmetic.h`, `R_log`).
@@ -102,9 +123,74 @@ The exact-fit tests cover a stuck series among ordinary ones, 3600 exact integer
 
 Three mutations were run against the fallback: a pseudo-inverse cutoff 1000 times below the flag (about 2470 failures in each build), the rank left unreported (646), and the non-finite check removed (the SVD solver aborts on the NaN, which fails the run). `tests/correctness/rank_rule_consistency.c` checks the package-wide statements the fallback relies on.
 
+The coefficient covariance, in three files.
+
+`tests/correctness/ols_covariance_correctness.c`, in `make test`, passing in both precisions:
+
+- **A regression worked by hand:** `y = (1, 3, 2, 5)` on an intercept and `x = (0, 1, 2, 3)`, `s^2 = 1.35`, variances `0.945` and `0.27`, covariance `-0.405`.
+- **A long double reference from the definitions,** on 150 fixed-seed designs (1500 under `STRESS=1`) from `rng_new(53, r)`:
+  - `(x^T x)^-1` by Gauss-Jordan elimination, and the Newey-West matrix exactly as `lpirfs`' `src/newey_west.cpp` computes it, uncentered scores;
+  - `n` from 2 to 12, `m` from `n + 2` to 300, `lag_max` anywhere in `[0, m - 1]`, both windows, one to three responses, two columns nearly collinear in every third design;
+  - the tolerance is `64 cond(x^T x) u` times `sqrt(V_aa V_bb)` for the classical covariance, and times `sqrt(W_aa W_bb) (1 + 2 lag_max)` for the HAC one, `W` the lag-0 (White) covariance, a bound on the sum of the absolute terms, since the rectangular window can cancel a variance to nearly zero;
+  - measured: the largest gap `0.064` of that bound in float64 and `0.051` in float32.
+- `ols_coefficient_variances` against the diagonal of `ols_covariance` for every response, for coefficients chosen in any order and repeated.
+- **Checks written separately:**
+  - `lag_max = 0` against White's formula;
+  - equivariance: columns scaled by `1, 1e3, 1e-2, -7` and the response by 3;
+  - strided views against copies, bit for bit;
+  - one degree of freedom;
+  - `lag_max = m - 1`;
+  - columns of `1e6` and `1e-6`;
+  - an exact fit, whose covariance is rounding.
+
+| mutation | failing checks |
+|---|---|
+| the classical divisor `m` instead of `m - n` | 2474 |
+| the HAC covariance without its factor `m` | 2450 |
+| a selected classical variance read from another column | 1861 |
+| one triangular solve instead of two for `z` | 4302 |
+| the scalar HAC series not centered | 0, and cannot be: its sum is `z_j^T x^T u = 0` at the least squares solution |
+
+`tests/correctness/ols_covariance_recovery.c`, a Monte Carlo study, in `make test` (float64). Setup:
+- `y_t = 1 + 0.5 x_t + u_t` on an intercept and `x_t`;
+- 400 observations after 200 burn-in periods;
+- 1000 draws per case (5000 under `STRESS=1`), draw `r` of case `c` from `rng_new(59 + c, r)`;
+- measured: the Monte Carlo variance of the slope, each estimator's mean variance over it, and the coverage of normal 95 per cent intervals.
+
+The criteria were fixed from theory before the first run:
+
+| case | classical / Monte Carlo | HAC / Monte Carlo | coverage |
+|---|---|---|---|
+| A. iid | `1.057` in `[0.9, 1.1]` | lag 4: `1.036` in `[0.85, 1.1]` | `0.951` and `0.951` in `[0.93, 0.97]` |
+| B. `x` and `u` AR(1) with 0.7; theory: classical `0.34` | `0.340` in `[0.25, 0.45]` | lag 12: `0.805` in `[0.65, 1.02]` | classical `0.748` (below 0.85), HAC `0.909` in `[0.87, 0.96]` |
+| C. `u = (1 + abs(x)) e`; theory: classical `0.50` | `0.534` in `[0.35, 0.65]` | lag 0 (White): `1.049` in `[0.85, 1.1]` | White `0.947` in `[0.92, 0.97]` |
+
+Under `STRESS=1` the ratios are `0.995, 0.975; 0.354, 0.850; 0.491, 0.964`. Removing the factor `m` from the selected HAC variances fails 7 of its checks.
+
+`tests/correctness/ols_covariance_reference_agreement.py` (`make test-ols-covariance-python PYTHON=...`, outside `make test` because it needs statsmodels, and R with the `lpirfs` package for that arm) compares with statsmodels 0.14.6 and with `lpirfs:::newey_west`, in both precisions:
+
+- designs from `default_rng(2026)`: `(m, n)` of `(60, 3)`, `(200, 9)`, `(500, 21)` and `(200, 41)` at lags 0, 4 and `m / 4`, and a calibration-shaped design at lags 1 to 15;
+- tolerance `16 cond(x^T x) sqrt(m) e` times the scale above, `cond(x^T x)` by SVD with every column scaled to unit norm, `sqrt(m)` for the rounding of the sums of `m` terms both implementations carry (a first version without it failed at 1 to 3.2 times the bound on well-conditioned designs, gaps of about `1e-14`).
+
+All 172 comparisons pass. Float64 gaps reach at most 0.24 of the bound; in float32 the calibration-shaped design is checked for shape only, its bound being above one.
+
+`tests/performance/bench_ols_covariance.py` (in `bench.sh`) against statsmodels 0.14.6. Setup: float64, 16 threads, best of 5 batches of at least 20 ms, designs from `default_rng(0)`. The covariance of a fitted regression, the fit made outside the timing on both sides:
+
+| `m x n` | covariance | full here | `n - 1` variances here | statsmodels |
+|---|---|---|---|---|
+| 200 x 21 | classical | 19.4 us | 18.9 us | 2.5 us |
+| 200 x 21 | HAC lag 15 | 50.9 us | 36.0 us | 230 us |
+| 200 x 41 | HAC lag 15 | 170 us | 144 us | 455 us |
+| 1000 x 21 | HAC lag 4 | 169 us | 148 us | 256 us |
+| 10000 x 5 | HAC lag 15 | 528 us | 337 us | 1269 us |
+
+The HAC covariance is 1.2 to 4.5 times faster than statsmodels at every shape measured. The classical one is slower here because statsmodels keeps the pseudo-inverse from its fit (see "Known limitations"). Fit and covariance together, `ols` then `ols_covariance` against `fit(cov_type=...)` then `cov_params()`, are 3.7 to 7.1 times faster here. The full table is in `out/bench_ols_covariance_report.txt`.
+
 ## Known limitations and future work
 
-- No coefficient covariance matrix; only `ols_unscaled_variance`, one diagonal entry at a time, for a full-rank design. A full classical and HAC (Newey-West) covariance is what the local-projection work needs next; under rank deficiency it has to be computed on the identified combinations only, which is a decision still to make.
+- The coefficient covariance needs a fit with full column rank. Under rank deficiency only some linear combinations of the coefficients have a covariance; computing it on those is a decision still to make, and `lp/lp.h` returns NaN bands for such a horizon instead.
+- `ols_covariance` factors `x` again, since `OlsFit` does not keep the factor `ols` computed. statsmodels keeps its pseudo-inverse from the fit, so its classical covariance from an existing fit is a product of stored matrices (2.5 us against 19 to 144 us here, see Testing); fit and covariance together are 3.7 to 7.1 times faster here.
+- `ols_unscaled_variance` predates the covariance functions and forms `x^T x`; it squares the condition number where `ols_covariance` does not.
 - What to do with a series fitted exactly is the caller's decision. `mat_chol` does not catch it: a covariance of residuals that are rounding noise (measured: largest `2.2e-16` on a series stuck at `0.25`, float64) passes, because each pivot is judged against that variable's own variance. `examples/singular_draws_example.c` calls `ols_residuals_are_zero` before the Cholesky step and reports those draws as having no shock to identify.
 - No weights, no regularization, no underdetermined case: `m < n` asserts rather than returning the minimum-norm solution of a system with fewer observations than regressors.
 - The minimum-norm convention is in the units of `x` as given. A caller who wants it unit-free standardizes the columns first and rescales the coefficients after.

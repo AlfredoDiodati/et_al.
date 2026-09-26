@@ -174,6 +174,59 @@ static inline Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char
     return x;
 }
 
+/* The rank rule of mat_lstsq on an upper triangular factor R of an m-row
+   design, n x n and row-major with leading dimension ldr: the 1-based index
+   of the first column j with |R[j][j]| <= mat_rank_tolerance(m) ||a_j||,
+   ||a_j|| read off column j of R, or of the first column holding a NaN or an
+   infinity; 0 when there is none. See mat_lstsq for the rule. Any R with
+   R^T R = A^T A will do, since both ||a_j|| and the diagonal up to sign are
+   determined by A^T A. */
+static inline int _lstsq_first_dependent_column(const mreal *r, int n, int ldr, int m) {
+    /* The column norms are accumulated a row of R at a time, since walking
+       a column of a row-major R touches a new cache line per entry; the
+       stack buffer spares small designs, which are most of them, an
+       allocation. */
+    double small_buffer[192];
+    double *buffer = n <= 64 ? small_buffer : (double*)malloc(3 * (size_t)n * sizeof(double));
+    assert(buffer);
+    double *column_inverse_scale = buffer, *column_norms_sq = buffer + n, *column_non_finite = buffer + 2 * n;
+
+    /* Each column is divided by its largest entry before it is squared: in
+       float64 an entry beyond about 1e154 squares to infinity and one below
+       about 1e-154 to zero, and either would decide the test on its own.
+
+       A finite a can still overflow to an infinity inside the factorization,
+       so R's entries are checked again through their bit patterns as they
+       are read; a test on the norm computed from them would not do, since
+       under -ffast-math GCC 15.2 compiles the scaled sum so that a NaN entry
+       never reaches it. */
+    for (int j = 0; j < n; j++) { column_inverse_scale[j] = 0; column_norms_sq[j] = 0; column_non_finite[j] = 0; }
+    for (int i = 0; i < n; i++)
+        for (int j = i; j < n; j++) {
+            mreal value = r[(size_t)i * ldr + j];
+            if (MISNAN(value) || MISINF(value)) { column_non_finite[j] = 1; continue; }
+            double entry = fabs((double)value);
+            if (entry > column_inverse_scale[j]) column_inverse_scale[j] = entry;
+        }
+    for (int j = 0; j < n; j++)
+        column_inverse_scale[j] = column_inverse_scale[j] > 0 ? 1 / column_inverse_scale[j] : 0;
+    for (int i = 0; i < n; i++)
+        for (int j = i; j < n; j++) {
+            double scaled = (double)r[(size_t)i * ldr + j] * column_inverse_scale[j];
+            column_norms_sq[j] += scaled * scaled;
+        }
+
+    int info = 0;
+    double tolerance = mat_rank_tolerance(m);
+    for (int j = 0; j < n; j++) {
+        double diagonal = (double)r[(size_t)j * ldr + j] * column_inverse_scale[j];
+        if (column_non_finite[j] != 0 ||
+            diagonal * diagonal <= tolerance * tolerance * column_norms_sq[j]) { info = j + 1; break; }
+    }
+    if (buffer != small_buffer) free(buffer);
+    return info;
+}
+
 /* Solve the least-squares problem min ||a*x - b||_2 via QR.
    a is m x n with m >= n (overdetermined or square); b is m x nrhs with
    b.r == a.r. Returns the n x nrhs solution as a new owner; a and b are
@@ -227,49 +280,9 @@ static inline Mat mat_lstsq(Mat a, Mat b, int *status) {
     _gels(m, n, nrhs, qr.d, qr.stride, work.d, work.stride);
 
     /* _gels leaves R in the upper triangle of qr. Its own return value
-       only flags a diagonal entry that is exactly zero, which the test
-       below already includes. The column norms are accumulated a row of R
-       at a time, since walking a column of a row-major R touches a new
-       cache line per entry; the stack buffer spares small designs, which
-       are most of them, an allocation. */
-    double small_buffer[192];
-    double *buffer = n <= 64 ? small_buffer : (double*)malloc(3 * (size_t)n * sizeof(double));
-    assert(buffer);
-    double *column_inverse_scale = buffer, *column_norms_sq = buffer + n, *column_non_finite = buffer + 2 * n;
-
-    /* Each column is divided by its largest entry before it is squared: in
-       float64 an entry beyond about 1e154 squares to infinity and one below
-       about 1e-154 to zero, and either would decide the test on its own.
-
-       A finite a can still overflow to an infinity inside the factorization,
-       so R's entries are checked again through their bit patterns as they
-       are read; a test on the norm computed from them would not do, since
-       under -ffast-math GCC 15.2 compiles the scaled sum so that a NaN entry
-       never reaches it. */
-    for (int j = 0; j < n; j++) { column_inverse_scale[j] = 0; column_norms_sq[j] = 0; column_non_finite[j] = 0; }
-    for (int i = 0; i < n; i++)
-        for (int j = i; j < n; j++) {
-            mreal value = AT(qr, i, j);
-            if (MISNAN(value) || MISINF(value)) { column_non_finite[j] = 1; continue; }
-            double entry = fabs((double)value);
-            if (entry > column_inverse_scale[j]) column_inverse_scale[j] = entry;
-        }
-    for (int j = 0; j < n; j++)
-        column_inverse_scale[j] = column_inverse_scale[j] > 0 ? 1 / column_inverse_scale[j] : 0;
-    for (int i = 0; i < n; i++)
-        for (int j = i; j < n; j++) {
-            double scaled = (double)AT(qr, i, j) * column_inverse_scale[j];
-            column_norms_sq[j] += scaled * scaled;
-        }
-
-    int info = 0;
-    double tolerance = mat_rank_tolerance(m);
-    for (int j = 0; j < n; j++) {
-        double diagonal = (double)AT(qr, j, j) * column_inverse_scale[j];
-        if (column_non_finite[j] != 0 ||
-            diagonal * diagonal <= tolerance * tolerance * column_norms_sq[j]) { info = j + 1; break; }
-    }
-    if (buffer != small_buffer) free(buffer);
+       only flags a diagonal entry that is exactly zero, which the rank
+       rule already includes. */
+    int info = _lstsq_first_dependent_column(qr.d, n, qr.stride, m);
     if (status) *status = info;
     else assert(info == 0 && "mat_lstsq: a is numerically rank deficient");
     if (info != 0) {

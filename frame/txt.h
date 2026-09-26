@@ -69,7 +69,7 @@ static inline DataFrame df_read_txt(const char *path, TxtReadOptions opts) {
     StrList *rows = frame_parse_txt(buf, &n_rows);
     free(buf);
 
-    DataFrame df = frame_rows_to_dataframe(rows, n_rows, opts.has_header);
+    DataFrame df = frame_rows_to_dataframe(rows, n_rows, opts.has_header, NULL, 0);
 
     for (int i = 0; i < n_rows; i++) strlist_free(&rows[i]);
     free(rows);

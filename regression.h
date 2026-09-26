@@ -1,5 +1,6 @@
 #pragma once
 #include "linalg/solver.h"
+#include "stats.h"
 
 /* Ordinary least squares that carries on through collinearity.
 
@@ -56,23 +57,32 @@ typedef struct {
                           or infinite entry, nothing computed or allocated */
 } OlsFit;
 
-/* The Euclidean norm of every column of m, each divided by its largest
-   entry before squaring so an entry beyond about 1e154 in float64 does not
-   overflow and one below 1e-154 does not vanish. Row by row, since m is
-   row-major; largest is scratch of m.c entries. */
+/* The Euclidean norm of every column of m, row by row, since m is
+   row-major; largest is scratch of m.c entries. One pass accumulates each
+   column's sum of squares in double together with its largest entry. A
+   column whose largest entry lies outside [1e-150, 1e150] is summed again
+   with every entry divided by that largest one first, since there a square
+   can overflow or vanish in float64; float32 entries squared never do. */
 static inline void _ols_column_norms(Mat m, double *norms, double *largest) {
     for (int j = 0; j < m.c; j++) { largest[j] = 0; norms[j] = 0; }
     for (int i = 0; i < m.r; i++)
-        for (int j = 0; j < m.c; j++) largest[j] = fmax(largest[j], fabs((double)AT(m, i, j)));
-    /* largest becomes its reciprocal, 0 for a column of zeros, whose norm
-       is then 0 */
-    for (int j = 0; j < m.c; j++) largest[j] = largest[j] > 0 ? 1 / largest[j] : 0;
-    for (int i = 0; i < m.r; i++)
         for (int j = 0; j < m.c; j++) {
-            double scaled = (double)AT(m, i, j) * largest[j];
-            norms[j] += scaled * scaled;
+            double value = (double)AT(m, i, j);
+            largest[j] = fmax(largest[j], fabs(value));
+            norms[j] += value * value;
         }
-    for (int j = 0; j < m.c; j++) norms[j] = largest[j] > 0 ? sqrt(norms[j]) / largest[j] : 0;
+    for (int j = 0; j < m.c; j++) {
+        if (largest[j] == 0 || (largest[j] >= 1e-150 && largest[j] <= 1e150)) {
+            norms[j] = sqrt(norms[j]);
+            continue;
+        }
+        double inverse = 1 / largest[j], sum = 0;
+        for (int i = 0; i < m.r; i++) {
+            double scaled = (double)AT(m, i, j) * inverse;
+            sum += scaled * scaled;
+        }
+        norms[j] = sqrt(sum) * largest[j];
+    }
 }
 
 /* x is m x n with m >= n, y is m x k. Neither is modified; either may be a
@@ -194,6 +204,145 @@ static inline mreal ols_unscaled_variance(Mat x, int column) {
     mat_free(transpose); mat_free(cross); mat_free(solved);
     if (selector_data != small_selector) free(selector_data);
     return value;
+}
+
+/* How the covariance of ols coefficients is estimated.
+
+   OLS_COVARIANCE_CLASSICAL: s^2 (x^T x)^-1, with s^2 the sum of squared
+   residuals over m - n, m rows and n columns of x: homoskedastic errors
+   without serial correlation.
+
+   OLS_COVARIANCE_HAC: (x^T x)^-1 (m S) (x^T x)^-1, with S = stats_hac_cov of
+   the scores x_t u_t at lag_max with the chosen window: Newey and West
+   (1987) with STATS_HAC_BARTLETT, consistent under heteroskedasticity and
+   serial correlation up to about lag_max. The scores sum to x^T u, which
+   is zero at the least squares solution, so centering them, as
+   stats_hac_cov does, changes only rounding.
+
+   Neither applies a finite-sample adjustment; a caller that wants one
+   multiplies. */
+typedef enum { OLS_COVARIANCE_CLASSICAL, OLS_COVARIANCE_HAC } OlsCovarianceKind;
+
+typedef struct {
+    OlsCovarianceKind kind;
+    int lag_max;              /* OLS_COVARIANCE_HAC only, 0 <= lag_max < m */
+    StatsHACKernel kernel;    /* OLS_COVARIANCE_HAC only */
+} OlsCovarianceSpec;
+
+static inline void _ols_check_covariance(Mat x, const OlsFit *fit, int column, OlsCovarianceSpec spec) {
+    assert(fit->status == 0 && fit->coefficients.d && "ols covariance: the fit must have full column rank");
+    assert(x.r == fit->residuals.r && x.c == fit->coefficients.r && column >= 0 && column < fit->residuals.c);
+    assert(spec.kind == OLS_COVARIANCE_CLASSICAL || spec.kind == OLS_COVARIANCE_HAC);
+    assert(spec.kind != OLS_COVARIANCE_CLASSICAL || x.r > x.c);
+    assert(spec.kind != OLS_COVARIANCE_HAC || (spec.lag_max >= 0 && spec.lag_max < x.r));
+}
+
+/* The upper triangular factor R of x = Q R, n x n. */
+static inline Mat _ols_r_factor(Mat x) {
+    Mat factored = mat_copy(x), r = mat_new(x.c, x.c);
+    mreal *tau = (mreal*)malloc((size_t)x.c * sizeof(mreal));
+    assert(tau);
+    _geqrf(factored.d, x.r, x.c, factored.stride, tau);
+    for (int i = 0; i < x.c; i++)
+        for (int j = i; j < x.c; j++) AT(r, i, j) = AT(factored, i, j);
+    free(tau);
+    mat_free(factored);
+    return r;
+}
+
+/* The covariance of column `column`'s coefficients, n x n, from a fit with
+   status 0. (x^T x)^-1 is R^-1 R^-T with R from a QR of x, so the normal
+   matrix is never formed and its condition number never squared. A new
+   owner; x may be a strided view. */
+static inline Mat ols_covariance(Mat x, const OlsFit *fit, int column, OlsCovarianceSpec spec) {
+    _ols_check_covariance(x, fit, column, spec);
+    int m = x.r, n = x.c;
+    Mat r = _ols_r_factor(x);
+    /* inverse_r = R^-1, one triangular solve against the identity */
+    Mat inverse_r = mat_eye(n);
+    _trtrs('U', 'N', 'N', n, n, r.d, r.stride, inverse_r.d, inverse_r.stride);
+    Mat inverse_r_t = mat_T(inverse_r);
+    Mat unscaled = mat_mul(inverse_r, inverse_r_t);
+    Mat covariance;
+    if (spec.kind == OLS_COVARIANCE_CLASSICAL) {
+        double squared = 0;
+        for (int i = 0; i < m; i++) squared += (double)AT(fit->residuals, i, column) * (double)AT(fit->residuals, i, column);
+        for (int i = 0; i < n * n; i++) unscaled.d[i] *= (mreal)(squared / (m - n));
+        covariance = unscaled;
+    } else {
+        Mat scores = mat_new(m, n);
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < n; j++) AT(scores, i, j) = AT(x, i, j) * AT(fit->residuals, i, column);
+        Mat long_run = stats_hac_cov(scores, spec.lag_max, spec.kernel);
+        for (int i = 0; i < n * n; i++) long_run.d[i] *= (mreal)m;
+        Mat left = mat_mul(unscaled, long_run);
+        covariance = mat_mul(left, unscaled);
+        mat_free(scores); mat_free(long_run); mat_free(left); mat_free(unscaled);
+    }
+    mat_free(r); mat_free(inverse_r); mat_free(inverse_r_t);
+    return covariance;
+}
+
+/* ols_coefficient_variances given R, the upper triangular factor of x = Q R
+   that the caller already holds; see there. */
+static inline void _ols_coefficient_variances(Mat x, Mat r, const OlsFit *fit, OlsCovarianceSpec spec,
+                                              const int *coefficients, int count, Mat out) {
+    int m = x.r, n = x.c, K = fit->residuals.c;
+    for (int k = 0; k < K; k++) _ols_check_covariance(x, fit, k, spec);
+    assert(r.r == n && r.c == n && out.r == count && out.c == K && count >= 1);
+    /* z = (x^T x)^-1 at the selected columns, n x count: R^T R z = e */
+    Mat z = mat_new(n, count);
+    for (int j = 0; j < count; j++) {
+        assert(coefficients[j] >= 0 && coefficients[j] < n);
+        AT(z, coefficients[j], j) = 1;
+    }
+    _trtrs('U', 'T', 'N', n, count, r.d, r.stride, z.d, z.stride);
+    _trtrs('U', 'N', 'N', n, count, r.d, r.stride, z.d, z.stride);
+    if (spec.kind == OLS_COVARIANCE_CLASSICAL) {
+        for (int k = 0; k < K; k++) {
+            double squared = 0;
+            for (int i = 0; i < m; i++) squared += (double)AT(fit->residuals, i, k) * (double)AT(fit->residuals, i, k);
+            for (int j = 0; j < count; j++)
+                AT(out, j, k) = (mreal)(squared / (m - n) * (double)AT(z, coefficients[j], j));
+        }
+        mat_free(z);
+        return;
+    }
+    /* z_j^T (m S) z_j is m times the long-run variance of the scalar series
+       u_t x_t^T z_j, so one product x z serves every coefficient and every
+       response, and no n x n matrix is built per response */
+    Mat projected = mat_new(m, count);
+    mat_gemm(0, 0, m, count, n, 1, x.d, x.stride, z.d, z.stride, 0, projected.d, projected.stride);
+    double *series = (double*)malloc((size_t)m * sizeof(double));
+    assert(series);
+    for (int k = 0; k < K; k++)
+        for (int j = 0; j < count; j++) {
+            double mean = 0;
+            for (int i = 0; i < m; i++) {
+                series[i] = (double)AT(fit->residuals, i, k) * (double)AT(projected, i, j);
+                mean += series[i];
+            }
+            mean /= m;
+            for (int i = 0; i < m; i++) series[i] -= mean;
+            AT(out, j, k) = (mreal)(m * stats_hac_var_centered(series, m, spec.lag_max, spec.kernel));
+        }
+    free(series);
+    mat_free(projected); mat_free(z);
+}
+
+/* The variances of selected coefficients, for every column of y at once:
+   out[j][k] is the variance of coefficient coefficients[j] of column k,
+   the diagonal entry ols_covariance(x, fit, k, spec) would hold, without
+   building that matrix. out is count x (columns of y). For
+   OLS_COVARIANCE_HAC each entry is m times the long-run variance of the
+   scalar series u_t x_t^T z_j, with z_j that coefficient's column of
+   (x^T x)^-1, which costs one m x n x count product and O(m lag_max) per
+   entry where the full matrix costs O(m n^2 lag_max) per column of y. */
+static inline void ols_coefficient_variances(Mat x, const OlsFit *fit, OlsCovarianceSpec spec, const int *coefficients,
+                                             int count, Mat out) {
+    Mat r = _ols_r_factor(x);
+    _ols_coefficient_variances(x, r, fit, spec, coefficients, count, out);
+    mat_free(r);
 }
 
 static inline void ols_free(OlsFit *fit) {

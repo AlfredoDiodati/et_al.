@@ -9,12 +9,19 @@
    fields (country names, formatted dates, ...), so a bare split-on-comma
    parser would silently corrupt them. */
 
-typedef struct { int has_header; char delimiter; } CsvReadOptions;
+/* na_values: n_na_values markers read as NaN in numeric columns, compared
+   with the whole field after the tokenizer has removed any quotes, as R's
+   read.csv(na.strings = ...) and pandas' read_csv(na_values = ...) do; a
+   field equal to one of them does not make its column a string column. The
+   array is borrowed, not copied, and must outlive the call. None by
+   default, so a marker makes its column a string column, as the note on
+   missing values in docs/FRAME_DOCUMENTATION.md explains. */
+typedef struct { int has_header; char delimiter; const char *const *na_values; int n_na_values; } CsvReadOptions;
 
-/* has_header = 1 (first row is column names), delimiter = ',' - the
-   common case. */
+/* has_header = 1 (first row is column names), delimiter = ',', no
+   missing-value markers - the common case. */
 static inline CsvReadOptions csv_read_options_default(void) {
-    CsvReadOptions o; o.has_header = 1; o.delimiter = ',';
+    CsvReadOptions o; o.has_header = 1; o.delimiter = ','; o.na_values = NULL; o.n_na_values = 0;
     return o;
 }
 
@@ -97,7 +104,8 @@ static inline DataFrame df_read_csv(const char *path, CsvReadOptions opts) {
     StrList *rows = frame_parse_csv(buf, opts.delimiter, &n_rows);
     free(buf);
 
-    DataFrame df = frame_rows_to_dataframe(rows, n_rows, opts.has_header);
+    assert(opts.n_na_values >= 0 && (opts.n_na_values == 0 || opts.na_values) && "df_read_csv: na_values holds n_na_values markers");
+    DataFrame df = frame_rows_to_dataframe(rows, n_rows, opts.has_header, opts.na_values, opts.n_na_values);
 
     for (int i = 0; i < n_rows; i++) strlist_free(&rows[i]);
     free(rows);
@@ -106,12 +114,17 @@ static inline DataFrame df_read_csv(const char *path, CsvReadOptions opts) {
 
 /* --- writing: the other direction of the same format --- */
 
-typedef struct { int write_header; char delimiter; } CsvWriteOptions;
+/* na_rep: when not NULL, the text a NaN in a numeric column is written as,
+   quoted like any field if it needs to be; with the same marker in the
+   reader's na_values the file round-trips, as R's write.csv(na = "NA")
+   and read.csv do. NULL writes a NaN as printf does, "nan", which the
+   reader parses back as a number. */
+typedef struct { int write_header; char delimiter; const char *na_rep; } CsvWriteOptions;
 
-/* write_header = 1, delimiter = ',' - the common case, mirroring
-   csv_read_options_default(). */
+/* write_header = 1, delimiter = ',', na_rep NULL - the common case,
+   mirroring csv_read_options_default(). */
 static inline CsvWriteOptions csv_write_options_default(void) {
-    CsvWriteOptions o; o.write_header = 1; o.delimiter = ',';
+    CsvWriteOptions o; o.write_header = 1; o.delimiter = ','; o.na_rep = NULL;
     return o;
 }
 
@@ -163,7 +176,9 @@ static inline void df_write_csv(const DataFrame *df, const char *path, CsvWriteO
         for (int j = 0; j < df->n_cols; j++) {
             if (j) fputc(opts.delimiter, f);
             ColumnMeta cm = df->columns[j];
-            if (cm.type == COL_NUMERIC) frame_csv_write_number(f, AT(df->numeric, i, cm.index));
+            mreal value = cm.type == COL_NUMERIC ? AT(df->numeric, i, cm.index) : 0;
+            if (cm.type == COL_NUMERIC && opts.na_rep && MISNAN(value)) frame_csv_write_field(f, opts.na_rep, opts.delimiter);
+            else if (cm.type == COL_NUMERIC) frame_csv_write_number(f, value);
             else frame_csv_write_field(f, df->string_cols[cm.index][i], opts.delimiter);
         }
         fputc('\n', f);

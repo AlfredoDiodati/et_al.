@@ -2221,3 +2221,38 @@ change, default threads against one thread are 1.30 slower at 200 x 100, 1.15
 at 2000 x 49 and 1.12 at 5000 x 49. `_org2r` (forming `Q`) and `_larf_left` and
 `_larf_right` (bidiagonal and Hessenberg reductions) still use the pair and
 were not measured.
+
+## 22. Local projections (`lp/lp.h`) - fixed
+
+The regressions of all horizons now share one QR factor, updated a row at a
+time, and are solved by the corrected semi-normal equations. Three more
+changes followed, each measured on its own:
+
+- the flags' design norms read off `R`;
+- `lp_lin`'s VAR taken from its horizon-1 regression;
+- one-pass column norms in `regression.h`.
+
+At the calibration's specification (5 variables, 4 lags, horizon 15,
+`T = 200`, float64, 16 threads), a single `lp_lin` call takes 0.55 to 0.57 of
+its former time and an `lp_nl` call 0.45. With many draws fitted at once,
+each on one thread, a draw with both fits takes about 0.48. The price is
+accuracy: on calibration-shaped data the responses are about 3 times
+further from the exact ones than QR at every horizon put them, `3.4e-12`
+against `9.6e-13` relative at worst. Every step, the
+setup and the accuracy check are in `docs/LP_DOCUMENTATION.md`, "How the
+horizons are computed" and "Speed".
+
+Rejected there, with numbers:
+
+- residuals and `X' r` from one pass over the rows (1.20 to 1.27 times
+  slower);
+- the per-horizon products batched into three large ones: faster for single
+  calls except `lp_nl` at `T = 200`, but 1.3 to 1.55 times slower with many
+  draws at once;
+- dropping the correction step: about 30 per cent faster and 2000 times less
+  accurate.
+
+A side effect in shared code: `QR_UNBLOCKED_MAX` in `linalg/factor.h`
+factors QRs of up to 48 columns without blocking, and `mat_lstsq` at 33 to
+48 columns takes 0.55 to 0.98 of its former time
+(`docs/SOLVER_DOCUMENTATION.md`).

@@ -445,6 +445,60 @@ static inline mreal stats_hac_var(Mat x, int lag_max, StatsHACKernel kernel) {
     return (mreal)s;
 }
 
+/* HAC long-run covariance matrix of an n x d sample, rows the observations,
+   each column centered by its own sample mean:
+
+     S = Gamma_0 + sum_{k=1..lag_max} w(k) * (Gamma_k + Gamma_k^T)
+     Gamma_k = (1/n) * sum_{t=0..n-1-k} xc[t+k] * xc[t]^T
+
+   the matrix form of stats_hac_var, with the same window and the same
+   divisor n at every lag, so a one-column x gives exactly stats_hac_var's
+   value and lag_max = 0 gives the population covariance. Under
+   STATS_HAC_BARTLETT S is positive semi-definite for any sample, which is
+   the property Newey and West (1987) chose that window for; under
+   STATS_HAC_RECTANGULAR it need not be. d x d and symmetric; caller must
+   mat_free(). Accumulated in double whatever the mreal build, as
+   stats_autocov does. */
+static inline Mat stats_hac_cov(Mat x, int lag_max, StatsHACKernel kernel) {
+    int n = x.r, d = x.c;
+    assert(n >= 1 && d >= 1 && lag_max >= 0 && lag_max < n);
+    double *mu = (double *)calloc((size_t)d, sizeof *mu);
+    double *xc = (double *)malloc((size_t)n * d * sizeof *xc);
+    double *weighted = (double *)calloc((size_t)n * d, sizeof *weighted);
+    double *weights = (double *)malloc(((size_t)lag_max + 1) * sizeof *weights);
+    double *total = (double *)malloc((size_t)d * d * sizeof *total);
+    assert(mu && xc && weighted && weights && total);
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < d; j++) mu[j] += (double)AT(x, i, j);
+    for (int j = 0; j < d; j++) mu[j] /= n;
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < d; j++) xc[(size_t)i * d + j] = (double)AT(x, i, j) - mu[j];
+    weights[0] = 1;
+    for (int k = 1; k <= lag_max; k++) weights[k] = stats_hac_weight(kernel, k, lag_max);
+
+    /* sum_k w(k) (Gamma_k + Gamma_k^T) n = xc^T B xc, with B the n x n
+       banded Toeplitz matrix whose entry (s, t) is w(|s - t|) for
+       |s - t| <= lag_max. B xc is built one lag at a time, each lag two
+       contiguous updates of (n - k) d entries, rows shifted by k in each
+       direction, O(n d lag_max) in all, and one product finishes, where a
+       product per lag costs O(n d^2 lag_max). */
+    for (int k = 0; k <= lag_max; k++) {
+        size_t length = (size_t)(n - k) * d, shift = (size_t)k * d;
+        double w = weights[k];
+        for (size_t i = 0; i < length; i++) weighted[i] += w * xc[i + shift];
+        if (k > 0)
+            for (size_t i = 0; i < length; i++) weighted[i + shift] += w * xc[i];
+    }
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, d, d, n, 1.0, xc, d, weighted, d, 0.0, total, d);
+    Mat o = mat_new(d, d);
+    /* symmetric in exact arithmetic; the average removes the rounding
+       asymmetry of the product */
+    for (int a = 0; a < d; a++)
+        for (int b = 0; b < d; b++) AT(o, a, b) = (mreal)((total[a * d + b] + total[b * d + a]) / (2.0 * n));
+    free(mu); free(xc); free(weighted); free(weights); free(total);
+    return o;
+}
+
 /* --- order statistics and rank correlation: unlike everything above,
    these sort rather than accumulate, so there is no double-vs-mreal
    precision question - sort order is exact regardless of precision. --- */

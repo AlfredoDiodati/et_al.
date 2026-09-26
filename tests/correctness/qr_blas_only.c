@@ -324,7 +324,8 @@ static void test_shapes(void) {
    first panel correct, because there is nothing to its right for the
    block update to be applied to, and corrupts every panel after it. So a
    test whose sizes all sit below QR_NB would pass while the routine was
-   wrong for everything larger, which is why the sizes here straddle it.
+   wrong for everything larger, which is why the sizes here straddle it,
+   and straddle QR_UNBLOCKED_MAX, below which _geqrf does not block at all.
 
    _geqr2 and _org2r are column-major, _geqrf and _orgqr row-major, so
    each is given the layout it expects and the results are compared after
@@ -332,7 +333,7 @@ static void test_shapes(void) {
 static void test_blocked_matches_unblocked(void) {
     puts("blocked vs unblocked");
     const int dims[][2] = {
-        {33,33},{40,36},{64,64},{65,40},{100,64},{128,70},{129,129}
+        {33,33},{40,36},{60,49},{80,50},{64,64},{65,40},{100,64},{128,70},{129,129}
     };
     int n_dims = (int)(sizeof dims / sizeof dims[0]);
     char what[96];

@@ -73,6 +73,10 @@ Each column is divided by its largest entry in `R` before its norm is squared. W
 
 The unblocked part of the QR applies each Householder reflector with a plain loop, `_reflect_columns`, rather than a `?gemv` and `?ger` pair, because the OpenMP build of OpenBLAS threaded that pair at sizes where one thread is faster. At 16 threads `mat_lstsq` now takes 0.42 to 0.94 of its former time on designs of 100 to 5000 rows and 10 to 100 columns with 6 right-hand sides; the setup and the full table are item 21 of `docs/PERFORMANCE_BACKLOG.md`.
 
+Up to `QR_UNBLOCKED_MAX` (48) columns the QR is factored without blocking at all, and the blocked path with its `QR_NB` (32) wide panels starts above that. Measured with `mat_lstsq`, 6 right-hand sides, float64, 16 threads, heights 100 to 2000, the cutoff at 32, 40, 48 and 56 alternated: at 33 to 48 columns the unblocked factorisation takes 0.55 to 0.98 of the blocked one's time; above 48 the blocked path is unchanged, and at 64 columns on one thread the unblocked one was 12 to 16 per cent slower. `tests/correctness/qr_blas_only.c` compares the two paths on shapes on both sides of both constants.
+
+The rank rule reads only the triangular factor, and is the function `_lstsq_first_dependent_column`, so that `lp/lp.h`, which updates one factor a row at a time rather than calling `mat_lstsq`, applies the same rule to it.
+
 What the tolerance buys over the exact-zero rule, from the same file, on matrices built from small integers so that a singular one is singular in exact arithmetic and any nonzero pivot is rounding alone:
 
 - On 1500 exactly singular designs (six patterns, 4 to 10000 rows) the exact-zero rule missed about 1420 in both builds; the tolerance rule reported the first dependent column in all 1500. The solutions the exact-zero rule let through had coefficients up to `1e21` in float64 and `1e10` in float32, on problems whose valid solutions are of order 10; what makes them wrong is not their size but that the model is not identified. The same held at 200000 rows and on a 40 x 40 square matrix.

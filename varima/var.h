@@ -164,6 +164,39 @@ static inline void _var_check_data(Mat y, const VarSpec *spec) {
     (void)T_e; (void)n;
 }
 
+/* The fit from the regression of the response on the design, both as
+   _var_design and _var_response build them, with status at least 0, and its
+   exact-fit flags, which the fit takes over. Shared by var_fit and by
+   lp/lp.h, whose horizon-1 regression is this one. */
+static inline VarFit _var_fit_from_regression(VarSpec spec, const OlsFit *regression, int *residuals_are_zero) {
+    int K = spec.K, Kp = K * spec.p;
+    VarFit fit = {0};
+    fit.spec = spec;
+    fit.ols_status = regression->status;
+    fit.rank = regression->rank;
+    fit.residuals_are_zero = residuals_are_zero;
+
+    fit.model.nu = mat_new(K, 1);
+    fit.model.A = mat_new(K, Kp);
+    for (int k = 0; k < K; k++) {
+        AT(fit.model.nu, k, 0) = AT(regression->coefficients, 0, k);
+        for (int j = 0; j < Kp; j++) AT(fit.model.A, k, j) = AT(regression->coefficients, j + 1, k);
+    }
+    fit.residuals = mat_T(regression->residuals);
+    fit.model.Sigma_u = _var_sigma(regression->residuals, &spec);
+    /* The residuals lie in a space of dimension T_e - rank, so with fewer
+       dimensions than variables Sigma_u is singular in exact arithmetic.
+       Its computed pivots are then rounding noise amplified by the design's
+       conditioning, which can exceed mat_chol's tolerance: 15 residuals of
+       a 13-column design gave a third pivot of 9.4e-14 relative, against a
+       tolerance of 1.9e-15. So it is rejected here, at the first pivot that
+       vanishes in exact arithmetic, T_e - rank + 1. */
+    int residual_dimension = regression->residuals.r - regression->rank;
+    if (residual_dimension < K) fit.model.chol_status = residual_dimension + 1;
+    else _var_derive(&fit.model);
+    return fit;
+}
+
 /*
 Least squares on y, K x T, one column per period, the first p columns being
 the presample. y may be a strided view and is not modified.
@@ -185,42 +218,19 @@ docs/REGRESSION_DOCUMENTATION.md for what ols decides and why.
 */
 static inline VarFit var_fit(Mat y, VarSpec spec) {
     _var_check_data(y, &spec);
-    int K = spec.K, Kp = K * spec.p;
+    int K = spec.K;
     VarFit fit = {0};
     fit.spec = spec;
 
     Mat design = _var_design(y, spec.p);
     Mat response = _var_response(y, spec.p);
     OlsFit regression = ols(design, response);
-    fit.ols_status = regression.status;
-    if (regression.status < 0) {
-        mat_free(design); mat_free(response);
-        return fit;
-    }
-    fit.rank = regression.rank;
-    fit.residuals_are_zero = (int*)malloc((size_t)K * sizeof(int));
-    assert(fit.residuals_are_zero);
-    ols_all_residuals_are_zero(design, response, &regression, fit.residuals_are_zero);
-
-    fit.model.nu = mat_new(K, 1);
-    fit.model.A = mat_new(K, Kp);
-    for (int k = 0; k < K; k++) {
-        AT(fit.model.nu, k, 0) = AT(regression.coefficients, 0, k);
-        for (int j = 0; j < Kp; j++) AT(fit.model.A, k, j) = AT(regression.coefficients, j + 1, k);
-    }
-    fit.residuals = mat_T(regression.residuals);
-    fit.model.Sigma_u = _var_sigma(regression.residuals, &spec);
-    /* The residuals lie in a space of dimension T_e - rank, so with fewer
-       dimensions than variables Sigma_u is singular in exact arithmetic.
-       Its computed pivots are then rounding noise amplified by the design's
-       conditioning, which can exceed mat_chol's tolerance: 15 residuals of
-       a 13-column design gave a third pivot of 9.4e-14 relative, against a
-       tolerance of 1.9e-15. So it is rejected here, at the first pivot that
-       vanishes in exact arithmetic, T_e - rank + 1. */
-    int residual_dimension = (y.c - spec.p) - regression.rank;
-    if (residual_dimension < K) fit.model.chol_status = residual_dimension + 1;
-    else _var_derive(&fit.model);
-
+    if (regression.status >= 0) {
+        int *flags = (int*)malloc((size_t)K * sizeof(int));
+        assert(flags);
+        ols_all_residuals_are_zero(design, response, &regression, flags);
+        fit = _var_fit_from_regression(spec, &regression, flags);
+    } else fit.ols_status = regression.status;
     ols_free(&regression);
     mat_free(design); mat_free(response);
     return fit;
