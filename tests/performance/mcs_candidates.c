@@ -108,6 +108,12 @@ static const MCSArmCase cases[] = {
     { "tr_m120_stress", 200, 120, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 23, 6, 18, 0.4, 0.006, 1, 0, 0, 0 },
     { "tmax_m120_stress", 200, 120, 500, 15, -1, 0.05, 0, MCS_ARM_VAR_BOOTSTRAP, 47, 11, 23, 0.4, 0.006, 1, 0, 0, 0 },
     { "tr_noisy_m120_stress", 200, 120, 500, 15, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 59, 13, 25, 0.4, 0.006, 1, 0, 0, 20 },
+    /* Blocks of one observation, the setting of a Monte Carlo that needs
+       four million sets at a thousand models over 999 observations; both
+       arms run, since the shipped header now takes about a second there. */
+    { "tr_block1", 300, 20, 1000, 1, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 123, 0, 26, 0.0, 0.01, 0, 0, 0, 0 },
+    { "tr_m300_block1_stress", 999, 300, 2000, 1, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 123, 0, 27, 0.0, 0.002, 1, 0, 0, 0 },
+    { "tr_m1000_block1_stress", 999, 1000, 2000, 1, -1, 0.05, 1, MCS_ARM_VAR_BOOTSTRAP, 123, 0, 28, 0.0, 0.0005, 1, 0, 1, 0 },
     /* Past here the shipped header is the thing that cannot be waited
        for, so only the candidate runs and only its cost is reported.
        Agreement is settled at the rungs above, where both arms fit. */

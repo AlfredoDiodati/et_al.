@@ -1886,16 +1886,31 @@ for 80 KiB and 24 KiB more memory. Every harness case identical, the full
 result identical at 1, 3 and 16 threads. `docs/MCS_PERFORMANCE_DOCUMENTATION.md`
 has the setup behind each number, as Fix 5.
 
+**A sixth change**, exact, stopped `MCS_TR` under the bootstrap variance from
+running its rounds one at a time. A pair's reciprocal standard error is fixed
+once the draws are made, so the whole elimination order follows from the mean
+losses before any draw is read; and the set only shrinks, so walking the rounds
+from the last to the first each draw's statistic is a running maximum, and one
+pass over its pairs gives every round's exceedance at once. Above 5 MiB of
+losses the per-model resampled means are gathered 32 models at a time, so that
+block of the matrix stays in cache across draws instead of the whole matrix
+being read from main memory once per draw. At a thousand models over 999
+observations with 2000 draws and blocks of one, 1072 ms to 115 ms in the
+project's build and 962 ms to 118 ms in a `-O2` double build without
+fast-math; every harness case byte-identical in both, and 360 of 360 runs over
+six real loss tables. `docs/MCS_PERFORMANCE_DOCUMENTATION.md` has it as Fix 6.
+
 **What is left.** `MCS_TR` under the two HAC variants is still quadratic in `M`
 in time and memory: those variants estimate each series' standard error from
 that series, so a pair's number cannot be reached through its two models'.
 `MCS_VARIANCE_HAC` still redraws every round, though the shared per-model table
 could serve it; that moves p-values by whole draws and needs the statistical
 gates the second and fourth changes had. Under `MCS_TR` at a thousand models
-the phase split after the fifth change is 0.47 s draw scan, 0.25 s one-off
-setup (0.22 s of it the per-model resampled means), 0.14 s choosing the model
-to drop, 0.10 s per-round fill, of 0.97 s. `MCS_TMAX` has not been profiled by
-phase.
+over 999 observations, blocks of one, the phase split after the sixth change is
+about 70 ms forming the per-model resampled means, 27 ms the pair spreads and 4
+ms everything else, of about 105 ms; a tiled pair-spread loop and a larger draw
+chunk were tried and rejected, with numbers in that file. `MCS_TMAX` has not
+been profiled by phase.
 
 ## 14. Broadcast element-wise operations (`linalg/tensor.h`) - fixed
 
