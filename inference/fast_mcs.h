@@ -46,6 +46,13 @@
      Lemma 2's proof decomposes the statistic into; the printed equations
      range over E_plus(k) alone.
 
+   The implementation the paper links differs from this one on the same
+   draws, and the difference is in that code's application of Eq. (18):
+   it takes the models ranked below the new one in the order they were
+   added rather than in ranking order. docs/FAST_MCS_DOCUMENTATION.md,
+   "The authors' code and Eq. (18)", has the lines, the equations and the
+   measurement that settles which of the two is exact.
+
    Only MCS_TR under MCS_VARIANCE_BOOTSTRAP: the updating lemmas are for
    the range rule (Section 2.3), and the paper's t-statistics use the
    bootstrap variance. The pieces that paper does not define - how a

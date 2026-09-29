@@ -691,6 +691,15 @@ liblp_f32.so: $(LP_DEPS)
 test-lp-python: liblp_f64.so liblp_f32.so
 	$(or $(PYTHON),python3) tests/correctness/lp_reference_agreement.py
 
+# Checks inference/fast_mcs.h against the authors' implementation of the
+# paper, run on the same draws; needs numpy and a clone of
+# https://github.com/Sylvain-Barde/fastMCS:
+# make test-fast-mcs-python FASTMCS_REFERENCE=path/to/fastMCS PYTHON=...
+libfastmcs_f64.so: tests/correctness/fast_mcs_reference_agreement.c $(FAST_MCS_DEPS)
+	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/correctness/fast_mcs_reference_agreement.c $(LDLIBS) -o libfastmcs_f64.so
+test-fast-mcs-python: libfastmcs_f64.so
+	FASTMCS_REFERENCE=$(FASTMCS_REFERENCE) $(or $(PYTHON),python3) tests/correctness/fast_mcs_reference_agreement.py
+
 test-rolling-mean-python: librolling_f64.so librolling_f32.so
 	$(or $(PYTHON),python3) tests/correctness/rolling_mean_reference_agreement.py
 
@@ -1285,4 +1294,4 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model
+.PHONY: bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-fast-mcs-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model

@@ -63,13 +63,79 @@ This holds exactly in floating point as well, because the order is sorted from t
 
 What can still separate `fast_mcs()` from `mcs()` is condition 2.1. `T_m` is taken over every model already in, and when the largest `t_{m,i}` is against a model that ends up ranked below m, `T_m` exceeds the statistic of the round that eliminates m. Whenever condition 2.1 held at every addition, the correctness suite finds the two identical in every output.
 
-**How this differs from the authors' code.** The Python implementation the paper links (`github.com/Sylvain-Barde/fastMCS`, `fastMCS.py`, run with `algorithm='1-pass'`) departs from the equations above in four places:
-- **Better-ranked models move:** it raises the score of any processed model whose t-statistic against the new one exceeds both its own score and the new model's, including models ranked better, which Eq. (14) keeps fixed.
-- **Floor at zero:** it floors a new model's score at 0.
-- **Wrong running maximum:** for the models ranked below the new one, it accumulates the running maximum of `|tau|` in processing order while assigning it by ranking position.
-- **Already-updated neighbour:** in the heuristic, it reads the value of the model ranked just above k after this addition has already updated it, where Eq. (28) uses the value before.
+## The authors' code and Eq. (18)
 
-The paper reports p-value differences between its one-pass and two-pass algorithms in 88.6% of its replications at T = 250. That code was not run here, because the machine this was written on has no numpy. So it is not established which of those departures, if any, produces the paper's rates. What is measured is the implementation of the equations, below.
+This header and the implementation the paper links (`github.com/Sylvain-Barde/fastMCS`, file `fastMCS.py`, commit `8f63ea4` of 21 July 2025, `algorithm='1-pass'`) return different p-values on the same data and the same draws. The difference is in the authors' code, not here. This section says where, against which equation, and how that was established.
+
+**What Eq. (18) requires.** When model m is added:
+- **Who gets updated:** every model k ranked below it, $k \in \mathcal{E}_m^-$ (Eq. (13)), has its bootstrapped statistic updated.
+- **The update:** where condition 2.3 holds, Eq. (18) is
+
+$$\mathcal{T}_{k,b} = \max\left(\mathcal{T}'_{k,b},\ \max_{i \in \mathcal{E}_k^+} |\tau_{m,i,b}|\right).$$
+
+- **The set it ranges over:** $\mathcal{E}_k^+$ is, by Definition 1, the set of models eliminated after k, which are the models ranked above k. It is fixed by the ranking, meaning the order of the equivalence statistics T of Eqs. (12)-(15), not by the order in which models were added.
+- **Why:** the reason is Lemma 2. $\mathcal{T}_{k,b}$ is the bootstrapped statistic of the round that eliminates k, a maximum over the pairs of models still in the set at that round (Eq. (10)), and those models are $\mathcal{E}_k^+ \cup \{k\}$. Adding m adds m's pairs with exactly those models.
+
+**The pair $(m, k)$.** The printed range $i \in \mathcal{E}_k^+$ leaves out i = k itself, but m and k are both in the set at k's round, so their pair belongs in the maximum. The proof of Lemma 2 (Appendix A) decomposes the statistic over $\mathcal{E}_k^+ \cup \{k\}$. This header takes the maximum over $(\mathcal{E}_k^+ \cup \{k\}) \setminus \{m\}$, and Eq. (28)'s lower bound over the same set. With that set the one-pass result equals the exact algorithms in every replication measured below.
+
+**What the authors' code does instead.** From `fastMCS.py` at that commit, lines 603-617:
+
+```python
+for j, mod in enumerate(modsWorse[0]):
+    j += loc + 1 # Ajust index for current model location
+    tMax = np.maximum(tMax, np.abs(tBoot[:,mod]))
+    if swaps[j]:
+        ...
+    else:
+        self.tBootDist[:,modRank[j]] = np.maximum(tMax,
+                          self.tBootDist[:,modRank[j]])
+```
+
+What the variables hold:
+- **`modsWorse[0]`:** comes from `np.where` over `modsProcessed`, so it lists the models of $\mathcal{E}_m^-$ in the order they were added.
+- **`modRank[j]`:** the model at ranking position j.
+- **`tMax`:** enters the loop as m's maximum over $\mathcal{E}_m^+$.
+
+So the value written to the model at ranking position j is the maximum over $\mathcal{E}_m^+$ and the first j - loc models of $\mathcal{E}_m^-$ in addition order. Eq. (18) wants the first j - loc models of $\mathcal{E}_m^-$ in ranking order. The two coincide when those models were added in the order they are ranked. When they were not, the code's maximum includes models ranked below k, which are not in k's round, and misses models ranked above k, which are.
+
+Example: $\mathcal{E}_m^- = \{a, c\}$, a added before c, c ranked above a.
+- **c:** the code writes to c a maximum that contains $|\tau_{m,a,b}|$ and not $|\tau_{m,c,b}|$. But a is eliminated before c, so it is not in c's round.
+- **a:** the code writes to a the maximum over both, which is what Eq. (18) gives a.
+
+**How it was established.** `make test-fast-mcs-python` runs the authors' code beside this library on the same losses and the same draws: this library's resamples are handed to the authors' code in place of its own block bootstrap.
+
+Setup: the paper's design (Eqs. (30)-(31)), numpy seed 2026, 20 replications at each of T = 250 and 30 and M = 10, 50 and 100 (120 in all), 500 draws, blocks of two, alpha 0.05. Exceedance counts are recomputed on both sides with the same strict inequality, so the authors' `>=` in Eq. (10) cannot show up as a difference.
+
+| comparison | result over 120 replications |
+|---|---|
+| control: the authors' elimination algorithm against `mcs()` | 120 agree: same order, same counts, same set, statistics within `1.8e-14` relative |
+| the authors' two-pass (exact) against `mcs()` (exact) | 120 agree |
+| the authors' one-pass as published against `fast_mcs()` | order never differs; counts differ in 31, and the set in 1 |
+| the authors' one-pass against the authors' own two-pass | differ in the same 31 |
+| `fast_mcs()` against `mcs()` | 0 differ |
+| in the 31 where the two one-pass versions differ, which equals both exact algorithms | `fast_mcs()` in 31, the authors' one-pass in 0 |
+| the authors' one-pass with that one line taking the models in ranking order, against `fast_mcs()` | 120 agree |
+
+The 31 by design, one-pass disagreements per 20 replications:
+
+| | M = 10 | M = 50 | M = 100 |
+|---|---|---|---|
+| T = 250 | 0 | 1 | 12 |
+| T = 30 | 1 | 6 | 11 |
+
+**Why the exact algorithms decide it.** In the paper's own order (line 1 of Algorithm 3, increasing average loss), the heuristic of Eqs. (28)-(29) never runs, as shown above. Every update is then Eq. (18) under condition 2.3, which Lemma 2 makes exact, so a correct one-pass must return what the elimination algorithm and the two-pass algorithm return. On every replication where the two one-pass versions disagree, this header agrees with both exact algorithms and the authors' one-pass agrees with neither. Changing the one line so it takes the models in ranking order makes the authors' code agree with this header on all 120.
+
+**The authors' three other departures from the printed equations** are left in that patched version, and it still agrees on every replication:
+- **Eqs. (14)-(15):** the code raises the score of any processed model whose t-statistic against the new one exceeds both its own score and the new model's, including models Eq. (14) keeps fixed.
+- **Floor at zero:** the code floors a new model's score at 0.
+- **Eq. (28):** the code reads the updated value of the model ranked just above k, where Eq. (28) uses the value before this addition, $\mathcal{T}'_{k^+,b}$.
+
+In the paper's order the first two cannot act, because every earlier model's t-statistic against a new one is at most 0 and the new model's score is at least 0. The third acts only inside the heuristic, which never runs there.
+
+**What this does not establish:**
+- **The paper's own figure:** the paper reports one-pass p-value differences in 88.6% of its replications at T = 250 (its Table 1), over M from 100 to 10000 with 1000 draws. That design was not rerun here. The numbers above show the same kind of difference, growing with M, from this one line.
+- **Other addition orders:** where the heuristic does run (`fast_mcs_in_order()` with another order), this header and the authors' code are not compared.
+- **Intent:** the code has no comment tying it to the equations or marking any of this as intended.
 
 ## Testing
 
@@ -77,6 +143,7 @@ The paper reports p-value differences between its one-pass and two-pass algorith
 |---|---|---|---|
 | `tests/correctness/fast_mcs_correctness.c` | does it compute Algorithm 3, and does it equal `mcs()` where Proposition 1 says it must | `make test` | 0.15 s |
 | `tests/correctness/fast_mcs_size_and_power.c` | does it cover and eliminate as the MCS should, on `mcs_size_and_power.c`'s design | `make test` | 0.40 s |
+| `tests/correctness/fast_mcs_reference_agreement.py` | on the same draws, where does it differ from the authors' code, and which of the two equals the exact algorithms | `make test-fast-mcs-python FASTMCS_REFERENCE=<clone> PYTHON=<python with numpy>` | 36 s |
 | `tests/performance/fast_mcs_against_mcs.c` | is it cheaper than `mcs()`, and how far apart are their answers | `make bench-fast_mcs_against_mcs` | 14 s |
 
 **`fast_mcs_correctness.c`** compares against a reference written from the paper with nothing reused from either header:
@@ -156,5 +223,5 @@ The paper's comparison is against the elimination algorithm, which is $O(M^3)$. 
 
 - **Only `MCS_TR` under the bootstrap variance.**
 - **No incremental API:** extending a finished result with more models is not provided. It would need the resamples, the observed rankings and `T_star` kept past the call. `fast_mcs_in_order()` runs the same updating rules on a whole collection, which is what the tests use.
-- **Heuristic untested in use:** Eqs. (28)-(29) are tested against a reference written from the same reading of the paper, not against the authors' code.
+- **Heuristic untested against the authors' code:** Eqs. (28)-(29) are tested against a reference written from the same reading of the paper. The comparison with the authors' code runs the paper's order, where neither implementation reaches them.
 - **More memory than `mcs()`:** it holds `T_star`, one double per model per draw, beside the per-model table `mcs()` also holds, plus the per-addition record of rankings, $M(M+1)/2$ entries.
