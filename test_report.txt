@@ -1,10 +1,10 @@
-test run: di 29 sep 2026 13:45:23 CEST
+test run: di 29 sep 2026 15:11:59 CEST
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 91 suites
+make test and check.sh run the same 93 suites
 
 === build ===
 make: 'tests/correctness/poly_correctness' is up to date.
@@ -34,10 +34,12 @@ make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
 make: 'tests/correctness/test_lhs' is up to date.
-make: 'tests/correctness/test_mcs' is up to date.
-make: 'tests/correctness/test_mcs_variance' is up to date.
-make: 'tests/correctness/mcs_primitives' is up to date.
-make: 'tests/correctness/mcs_size_and_power' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs.c -lm -lopenblas -o tests/correctness/test_mcs
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs_variance.c -lm -lopenblas -o tests/correctness/test_mcs_variance
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/mcs_primitives.c -lm -lopenblas -o tests/correctness/mcs_primitives
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/mcs_size_and_power.c -lm -lopenblas -o tests/correctness/mcs_size_and_power
+make: 'tests/correctness/fast_mcs_correctness' is up to date.
+make: 'tests/correctness/fast_mcs_size_and_power' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
 make: 'tests/correctness/test_student' is up to date.
@@ -88,18 +90,18 @@ make: 'tests/correctness/var_correctness' is up to date.
 make: 'tests/correctness/var_recovery' is up to date.
 make: 'tests/correctness/lp_correctness' is up to date.
 make: 'tests/correctness/lp_recovery' is up to date.
-make: 'tests/integration/basis_to_regression' is up to date.
-make: 'tests/integration/frame_to_model' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/basis_to_regression.c -lm -lopenblas -o tests/integration/basis_to_regression
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -lopenblas -o tests/integration/frame_to_model
 make: 'tests/integration/frame_to_tensor' is up to date.
 make: 'tests/integration/tensor_to_optimizer' is up to date.
-make: 'tests/integration/join_missing_values' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/join_missing_values.c -lm -lopenblas -o tests/integration/join_missing_values
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
-make: 'tests/integration/pipeline_ownership' is up to date.
-make: 'tests/integration/npz_to_statistics' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
 make: 'tests/integration/header_composition' is up to date.
 make: 'tests/integration/header_composition_f32' is up to date.
-make: Nothing to be done for 'examples'.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/mcs_example.c -lm -lopenblas -o examples/mcs_example
 
 === poly_correctness: PASS ===
 basis/poly.h correctness, float32 build
@@ -556,6 +558,28 @@ PASSED, 0 failures
 === mcs_size_and_power: PASS ===
 mcs: coverage and power over 300 replications per panel, both statistics
   written to out/mcs_size_and_power.txt
+
+PASSED, 0 failures
+
+=== fast_mcs_correctness: PASS ===
+inference/fast_mcs.h against a reference written from the paper
+
+  80 datasets up to 12 models: the reference agrees bit for bit in the paper's order and
+  in 240 reversed and random orders; the heuristic ran 1100 times there and never in the
+  paper's; condition 2.1 held throughout on 80 datasets, where fast_mcs equals mcs,
+  and failed at least once on 0
+  two models, 20 seeds: identical to mcs
+  six identical models: finite, and identical to mcs
+  three copies of one column among eight: agrees with the reference
+  losses scaled by 2^10: the same answer bit for bit
+  one draw with blocks as long as the sample: identical to mcs
+  names read after the input is freed, and the report writer reads the result
+
+PASSED, 0 failures
+
+=== fast_mcs_size_and_power: PASS ===
+fast_mcs: coverage and power over 300 replications per panel, TR, beside mcs
+  written to out/fast_mcs_size_and_power.txt
 
 PASSED, 0 failures
 
@@ -1729,4 +1753,4 @@ PASSED, 0 failures
 
 
 === summary ===
-94 passed, 0 failed
+96 passed, 0 failed

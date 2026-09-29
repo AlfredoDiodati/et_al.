@@ -39,6 +39,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../basis/poly.h"
 #include "../../inference/cointegration.h"
 #include "../../inference/unit_root.h"
+#include "../../inference/fast_mcs.h"
 #include "../../inference/mcs.h"
 #include "../../frame/gzip.h"
 #include "../../json.h"

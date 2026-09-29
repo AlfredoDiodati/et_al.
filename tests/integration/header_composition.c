@@ -52,6 +52,7 @@ the lot as unused.
 #include "../../basis/spline.h"
 #include "../../filter/hp.h"
 #include "../../inference/mcs.h"
+#include "../../inference/fast_mcs.h"
 #include "../../inference/unit_root.h"
 #include "../../inference/cointegration.h"
 #include "../../inference/qlr_test.h"
@@ -175,6 +176,24 @@ static int touch_every_module(void) {
     if (adf_max_lags(100) < 1) problems++;
     if (kpss_bandwidth(100) < 1) problems++;
     if (mcs_options_default().bootstrap < 1) problems++;
+    {
+        /* inference/fast_mcs.h has no call cheaper than a whole run, so
+           the smallest one: two models, one draw. */
+        DataFrame two = df_new(3);
+        Vec column = vec_new(3);
+        for (int i = 0; i < 3; i++) AT(column, i, 0) = (mreal)i;
+        df_add_numeric_col(&two, "first", column);
+        df_add_numeric_col(&two, "second", column);
+        MCSOptions tr = mcs_options_default();
+        tr.stat = MCS_TR;
+        tr.bootstrap = 1;
+        tr.block_length = 1;
+        MCSResult fast = fast_mcs(&two, tr);
+        if (fast.n_rounds != 1) problems++;
+        mcs_free(&fast);
+        mat_free(column);
+        df_free(&two);
+    }
 
     /* basis/: a design matrix from each of the two headers, both of which
        must agree with linalg/ about rows being observations. */

@@ -61,6 +61,8 @@ tests/correctness/mcs_primitives
 tests/correctness/ad_tensor_gradients
 tests/correctness/mcs_primitives_candidate
 tests/correctness/mcs_size_and_power
+tests/correctness/fast_mcs_correctness
+tests/correctness/fast_mcs_size_and_power
 tests/correctness/mcs_size_and_power_candidate
 tests/correctness/test_mcs_variance_candidate
 tests/performance/qvarma_*
@@ -73,6 +75,7 @@ tests/performance/lbfgs_direction_threshold
 tests/performance/lbfgs_largest_threshold
 tests/performance/lbfgs_copy_threshold
 tests/performance/mcs_candidates
+tests/performance/fast_mcs_against_mcs
 tests/performance/tensor_omp_threshold
 tests/performance/tensor_reduce_tile
 tests/performance/tensor_batch_threads

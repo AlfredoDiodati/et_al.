@@ -1702,6 +1702,87 @@ static inline int mcs_in_set(const MCSResult *res, int j) {
     return 0;
 }
 
+/* An MCSResult for m0 models with every array allocated and nothing
+   decided yet: the state mcs() starts its loop from. Internal; the
+   header's other procedures build their results through it and
+   _mcs_result_from_rounds. */
+static inline MCSResult _mcs_result_new(int m0, int n, MCSOptions opt) {
+    MCSResult res;
+    res.m0 = m0;
+    res.surviving = (int *)malloc((size_t)m0 * sizeof(int));
+    res.elimination_order = (int *)malloc((size_t)m0 * sizeof(int));
+    res.surviving_names = (char **)malloc((size_t)m0 * sizeof(char *));
+    res.elimination_names = (char **)malloc((size_t)m0 * sizeof(char *));
+    res.pvalue = (double *)malloc((size_t)m0 * sizeof(double));
+    res.n_rounds = m0 - 1;
+    res.elimination_round = (int *)malloc((size_t)m0 * sizeof(int));
+    res.round_eliminated = (int *)malloc((size_t)res.n_rounds * sizeof(int));
+    res.round_statistic = (double *)malloc((size_t)res.n_rounds * sizeof(double));
+    res.round_pvalue = (double *)malloc((size_t)res.n_rounds * sizeof(double));
+    assert(res.surviving && res.elimination_order && res.surviving_names
+           && res.elimination_names && res.pvalue && res.elimination_round
+           && res.round_eliminated && res.round_statistic && res.round_pvalue);
+    res.n_eliminated = 0;
+    res.n_surviving = 0;
+    res.converged = 0;
+    res.final_pvalue = 0;
+    res.decided_round = 0;
+    res.n_obs = n;
+    res.options = opt;
+    return res;
+}
+
+/* The rest of a result whose rounds are already known: res from
+   _mcs_result_new, with round_eliminated, round_statistic and
+   round_pvalue filled for every round. Writes what mcs()'s loop writes
+   from the same rounds - the MCS p-values as running maxima, the round
+   each model left in, the deciding round, the surviving set in ascending
+   order and the name copies - so a procedure that finds its rounds some
+   other way reports them in the same form. */
+static inline void _mcs_result_from_rounds(const DataFrame *losses, MCSResult *res) {
+    int m0 = res->m0;
+    unsigned char *eliminated = (unsigned char *)calloc((size_t)m0, 1);
+    assert(eliminated);
+    int decided = 0;
+    double best_p = 0;
+    for (int round = 1; round <= res->n_rounds; round++) {
+        double p = res->round_pvalue[round - 1];
+        int worst = res->round_eliminated[round - 1];
+        assert(worst >= 0 && worst < m0 && !eliminated[worst] && "mcs: a round drops a model twice");
+        if (p > best_p) best_p = p;
+        if (!decided) {
+            res->final_pvalue = p;
+            if (p >= res->options.alpha) {
+                decided = 1;
+                res->converged = 1;
+                res->decided_round = round;
+                for (int j = 0; j < m0; j++)
+                    if (!eliminated[j]) {
+                        res->surviving[res->n_surviving] = j;
+                        res->surviving_names[res->n_surviving++] = frame_strdup(mcs_model_name(losses, j));
+                    }
+            }
+        }
+        res->pvalue[worst] = best_p;
+        res->elimination_round[worst] = round;
+        if (!decided) {
+            res->elimination_names[res->n_eliminated] = frame_strdup(mcs_model_name(losses, worst));
+            res->elimination_order[res->n_eliminated++] = worst;
+        }
+        eliminated[worst] = 1;
+    }
+    int last = 0;
+    while (eliminated[last]) last++;
+    res->pvalue[last] = 1;
+    res->elimination_round[last] = 0;
+    if (!decided) {
+        res->n_surviving = 1;
+        res->surviving[0] = last;
+        res->surviving_names[0] = frame_strdup(mcs_model_name(losses, last));
+    }
+    free(eliminated);
+}
+
 /* Every round of a MCS_TR run under the bootstrap variance at once: the
    model each round drops, its observed statistic and its p-value,
    written to round_eliminated, round_statistic and round_pvalue at index
@@ -1979,28 +2060,7 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
     mcs_gather(losses, all);
     for (int i = 0; i < m0; i++) active[i] = i;
 
-    MCSResult res;
-    res.m0 = m0;
-    res.surviving = (int *)malloc((size_t)m0 * sizeof(int));
-    res.elimination_order = (int *)malloc((size_t)m0 * sizeof(int));
-    res.surviving_names = (char **)malloc((size_t)m0 * sizeof(char *));
-    res.elimination_names = (char **)malloc((size_t)m0 * sizeof(char *));
-    res.pvalue = (double *)malloc((size_t)m0 * sizeof(double));
-    res.n_rounds = m0 - 1;
-    res.elimination_round = (int *)malloc((size_t)m0 * sizeof(int));
-    res.round_eliminated = (int *)malloc((size_t)res.n_rounds * sizeof(int));
-    res.round_statistic = (double *)malloc((size_t)res.n_rounds * sizeof(double));
-    res.round_pvalue = (double *)malloc((size_t)res.n_rounds * sizeof(double));
-    assert(res.surviving && res.elimination_order && res.surviving_names
-           && res.elimination_names && res.pvalue && res.elimination_round
-           && res.round_eliminated && res.round_statistic && res.round_pvalue);
-    res.n_eliminated = 0;
-    res.n_surviving = 0;
-    res.converged = 0;
-    res.final_pvalue = 0;
-    res.decided_round = 0;
-    res.n_obs = n;
-    res.options = opt;
+    MCSResult res = _mcs_result_new(m0, n, opt);
 
     Rng rng = rng_new(opt.seed, opt.stream);
     int m = m0;
@@ -2019,33 +2079,30 @@ static inline MCSResult mcs(const DataFrame *losses, MCSOptions opt) {
     }
 
     /* Under MCS_TR on the shared path every round is scored at once, and
-       the loop below only reads the rounds back. */
-    int all_rounds = factored && opt.stat == MCS_TR;
-    if (all_rounds)
+       the result is read off the rounds. */
+    if (factored && opt.stat == MCS_TR) {
         _mcs_range_all_rounds(n, opt, &rng, &sc, res.round_eliminated, res.round_statistic,
                               res.round_pvalue);
+        _mcs_result_from_rounds(losses, &res);
+        mcs_scratch_free(&sc);
+        free(all); free(active_losses); free(rowmax); free(active);
+        return res;
+    }
 
     while (m >= 2) {
         int round = m0 - m + 1;
-        double p;
-        int worst = 0;
-        if (all_rounds) {
-            p = res.round_pvalue[round - 1];
-            while (active[worst] != res.round_eliminated[round - 1]) worst++;
-        } else {
-            if (!factored)
-                for (int t_i = 0; t_i < n; t_i++)
-                    for (int i = 0; i < m; i++)
-                        active_losses[(size_t)t_i * m + i] = all[(size_t)t_i * m0 + active[i]];
+        if (!factored)
+            for (int t_i = 0; t_i < n; t_i++)
+                for (int i = 0; i < m; i++)
+                    active_losses[(size_t)t_i * m + i] = all[(size_t)t_i * m0 + active[i]];
 
-            int k_count = mcs_n_series(opt.stat, m);
-            if (!factored) mcs_build_diffs(active_losses, n, m, opt.stat, sc.d);
-            double t_emp;
-            p = mcs_round(n, k_count, opt, hac_lag, &rng, &sc, &t_emp);
-            res.round_statistic[round - 1] = t_emp;
-            res.round_pvalue[round - 1] = p;
-            worst = mcs_worst_from_tstats(sc.t, m, opt.stat, rowmax);
-        }
+        int k_count = mcs_n_series(opt.stat, m);
+        if (!factored) mcs_build_diffs(active_losses, n, m, opt.stat, sc.d);
+        double t_emp;
+        double p = mcs_round(n, k_count, opt, hac_lag, &rng, &sc, &t_emp);
+        res.round_statistic[round - 1] = t_emp;
+        res.round_pvalue[round - 1] = p;
+        int worst = mcs_worst_from_tstats(sc.t, m, opt.stat, rowmax);
         if (p > best_p) best_p = p;
 
         /* Theorem 4 puts a model in the set exactly when its MCS

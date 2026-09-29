@@ -280,6 +280,8 @@ Change 6, against the header before it, both arms in one binary, best of 8 round
 
 `docs/MCS_PERFORMANCE_DOCUMENTATION.md` has the mechanism of each change, the full setup behind every number here, how the harness establishes agreement before cost, why the memory is counted rather than read off resident set size, and what was tried and rejected.
 
+**An alternative algorithm.** `inference/fast_mcs.h` implements the one-pass fast MCS of Barde (2026) beside this header, sharing its resamples, variances and result type, so the two can be compared on the same inputs. Measured against `mcs()` it is slower from 20 models up and 2.2x to 2.8x slower at a thousand, and on every input tried it returned the same answer; `docs/FAST_MCS_DOCUMENTATION.md` has the setup and the reason.
+
 ## Known limitations and future work
 
 - **Coverage wants roughly 200 observations per model.** Measured under a complete null with AR(1) losses at `phi = 0.5`: coverage is near nominal at 5 models with `T = 1000`, at 20 models with `T = 4000` and at 80 models with `T = 16000`, and falls away sharply below that diagonal — at 80 models with `T = 250` it is 0.683 for `MCS_TMAX` and 0.317 for `MCS_TR`. A confidence set over a thousand models therefore wants a sample no financial series has, whatever it costs to compute. `docs/MCS_RELIABILITY_DOCUMENTATION.md` has the grid and the rest of the guidance.
