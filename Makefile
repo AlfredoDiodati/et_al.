@@ -69,7 +69,7 @@ QVARMA_DEPS := sd/qvarma.h solver/lbfgs.h ad.h json.h special.h random/random.h 
 # core:  linalg/*.h (mat.h, decomp.h, solver.h), random/*.h (random.h, lhs.h),
 #        ad.h, dist/*.h, solver/*.h, filter/*.h (trend-cycle filters),
 #        and the hypothesis tests in inference/ (unit_root.h, cointegration.h,
-#        qlr_test.h, mcs.h) - math and general-purpose statistics, no model
+#        qlr_test.h, mcs.h, fast_mcs.h, seri_mcs.h) - math and general-purpose statistics, no model
 #        implementations.
 #        Note solver.h (linalg/, "solving Ax=b") and solver/ (this dir, the
 #        Optimizer interface + Adam) are deliberately unrelated despite the
@@ -386,6 +386,14 @@ bench-rolling_mean_threshold: tests/performance/rolling_mean_threshold
 bench-cumsum_threshold: tests/performance/cumsum_threshold
 	./tests/performance/cumsum_threshold
 
+# stats_dargsort's insertion and radix paths against each other and against
+# qsort, the measurement STATS_DARGSORT_INSERTION_MAX is set from.
+tests/performance/dargsort_threshold: tests/performance/dargsort_threshold.c stats.h random/random.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/dargsort_threshold.c $(LDLIBS) -o tests/performance/dargsort_threshold
+
+bench-dargsort_threshold: tests/performance/dargsort_threshold
+	./tests/performance/dargsort_threshold
+
 bench-tensor_omp_threshold: tests/performance/tensor_omp_threshold
 	./tests/performance/tensor_omp_threshold
 
@@ -486,6 +494,25 @@ tests/correctness/fast_mcs_correctness: tests/correctness/fast_mcs_correctness.c
 
 tests/correctness/fast_mcs_size_and_power: tests/correctness/fast_mcs_size_and_power.c $(FAST_MCS_DEPS)
 	$(CC) $(CFLAGS) tests/correctness/fast_mcs_size_and_power.c $(LDLIBS) -o tests/correctness/fast_mcs_size_and_power
+
+# inference/seri_mcs.h, the Model Confidence Set with the analytic
+# equivalence test of Seri et al. (2021): every round against its set
+# recomputed from scratch, the paper's matrix form, invariances, the abort
+# on a constant column, and size, coverage and power by simulation, written
+# to out/seri_mcs_correctness_size.txt.
+SERI_MCS_DEPS := inference/seri_mcs.h inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h frame/npz.h frame/npy.h frame/gzip.h
+
+# examples/datasets/seri_2021_simulation_runs.npz from the authors' Data.csv
+# (see scripts/seri_runs_to_npz.c), built at float32 since the archive is
+# written at the build's precision. Not part of `test`.
+scripts/seri_runs_to_npz: scripts/seri_runs_to_npz.c frame/csv.h frame/npz.h frame/npy.h frame/frame.h frame/gzip.h linalg/mat.h
+	$(CC) $(filter-out -DMAT_DOUBLE,$(CFLAGS)) scripts/seri_runs_to_npz.c $(LDLIBS) -o scripts/seri_runs_to_npz
+seri-runs-npz: scripts/seri_runs_to_npz
+	@test -n "$(SERI_RUNS_CSV)" || { echo "set SERI_RUNS_CSV to the authors' Data.csv"; exit 1; }
+	./scripts/seri_runs_to_npz $(SERI_RUNS_CSV) examples/datasets/seri_2021_simulation_runs.npz
+
+tests/correctness/seri_mcs_correctness: tests/correctness/seri_mcs_correctness.c $(SERI_MCS_DEPS) tests/check.h
+	$(CC) $(CFLAGS) tests/correctness/seri_mcs_correctness.c $(LDLIBS) -o tests/correctness/seri_mcs_correctness
 
 tests/correctness/test_random: tests/correctness/test_random.c random/random.h stats.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_random.c $(LDLIBS) -o tests/correctness/test_random
@@ -616,6 +643,11 @@ tests/correctness/test_npy: tests/correctness/test_npy.c frame/npy.h frame/frame
 tests/correctness/test_npz: tests/correctness/test_npz.c frame/npz.h frame/npy.h frame/sql.h frame/join.h frame/frame.h frame/gzip.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_npz.c $(LDLIBS) -o tests/correctness/test_npz
 
+# A double build reading '<f4' members, which exists only at float64, so the
+# binary is built with -DMAT_DOUBLE whatever MAT_DOUBLE says.
+tests/correctness/float32_file_widening: tests/correctness/float32_file_widening.c frame/npz.h frame/npy.h frame/frame.h frame/gzip.h linalg/mat.h tests/check.h
+	$(CC) $(CFLAGS) -DMAT_DOUBLE tests/correctness/float32_file_widening.c $(LDLIBS) -o tests/correctness/float32_file_widening
+
 # The one check here that runs against a live numpy rather than against bytes
 # numpy produced once during development, which is the only way to test the
 # writer at all - nothing in a Python-free suite can call np.load. numpy and
@@ -690,6 +722,28 @@ liblp_f32.so: $(LP_DEPS)
 	$(CC) $(filter-out -DMAT_DOUBLE,$(CFLAGS)) -shared -fPIC tests/correctness/lp_reference_agreement.c $(LDLIBS) -o liblp_f32.so
 test-lp-python: liblp_f64.so liblp_f32.so
 	$(or $(PYTHON),python3) tests/correctness/lp_reference_agreement.py
+
+# special.h's regularized incomplete gamma functions against mpmath at 60
+# digits, across df from 1 to 1000000 of the chi-squared tail; writes
+# out/gammainc_reference_agreement_report.txt. Needs an interpreter with
+# mpmath: make test-gammainc-python PYTHON=...
+libgammainc_f64.so: tests/correctness/gammainc_reference_agreement.c special.h
+	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/correctness/gammainc_reference_agreement.c $(LDLIBS) -o libgammainc_f64.so
+test-gammainc-python: libgammainc_f64.so
+	$(or $(PYTHON),python3) tests/correctness/gammainc_reference_agreement.py
+
+# inference/seri_mcs.h against the R code Seri et al. (2021) published with
+# the paper, tests/correctness/seri_mcs_authors_code.R, from
+# https://github.com/mmartinoli87/Model-Confidence-Set, on the paper's data
+# and on random designs, in both precisions; writes
+# out/seri_mcs_r_agreement_report.txt. Needs Rscript. The authors' code is
+# development only: no install target copies anything from tests/.
+libserimcs_f64.so: tests/correctness/seri_mcs_r_agreement.c $(SERI_MCS_DEPS)
+	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/correctness/seri_mcs_r_agreement.c $(LDLIBS) -o libserimcs_f64.so
+libserimcs_f32.so: tests/correctness/seri_mcs_r_agreement.c $(SERI_MCS_DEPS)
+	$(CC) $(CFLAGS) -shared -fPIC tests/correctness/seri_mcs_r_agreement.c $(LDLIBS) -o libserimcs_f32.so
+test-seri-mcs-r: libserimcs_f64.so libserimcs_f32.so
+	Rscript tests/correctness/seri_mcs_r_agreement.R
 
 # Checks inference/fast_mcs.h against the authors' implementation of the
 # paper, run on the same draws; needs numpy and a clone of
@@ -1070,6 +1124,58 @@ bench-fast_mcs_against_mcs: tests/performance/fast_mcs_against_mcs.c $(FAST_MCS_
 	$(CC) $(CFLAGS) -I. tests/performance/fast_mcs_against_mcs.c $(LDLIBS) -o tests/performance/fast_mcs_against_mcs
 	./tests/performance/fast_mcs_against_mcs
 
+# A candidate version of seri_mcs() against a baseline: every output of
+# seri_mcs(), mcs() and fast_mcs() compared over a grid of datasets (the
+# binary fails if any decision differs), then both timed alternately. Both
+# are source trees of this library; the candidate defaults to the working
+# tree. Results go to out/seri_mcs_candidates_report.txt. Not part of `test`
+# or bench.sh.
+#   git worktree add out/seri_mcs_baseline <commit>
+#   make bench-seri_mcs_candidates SERI_MCS_BASELINE=out/seri_mcs_baseline
+#   STRESS=1 make bench-seri_mcs_candidates SERI_MCS_BASELINE=...   (adds 8000 to 60000 models)
+SERI_MCS_CANDIDATE ?= .
+bench-seri_mcs_candidates: tests/performance/seri_mcs_candidates.c tests/performance/seri_mcs_arm.c tests/performance/seri_mcs_arm.h
+	@test -n "$(SERI_MCS_BASELINE)" || { echo "set SERI_MCS_BASELINE to the source tree to compare against"; exit 1; }
+	$(CC) $(CFLAGS) -I$(SERI_MCS_BASELINE) -DSERI_MCS_ARM_ENTRY=seri_mcs_arm_baseline -c tests/performance/seri_mcs_arm.c -o tests/performance/seri_mcs_arm_baseline.o
+	$(CC) $(CFLAGS) -I$(SERI_MCS_CANDIDATE) -DSERI_MCS_ARM_ENTRY=seri_mcs_arm_candidate -c tests/performance/seri_mcs_arm.c -o tests/performance/seri_mcs_arm_candidate.o
+	$(CC) $(CFLAGS) tests/performance/seri_mcs_candidates.c tests/performance/seri_mcs_arm_baseline.o tests/performance/seri_mcs_arm_candidate.o $(LDLIBS) -o tests/performance/seri_mcs_candidates
+	rm -f tests/performance/seri_mcs_arm_baseline.o tests/performance/seri_mcs_arm_candidate.o
+	./tests/performance/seri_mcs_candidates
+
+# A candidate version of frame/npy.h and frame/npz.h against a baseline:
+# every reader on .npy and .npz files of 1000 to 1000000 rows, through both
+# trees, compared byte for byte and then timed in alternated batches, at the
+# precision MAT_DOUBLE selects. Results go to
+# out/npy_read_candidates_report_f32.txt or _f64.txt. Not part of `test` or
+# bench.sh.
+#   git worktree add out/npy_read_baseline <commit>
+#   make bench-npy_read_candidates NPY_READ_BASELINE=out/npy_read_baseline
+#   make MAT_DOUBLE=1 bench-npy_read_candidates NPY_READ_BASELINE=out/npy_read_baseline
+NPY_READ_CANDIDATE ?= .
+bench-npy_read_candidates: tests/performance/npy_read_candidates.c tests/performance/npy_read_arm.c tests/performance/npy_read_arm.h
+	@test -n "$(NPY_READ_BASELINE)" || { echo "set NPY_READ_BASELINE to the source tree to compare against"; exit 1; }
+	$(CC) $(CFLAGS) -I$(NPY_READ_BASELINE) -DNPY_READ_ARM_ENTRY=npy_read_arm_baseline -c tests/performance/npy_read_arm.c -o tests/performance/npy_read_arm_baseline.o
+	$(CC) $(CFLAGS) -I$(NPY_READ_CANDIDATE) -DNPY_READ_ARM_ENTRY=npy_read_arm_candidate -c tests/performance/npy_read_arm.c -o tests/performance/npy_read_arm_candidate.o
+	$(CC) $(CFLAGS) tests/performance/npy_read_candidates.c tests/performance/npy_read_arm_baseline.o tests/performance/npy_read_arm_candidate.o $(LDLIBS) -o tests/performance/npy_read_candidates
+	rm -f tests/performance/npy_read_arm_baseline.o tests/performance/npy_read_arm_candidate.o
+	./tests/performance/npy_read_candidates
+
+# seri_mcs() timing from 16 to 50000 models and from 200 to 100000
+# observations, against the per-column moments it computes and against one
+# row-major read of the same losses, with mcs() beside it on the small cases.
+# Results go to out/seri_mcs_performance_report.txt. Not part of `test` or
+# bench.sh.
+bench-seri_mcs_performance: tests/performance/seri_mcs_performance.c $(SERI_MCS_DEPS)
+	$(CC) $(CFLAGS) -I. tests/performance/seri_mcs_performance.c $(LDLIBS) -o tests/performance/seri_mcs_performance
+	./tests/performance/seri_mcs_performance
+
+# seri_mcs() against the authors' R code on the same losses, timed from R:
+# their procedure, seri_mcs() through one .C() call, and seri_mcs() in a
+# loop inside C. Results go to out/seri_mcs_against_authors_report.txt.
+# Needs Rscript. Not part of `test` or bench.sh.
+bench-seri_mcs_against_authors: libserimcs_f64.so libserimcs_f32.so
+	Rscript tests/performance/seri_mcs_against_authors.R
+
 bench-mcs_candidates: tests/performance/mcs_candidates.c tests/performance/mcs_arm.c $(MCS_ARM_DEPS) $(MCS_CANDIDATE)
 	$(CC) $(CFLAGS) -I. -DMCS_ARM_HEADER='"inference/mcs.h"' -DMCS_ARM_ENTRY=mcs_arm_current -c tests/performance/mcs_arm.c -o tests/performance/mcs_arm_current.o
 	$(CC) $(CFLAGS) -I. -DMCS_ARM_HEADER='"$(MCS_CANDIDATE)"' -DMCS_ARM_ENTRY=mcs_arm_candidate -c tests/performance/mcs_arm.c -o tests/performance/mcs_arm_candidate.o
@@ -1206,10 +1312,10 @@ ad-asan:
 lapack-comparison-bench: $(LAPACK_COMPARISON_BENCH)
 	for b in $(LAPACK_COMPARISON_BENCH); do ./$$b || exit 1; done
 
-test: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/hp_filter_correctness tests/correctness/hp_filter_recovery tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/hac_covariance_correctness tests/correctness/ols_covariance_correctness tests/correctness/ols_covariance_recovery tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/fast_mcs_correctness tests/correctness/fast_mcs_size_and_power tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/csv_missing_values tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery tests/correctness/lp_correctness tests/correctness/lp_recovery $(INTEGRATION_TESTS)
+test: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/hp_filter_correctness tests/correctness/hp_filter_recovery tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/hac_covariance_correctness tests/correctness/ols_covariance_correctness tests/correctness/ols_covariance_recovery tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/fast_mcs_correctness tests/correctness/fast_mcs_size_and_power tests/correctness/seri_mcs_correctness tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/csv_missing_values tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/float32_file_widening tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery tests/correctness/lp_correctness tests/correctness/lp_recovery $(INTEGRATION_TESTS)
 	for t in $^; do ./$$t || exit 1; done
 
-test-stress: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/hp_filter_correctness tests/correctness/hp_filter_recovery tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/hac_covariance_correctness tests/correctness/ols_covariance_correctness tests/correctness/ols_covariance_recovery tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/fast_mcs_correctness tests/correctness/fast_mcs_size_and_power tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/csv_missing_values tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery tests/correctness/lp_correctness tests/correctness/lp_recovery $(INTEGRATION_TESTS)
+test-stress: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/hp_filter_correctness tests/correctness/hp_filter_recovery tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/hac_covariance_correctness tests/correctness/ols_covariance_correctness tests/correctness/ols_covariance_recovery tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/fast_mcs_correctness tests/correctness/fast_mcs_size_and_power tests/correctness/seri_mcs_correctness tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/csv_missing_values tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/float32_file_widening tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery tests/correctness/lp_correctness tests/correctness/lp_recovery $(INTEGRATION_TESTS)
 	for t in $^; do STRESS=1 ./$$t || exit 1; done
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754
@@ -1294,4 +1400,4 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-fast-mcs-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model
+.PHONY: seri-runs-npz bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model

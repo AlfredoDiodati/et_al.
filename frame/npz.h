@@ -39,8 +39,8 @@
      ZIP64 extra fields, so ordinary numpy output needs no ZIP64 support
      at all.
    - No encryption, and no multi-disk archive.
-   - Numeric members must match this build's mreal exactly, the same rule
-     and the same message frame/npy.h enforces for a bare .npy.
+   - Numeric members follow frame/npy.h's rule for a bare .npy: this
+     build's mreal, and in a double build also '<f4', widened exactly.
    - String members are numpy's fixed-width UCS-4 dtype ('<U7' and so
      on), converted to and from UTF-8. Byte-string ('|S') and object
      ('|O', pickled) dtypes are rejected; np.array(x).astype(str)
@@ -307,11 +307,13 @@ static inline void frame_npz_add_member(DataFrame *df, const FrameNpzMember *mem
         return;
     }
 
-    assert(strcmp(descr, frame_npy_mreal_descr()) == 0 &&
-           "frame: .npz member dtype is neither this build's mreal nor a '<U' string - "
-           "re-save numeric arrays at the matching precision, and string arrays via .astype(str)");
+    size_t width = frame_npy_numeric_width(descr);
+    assert(width != 0 &&
+           "frame: .npz member dtype is neither a numeric dtype this build reads ('<f4' in a float build, "
+           "'<f8' or '<f4' in a double build) nor a '<U' string - re-save numeric arrays at a matching "
+           "precision, and string arrays via .astype(str)");
 
-    Mat m = frame_npy_data_matrix(member->image, member->size, data_start, shape);
+    Mat m = frame_npy_data_matrix(member->image, member->size, data_start, shape, width);
     Vec col = mat_new(shape[0], 1);
     for (int j = 0; j < shape[1]; j++) {
         char name[256];

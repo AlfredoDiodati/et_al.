@@ -211,6 +211,18 @@ static void test_malformed_npy_aborts(void) {
     write_test_npy_ex(g_bad_npy_path, "<i4", 2, 3, data, sizeof data);
     expect_abort(call_df_read_npy);
 
+#ifndef MAT_DOUBLE
+    /* a float64 file in a float32 build, which would round. Twelve floats
+       are 48 bytes, the full length of a 2 x 3 float64 block, so it is the
+       dtype that is refused and not the length. A float64 build reads a
+       float32 file, which tests/correctness/float32_file_widening.c checks. */
+    {
+        mreal wide[12] = { 0 };
+        write_test_npy_ex(g_bad_npy_path, "<f8", 2, 3, wide, sizeof wide);
+        expect_abort(call_df_read_npy);
+    }
+#endif
+
     /* truncated: header declares a 2x3 array but far fewer data bytes follow */
     write_test_npy_ex(g_bad_npy_path, descr, 2, 3, data, sizeof(mreal));
     expect_abort(call_df_read_npy);
@@ -370,11 +382,8 @@ static void test_random_write_read_roundtrip_stress(void) {
    so the only way to check against the real format is to carry a file numpy
    produced once.
 
-   The embedded file is float32, so the checks that read it are compiled only
-   in a float32 build; the dtype guard in frame_npy_check_descr would
-   (correctly) refuse it otherwise, and a test that asserts a refusal is a
-   different test from one that asserts a value. */
-#ifndef MAT_DOUBLE
+   The embedded file is float32, which a float32 build reads as it is and a
+   float64 build widens, so the same check runs in both. */
 static const unsigned char numpy_3d_f32[] = {
     0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 0x01, 0x00, 0x76, 0x00, 0x7b, 0x27,
     0x64, 0x65, 0x73, 0x63, 0x72, 0x27, 0x3a, 0x20, 0x27, 0x3c, 0x66, 0x34,
@@ -413,7 +422,6 @@ static void test_tensor_reads_a_real_numpy_file(void) {
     remove(path);
     printf("  rank 3, shape 2x3x2, values and indexing all match\n");
 }
-#endif
 
 static void test_tensor_npy_roundtrip(void) {
     puts("n-dimensional .npy round trip");
@@ -489,9 +497,7 @@ int main(void) {
     test_write_read_roundtrip();
     test_tensor_npy_roundtrip();
     test_dataframe_still_refuses_rank_three();
-#ifndef MAT_DOUBLE
     test_tensor_reads_a_real_numpy_file();
-#endif
 
     if (getenv("STRESS")) test_random_write_read_roundtrip_stress();
 

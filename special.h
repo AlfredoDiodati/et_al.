@@ -247,12 +247,24 @@ static inline double special_digamma_diff(double x, double a) {
    way round, which is why the split is where it is (Numerical Recipes,
    section 6.2). Both stop once a term stops moving the accumulator at
    double precision, with an iteration cap so a pathological argument
-   cannot spin forever. */
+   cannot spin forever.
+
+   Near x = a both need a number of iterations that grows like sqrt(a),
+   since the series terms fall off like exp(-k^2 / (2a)), so the cap is
+   SPECIAL_GAMMAINC_ITERATIONS(a) rather than a constant. A fixed cap of
+   500 puts the chi-squared tail at the mean off by 3.4e-7 at 20000 degrees
+   of freedom and by 0.24 at a million; with this cap the worst absolute error
+   over four standard deviations below to six above the mean is 1.9e-10 at
+   a million (make test-gammainc-python, which compares both against
+   mpmath at 60 digits). */
+#define SPECIAL_GAMMAINC_ITERATIONS(a) (500 + (int)(12.0 * sqrt(a)))
+
 static inline double special_gammainc_series(double a, double x) {
     double sum = 1.0 / a;
     double term = sum;
     double n = a;
-    for (int i = 0; i < 500; i++) {
+    int cap = SPECIAL_GAMMAINC_ITERATIONS(a);
+    for (int i = 0; i < cap; i++) {
         n += 1.0;
         term *= x / n;
         sum += term;
@@ -269,7 +281,8 @@ static inline double special_gammainc_continued_fraction(double a, double x) {
     double c = 1.0 / tiny;
     double d = 1.0 / b;
     double h = d;
-    for (int i = 1; i < 500; i++) {
+    int cap = SPECIAL_GAMMAINC_ITERATIONS(a);
+    for (int i = 1; i < cap; i++) {
         double an = -(double)i * ((double)i - a);
         b += 2.0;
         d = an * d + b;

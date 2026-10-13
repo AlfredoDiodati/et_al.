@@ -16,9 +16,11 @@
    arrays, only little-endian (this is what every practical target
    platform for this library already is - x86/ARM), only C-contiguous
    (fortran_order=False, matching this library's row-major-only
-   convention), and the dtype must exactly match this build's mreal
-   ('<f4' for the default float build, '<f8' under -DMAT_DOUBLE) - no
-   silent narrowing/widening cast between file and build precision. */
+   convention), and the dtype must be this build's mreal ('<f4' for the
+   default float build, '<f8' under -DMAT_DOUBLE), with one exception: a
+   double build also reads '<f4', widening every value to double, which
+   is exact because every float32 value has a float64 representation. The
+   reverse, '<f8' into a float build, would round, and is refused. */
 
 /* Copies the header dict's 'descr' value (the dtype string, e.g. "<f4" or
    "<U7") into out. Separate from the check below because frame/npz.h has
@@ -47,12 +49,57 @@ static inline const char *frame_npy_mreal_descr(void) {
 #endif
 }
 
-static inline void frame_npy_check_descr(const char *header) {
+/* Bytes per element of a numeric dtype this build reads, or 0 for one it
+   does not: its own mreal, and under MAT_DOUBLE also '<f4'. */
+static inline size_t frame_npy_numeric_width(const char *descr) {
+    if (strcmp(descr, frame_npy_mreal_descr()) == 0) return sizeof(mreal);
+#ifdef MAT_DOUBLE
+    if (strcmp(descr, "<f4") == 0) return sizeof(float);
+#endif
+    return 0;
+}
+
+/* Returns the element width of a header's dtype, asserting that this
+   build reads it. */
+static inline size_t frame_npy_check_descr(const char *header) {
     char descr[32];
     frame_npy_descr(header, descr, sizeof descr);
-    assert(strcmp(descr, frame_npy_mreal_descr()) == 0 &&
-           "frame: .npy dtype does not match this build's precision (float vs double) - "
-           "re-save with the matching dtype, or rebuild with/without -DMAT_DOUBLE");
+    size_t width = frame_npy_numeric_width(descr);
+    assert(width != 0 &&
+           "frame: .npy dtype is not one this build reads (a float build reads '<f4', a double build "
+           "'<f8' and '<f4') - re-save with a matching dtype, or rebuild with -DMAT_DOUBLE");
+    return width;
+}
+
+/* Copies count elements of the given width, as frame_npy_numeric_width
+   returned it, from a file's data block into dst. A '<f4' element read by
+   a double build is converted one at a time, through memcpy because the
+   block need not be 4-byte aligned inside an archive.
+
+   A subnormal float32 is not converted by the conversion instruction: a
+   program linked with -ffast-math runs with denormals-are-zero set, and
+   the instruction then returns 0 for it. Its value is fraction * 2^-149,
+   which is computed instead from the integer fraction; both factors and
+   the product are normal float64 numbers, so the flag does not touch it
+   and the product is exact. */
+static inline void frame_npy_copy_elements(mreal *dst, const unsigned char *src, size_t count, size_t width) {
+    if (width == sizeof(mreal)) {
+        memcpy(dst, src, count * sizeof(mreal));
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        uint32_t bits;
+        memcpy(&bits, src + i * sizeof bits, sizeof bits);
+        uint32_t fraction = bits & 0x7FFFFFu;
+        if ((bits & 0x7F800000u) == 0 && fraction != 0) {
+            mreal magnitude = (mreal)fraction * (mreal)0x1p-149;
+            dst[i] = (bits >> 31) ? -magnitude : magnitude;
+        } else {
+            float value;
+            memcpy(&value, &bits, sizeof value);
+            dst[i] = (mreal)value;
+        }
+    }
 }
 
 static inline void frame_npy_check_fortran_order(const char *header) {
@@ -170,17 +217,17 @@ static inline char *frame_npy_header_text(const unsigned char *buf, size_t size,
     return header;
 }
 
-/* Copies a validated .npy image's raw data block into a fresh shape[0] x
-   shape[1] Mat. Shared with frame/npz.h for the same reason
-   frame_npy_header_text is: the truncation check must not drift between
-   the two readers. */
+/* Copies a validated .npy image's raw data block, of elements width bytes
+   wide, into a fresh shape[0] x shape[1] Mat. Shared with frame/npz.h for
+   the same reason frame_npy_header_text is: the truncation check must not
+   drift between the two readers. */
 static inline Mat frame_npy_data_matrix(const unsigned char *buf, size_t size,
-                                         size_t data_start, const int *shape) {
+                                         size_t data_start, const int *shape, size_t width) {
     int r = shape[0], c = shape[1];
-    size_t expected_bytes = (size_t)r * (size_t)c * sizeof(mreal);
+    size_t expected_bytes = (size_t)r * (size_t)c * width;
     assert(data_start + expected_bytes <= size && "frame: .npy file truncated (data shorter than header declares)");
     Mat m = mat_new(r, c);
-    memcpy(m.d, buf + data_start, expected_bytes);
+    frame_npy_copy_elements(m.d, buf + data_start, (size_t)r * (size_t)c, width);
     return m;
 }
 
@@ -195,13 +242,13 @@ static inline DataFrame df_read_npy(const char *path) {
 
     size_t data_start;
     char *header = frame_npy_header_text(buf, (size_t)size, &data_start);
-    frame_npy_check_descr(header);
+    size_t width = frame_npy_check_descr(header);
     frame_npy_check_fortran_order(header);
     int shape[2];
     frame_npy_parse_shape(header, shape);
     free(header);
 
-    Mat m = frame_npy_data_matrix(buf, (size_t)size, data_start, shape);
+    Mat m = frame_npy_data_matrix(buf, (size_t)size, data_start, shape, width);
     free(buf);
 
     DataFrame df = df_from_matrix(m, NULL);
@@ -262,9 +309,10 @@ static inline size_t frame_npy_format_preamble(unsigned char *out, size_t out_ca
    the way in. */
 /* Reads a .npy file of any rank up to TENSOR_MAX_NDIM into a Tensor, which
    is the direction a stack of matrices produced in Python arrives from. The
-   dtype must match this build's mreal exactly, as for the DataFrame reader -
-   the same frame_npy_check_descr enforces it, so a float64 file read by a
-   float32 build is refused rather than silently reinterpreted.
+   dtype rule is the DataFrame reader's, through the same
+   frame_npy_check_descr: a float64 file read by a float32 build is refused
+   rather than rounded, and a float32 file read by a float64 build is
+   widened.
 
    A 1-D file comes back as a rank-1 tensor here, not as the n x 1 column the
    DataFrame reader turns it into: the Tensor has a rank of its own to carry,
@@ -275,17 +323,17 @@ static inline Tensor tensor_read_npy(const char *path) {
 
     size_t data_start;
     char *header = frame_npy_header_text(buf, (size_t)size, &data_start);
-    frame_npy_check_descr(header);
+    size_t width = frame_npy_check_descr(header);
     frame_npy_check_fortran_order(header);
     int shape[TENSOR_MAX_NDIM];
     int ndim = frame_npy_parse_shape_nd(header, shape);
     free(header);
 
     Tensor t = tensor_new(ndim, shape);
-    size_t expected_bytes = tensor_size(t) * sizeof(mreal);
+    size_t expected_bytes = tensor_size(t) * width;
     assert(data_start + expected_bytes <= (size_t)size &&
            "frame: .npy file truncated (data shorter than header declares)");
-    memcpy(t.d, buf + data_start, expected_bytes);
+    frame_npy_copy_elements(t.d, buf + data_start, tensor_size(t), width);
     free(buf);
     return t;
 }

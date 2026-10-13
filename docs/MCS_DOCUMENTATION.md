@@ -261,7 +261,7 @@ Its result is the point of the procedure: under QLIKE the set collapses to `ewma
 
 ## Benchmark results
 
-`inference/mcs.h` still has no `bench_mcs.c`/`bench_mcs.py` pair timing it against `arch.bootstrap.MCS` — see the limitation below. What it has is `tests/performance/mcs_candidates.c`, a harness that compares a candidate rewrite of this header against the shipped one on agreement first and on time and allocated bytes second, and six changes that went through it:
+`inference/mcs.h` still has no `bench_mcs.c`/`bench_mcs.py` pair timing it against `arch.bootstrap.MCS` — see the limitation below. What it has is `tests/performance/mcs_candidates.c`, a harness that compares a candidate rewrite of this header against the shipped one on agreement first and on time and allocated bytes second, and seven changes that went through it:
 
 1. Under `MCS_TR` with the bootstrap variance, a pair's resampled mean is the difference of two per-model resampled means, so one gather per model replaces one per pair. Bit-identical elsewhere, `5e-16` to `1.9e-15` relative on the changed cases, no p-value moved.
 2. One set of resamples shared across every elimination round under `MCS_TR`, rather than a fresh set per round. This moves p-values by whole draws, so it was gated statistically.
@@ -269,6 +269,9 @@ Its result is the point of the procedure: under QLIKE the set collapses to `ewma
 4. `MCS_TMAX` under the bootstrap variance moved onto the same per-model table and shared draws, and the draws held as block starts rather than index lists. Also gated statistically.
 5. The two HAC variants split their draws across threads; under `MCS_TR` each pair's reciprocal standard error is formed once rather than once per round, the spreads are accumulated a cache-sized block of pairs at a time, and the row test of change 3 bounds a row by the models it actually pairs with and by each model's own largest reciprocal standard error, so one very noisy model no longer stops rows being skipped. Exact.
 6. Under `MCS_TR` with the bootstrap variance, the elimination order is found from the mean losses alone, since a pair's standard error is fixed once the draws are made, and every round's p-value comes out of one pass over each draw's pairs, taken from the last round to the first so that each draw's statistic is a running maximum; and when the loss matrix is past 5 MiB the per-model resampled means are gathered 32 models at a time, so that part of the matrix stays in cache across draws. Exact.
+7. Under `MCS_TR` past 181 models, the pair spreads are accumulated in square tiles of up to 128 earlier against 128 later models, so the table of resampled deviations is read from memory once per tile rather than once per block of rows. With 8 sets of 1000 models running at once, one thread each, 87.2 ms to 73.8 ms per set. Exact.
+
+One further change went through `make bench-seri_mcs_candidates` instead, because it is shared with `inference/seri_mcs.h` and `inference/fast_mcs.h`: `_mcs_result_from_rounds` names the models from a table built in one pass, rather than through `mcs_model_name`, whose scan of the columns made naming grow with the square of the model count. See `docs/MCS_PERFORMANCE_DOCUMENTATION.md`, Fix 8.
 
 At a thousand models over a thousand observations with 2000 draws and blocks of 20, one pass on 16 cores, the shipped header takes **0.33 s and 42.3 MiB under `MCS_TR`** and **0.99 s and 23.1 MiB under `MCS_TMAX`**. Before change 1 the `MCS_TR` run would have allocated 12.0 GiB and taken days; before change 4 the `MCS_TMAX` run was about `1.0e12` serial gathers, on the order of twelve minutes by arithmetic. Neither of those two was run.
 

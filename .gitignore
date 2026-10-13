@@ -28,6 +28,8 @@ tests/correctness/gzip_inflate
 tests/correctness/gzip_deflate
 tests/correctness/rdata_array_read
 tests/correctness/npz_python_interop
+tests/correctness/float32_file_widening
+scripts/seri_runs_to_npz
 tests/correctness/lstsq_rank_deficiency
 tests/correctness/chol_singularity
 tests/correctness/singularity_rule_comparison
@@ -67,6 +69,7 @@ tests/correctness/mcs_size_and_power_candidate
 tests/correctness/test_mcs_variance_candidate
 tests/performance/qvarma_*
 tests/performance/cumsum_threshold
+tests/performance/dargsort_threshold
 tests/performance/rolling_mean_threshold
 tests/performance/eig_sym_status
 tests/performance/lbfgs_candidates
@@ -76,6 +79,9 @@ tests/performance/lbfgs_largest_threshold
 tests/performance/lbfgs_copy_threshold
 tests/performance/mcs_candidates
 tests/performance/fast_mcs_against_mcs
+tests/performance/seri_mcs_performance
+tests/performance/seri_mcs_candidates
+tests/performance/npy_read_candidates
 tests/performance/tensor_omp_threshold
 tests/performance/tensor_reduce_tile
 tests/performance/tensor_batch_threads

@@ -26,11 +26,11 @@
    The stored and deflated pairs are the same data through np.savez and
    np.savez_compressed, so the stored/deflate branch of the archive
    reader is the only thing that differs between them. Both precisions
-   are embedded because a numeric member has to match this build's mreal
-   exactly. tests/correctness/npz_python_interop.py regenerates and
-   re-checks all four against a live numpy. --- */
+   are embedded because a float32 build refuses a float64 member; a
+   float64 build reads both pairs, the float32 one widened.
+   tests/correctness/npz_python_interop.py regenerates and re-checks all
+   four against a live numpy. --- */
 
-#ifndef MAT_DOUBLE
 static const unsigned char numpy_stored_f32[918] = {
     0x50, 0x4B, 0x03, 0x04, 0x2D, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x21, 0x00, 0xE2, 0x16, 0x0E, 0x9B, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -168,7 +168,7 @@ static const unsigned char numpy_deflated_f32[638] = {
     0x00, 0x00
 };
 
-#else
+#ifdef MAT_DOUBLE
 static const unsigned char numpy_stored_f64[966] = {
     0x50, 0x4B, 0x03, 0x04, 0x2D, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x21, 0x00, 0x7F, 0x61, 0xDE, 0x78, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -311,13 +311,6 @@ static const unsigned char numpy_deflated_f64[640] = {
 };
 #endif
 
-#ifdef MAT_DOUBLE
-#define NUMPY_STORED numpy_stored_f64
-#define NUMPY_DEFLATED numpy_deflated_f64
-#else
-#define NUMPY_STORED numpy_stored_f32
-#define NUMPY_DEFLATED numpy_deflated_f32
-#endif
 
 static const char *utf8_fixture_labels[4] = { "alpha", "b", "", "caff\xc3\xa8 \xe4\xb8\xad\xf0\x9f\x98\x80" };
 
@@ -572,8 +565,12 @@ static void check_numpy_fixture(const char *label, const unsigned char *bytes, s
 }
 
 static void test_reads_real_numpy_archives(void) {
-    check_numpy_fixture("np.savez, stored", NUMPY_STORED, sizeof NUMPY_STORED);
-    check_numpy_fixture("np.savez_compressed, deflated", NUMPY_DEFLATED, sizeof NUMPY_DEFLATED);
+    check_numpy_fixture("np.savez float32, stored", numpy_stored_f32, sizeof numpy_stored_f32);
+    check_numpy_fixture("np.savez_compressed float32, deflated", numpy_deflated_f32, sizeof numpy_deflated_f32);
+#ifdef MAT_DOUBLE
+    check_numpy_fixture("np.savez float64, stored", numpy_stored_f64, sizeof numpy_stored_f64);
+    check_numpy_fixture("np.savez_compressed float64, deflated", numpy_deflated_f64, sizeof numpy_deflated_f64);
+#endif
 }
 
 static void test_adversarial_shapes(void) {
@@ -852,16 +849,18 @@ static void test_malformed_npz_aborts(void) {
         expect_abort(call_df_read_npz);
     }
 
-    /* a numeric member at the other precision: the same dtype-mismatch
-       contract a bare .npy read enforces */
+#ifndef MAT_DOUBLE
+    /* a float64 member in a float32 build, which would round: the same
+       contract a bare .npy read enforces. A float64 build reads a float32
+       member, which tests/correctness/float32_file_widening.c checks. */
     {
-        const char *other = strcmp(frame_npy_mreal_descr(), "<f8") == 0 ? "<f4" : "<f8";
         unsigned char payload[64];
         memset(payload, 0, sizeof payload);
-        FixtureArray a = { "x", other, payload, 24, 3, 1 };
+        FixtureArray a = { "x", "<f8", payload, 24, 3, 1 };
         build_fixture_npz(g_bad_path, &a, 1);
         expect_abort(call_df_read_npz);
     }
+#endif
 
     remove(g_bad_path);
 }

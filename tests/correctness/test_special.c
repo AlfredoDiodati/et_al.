@@ -166,6 +166,33 @@ static void test_gammainc_known_values(void) {
     assert(fabs(special_chi_squared_sf(18.307038053275146, 10.0) - 0.05) < 1e-12);
 }
 
+/* The chi-squared tail at tens of thousands to a million degrees of
+   freedom, at the mean and three standard deviations above it, against
+   the regularized upper incomplete gamma at 60 digits (mpmath 1.3.0,
+   gammainc(df/2, x/2, inf, regularized=True)). Near x = a the series and
+   the continued fraction need a number of iterations growing like
+   sqrt(a), which SPECIAL_GAMMAINC_ITERATIONS allows for; make
+   test-gammainc-python shows what a fixed cap of 500 gives instead. The
+   tolerance covers the rounding of exp(-x + a log x - lgamma(a)), which
+   grows with a. */
+static void test_gammainc_large_degrees_of_freedom(void) {
+    static const double cases[][3] = {
+        { 20000.0, 20000.0, 0.4986701916600448 },
+        { 20000.0, 20600.0, 0.0014704948963856813 },
+        { 49999.0, 49999.0, 0.49915894722853776 },
+        { 49999.0, 50947.6738111701, 0.0014256131980276052 },
+        { 100000.0, 100000.0, 0.49940529189520669 },
+        { 100000.0, 101341.64078649988, 0.0014032363438129228 },
+        { 1000000.0, 1000000.0, 0.4998119368033945 },
+        { 1000000.0, 1004242.6406871193, 0.0013666602638577318 },
+    };
+    for (int i = 0; i < (int)(sizeof cases / sizeof cases[0]); i++) {
+        double got = special_chi_squared_sf(cases[i][1], cases[i][0]);
+        assert(fabs(got - cases[i][2]) <= 2e-9 * cases[i][2]);
+        assert(fabs(special_gammainc_p(cases[i][0] / 2, cases[i][1] / 2) - (1 - cases[i][2])) <= 2e-9);
+    }
+}
+
 static void test_gammainc_invariants(void) {
     puts("incomplete gamma invariants");
     static const double as[] = { 0.25, 1.0, 2.5, 10.0, 500.0 };
@@ -445,6 +472,7 @@ int main(void) {
     test_norm_cdf_known_values();
     test_norm_cdf_invariants();
     test_gammainc_known_values();
+    test_gammainc_large_degrees_of_freedom();
     test_gammainc_invariants();
     test_gammainc_far_tail();
     test_recurrence();

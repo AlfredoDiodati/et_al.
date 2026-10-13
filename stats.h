@@ -114,6 +114,36 @@ static inline mreal stats_var(Mat x) {
     return (mreal)(s / n);
 }
 
+/* Mean and population (1/n) variance of every column of x, in double,
+   written to mean[j] and var[j]. Two row-major passes, the first for the
+   means and the second for the squared deviations, so a wide table is
+   read in its storage order rather than one strided column at a time:
+   at 100000 rows by 16 columns, stats_dmean and stats_var on each column
+   slice took 15.8 ms against 0.45 ms for one row-major read
+   (tests/performance/seri_mcs_performance.c, arms "column slices" and
+   "one read"). Each column's sums run over the rows in order: the means
+   equal stats_dmean's bit for bit and the variances a strictly in-order
+   sum, while stats_var on a column slice reorders its sum under
+   -ffast-math and differs by up to 2e-15 relative (tests/correctness/
+   test_stats.c, test_column_moments). */
+static inline void stats_dcol_mean_var(Mat x, double *restrict mean, double *restrict var) {
+    assert(x.r >= 1 && x.c >= 1 && mean && var);
+    for (int j = 0; j < x.c; j++) mean[j] = var[j] = 0;
+    for (int i = 0; i < x.r; i++) {
+        const mreal *restrict row = x.d + (size_t)i * x.stride;
+        for (int j = 0; j < x.c; j++) mean[j] += (double)row[j];
+    }
+    for (int j = 0; j < x.c; j++) mean[j] /= x.r;
+    for (int i = 0; i < x.r; i++) {
+        const mreal *restrict row = x.d + (size_t)i * x.stride;
+        for (int j = 0; j < x.c; j++) {
+            double d = (double)row[j] - mean[j];
+            var[j] += d * d;
+        }
+    }
+    for (int j = 0; j < x.c; j++) var[j] /= x.r;
+}
+
 /* Pearson correlation of x and y paired elementwise (same shape,
    at least two elements, neither constant). */
 static inline mreal stats_corr(Mat x, Mat y) {
@@ -703,6 +733,97 @@ typedef struct { mreal val; int idx; } StatsIdxVal;
 static int stats_cmp_idxval(const void *a, const void *b) {
     mreal da = ((const StatsIdxVal*)a)->val, db = ((const StatsIdxVal*)b)->val;
     return (da > db) - (da < db);
+}
+
+/* Below this many elements stats_dargsort sorts by insertion; at or above
+   it, by radix. Set from tests/performance/dargsort_threshold.c, which
+   times both paths on the same arrays (make bench-dargsort_threshold). */
+#ifndef STATS_DARGSORT_INSERTION_MAX
+#define STATS_DARGSORT_INSERTION_MAX 96
+#endif
+
+/* The bits of a double as an unsigned integer whose unsigned order is the
+   numeric order: a negative value has every bit flipped, a non-negative
+   one only its sign bit. -0.0 and every subnormal are mapped to the key
+   of +0.0. A -ffast-math build compares subnormals as zero, so without
+   this the radix pass and a comparison would order them differently. */
+static inline uint64_t _stats_dorder_key(double x) {
+    uint64_t u;
+    memcpy(&u, &x, sizeof u);
+    if ((u & 0x7ff0000000000000ull) == 0) u = 0;
+    return u & 0x8000000000000000ull ? ~u : u | 0x8000000000000000ull;
+}
+
+/* stats_dargsort by insertion, on the order keys. */
+static inline void _stats_dargsort_insertion(const double *x, int n, int *order) {
+    for (int i = 0; i < n; i++) {
+        int item = i, j = i - 1;
+        uint64_t item_key = _stats_dorder_key(x[item]);
+        while (j >= 0 && _stats_dorder_key(x[order[j]]) > item_key) {
+            order[j + 1] = order[j];
+            j--;
+        }
+        order[j + 1] = item;
+    }
+}
+
+/* stats_dargsort by a least-significant-digit radix sort of the order keys,
+   eight bits per pass, skipping a pass whose digit is the same for every
+   element. Each pass is a stable counting sort, so the whole sort is
+   stable. */
+static inline void _stats_dargsort_radix(const double *x, int n, int *order) {
+    if (n == 0) return;
+    uint64_t *key = (uint64_t *)malloc((size_t)n * 2 * sizeof *key);
+    int *index = (int *)malloc((size_t)n * sizeof *index);
+    assert(key && index);
+    uint64_t *key_next = key + n;
+    uint64_t all_or = 0, all_and = ~(uint64_t)0;
+    for (int i = 0; i < n; i++) {
+        key[i] = _stats_dorder_key(x[i]);
+        order[i] = i;
+        all_or |= key[i];
+        all_and &= key[i];
+    }
+    int *index_src = order, *index_dst = index;
+    for (int shift = 0; shift < 64; shift += 8) {
+        /* Every key has the same digit here: the pass would move nothing. */
+        if ((((all_or ^ all_and) >> shift) & 0xff) == 0) continue;
+        int count[256] = { 0 };
+        for (int i = 0; i < n; i++) count[(key[i] >> shift) & 0xff]++;
+        int total = 0;
+        for (int b = 0; b < 256; b++) {
+            int c = count[b];
+            count[b] = total;
+            total += c;
+        }
+        for (int i = 0; i < n; i++) {
+            int slot = count[(key[i] >> shift) & 0xff]++;
+            key_next[slot] = key[i];
+            index_dst[slot] = index_src[i];
+        }
+        uint64_t *swap_key = key;
+        key = key_next;
+        key_next = swap_key;
+        int *swap_index = index_src;
+        index_src = index_dst;
+        index_dst = swap_index;
+    }
+    if (index_src != order) memcpy(order, index_src, (size_t)n * sizeof *order);
+    /* key and key_next are the two halves of one block; free the lower. */
+    free(key < key_next ? key : key_next);
+    free(index);
+}
+
+/* The indices that sort x[0 .. n-1] ascending, written to order: x[order[0]]
+   is the smallest. Stable, so equal values keep ascending index order.
+   -0.0 and subnormals tie with 0.0, under any build flags. x must hold no
+   NaN. Short arrays are sorted by insertion, longer ones by radix (see
+   STATS_DARGSORT_INSERTION_MAX); tests/performance/dargsort_threshold.c
+   also times qsort with a comparison function on the same arrays. */
+static inline void stats_dargsort(const double *x, int n, int *order) {
+    assert(n >= 0 && (n == 0 || (x && order)));
+    if (n < STATS_DARGSORT_INSERTION_MAX) _stats_dargsort_insertion(x, n, order);
+    else _stats_dargsort_radix(x, n, order);
 }
 
 /* Ranks every element of x (any shape) ascending - rank 1 for the

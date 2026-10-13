@@ -578,7 +578,7 @@ typedef struct {
        draw index, k_max long each: one entry per surviving model under
        MCS_TMAX, and one per pair under MCS_TR when there are at most
        MCS_SPREAD_BLOCK_PAIRS pairs. Past that MCS_TR accumulates its pairs
-       a block of rows at a time instead, in inv_se_all, and this is not
+       in cache tiles instead, straight into var_all, and this is not
        allocated. */
     double *var_part;
     /* How many doubles bmean holds per draw. The general path steps
@@ -615,17 +615,13 @@ typedef struct {
    count instead would make the p-value depend on the hardware. */
 #define MCS_VAR_PIECES 16
 
-/* How many pairs MCS_TR accumulates at once while forming the pairs'
-   spreads: a block's partial sums and running totals are two doubles per
-   pair, 256 KiB at this size, which stays in a core's cache while every
-   draw is streamed past it. Accumulating every pair at once instead
-   swept tens of megabytes per draw at a thousand models. */
+/* The most pairs for which MCS_TR forms the pairs' spreads with one
+   accumulator over every pair per piece of the draw index: 128 KiB per
+   piece at this size, which stays in a core's cache while the piece's
+   draws stream past it. Past it the pairs are taken in cache tiles
+   (MCS_SPREAD_TILE_MODELS), since an accumulator over every pair swept
+   tens of megabytes per draw at a thousand models. */
 #define MCS_SPREAD_BLOCK_PAIRS 16384
-
-/* How many blocks of rows the spreads are cut into at least, when they are
-   formed on several threads, so that a model count whose pairs fit in one
-   block still gives every thread rows to work on. */
-#define MCS_SPREAD_MIN_BLOCKS 64
 
 /* The factor the weighted row bound in MCS_TR's draw scan is widened by.
    That bound adds two rounded products where a pair's standardised
@@ -636,6 +632,27 @@ typedef struct {
    subtraction the pair does and multiplies by a factor at least the
    pair's own. */
 #define MCS_WEIGHTED_BOUND_SLACK (1.0 + 1e-12)
+
+/* The tiles MCS_TR's spread accumulation uses past MCS_SPREAD_BLOCK_PAIRS
+   pairs: MCS_SPREAD_TILE_MODELS earlier against as many later models per
+   cache tile, and MCS_SPREAD_REGISTER_EARLIER x MCS_SPREAD_REGISTER_LATER
+   pair sums per register tile. Measured with 8 sets of 1000 models over
+   999 observations running at once, one thread each, 2000 draws, blocks
+   of one, -O3 without fast-math, against the block-of-rows loop they
+   replaced: cache tiles of 128 and 256 models 0.857 to 0.868 of its time,
+   of 64 models 0.890 to 0.899; register tiles of 4 x 16 no slower than
+   it before the cache tiles existed (0.988 and 0.996), 3 x 16 and 2 x 16
+   1.05, 4 x 8 1.47. A cache tile of 128 models is 256 KiB of deviations
+   per piece of 125 draws, half of this machine's per-core cache. */
+#define MCS_SPREAD_TILE_MODELS 128
+
+/* The fewest cache tiles the spread accumulation cuts the pairs into, so
+   that a run on every hardware thread has work for all of them: at 300
+   models, tiles of 128 made 6 and ran at 1.06x to 1.11x the time of the
+   block-of-rows loop on 16 threads. */
+#define MCS_SPREAD_MIN_TILES 32
+#define MCS_SPREAD_REGISTER_EARLIER 4
+#define MCS_SPREAD_REGISTER_LATER 16
 
 /* Surviving pairs from which a MCS_TR round's table of t-statistics, and
    the choice of the model it drops, are formed on several threads.
@@ -955,10 +972,8 @@ static inline void _mcs_shared_tables(int n, MCSOptions opt, Rng *rng, MCSScratc
        answer does not move with the core count. Up to
        MCS_SPREAD_BLOCK_PAIRS pairs, every piece keeps its own
        accumulator over all pairs and the pieces run on separate
-       threads. Beyond it the pairs are taken a block of rows at a
-       time instead, each block's partial sums in inv_se_all and
-       running totals in var_all, so that both stay in cache while
-       the draws stream past, and the blocks run on separate
+       threads. Beyond it the pairs are taken in square cache tiles
+       instead, described below, and the tiles run on separate
        threads. The two orders of work add the same numbers in the
        same order, so they give the same bits. */
     if (opt.stat == MCS_TR) {
@@ -995,42 +1010,110 @@ static inline void _mcs_shared_tables(int n, MCSOptions opt, Rng *rng, MCSScratc
                 sc->inv_se_all[k] = 1.0 / sqrt(sc->var_all[k]);
             }
         }
-        int rows_per_block = MCS_SPREAD_BLOCK_PAIRS / (m0 - 1);
-        if (pieces > 1 && rows_per_block > (m0 - 1) / MCS_SPREAD_MIN_BLOCKS)
-            rows_per_block = (m0 - 1) / MCS_SPREAD_MIN_BLOCKS;
-        if (rows_per_block < 1) rows_per_block = 1;
-        int blocks = all_pairs <= MCS_SPREAD_BLOCK_PAIRS ? 0 : (m0 - 1 + rows_per_block - 1) / rows_per_block;
+        /* Past MCS_SPREAD_BLOCK_PAIRS pairs the pairs are taken in square
+           tiles of MCS_SPREAD_TILE_MODELS earlier models against as many
+           later ones. For one piece of draws a tile reads those models'
+           deviations, which fit in a core's second-level cache, and every
+           register tile inside it reuses them from there, so the table of
+           deviations is read from memory once per tile and piece rather
+           than once per block of rows. A register tile holds
+           MCS_SPREAD_REGISTER_EARLIER x MCS_SPREAD_REGISTER_LATER pair
+           sums while the piece's draws stream past.
+
+           Each pair still sums its piece's draws in order and adds the
+           pieces to its total in order, so every pair adds the same
+           numbers in the same order as the per-piece accumulators above.
+           The draw loop is kept out of the vectorizer, which under
+           -ffast-math splits a sum over draws into several partial sums
+           and so changes the order of the additions: without the pragma
+           the t-statistics moved by one or two units in the last place.
+           The pragma needs GCC 14 or later; an older compiler ignores it
+           with a warning and only a -ffast-math build is then exposed.
+           The loop over a register tile's later models is left to the
+           vectorizer, since its lanes are separate pairs; fully unrolling
+           it instead stopped the vectorizer inside the draw loop, and the
+           tile ran as scalar code at 1.4x the time. */
+        if (all_pairs > MCS_SPREAD_BLOCK_PAIRS) {
+            double *restrict total_all = sc->var_all;
+            /* The largest tile that still leaves MCS_SPREAD_MIN_TILES tiles
+               to share among threads, halving from MCS_SPREAD_TILE_MODELS
+               down to one register tile's width. */
+            int tile_models = MCS_SPREAD_TILE_MODELS, blocks, tiles;
+            for (;;) {
+                blocks = (m0 + tile_models - 1) / tile_models;
+                tiles = blocks * (blocks + 1) / 2;
+                if (tiles >= MCS_SPREAD_MIN_TILES || tile_models <= MCS_SPREAD_REGISTER_LATER) break;
+                tile_models /= 2;
+            }
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic, 1) if (pieces > 1)
 #endif
-        for (int block = 0; block < blocks; block++) {
-            int g0 = block * rows_per_block;
-            int g1 = g0 + rows_per_block < m0 - 1 ? g0 + rows_per_block : m0 - 1;
-            int k0 = g0 * m0 - g0 * (g0 + 1) / 2;
-            int k1 = g1 * m0 - g1 * (g1 + 1) / 2;
-            double *restrict total = sc->var_all + k0;
-            double *restrict part = sc->inv_se_all + k0;
-            for (int k = 0; k < k1 - k0; k++) total[k] = 0;
-            for (int piece = 0; piece < pieces; piece++) {
-                int b0 = (int)((long)piece * opt.bootstrap / pieces);
-                int b1 = (int)((long)(piece + 1) * opt.bootstrap / pieces);
-                for (int k = 0; k < k1 - k0; k++) part[k] = 0;
-                for (int b = b0; b < b1; b++) {
-                    const double *restrict u = sc->bmean + (size_t)b * m0;
-                    int k = 0;
-                    for (int g = g0; g < g1; g++) {
-                        double ug = u[g];
-                        for (int h = g + 1; h < m0; h++) {
-                            double e = ug - u[h];
-                            part[k++] += e * e;
+            for (int tile = 0; tile < tiles; tile++) {
+                /* Tile number to (earlier block, later block), later >= earlier. */
+                int earlier = 0, left = tile;
+                while (left >= blocks - earlier) { left -= blocks - earlier; earlier++; }
+                int later = earlier + left;
+                int g_lo = earlier * tile_models;
+                int g_hi = g_lo + tile_models < m0 ? g_lo + tile_models : m0;
+                int h_lo = later * tile_models;
+                int h_hi = h_lo + tile_models < m0 ? h_lo + tile_models : m0;
+                for (int g = g_lo; g < g_hi; g++)
+                    for (int h = (g + 1 > h_lo ? g + 1 : h_lo); h < h_hi; h++)
+                        total_all[g * m0 - g * (g + 1) / 2 - g - 1 + h] = 0;
+                for (int piece = 0; piece < pieces; piece++) {
+                    int b0 = (int)((long)piece * opt.bootstrap / pieces);
+                    int b1 = (int)((long)(piece + 1) * opt.bootstrap / pieces);
+                    for (int g0 = g_lo; g0 < g_hi; g0 += MCS_SPREAD_REGISTER_EARLIER) {
+                        int rows = g_hi - g0 < MCS_SPREAD_REGISTER_EARLIER ? g_hi - g0 : MCS_SPREAD_REGISTER_EARLIER;
+                        for (int h0 = h_lo; h0 < h_hi; h0 += MCS_SPREAD_REGISTER_LATER) {
+                            int width = h_hi - h0 < MCS_SPREAD_REGISTER_LATER ? h_hi - h0 : MCS_SPREAD_REGISTER_LATER;
+                            /* No pair here has its earlier model first. */
+                            if (h0 + width - 1 <= g0) continue;
+                            double acc[MCS_SPREAD_REGISTER_EARLIER][MCS_SPREAD_REGISTER_LATER] = { { 0 } };
+                            if (rows == MCS_SPREAD_REGISTER_EARLIER && width == MCS_SPREAD_REGISTER_LATER) {
+#pragma GCC novector
+                                for (int b = b0; b < b1; b++) {
+                                    const double *restrict u = sc->bmean + (size_t)b * m0;
+                                    for (int r = 0; r < MCS_SPREAD_REGISTER_EARLIER; r++) {
+                                        double ug = u[g0 + r];
+                                        for (int c = 0; c < MCS_SPREAD_REGISTER_LATER; c++) {
+                                            double e = ug - u[h0 + c];
+                                            acc[r][c] += e * e;
+                                        }
+                                    }
+                                }
+                            } else {
+#pragma GCC novector
+                                for (int b = b0; b < b1; b++) {
+                                    const double *restrict u = sc->bmean + (size_t)b * m0;
+                                    for (int r = 0; r < rows; r++) {
+                                        double ug = u[g0 + r];
+                                        for (int c = 0; c < width; c++) {
+                                            double e = ug - u[h0 + c];
+                                            acc[r][c] += e * e;
+                                        }
+                                    }
+                                }
+                            }
+                            /* A register tile on the diagonal also formed sums
+                               for pairs with the later model first, which are
+                               not pairs and are dropped here. */
+                            for (int r = 0; r < rows; r++) {
+                                int g = g0 + r;
+                                double *restrict total = total_all + (g * m0 - g * (g + 1) / 2 - g - 1);
+                                for (int c = 0; c < width; c++)
+                                    if (h0 + c > g) total[h0 + c] += acc[r][c];
+                            }
                         }
                     }
                 }
-                for (int k = 0; k < k1 - k0; k++) total[k] += part[k];
             }
-            for (int k = 0; k < k1 - k0; k++) {
-                total[k] = mcs_floor_var(total[k] / opt.bootstrap);
-                part[k] = 1.0 / sqrt(total[k]);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (pieces > 1)
+#endif
+            for (int k = 0; k < all_pairs; k++) {
+                total_all[k] = mcs_floor_var(total_all[k] / opt.bootstrap);
+                sc->inv_se_all[k] = 1.0 / sqrt(total_all[k]);
             }
         }
     }
@@ -1742,7 +1825,15 @@ static inline MCSResult _mcs_result_new(int m0, int n, MCSOptions opt) {
 static inline void _mcs_result_from_rounds(const DataFrame *losses, MCSResult *res) {
     int m0 = res->m0;
     unsigned char *eliminated = (unsigned char *)calloc((size_t)m0, 1);
-    assert(eliminated);
+    /* Every model's name from one pass over the columns. mcs_model_name
+       scans them on each call, so naming every model through it grows
+       with the square of the model count: 0.25 ms at 1000 models and
+       617 ms at 50000 (tests/performance/seri_mcs_performance.c, arm
+       "name lookups"). */
+    const char **names = (const char **)malloc((size_t)m0 * sizeof *names);
+    assert(eliminated && names);
+    for (int i = 0; i < losses->n_cols; i++)
+        if (losses->columns[i].type == COL_NUMERIC) names[losses->columns[i].index] = losses->columns[i].name;
     int decided = 0;
     double best_p = 0;
     for (int round = 1; round <= res->n_rounds; round++) {
@@ -1759,14 +1850,14 @@ static inline void _mcs_result_from_rounds(const DataFrame *losses, MCSResult *r
                 for (int j = 0; j < m0; j++)
                     if (!eliminated[j]) {
                         res->surviving[res->n_surviving] = j;
-                        res->surviving_names[res->n_surviving++] = frame_strdup(mcs_model_name(losses, j));
+                        res->surviving_names[res->n_surviving++] = frame_strdup(names[j]);
                     }
             }
         }
         res->pvalue[worst] = best_p;
         res->elimination_round[worst] = round;
         if (!decided) {
-            res->elimination_names[res->n_eliminated] = frame_strdup(mcs_model_name(losses, worst));
+            res->elimination_names[res->n_eliminated] = frame_strdup(names[worst]);
             res->elimination_order[res->n_eliminated++] = worst;
         }
         eliminated[worst] = 1;
@@ -1778,9 +1869,10 @@ static inline void _mcs_result_from_rounds(const DataFrame *losses, MCSResult *r
     if (!decided) {
         res->n_surviving = 1;
         res->surviving[0] = last;
-        res->surviving_names[0] = frame_strdup(mcs_model_name(losses, last));
+        res->surviving_names[0] = frame_strdup(names[last]);
     }
     free(eliminated);
+    free((void *)names);
 }
 
 /* Every round of a MCS_TR run under the bootstrap variance at once: the

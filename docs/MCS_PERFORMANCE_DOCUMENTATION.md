@@ -301,6 +301,61 @@ The order check reads "candidate faster" on every one of these in both builds, e
 
 **A build note for a caller.** Without `-ffast-math`, `-O3` and `-O2` give the same bits here, and `-O3` vectorizes loops `-O2` leaves scalar. In the consumer build at a thousand models over 999 observations, blocks of one, 10 alternating runs, the header took 0.65x to 0.74x as long at `-O3` as at `-O2`; the previous header gained 0.94x to 0.96x.
 
+## Fix 7: the pair spreads in cache tiles, for many sets at once
+
+**The occasion.** The Monte Carlo of Fix 6 runs 8 sets at once, one thread each, rather than one set on every thread. Under that load `mcs()` measured about 0.12 s per set with the other project's `-O2` build, against a need of about 0.035 s.
+
+**Two changes, one of them outside this header.**
+- **`-O3` instead of `-O2` for the caller:** at `-O2`, GCC leaves loops that need a remainder scalar, including this header's spread loop, and at `-O3` it vectorizes them. Without `-ffast-math` this changes the order of no addition. The same 8-set measurement as below went from about 130 to about 80 ms per set, with the same hash of every output. Nothing here changed for that.
+- **The spreads:** the change this section is about.
+
+**Where the time went, measured under the load itself.** A thread-local phase clock in each of 8 concurrent single-thread calls, 1000 models over 999 observations, 2000 draws, blocks of one, `-O3 -std=c11 -DMAT_DOUBLE`, 4 rounds. Of one call's 728 ms of thread time: 405 ms in the gather, 291 ms in the pair spreads, 32 ms in the rest. Alone on one thread the same call took 448 ms: 245 in the gather and 190 in the spreads.
+
+**What the spread loop was spending it on.** The block-of-rows loop of Fix 5 keeps a block's partial sums in cache and streams the deviations of every draw past them once per block. At a thousand models that is about 67 blocks, each reading the whole 16 MB table of deviations: about 1 GB per set. Eight sets reading their own tables at once share one memory bus.
+
+**Why the replacement is faster.** The pairs are taken in square tiles of `MCS_SPREAD_TILE_MODELS` earlier models against as many later ones. For one piece of 125 draws, a tile of 128 models is 256 KiB of deviations, which stays in a core's cache while every register tile inside it, 4 earlier against 16 later models with their 64 pair sums in registers, reads it. The table is then read from memory once per tile and piece: about 125 MB per set by the same arithmetic, which was not measured.
+
+Each pair still sums its piece's draws in order and adds the pieces in order, so the result is bit for bit what it was.
+
+**Two things that decided bit identity and speed, found by measurement.**
+- **The sum over draws:** under `-ffast-math`, GCC vectorized each pair's sum over draws into several partial sums. That is a different order of additions, and the t-statistics moved by one or two units in the last place. The draw loop now carries `#pragma GCC novector`, which needs GCC 14 or later; an older compiler ignores it with a warning, and then only a `-ffast-math` build is exposed.
+- **Full unrolling:** fully unrolling the register tile inside that loop stopped the vectorizer there, and the tile ran as scalar code at 1.4x to 1.5x the time. The loop over a register tile's later models is left for the vectorizer, which vectorizes it, since its lanes are separate pairs.
+
+**Enough tiles for every thread.** With one set on 16 threads, 300 models make 6 tiles of 128, and that case ran at 1.06x to 1.11x the time. The tile is halved until there are at least `MCS_SPREAD_MIN_TILES` (32) tiles. At 1000 models it stays at 128 (36 tiles), and at 300 it becomes 32 (55 tiles).
+
+**Measured.**
+
+*8 sets at once:* 8 distinct 999 x 1000 loss tables (three real ones from the Monte Carlo and five column shuffles of them), MCS_TR, bootstrap variance, 2000 draws, blocks of one, seed 123, one thread each, 6 rounds after a warmup with the two versions alternated, `-O3 -std=c11 -DMAT_DOUBLE`, wall time divided by 8. Result: 87.2 ms to 73.8 ms per set, a within-pair ratio of 0.851 with the old version first and 0.837 with the new one first.
+
+*One set at a time, 16 threads, same tables:* 115 ms to 107 ms (0.937 and 0.940).
+
+*The harness:* `STRESS=1 MCS_ROUNDS=6`, `float32` elements, `-O3 -ffast-math`, 16 threads.
+- all 19 cases `identical`;
+- `tr_m1000_block1_stress` read "candidate faster" (1.158 and 1.061 in the two orders), `tr_m300_block1_stress` "no difference" (1.033 and 1.046), and no case "current faster".
+- Harness cases below 182 models do not reach this loop.
+
+*Also identical in the other project's builds:* all 19 cases at `-O2` and `-O3 -std=c11 -DMAT_DOUBLE`, and at 1 and 3 threads.
+
+**Tried and rejected on the way**, each against the loop it replaces with 8 sets at once:
+- **Tiles one-dimensional:** 32 later models against every earlier model, sums in registers, as a prototype from the Monte Carlo's project had them. 1.43x to 1.52x the time with the unrolled body, which ran scalar. With the vectorized body, 0.99 to 1.06.
+- **Register tiles of 3 x 16, 2 x 16, 4 x 8 and 6 x 8:** 1.05 to 1.52.
+- **Cache tiles of 64 models:** 0.890 to 0.899, against 0.857 to 0.868 at 128 and 256.
+- **256 draws per gather chunk instead of 64:** 0.884 to 0.887 with the tiles, against 0.857 to 0.868 without the change.
+- **Gather blocks of 8, 16 and 64 columns:** 1.55x to 1.90x the time of 32.
+- **Pinning one set per core** (`OMP_PLACES=cores OMP_PROC_BIND=spread`): 75.2 against 76.9 ms per set in one run each, not pursued.
+
+**What is left.** Under that load the gather is now the larger share: about 390 of about 610 ms of thread time. Alone on one thread it adds at about two doubles per cycle out of the per-core cache, against four at that cache's bandwidth. Nothing tried here moved it. Reusing work between sets is not available to the Monte Carlo that asked: every entry of its loss tables depends on the set's own reference response.
+
+## Fix 8: the model names, looked up once
+
+**The occasion.** `inference/seri_mcs.h` builds its result through `_mcs_result_from_rounds`, as `fast_mcs()` and `mcs()`'s `MCS_TR` path under the bootstrap variance do. At tens of thousands of models that function took most of a `seri_mcs` call.
+
+**The cause.** It named every model through `mcs_model_name`, which scans the `DataFrame`'s columns on each call, so naming the models grew with the square of their count. `make bench-seri_mcs_performance` times that lookup on its own, arm "name lookups": 0.25 ms at 1000 models, 24 ms at 10000 and 617 ms at 50000.
+
+**The change.** The function now builds a table of every model's name in one pass over the columns and reads the names from it.
+
+**Checked with `make bench-seri_mcs_candidates`, not with this file's harness**, since that one compares `mcs()` alone. It compares every output of `seri_mcs`, `mcs` and `fast_mcs` between two source trees. Against the working tree before this change, which was never committed, every output of `mcs` and `fast_mcs` came out identical on all 324 runs, in the float and the double build, with 2 to 17 models, `MCS_TR`, 300 draws and blocks of 3.
+
 ## The size this was changed for
 
 `STRESS=1 MCS_HUGE=1 make bench-mcs_candidates` runs four rungs past where a paired A/B was affordable when they were added. They report the candidate's own cost and nothing else.
@@ -326,7 +381,7 @@ Measured on the header after Fix 6, `STRESS=1 MCS_HUGE=1 MCS_ROUNDS=1`. After Fi
 
 The gather over draws, the spread accumulation and the exceedance scan carry `#ifdef _OPENMP` pragmas, under both statistics, and under `MCS_TR` so do the per-round table fill and the choice of the model to drop; on the general path the draws of a chunk are split into pieces across threads; `-fopenmp` is already on the compile line through openblas's own pkg-config metadata, so no dependency was added. `frame/sql.h`'s optional-OpenMP pattern is the precedent.
 
-**The answer does not depend on the core count, and that is a constraint the code is written around rather than a property it happens to have.** Each per-model resampled mean is summed over the same observations in the same order by one thread. Each pair's spread under `MCS_TR`, whether its pieces run on separate threads or its pairs are taken a block of rows at a time, and each surviving model's spread under `MCS_TMAX` together with the per-draw totals, is accumulated in `MCS_VAR_PIECES` fixed pieces — fixed, not taken from the thread count — with each piece summed in order and the pieces added in order; below `MCS_PARALLEL_MIN_WORK` it is one piece, a single running sum, so a run too small for a thread team does no piecewise bookkeeping at all. The exceedance count is an integer sum, and the round's maximum and each model's worst comparison are order free. On the general path each draw is gathered, and under `MCS_VARIANCE_HAC_RESAMPLE` divided by its own HAC variance, by one piece with the same arithmetic whichever piece it is.
+**The answer does not depend on the core count, and that is a constraint the code is written around rather than a property it happens to have.** Each per-model resampled mean is summed over the same observations in the same order by one thread. Each pair's spread under `MCS_TR`, whether its pieces run on separate threads or its pairs are taken in cache tiles, and each surviving model's spread under `MCS_TMAX` together with the per-draw totals, is accumulated in `MCS_VAR_PIECES` fixed pieces — fixed, not taken from the thread count — with each piece summed in order and the pieces added in order; below `MCS_PARALLEL_MIN_WORK` it is one piece, a single running sum, so a run too small for a thread team does no piecewise bookkeeping at all. The exceedance count is an integer sum, and the round's maximum and each model's worst comparison are order free. On the general path each draw is gathered, and under `MCS_VARIANCE_HAC_RESAMPLE` divided by its own HAC variance, by one piece with the same arithmetic whichever piece it is.
 
 The pragmas carry a work threshold rather than being unconditional. Starting and joining a thread team costs on the order of ten microseconds, more than a small round's whole gather: at five models over 250 observations a chunk is 80,000 additions, and spawning for that measured 30% slower than not spawning.
 

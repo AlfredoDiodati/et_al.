@@ -251,6 +251,143 @@ static void test_views(void) {
     mat_free(vm); mat_free(wm); mat_free(va); mat_free(wa);
 }
 
+/* stats_dcol_mean_var against the column-slice functions and the double
+   references, through a contiguous Mat, a strided view, a single row, a
+   single column, a constant column and a column far from zero. */
+static void test_column_moments(void) {
+    puts("column means and variances (stats_dcol_mean_var)");
+    double mean[8], var[8];
+
+    /* [[1,2],[2,2],[3,8]]: means 2 and 4, variances 2/3 and 8 */
+    Mat known = mat_lit(3, 2, 1.0f, 2.0f, 2.0f, 2.0f, 3.0f, 8.0f);
+    stats_dcol_mean_var(known, mean, var);
+    assert(fabs(mean[0] - 2) < 1e-15 && fabs(mean[1] - 4) < 1e-15);
+    assert(fabs(var[0] - 2.0 / 3.0) < 1e-15 && fabs(var[1] - 8) < 1e-15);
+    mat_free(known);
+
+    srand(47);
+    Mat parent = mat_new(37, 11);
+    for (int i = 0; i < 37 * 11; i++) parent.d[i] = (mreal)(rand() % 2001 - 1000) / 64.0f;
+    /* column 5 far from zero, column 6 constant */
+    for (int i = 0; i < 37; i++) {
+        AT(parent, i, 5) = (mreal)(4096 + (rand() % 17) / 8.0);
+        AT(parent, i, 6) = (mreal)0.1;
+    }
+    Mat v = mat_slice(parent, 2, 35, 1, 9); /* 33 x 8, strided */
+    assert(v.stride != v.c);
+    Mat w = mat_copy(v);
+    double mean_w[8], var_w[8], column[37];
+    stats_dcol_mean_var(v, mean, var);
+    stats_dcol_mean_var(w, mean_w, var_w);
+    for (int j = 0; j < 8; j++) {
+        assert(mean[j] == mean_w[j] && var[j] == var_w[j]); /* same arithmetic through both paths */
+        for (int i = 0; i < 33; i++) column[i] = (double)AT(v, i, j);
+        assert(fabs(mean[j] - ref_mean(column, 33)) <= 1e-12 * fmax(1, fabs(mean[j])));
+        assert(fabs(var[j] - ref_var(column, 33)) <= 1e-12 * fmax(1, var[j]));
+        assert(var[j] >= 0);
+        Mat slice = mat_slice(v, 0, 33, j, j + 1);
+        assert(fabs(mean[j] - stats_dmean(slice)) <= 1e-12 * fmax(1, fabs(mean[j])));
+        assert(fabs((mreal)var[j] - stats_var(slice)) <= 1e-6f * fmaxf(1, stats_var(slice)));
+    }
+    /* View column 4 is the parent's column 5, eighths from 0 to 2 around
+       4096: the spread survives the large mean. View column 5 is the
+       constant one. */
+    assert(var[4] > 0.1 && var[4] < 1);
+    assert(var[5] < 1e-14);
+
+    /* one row: every variance is 0 and every mean the value */
+    Mat row = mat_slice(parent, 3, 4, 0, 8);
+    stats_dcol_mean_var(row, mean, var);
+    for (int j = 0; j < 8; j++) assert(mean[j] == (double)AT(row, 0, j) && var[j] == 0);
+
+    /* one column of a strided parent */
+    Mat col = mat_slice(parent, 0, 37, 2, 3);
+    stats_dcol_mean_var(col, mean, var);
+    for (int i = 0; i < 37; i++) column[i] = (double)AT(col, i, 0);
+    assert(fabs(mean[0] - ref_mean(column, 37)) <= 1e-12 * fmax(1, fabs(mean[0])));
+    assert(fabs(var[0] - ref_var(column, 37)) <= 1e-12 * fmax(1, var[0]));
+
+    mat_free(parent); mat_free(w);
+
+    /* 500 x 60 normal draws: the means equal stats_dmean on each column
+       slice bit for bit, the variances equal a strictly in-order sum of
+       squared deviations bit for bit, and stats_var on the slice is within
+       2e-15 relative (it reorders its sum under -ffast-math). */
+    Rng rng = rng_new(59, 0);
+    Mat draws = mat_new(500, 60);
+    for (int i = 0; i < 500 * 60; i++) draws.d[i] = (mreal)(1 + rng_normal(&rng));
+    double draws_mean[60], draws_var[60];
+    stats_dcol_mean_var(draws, draws_mean, draws_var);
+    for (int j = 0; j < 60; j++) {
+        Mat slice = mat_slice(draws, 0, 500, j, j + 1);
+        assert(draws_mean[j] == stats_dmean(slice));
+        volatile double in_order = 0;
+        for (int i = 0; i < 500; i++) {
+            double d = (double)AT(draws, i, j) - draws_mean[j];
+            double square = d * d;
+            in_order = in_order + square;
+        }
+        assert(draws_var[j] == in_order / 500);
+#ifdef MAT_DOUBLE
+        assert(fabs(draws_var[j] - stats_var(slice)) <= 2e-15 * draws_var[j]);
+#else
+        assert(fabs((mreal)draws_var[j] - stats_var(slice)) <= 1e-6f * stats_var(slice));
+#endif
+    }
+    mat_free(draws);
+}
+
+/* Reference for stats_dargsort: qsort over (value, index) pairs, ties by
+   index. Subnormals are set to zero by their bits first, since
+   stats_dargsort ties them with zero; -0.0 and 0.0 are equal under <. */
+typedef struct { double value; int index; } RefPair;
+static int ref_pair_cmp(const void *a, const void *b) {
+    const RefPair *x = (const RefPair *)a, *y = (const RefPair *)b;
+    if (x->value < y->value) return -1;
+    if (x->value > y->value) return 1;
+    return (x->index > y->index) - (x->index < y->index);
+}
+
+/* stats_dargsort against the reference on both sides of the switch from
+   insertion to radix sort, on values built to break a radix key: heavy
+   ties, -0.0 beside 0.0, negatives, subnormals, values from 1e-300 to
+   1e300, all-equal arrays (every radix pass skipped) and arrays whose
+   keys differ only in their lowest byte. */
+static void test_dargsort(void) {
+    puts("stats_dargsort against a comparison sort");
+    int sizes[] = { 0, 1, 2, 3, STATS_DARGSORT_INSERTION_MAX - 1, STATS_DARGSORT_INSERTION_MAX,
+                    STATS_DARGSORT_INSERTION_MAX + 1, 200, 1000, 4097, 50000 };
+    srand(53);
+    for (int s = 0; s < (int)(sizeof sizes / sizeof sizes[0]); s++) {
+        int n = sizes[s];
+        double *x = (double *)malloc((size_t)(n > 0 ? n : 1) * sizeof *x);
+        int *order = (int *)malloc((size_t)(n > 0 ? n : 1) * sizeof *order);
+        RefPair *ref = (RefPair *)malloc((size_t)(n > 0 ? n : 1) * sizeof *ref);
+        assert(x && order && ref);
+        for (int kind = 0; kind < 6; kind++) {
+            for (int i = 0; i < n; i++) {
+                int r = rand();
+                switch (kind) {
+                case 0: x[i] = (double)(r % 2001 - 1000) / 7.0; break;      /* spread, some ties */
+                case 1: x[i] = (double)(r % 5) - 2.0; break;                /* heavy ties */
+                case 2: x[i] = r % 3 == 0 ? 0.0 : r % 3 == 1 ? -0.0 : (r % 2 ? 1e-310 : -1e-310); break;
+                case 3: x[i] = (r % 2 ? 1 : -1) * pow(10.0, (double)(r % 601) - 300.0); break;
+                case 4: x[i] = 3.25; break;                                 /* all equal */
+                default: x[i] = 1.0 + (double)(r % 256) * 2.220446049250313e-16; break; /* lowest byte only */
+                }
+                uint64_t bits;
+                memcpy(&bits, &x[i], sizeof bits);
+                ref[i].value = (bits & 0x7ff0000000000000ull) == 0 ? 0.0 : x[i];
+                ref[i].index = i;
+            }
+            if (n > 0) qsort(ref, (size_t)n, sizeof *ref, ref_pair_cmp);
+            stats_dargsort(x, n, order);
+            for (int i = 0; i < n; i++) assert(order[i] == ref[i].index);
+        }
+        free(x); free(order); free(ref);
+    }
+}
+
 static void test_adversarial(void) {
     puts("adversarial (scale, near-constant, minimal sizes)");
 
@@ -1274,6 +1411,8 @@ int main(void) {
     test_known_values();
     test_invariants();
     test_views();
+    test_column_moments();
+    test_dargsort();
     test_adversarial();
     test_vs_reference();
     test_autocov_gemm_path();

@@ -1912,6 +1912,13 @@ ms everything else, of about 105 ms; a tiled pair-spread loop and a larger draw
 chunk were tried and rejected, with numbers in that file. `MCS_TMAX` has not
 been profiled by phase.
 
+**A seventh change**, exact, took the pair spreads in square cache tiles of up
+to 128 models, with 4 x 16 pair sums in registers, for a Monte Carlo that runs
+8 sets at once, one thread each: 87.2 ms to 73.8 ms per set there, 115 to 107
+ms for one set on 16 threads, no harness case slower. Under that load the
+gather is now about 390 of about 610 ms of a call's thread time, and nothing
+tried moved it; `docs/MCS_PERFORMANCE_DOCUMENTATION.md` has it as Fix 7.
+
 ## 14. Broadcast element-wise operations (`linalg/tensor.h`) - fixed
 
 **What it was.** 1.30x slower than NumPy on `128x64x32 + 64x1`, float32. A
