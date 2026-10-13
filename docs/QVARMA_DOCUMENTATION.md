@@ -54,9 +54,9 @@ Not implemented, each for a stated reason:
   off-diagonal covariance rather than the diagonal entries the estimated
   parameters use.
 - **P-values on the estimates.** The standard errors below are reported as
-  errors, not turned into t-statistics against a normal tail. `special.h` has
-  both the normal CDF and the chi-squared survival function a caller needs to
-  do that, so this is a choice about what the report says rather than a
+  errors, not turned into t-statistics against a normal tail. `dist/gauss.h`
+  and `dist/chi_squared.h` have the normal CDF and the chi-squared tail a
+  caller needs to do that, so this is a choice about what the report says rather than a
   missing primitive.
 - **A forecast function.** `qvarma_simulate` draws from the model and the
   filter reports residuals, but there is no `qvarma_forecast` producing

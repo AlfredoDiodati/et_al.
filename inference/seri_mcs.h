@@ -1,6 +1,7 @@
 #pragma once
 #include <float.h>
 #include "mcs.h"
+#include "../dist/chi_squared.h"
 
 /* The Model Confidence Set with the equivalence test of Seri, Martinoli,
    Secchi and Centorrino (2021), "Model calibration and validation via
@@ -113,7 +114,7 @@ static inline double seri_mcs_pvalue(double W, int m) {
     assert(!mat_isnan_f64(W) && W >= 0);
     if (m == 1) return 1;
     if (mat_isinf_f64(W)) return 0;
-    double p = special_chi_squared_sf(W, m - 1);
+    double p = chi_squared_sf(W, m - 1);
     if (!(p > 0)) return 0;
     return p < 1 ? p : 1;
 }

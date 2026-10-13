@@ -16,7 +16,7 @@ Writes examples/out/qvarma_fixed_parameters_example_report.txt.
 */
 
 #include "../sd/qvarma.h"
-#include "../special.h"
+#include "../dist/chi_squared.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -35,7 +35,7 @@ static void write_fit_line(FILE *out, const char *label, const QvarmaFitResult *
     fprintf(out, "%-26s nu %8.3f  log_likelihood %12.4f  LR %9.4f  p %.4f  "
                  "converged %s  iterations %d  gradient_norm %.3g\n",
             label, (double)fit->params.nu, (double)fit->log_likelihood, statistic,
-            special_chi_squared_sf(statistic > 0 ? statistic : 0, 1),
+            chi_squared_sf(statistic > 0 ? statistic : 0, 1),
             fit->is_converged ? "yes" : "no", fit->niter, (double)fit->gradient_norm);
 }
 

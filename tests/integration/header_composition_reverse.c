@@ -32,6 +32,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../dist/mv/student.h"
 #include "../../dist/mv/gauss.h"
 #include "../../dist/student.h"
+#include "../../dist/chi_squared.h"
 #include "../../dist/gauss.h"
 #include "../../dist/broadcast.h"
 #include "../../inference/qlr_test.h"

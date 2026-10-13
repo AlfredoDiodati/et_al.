@@ -219,7 +219,7 @@ signals agree.
 `frame/csv.h`, `frame/sql.h`'s 2 public functions, `stats.h` (all 20,
 including `stats_hac_var`/`stats_hac_var_centered`), `inference/mcs.h` (see the
 note below), `random/random.h`'s `rng_below`, `special.h`'s
-`special_digamma` and `special_norm_cdf`, `dist/gauss.h`/`dist/student.h`/
+`special_digamma`, `dist/gauss.h`'s `gauss_standard_cdf`, `dist/gauss.h`/`dist/student.h`/
 `dist/broadcast.h`/`dist/mv/gauss.h`/`dist/mv/student.h`'s main pdf/logpdf/
 gradient/sample functions, `solver/adam.h`'s `adam_step` and init/free
 functions, `solver/optimizer.h` (no public functions, interface exercised

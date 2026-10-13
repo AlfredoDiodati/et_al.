@@ -3,6 +3,7 @@
 #include "../regression.h"
 #include "../random/random.h"
 #include "../stats.h"
+#include "../dist/gauss.h"
 #include <math.h>
 
 /*
@@ -540,15 +541,11 @@ static inline mreal otto_fixed_b_critical(mreal ratio, int level_index) {
     return row[OTTO_TABLE_RATIOS - 1];
 }
 
-/* Standard normal left-tail quantiles at the same eight levels, for small-b,
-   where the limit is normal and no table is needed. */
+/* The standard normal left-tail quantile at the same eight levels, for
+   small-b, where the limit is normal and no table is needed. */
 static inline mreal otto_small_b_critical(int level_index) {
-    static const mreal quantile[OTTO_TABLE_LEVELS] = {
-        (mreal)-0.8416, (mreal)-1.2816, (mreal)-1.6449, (mreal)-1.7507,
-        (mreal)-1.8808, (mreal)-2.0537, (mreal)-2.3263, (mreal)-3.0902
-    };
     assert(level_index >= 0 && level_index < OTTO_TABLE_LEVELS);
-    return quantile[level_index];
+    return (mreal)gauss_standard_quantile((double)_otto_level[level_index]);
 }
 
 /* The block length the paper's simulations favour, B of order T^gamma with gamma

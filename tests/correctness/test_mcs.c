@@ -336,7 +336,7 @@ static void test_tstats_known_values(void) {
     CHECKD(dm.stat, t_expected);
     CHECKD(dm.mean_diff, 1.5);
     CHECKD(dm.std_error, sqrt(0.3125));
-    CHECKD(dm.pvalue, 2.0 * special_norm_cdf(-t_expected));
+    CHECKD(dm.pvalue, 2.0 * gauss_standard_cdf(-t_expected));
     df_free(&L);
 }
 
@@ -540,7 +540,7 @@ static void test_dm_vs_reference(void) {
                 assert(got.status == DM_OK);
                 double s = mu / se;
                 assert(fabs((double)got.stat - s) < 1e-3 * (1 + fabs(s)));
-                double p = 2.0 * special_norm_cdf(-fabs(s));
+                double p = 2.0 * gauss_standard_cdf(-fabs(s));
                 assert(fabs((double)got.pvalue - p) < 1e-4);
             }
         }
@@ -1556,7 +1556,7 @@ static void test_dm_report(void) {
         assert(e.status == DM_OK);
         CHECKD(e.stat, -20.0);
         assert(e.pvalue > 0);
-        CHECKD(e.pvalue / (2.0 * special_norm_cdf(-20.0)), 1.0);
+        CHECKD(e.pvalue / (2.0 * gauss_standard_cdf(-20.0)), 1.0);
         char *te = render_dm_report("a", "b", &e);
         assert(strstr(te, "S_1 = -20.00"));
         assert(strstr(te, "two-sided p = 0\n") == NULL);

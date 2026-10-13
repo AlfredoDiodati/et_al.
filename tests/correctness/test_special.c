@@ -89,63 +89,16 @@ static void test_stress(void) {
     printf("  2000 log-spaced x in [1e-2, 1e6] ok\n");
 }
 
-static void test_norm_cdf_known_values(void) {
-    puts("normal CDF known values");
-    assert(fabs(special_norm_cdf(0.0) - 0.5) < TOL);
-    assert(fabs(special_norm_cdf(1.0) - 0.84134474606854293) < TOL);
-    assert(fabs(special_norm_cdf(-1.0) - 0.15865525393145707) < TOL);
-    assert(fabs(special_norm_cdf(1.959963984540054) - 0.975) < TOL);
-    assert(fabs(special_norm_cdf(2.5758293035489004) - 0.995) < TOL);
-    /* far tails: the point of evaluating on erfc rather than erf, so
-       these are checked on a relative scale - an absolute tolerance
-       would pass on any implementation that simply returned 0 */
-    double p6 = special_norm_cdf(-6.0), p6_exp = 9.865876450376946e-10;
-    assert(fabs(p6 - p6_exp) < 1e-12 * p6_exp);
-    double p10 = special_norm_cdf(-10.0), p10_exp = 7.619853024160525e-24;
-    assert(fabs(p10 - p10_exp) < 1e-12 * p10_exp);
-    /* saturation, both ends */
-    assert(special_norm_cdf(40.0) == 1.0);
-    assert(special_norm_cdf(-40.0) >= 0.0 && special_norm_cdf(-40.0) < 1e-300);
-}
-
-static void test_norm_cdf_invariants(void) {
-    puts("normal CDF invariants: symmetry, monotonicity, pdf by finite difference");
-    srand(51);
-    double prev = special_norm_cdf(-8.0);
-    for (int i = -800; i <= 800; i++) {
-        double x = i / 100.0;
-        double f = special_norm_cdf(x);
-        /* Phi(-x) = 1 - Phi(x), exact identity; checked on an absolute
-           scale since the identity itself loses the tail */
-        assert(fabs(special_norm_cdf(-x) - (1.0 - f)) < 1e-14);
-        assert(f >= prev - 1e-15);        /* nondecreasing */
-        assert(f >= 0.0 && f <= 1.0);
-        prev = f;
-    }
-    /* d/dx Phi(x) is the standard normal pdf, checked by central
-       difference where the difference itself is well conditioned */
-    for (int i = 0; i < 200; i++) {
-        double x = -4.0 + 8.0 * (double)(rand() % 10001) / 10000.0;
-        double h = 1e-4;
-        double fd = (special_norm_cdf(x + h) - special_norm_cdf(x - h)) / (2 * h);
-        double pdf = exp(-0.5 * x * x) / 2.5066282746310002;
-        assert(fabs(fd - pdf) < 1e-7);
-    }
-}
-
-
 /* P(a,x) and Q(a,x) at arguments where the answer is elementary, plus the
    identities and the boundary the split between the two evaluations sits
    on. The closed forms used:
 
-     P(1, x)   = 1 - exp(-x)                     (exponential distribution)
-     P(1/2, x) = erf(sqrt(x))                    (half-integer a)
-     chi-squared(1) survival = 2 Phi(-sqrt(x))   (a square of one normal)
-     chi-squared(2) survival = exp(-x/2)         (an exponential in disguise)
+     P(1, x) = 1 - exp(-x), the exponential distribution
+     P(1/2, x) = erf(sqrt(x)) and Q(1/2, x) = erfc(sqrt(x)), half-integer a
 
-   The last two are the ones that matter, since a chi-squared tail is what
-   every caller here actually asks for, and both reference forms go through
-   a completely different libm routine (erfc, exp) than the gamma series. */
+   Both reference forms go through a different libm routine (erf, erfc, exp)
+   than the gamma series. dist/chi_squared.h's tail, which is Q, is tested in
+   tests/correctness/chi_squared_tail_correctness.c. */
 static void test_gammainc_known_values(void) {
     puts("incomplete gamma against closed forms");
     static const double xs[] = { 1e-6, 0.05, 0.5, 1.0, 1.9, 2.0, 2.1, 5.0, 20.0, 200.0 };
@@ -157,18 +110,13 @@ static void test_gammainc_known_values(void) {
         /* the split between the series and the continued fraction is at
            x = a + 1, so a = 1 puts xs = 1.9, 2.0, 2.1 on either side of it
            and exactly on it */
-        assert(fabs(special_chi_squared_sf(x, 2.0) - exp(-0.5 * x)) < TOL);
-        assert(fabs(special_chi_squared_sf(x, 1.0) - 2.0 * special_norm_cdf(-sqrt(x))) < TOL);
+        assert(fabs(special_gammainc_q(0.5, x) - erfc(sqrt(x))) < TOL);
     }
-    /* the three critical values a chi-squared table is read at */
-    assert(fabs(special_chi_squared_sf(3.841458820694124, 1.0) - 0.05) < 1e-12);
-    assert(fabs(special_chi_squared_sf(5.991464547107979, 2.0) - 0.05) < 1e-12);
-    assert(fabs(special_chi_squared_sf(18.307038053275146, 10.0) - 0.05) < 1e-12);
 }
 
-/* The chi-squared tail at tens of thousands to a million degrees of
-   freedom, at the mean and three standard deviations above it, against
-   the regularized upper incomplete gamma at 60 digits (mpmath 1.3.0,
+/* Q(df/2, x/2), the chi-squared tail, at tens of thousands to a million
+   degrees of freedom, at the mean and three standard deviations above it,
+   against the regularized upper incomplete gamma at 60 digits (mpmath 1.3.0,
    gammainc(df/2, x/2, inf, regularized=True)). Near x = a the series and
    the continued fraction need a number of iterations growing like
    sqrt(a), which SPECIAL_GAMMAINC_ITERATIONS allows for; make
@@ -187,7 +135,7 @@ static void test_gammainc_large_degrees_of_freedom(void) {
         { 1000000.0, 1004242.6406871193, 0.0013666602638577318 },
     };
     for (int i = 0; i < (int)(sizeof cases / sizeof cases[0]); i++) {
-        double got = special_chi_squared_sf(cases[i][1], cases[i][0]);
+        double got = special_gammainc_q(cases[i][0] / 2, cases[i][1] / 2);
         assert(fabs(got - cases[i][2]) <= 2e-9 * cases[i][2]);
         assert(fabs(special_gammainc_p(cases[i][0] / 2, cases[i][1] / 2) - (1 - cases[i][2])) <= 2e-9);
     }
@@ -231,12 +179,12 @@ static void test_gammainc_invariants(void) {
    is the whole answer. At these points 1 - P has no correct digits left. */
 static void test_gammainc_far_tail(void) {
     puts("incomplete gamma far upper tail, relative accuracy");
-    /* chi-squared(2) survival is exp(-x/2) exactly, so the reference holds
-       to full relative precision however small it gets */
-    static const double xs[] = { 60.0, 200.0, 600.0, 1400.0 };
+    /* Q(1, x) is exp(-x) exactly, so the reference holds to full relative
+       precision however small it gets */
+    static const double xs[] = { 30.0, 100.0, 300.0, 700.0 };
     for (size_t i = 0; i < sizeof(xs) / sizeof(xs[0]); i++) {
-        double got = special_chi_squared_sf(xs[i], 2.0);
-        double want = exp(-0.5 * xs[i]);
+        double got = special_gammainc_q(1.0, xs[i]);
+        double want = exp(-xs[i]);
         assert(got > 0);
         assert(fabs(got - want) <= 1e-12 * want);
     }
@@ -469,8 +417,6 @@ static void test_diff_out_of_domain(void) {
 
 int main(void) {
     test_known_values();
-    test_norm_cdf_known_values();
-    test_norm_cdf_invariants();
     test_gammainc_known_values();
     test_gammainc_large_degrees_of_freedom();
     test_gammainc_invariants();

@@ -1,5 +1,5 @@
 #include "../../random/lhs.h"
-#include "../../special.h" /* dev-tier use: chi-squared tails for the count tests */
+#include "../../dist/chi_squared.h" /* dev-tier use: chi-squared tails for the count tests */
 #include "../check.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,7 +28,7 @@ static double uniform_counts_pvalue(const long *counts, int cells, long total) {
         double gap = (double)counts[c] - expected;
         statistic += gap * gap / expected;
     }
-    return special_chi_squared_sf(statistic, cells - 1);
+    return chi_squared_sf(statistic, cells - 1);
 }
 
 /* Rank of a permutation of 0..n-1 in the factorial number system, so a

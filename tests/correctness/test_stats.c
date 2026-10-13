@@ -1359,7 +1359,7 @@ static void test_ljung_box(void) {
         assert(fabs(got.statistic - ref_ljung_box(buffer, T, lags)) < 1e-3);
         /* the p-value is the chi-squared tail of that statistic, nothing more */
         assert(fabs(got.p_value
-                    - special_chi_squared_sf(got.statistic, (double)lags)) < 1e-12);
+                    - chi_squared_sf(got.statistic, (double)lags)) < 1e-12);
         assert(got.statistic >= 0 && got.p_value >= 0 && got.p_value <= 1);
     }
     /* an AR(1) at 0.6 over 300 periods is not white noise and the test

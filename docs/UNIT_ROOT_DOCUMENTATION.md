@@ -173,7 +173,7 @@ length.
 |---|---|---|
 | regime | `B/T -> 0` | `B/T -> b` in (0,1) |
 | limit | standard normal | nonstandard, depends on `b` |
-| critical values | normal quantiles | the paper's Table I |
+| critical values | normal quantiles, from `dist/gauss.h`'s `gauss_standard_quantile` | the paper's Table I |
 | extra machinery | the `kappa` correction and `v_T` | a time transformation by the estimated variance profile |
 
 Small-b is the default: the limit is normal so no table is needed, and the

@@ -56,14 +56,14 @@ STAT_CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math $(OPENMP_CFLAGS) $(BLA
 # from the optimum.
 MODEL_CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math $(OPENMP_CFLAGS) $(BLAS_CFLAGS)
 
-BASIS_DEPS := basis/poly.h basis/spline.h stats.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
+BASIS_DEPS := basis/poly.h basis/spline.h stats.h dist/chi_squared.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
 
-UNIT_ROOT_DEPS := inference/unit_root.h stats.h random/random.h linalg/solver.h linalg/decomp.h linalg/mat.h tests/check.h
+UNIT_ROOT_DEPS := inference/unit_root.h dist/gauss.h dist/broadcast.h stats.h dist/chi_squared.h random/random.h linalg/solver.h linalg/decomp.h linalg/mat.h tests/check.h
 COINTEGRATION_DEPS := inference/cointegration.h $(UNIT_ROOT_DEPS)
 SDLOC_DEPS := sd/score_driven_location.h dist/mv/student_traced.h linalg/factor.h solver/lbfgs.h ad.h json.h special.h random/random.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
-VAR_DEPS := varima/var.h regression.h stats.h special.h json.h random/random.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/tensor.h linalg/mat.h
+VAR_DEPS := varima/var.h regression.h stats.h dist/chi_squared.h special.h json.h random/random.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/tensor.h linalg/mat.h
 LP_MODEL_DEPS := lp/lp.h filter/hp.h frame/frame.h $(VAR_DEPS)
-QVARMA_DEPS := sd/qvarma.h dist/mv/student_traced.h linalg/factor.h solver/lbfgs.h ad.h json.h special.h random/random.h stats.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
+QVARMA_DEPS := sd/qvarma.h dist/mv/student_traced.h linalg/factor.h solver/lbfgs.h ad.h json.h special.h random/random.h stats.h dist/chi_squared.h dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h linalg/solver.h linalg/decomp.h linalg/mat.h
 
 # --- installation tiers: see README.md's "Installation tiers" policy.
 # core:  linalg/*.h (mat.h, decomp.h, solver.h), random/*.h (random.h, lhs.h),
@@ -82,7 +82,7 @@ PREFIX  ?= /usr/local
 INCDIR  := $(PREFIX)/include/et_al.
 PKGCONFIGDIR := $(PREFIX)/lib/pkgconfig
 
-CORE_HEADERS := ad.h json.h special.h stats.h regression.h
+CORE_HEADERS := ad.h json.h special.h stats.h dist/chi_squared.h regression.h
 CORE_SUBDIRS := linalg random dist dist/mv solver frame cluster inference basis filter
 MODEL_SUBDIRS := nn sd varima lp
 
@@ -117,22 +117,22 @@ examples/tensor_example: examples/tensor_example.c linalg/tensor.h linalg/mat.h 
 examples/mlp_example: examples/mlp_example.c nn/mlp.h json.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/mlp_example.c $(LDLIBS) -o examples/mlp_example
 
-examples/encoder: examples/encoder.c frame/csv.h frame/frame.h stats.h nn/mlp.h json.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
+examples/encoder: examples/encoder.c frame/csv.h frame/frame.h stats.h dist/chi_squared.h nn/mlp.h json.h solver/adam.h solver/optimizer.h ad.h special.h linalg/solver.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/encoder.c $(LDLIBS) -o examples/encoder
 
-examples/mcs_example: examples/mcs_example.c inference/mcs.h stats.h random/random.h special.h frame/csv.h frame/frame.h linalg/mat.h
+examples/mcs_example: examples/mcs_example.c inference/mcs.h dist/gauss.h dist/broadcast.h stats.h dist/chi_squared.h random/random.h special.h frame/csv.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/mcs_example.c $(LDLIBS) -o examples/mcs_example
 
 examples/singular_draws_example: examples/singular_draws_example.c linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
 	$(CC) $(STAT_CFLAGS) -I. examples/singular_draws_example.c $(LDLIBS) -o examples/singular_draws_example
 
-examples/lhs_example: examples/lhs_example.c random/lhs.h random/random.h stats.h frame/csv.h frame/frame.h linalg/mat.h
+examples/lhs_example: examples/lhs_example.c random/lhs.h random/random.h stats.h dist/chi_squared.h frame/csv.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/lhs_example.c $(LDLIBS) -o examples/lhs_example
 
 examples/cluster_example: examples/cluster_example.c cluster/cluster.h random/random.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/cluster_example.c $(LDLIBS) -o examples/cluster_example
 
-examples/rdata_example: examples/rdata_example.c frame/rdata.h frame/gzip.h frame/csv.h frame/frame.h stats.h linalg/mat.h
+examples/rdata_example: examples/rdata_example.c frame/rdata.h frame/gzip.h frame/csv.h frame/frame.h stats.h dist/chi_squared.h linalg/mat.h
 	$(CC) $(CFLAGS) -I. examples/rdata_example.c $(LDLIBS) -o examples/rdata_example
 
 examples/cumsum_rolling_mean_example: examples/cumsum_rolling_mean_example.c frame/frame.h linalg/tensor.h linalg/mat.h random/random.h
@@ -147,7 +147,7 @@ examples/band_solve_example: examples/band_solve_example.c linalg/solver.h linal
 examples/var_example: examples/var_example.c $(VAR_DEPS)
 	$(CC) $(STAT_CFLAGS) -I. examples/var_example.c $(LDLIBS) -o examples/var_example
 
-examples/ols_covariance_example: examples/ols_covariance_example.c regression.h stats.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
+examples/ols_covariance_example: examples/ols_covariance_example.c regression.h stats.h dist/chi_squared.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
 	$(CC) $(STAT_CFLAGS) -I. examples/ols_covariance_example.c $(LDLIBS) -o examples/ols_covariance_example
 
 examples/lp_example: examples/lp_example.c $(LP_MODEL_DEPS)
@@ -283,7 +283,7 @@ bench-score_driven_location_gradient_cost: tests/performance/score_driven_locati
 libcsvnabench.so: tests/performance/bench_csv_missing_values.c frame/csv.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/performance/bench_csv_missing_values.c $(LDLIBS) -o libcsvnabench.so
 
-libolscovbench.so: tests/performance/bench_ols_covariance.c regression.h stats.h linalg/solver.h linalg/factor.h linalg/decomp.h linalg/mat.h
+libolscovbench.so: tests/performance/bench_ols_covariance.c regression.h stats.h dist/chi_squared.h linalg/solver.h linalg/factor.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/performance/bench_ols_covariance.c $(LDLIBS) -o libolscovbench.so
 
 liblpbench.so: tests/performance/bench_lp.c $(LP_MODEL_DEPS)
@@ -346,7 +346,7 @@ libjoincompare.so: tests/performance/bench_join_compare.c frame/join.h frame/csv
 librandom.so: tests/performance/bench_random.c random/random.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_random.c $(LDLIBS) -o librandom.so
 
-libstats.so: tests/performance/bench_stats.c stats.h linalg/mat.h
+libstats.so: tests/performance/bench_stats.c stats.h dist/chi_squared.h linalg/mat.h
 	$(CC) $(CFLAGS) -shared -fPIC tests/performance/bench_stats.c $(LDLIBS) -o libstats.so
 
 libadam.so: tests/performance/bench_adam.c solver/adam.h solver/optimizer.h linalg/mat.h
@@ -395,7 +395,7 @@ bench-cumsum_threshold: tests/performance/cumsum_threshold
 
 # stats_dargsort's insertion and radix paths against each other and against
 # qsort, the measurement STATS_DARGSORT_INSERTION_MAX is set from.
-tests/performance/dargsort_threshold: tests/performance/dargsort_threshold.c stats.h random/random.h linalg/mat.h
+tests/performance/dargsort_threshold: tests/performance/dargsort_threshold.c stats.h dist/chi_squared.h random/random.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/performance/dargsort_threshold.c $(LDLIBS) -o tests/performance/dargsort_threshold
 
 bench-dargsort_threshold: tests/performance/dargsort_threshold
@@ -436,16 +436,16 @@ tests/correctness/mv_density_dispatch: tests/correctness/mv_density_dispatch.c t
 tests/correctness/singularity_rule_comparison: tests/correctness/singularity_rule_comparison.c tests/check.h random/random.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/singularity_rule_comparison.c $(LDLIBS) -o tests/correctness/singularity_rule_comparison
 
-tests/correctness/hac_covariance_correctness: tests/correctness/hac_covariance_correctness.c tests/check.h stats.h special.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
+tests/correctness/hac_covariance_correctness: tests/correctness/hac_covariance_correctness.c tests/check.h stats.h dist/chi_squared.h special.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
 	$(CC) $(CFLAGS) tests/correctness/hac_covariance_correctness.c $(LDLIBS) -o tests/correctness/hac_covariance_correctness
 
-tests/correctness/ols_covariance_correctness: tests/correctness/ols_covariance_correctness.c tests/check.h regression.h stats.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
+tests/correctness/ols_covariance_correctness: tests/correctness/ols_covariance_correctness.c tests/check.h regression.h stats.h dist/chi_squared.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
 	$(CC) $(CFLAGS) tests/correctness/ols_covariance_correctness.c $(LDLIBS) -o tests/correctness/ols_covariance_correctness
 
-tests/correctness/ols_covariance_recovery: tests/correctness/ols_covariance_recovery.c tests/check.h regression.h stats.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
+tests/correctness/ols_covariance_recovery: tests/correctness/ols_covariance_recovery.c tests/check.h regression.h stats.h dist/chi_squared.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h
 	$(CC) $(STAT_CFLAGS) tests/correctness/ols_covariance_recovery.c $(LDLIBS) -o tests/correctness/ols_covariance_recovery
 
-tests/correctness/ols_pseudo_inverse_fallback: tests/correctness/ols_pseudo_inverse_fallback.c tests/check.h random/random.h regression.h stats.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
+tests/correctness/ols_pseudo_inverse_fallback: tests/correctness/ols_pseudo_inverse_fallback.c tests/check.h random/random.h regression.h stats.h dist/chi_squared.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/ols_pseudo_inverse_fallback.c $(LDLIBS) -o tests/correctness/ols_pseudo_inverse_fallback
 
 tests/correctness/rank_rule_consistency: tests/correctness/rank_rule_consistency.c tests/check.h random/random.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
@@ -457,26 +457,26 @@ tests/correctness/chol_singularity: tests/correctness/chol_singularity.c tests/c
 tests/correctness/test_special: tests/correctness/test_special.c special.h
 	$(CC) $(CFLAGS) tests/correctness/test_special.c $(LDLIBS) -o tests/correctness/test_special
 
-tests/correctness/test_stats: tests/correctness/test_stats.c stats.h random/random.h linalg/mat.h
+tests/correctness/test_stats: tests/correctness/test_stats.c stats.h dist/chi_squared.h random/random.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_stats.c $(LDLIBS) -o tests/correctness/test_stats
 
-tests/correctness/test_mcs: tests/correctness/test_mcs.c inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
+tests/correctness/test_mcs: tests/correctness/test_mcs.c inference/mcs.h dist/gauss.h dist/broadcast.h stats.h dist/chi_squared.h random/random.h special.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mcs.c $(LDLIBS) -o tests/correctness/test_mcs
 
-tests/correctness/test_mcs_variance: tests/correctness/test_mcs_variance.c inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
+tests/correctness/test_mcs_variance: tests/correctness/test_mcs_variance.c inference/mcs.h dist/gauss.h dist/broadcast.h stats.h dist/chi_squared.h random/random.h special.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mcs_variance.c $(LDLIBS) -o tests/correctness/test_mcs_variance
 
 # The layer under mcs()'s entry points: the primitives the header calls
 # public so a caller can run their own elimination loop, and the check
 # that such a loop reproduces mcs() when its scratch is sized per round
 # rather than once for the first one.
-tests/correctness/mcs_primitives: tests/correctness/mcs_primitives.c inference/mcs.h tests/check.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
+tests/correctness/mcs_primitives: tests/correctness/mcs_primitives.c inference/mcs.h dist/gauss.h dist/broadcast.h tests/check.h stats.h dist/chi_squared.h random/random.h special.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/mcs_primitives.c $(LDLIBS) -o tests/correctness/mcs_primitives
 
 # Coverage and power over repeated samples, the property the procedure
 # exists for and the one a comparison against a previous version's
 # numbers cannot speak to. See the file header.
-tests/correctness/mcs_size_and_power: tests/correctness/mcs_size_and_power.c inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
+tests/correctness/mcs_size_and_power: tests/correctness/mcs_size_and_power.c inference/mcs.h dist/gauss.h dist/broadcast.h stats.h dist/chi_squared.h random/random.h special.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/mcs_size_and_power.c $(LDLIBS) -o tests/correctness/mcs_size_and_power
 
 # A map of which settings give a set worth reading, one factor at a time
@@ -484,7 +484,7 @@ tests/correctness/mcs_size_and_power: tests/correctness/mcs_size_and_power.c inf
 # rather than a check: it writes out/mcs_settings_study.txt and asserts
 # nothing, the way qvarma_recovery_study.c does, and takes several
 # minutes, so it is deliberately outside `make test`.
-tests/correctness/mcs_settings_study: tests/correctness/mcs_settings_study.c inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
+tests/correctness/mcs_settings_study: tests/correctness/mcs_settings_study.c inference/mcs.h dist/gauss.h dist/broadcast.h stats.h dist/chi_squared.h random/random.h special.h frame/frame.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/mcs_settings_study.c $(LDLIBS) -o tests/correctness/mcs_settings_study
 
 study-mcs_settings: tests/correctness/mcs_settings_study
@@ -494,7 +494,7 @@ study-mcs_settings: tests/correctness/mcs_settings_study
 # reference written from the paper and against mcs() where Proposition 1
 # makes them equal, then coverage and power on mcs_size_and_power.c's
 # design with mcs() run beside it.
-FAST_MCS_DEPS := inference/fast_mcs.h inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
+FAST_MCS_DEPS := inference/fast_mcs.h inference/mcs.h dist/gauss.h dist/broadcast.h stats.h dist/chi_squared.h random/random.h special.h frame/frame.h linalg/mat.h
 
 tests/correctness/fast_mcs_correctness: tests/correctness/fast_mcs_correctness.c $(FAST_MCS_DEPS) tests/check.h
 	$(CC) $(CFLAGS) tests/correctness/fast_mcs_correctness.c $(LDLIBS) -o tests/correctness/fast_mcs_correctness
@@ -507,7 +507,7 @@ tests/correctness/fast_mcs_size_and_power: tests/correctness/fast_mcs_size_and_p
 # recomputed from scratch, the paper's matrix form, invariances, the abort
 # on a constant column, and size, coverage and power by simulation, written
 # to out/seri_mcs_correctness_size.txt.
-SERI_MCS_DEPS := inference/seri_mcs.h inference/mcs.h stats.h random/random.h special.h frame/frame.h linalg/mat.h frame/npz.h frame/npy.h frame/gzip.h
+SERI_MCS_DEPS := inference/seri_mcs.h inference/mcs.h dist/gauss.h dist/broadcast.h stats.h dist/chi_squared.h random/random.h special.h frame/frame.h linalg/mat.h frame/npz.h frame/npy.h frame/gzip.h
 
 # examples/datasets/seri_2021_simulation_runs.npz from the authors' Data.csv
 # (see scripts/seri_runs_to_npz.c), built at float32 since the archive is
@@ -521,7 +521,7 @@ seri-runs-npz: scripts/seri_runs_to_npz
 tests/correctness/seri_mcs_correctness: tests/correctness/seri_mcs_correctness.c $(SERI_MCS_DEPS) tests/check.h
 	$(CC) $(CFLAGS) tests/correctness/seri_mcs_correctness.c $(LDLIBS) -o tests/correctness/seri_mcs_correctness
 
-tests/correctness/test_random: tests/correctness/test_random.c random/random.h stats.h linalg/mat.h
+tests/correctness/test_random: tests/correctness/test_random.c random/random.h stats.h dist/chi_squared.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_random.c $(LDLIBS) -o tests/correctness/test_random
 
 tests/correctness/test_lhs: tests/correctness/test_lhs.c random/lhs.h random/random.h special.h linalg/mat.h tests/check.h
@@ -590,22 +590,25 @@ bench-lhs: liblhs.so
 tests/correctness/test_broadcast: tests/correctness/test_broadcast.c dist/broadcast.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_broadcast.c $(LDLIBS) -o tests/correctness/test_broadcast
 
-tests/correctness/test_gauss: tests/correctness/test_gauss.c dist/gauss.h dist/broadcast.h random/random.h stats.h linalg/mat.h
+tests/correctness/test_gauss: tests/correctness/test_gauss.c dist/gauss.h dist/broadcast.h random/random.h stats.h dist/chi_squared.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_gauss.c $(LDLIBS) -o tests/correctness/test_gauss
 
-tests/correctness/test_student: tests/correctness/test_student.c dist/student.h dist/gauss.h dist/broadcast.h special.h random/random.h stats.h linalg/mat.h
+tests/correctness/test_student: tests/correctness/test_student.c dist/student.h dist/gauss.h dist/broadcast.h special.h random/random.h stats.h dist/chi_squared.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_student.c $(LDLIBS) -o tests/correctness/test_student
 
-tests/correctness/test_mvgauss: tests/correctness/test_mvgauss.c dist/mv/gauss.h dist/gauss.h dist/broadcast.h random/random.h stats.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_mvgauss: tests/correctness/test_mvgauss.c dist/mv/gauss.h dist/gauss.h dist/broadcast.h random/random.h stats.h dist/chi_squared.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mvgauss.c $(LDLIBS) -o tests/correctness/test_mvgauss
 
-tests/correctness/test_mvstudent: tests/correctness/test_mvstudent.c dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h special.h random/random.h stats.h linalg/decomp.h linalg/mat.h
+tests/correctness/chi_squared_tail_correctness: tests/correctness/chi_squared_tail_correctness.c dist/chi_squared.h dist/gauss.h dist/broadcast.h special.h random/random.h linalg/mat.h tests/check.h
+	$(CC) $(STAT_CFLAGS) tests/correctness/chi_squared_tail_correctness.c $(LDLIBS) -o tests/correctness/chi_squared_tail_correctness
+
+tests/correctness/test_mvstudent: tests/correctness/test_mvstudent.c dist/mv/student.h dist/mv/gauss.h dist/student.h dist/gauss.h dist/broadcast.h special.h random/random.h stats.h dist/chi_squared.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_mvstudent.c $(LDLIBS) -o tests/correctness/test_mvstudent
 
 tests/correctness/mvstudent_traced_agreement: tests/correctness/mvstudent_traced_agreement.c dist/mv/student_traced.h dist/mv/student.h dist/mv/gauss.h ad.h special.h random/random.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h tests/check.h
 	$(CC) $(STAT_CFLAGS) tests/correctness/mvstudent_traced_agreement.c $(LDLIBS) -o tests/correctness/mvstudent_traced_agreement
 
-tests/correctness/test_matgauss: tests/correctness/test_matgauss.c dist/mv/matgauss.h dist/mv/gauss.h dist/gauss.h dist/broadcast.h random/random.h stats.h linalg/decomp.h linalg/mat.h
+tests/correctness/test_matgauss: tests/correctness/test_matgauss.c dist/mv/matgauss.h dist/mv/gauss.h dist/gauss.h dist/broadcast.h random/random.h stats.h dist/chi_squared.h linalg/decomp.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/test_matgauss.c $(LDLIBS) -o tests/correctness/test_matgauss
 
 tests/correctness/test_matgauss_recovery: tests/correctness/test_matgauss_recovery.c dist/mv/matgauss.h dist/mv/gauss.h dist/gauss.h dist/broadcast.h random/random.h linalg/decomp.h linalg/mat.h
@@ -715,7 +718,7 @@ test-csv-na-python: libcsvna_f64.so
 
 # Checks regression.h's ols_covariance against statsmodels and lpirfs' newey_west,
 # in both precisions: make test-ols-covariance-python PYTHON=...
-OLSCOV_DEPS := tests/correctness/ols_covariance_reference_agreement.c regression.h stats.h linalg/solver.h linalg/factor.h linalg/decomp.h linalg/mat.h
+OLSCOV_DEPS := tests/correctness/ols_covariance_reference_agreement.c regression.h stats.h dist/chi_squared.h linalg/solver.h linalg/factor.h linalg/decomp.h linalg/mat.h
 libolscov_f64.so: $(OLSCOV_DEPS)
 	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/correctness/ols_covariance_reference_agreement.c $(LDLIBS) -o libolscov_f64.so
 libolscov_f32.so: $(OLSCOV_DEPS)
@@ -725,7 +728,7 @@ test-ols-covariance-python: libolscov_f64.so libolscov_f32.so
 
 # Checks lp/lp.h against lpirfs 0.2.5 itself, in both precisions; needs R with
 # the lpirfs R package installed: make test-lp-python PYTHON=...
-LP_DEPS := tests/correctness/lp_reference_agreement.c lp/lp.h varima/var.h filter/hp.h regression.h stats.h special.h linalg/solver.h linalg/factor.h linalg/tensor.h linalg/mat.h frame/frame.h json.h
+LP_DEPS := tests/correctness/lp_reference_agreement.c lp/lp.h varima/var.h filter/hp.h regression.h stats.h dist/chi_squared.h special.h linalg/solver.h linalg/factor.h linalg/tensor.h linalg/mat.h frame/frame.h json.h
 liblp_f64.so: $(LP_DEPS)
 	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/correctness/lp_reference_agreement.c $(LDLIBS) -o liblp_f64.so
 liblp_f32.so: $(LP_DEPS)
@@ -853,7 +856,7 @@ tests/correctness/qvarma_identification: tests/correctness/qvarma_identification
 
 # float64: its Monte Carlo checks a likelihood ratio, a difference of two maxima
 # of order 1e3 that has to resolve numbers of order one.
-tests/correctness/lag_matrix_layout: tests/correctness/lag_matrix_layout.c tests/check.h random/random.h regression.h stats.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
+tests/correctness/lag_matrix_layout: tests/correctness/lag_matrix_layout.c tests/check.h random/random.h regression.h stats.h dist/chi_squared.h special.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h
 	$(CC) $(CFLAGS) tests/correctness/lag_matrix_layout.c $(LDLIBS) -o tests/correctness/lag_matrix_layout
 
 tests/correctness/var_correctness: tests/correctness/var_correctness.c $(VAR_DEPS) tests/check.h
@@ -898,7 +901,7 @@ tests/integration/frame_to_tensor: tests/integration/frame_to_tensor.c tests/che
 tests/integration/tensor_to_optimizer: tests/integration/tensor_to_optimizer.c tests/check.h ad.h linalg/tensor.h linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h solver/adam.h solver/optimizer.h random/random.h special.h
 	$(CC) $(STAT_CFLAGS) -I. tests/integration/tensor_to_optimizer.c $(LDLIBS) -o tests/integration/tensor_to_optimizer
 
-tests/integration/join_missing_values: tests/integration/join_missing_values.c frame/join.h frame/csv.h frame/frame.h inference/mcs.h nn/mlp.h solver/adam.h solver/optimizer.h $(UNIT_ROOT_DEPS)
+tests/integration/join_missing_values: tests/integration/join_missing_values.c frame/join.h frame/csv.h frame/frame.h inference/mcs.h dist/gauss.h dist/broadcast.h nn/mlp.h solver/adam.h solver/optimizer.h $(UNIT_ROOT_DEPS)
 	$(CC) $(STAT_CFLAGS) -I. tests/integration/join_missing_values.c $(LDLIBS) -o tests/integration/join_missing_values
 
 tests/integration/distributed_simulation: tests/integration/distributed_simulation.c cluster/cluster.h $(UNIT_ROOT_DEPS)
@@ -933,7 +936,7 @@ tests/integration/header_composition_f32: $(HEADER_COMPOSITION_SRC) $(ALL_HEADER
 # Built at float64 like every other statistical binary here: it runs a
 # least-squares fit on a design matrix built from levels data, and a model
 # confidence set on the residuals of one.
-tests/integration/basis_to_regression: tests/integration/basis_to_regression.c $(BASIS_DEPS) frame/csv.h frame/frame.h json.h inference/mcs.h tests/check.h
+tests/integration/basis_to_regression: tests/integration/basis_to_regression.c $(BASIS_DEPS) frame/csv.h frame/frame.h json.h inference/mcs.h dist/gauss.h dist/broadcast.h tests/check.h
 	$(CC) $(STAT_CFLAGS) -I. tests/integration/basis_to_regression.c $(LDLIBS) -o tests/integration/basis_to_regression
 
 INTEGRATION_TESTS := tests/integration/frame_to_model tests/integration/frame_to_tensor \
@@ -1123,7 +1126,7 @@ test-mcs-candidate:
 	rm -f tests/correctness/test_mcs_candidate tests/correctness/test_mcs_variance_candidate tests/correctness/mcs_primitives_candidate tests/correctness/mcs_size_and_power_candidate
 
 MCS_CANDIDATE ?= inference/mcs.h
-MCS_ARM_DEPS := inference/mcs.h tests/performance/mcs_arm.h stats.h random/random.h special.h frame/frame.h linalg/mat.h
+MCS_ARM_DEPS := inference/mcs.h dist/gauss.h dist/broadcast.h tests/performance/mcs_arm.h stats.h dist/chi_squared.h random/random.h special.h frame/frame.h linalg/mat.h
 
 # fast_mcs() against mcs(): cost of one call from 8 to 1000 models, and
 # how often the two disagree over replications of the paper's design.
@@ -1322,10 +1325,10 @@ ad-asan:
 lapack-comparison-bench: $(LAPACK_COMPARISON_BENCH)
 	for b in $(LAPACK_COMPARISON_BENCH); do ./$$b || exit 1; done
 
-test: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/hp_filter_correctness tests/correctness/hp_filter_recovery tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/hac_covariance_correctness tests/correctness/ols_covariance_correctness tests/correctness/ols_covariance_recovery tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/fast_mcs_correctness tests/correctness/fast_mcs_size_and_power tests/correctness/seri_mcs_correctness tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/mvstudent_traced_agreement tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/csv_missing_values tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/float32_file_widening tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery tests/correctness/lp_correctness tests/correctness/lp_recovery $(INTEGRATION_TESTS)
+test: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/hp_filter_correctness tests/correctness/hp_filter_recovery tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/hac_covariance_correctness tests/correctness/ols_covariance_correctness tests/correctness/ols_covariance_recovery tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/fast_mcs_correctness tests/correctness/fast_mcs_size_and_power tests/correctness/seri_mcs_correctness tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/chi_squared_tail_correctness tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/mvstudent_traced_agreement tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/csv_missing_values tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/float32_file_widening tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery tests/correctness/lp_correctness tests/correctness/lp_recovery $(INTEGRATION_TESTS)
 	for t in $^; do ./$$t || exit 1; done
 
-test-stress: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/hp_filter_correctness tests/correctness/hp_filter_recovery tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/hac_covariance_correctness tests/correctness/ols_covariance_correctness tests/correctness/ols_covariance_recovery tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/fast_mcs_correctness tests/correctness/fast_mcs_size_and_power tests/correctness/seri_mcs_correctness tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/mvstudent_traced_agreement tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/csv_missing_values tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/float32_file_widening tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery tests/correctness/lp_correctness tests/correctness/lp_recovery $(INTEGRATION_TESTS)
+test-stress: tests/correctness/poly_correctness tests/correctness/spline_design_correctness tests/correctness/spline_basis_correctness tests/correctness/spline_objects_correctness tests/correctness/test_mat tests/correctness/test_tensor tests/correctness/test_tensor_serial tests/correctness/cumsum_correctness tests/correctness/rolling_mean_correctness tests/correctness/hp_filter_correctness tests/correctness/hp_filter_recovery tests/correctness/test_decomp tests/correctness/test_solver tests/correctness/lstsq_rank_deficiency tests/correctness/chol_singularity tests/correctness/singularity_rule_comparison tests/correctness/ols_pseudo_inverse_fallback tests/correctness/hac_covariance_correctness tests/correctness/ols_covariance_correctness tests/correctness/ols_covariance_recovery tests/correctness/lag_matrix_layout tests/correctness/rank_rule_consistency tests/correctness/test_special tests/correctness/test_stats tests/correctness/test_random tests/correctness/test_lhs tests/correctness/test_mcs tests/correctness/test_mcs_variance tests/correctness/mcs_primitives tests/correctness/mcs_size_and_power tests/correctness/fast_mcs_correctness tests/correctness/fast_mcs_size_and_power tests/correctness/seri_mcs_correctness tests/correctness/test_broadcast tests/correctness/test_gauss tests/correctness/chi_squared_tail_correctness tests/correctness/test_student tests/correctness/test_mvgauss tests/correctness/test_mvstudent tests/correctness/mvstudent_traced_agreement tests/correctness/test_matgauss tests/correctness/test_matgauss_recovery tests/correctness/mv_density_dispatch tests/correctness/test_ad tests/correctness/ad_tensor_gradients tests/correctness/test_tape_reset tests/correctness/test_adam tests/correctness/test_optimizer tests/correctness/test_cluster tests/correctness/test_mlp tests/correctness/test_frame tests/correctness/test_csv tests/correctness/csv_missing_values tests/correctness/test_txt tests/correctness/test_npy tests/correctness/test_npz tests/correctness/float32_file_widening tests/correctness/test_json tests/correctness/test_sql tests/correctness/test_join tests/correctness/gzip_inflate tests/correctness/gzip_deflate tests/correctness/rdata_array_read tests/correctness/adf_correctness tests/correctness/kpss_correctness tests/correctness/dfgls_correctness tests/correctness/otto_correctness tests/correctness/hlt_union_correctness tests/correctness/hlt_break_correctness tests/correctness/hhlt_correctness tests/correctness/zivot_andrews_correctness tests/correctness/johansen_correctness tests/correctness/engle_granger_correctness tests/correctness/maki_correctness tests/correctness/qlr_test_correctness tests/correctness/lbfgs_correctness tests/correctness/score_driven_location_correctness tests/correctness/qvarma_correctness tests/correctness/qvarma_analytic_agreement tests/correctness/qvarma_gaussian_limit tests/correctness/qvarma_identification tests/correctness/qvarma_fixed_parameter_fit tests/correctness/var_correctness tests/correctness/var_recovery tests/correctness/lp_correctness tests/correctness/lp_recovery $(INTEGRATION_TESTS)
 	for t in $^; do STRESS=1 ./$$t || exit 1; done
 
 # built without -ffast-math so NaN/inf behavior is defined by IEEE 754

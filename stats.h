@@ -1,6 +1,6 @@
 #pragma once
 #include "linalg/mat.h"
-#include "special.h"
+#include "dist/chi_squared.h"
 
 /* Sample statistics: descriptive statistics of observed data - sample
    mean, variance, Pearson correlation, autocorrelation, per-column
@@ -211,7 +211,7 @@ static inline mreal stats_autocorr(Mat x, int lag) {
 
    which under the null of no autocorrelation up to lag `lags` is
    chi-squared(lags); the p-value is that distribution's upper tail, from
-   special.h. x is a single series, 1 x T or T x 1. stats_autocorr above
+   dist/chi_squared.h. x is a single series, 1 x T or T x 1. stats_autocorr above
    supplies each rho_k, so this adds only the sum, the scaling and the
    tail probability, not a second autocorrelation estimator.
 
@@ -241,7 +241,7 @@ static inline StatsLjungBox stats_ljung_box(Mat x, int lags) {
     StatsLjungBox result;
     result.lags = lags;
     result.statistic = (double)T * (double)(T + 2) * sum;
-    result.p_value = special_chi_squared_sf(result.statistic, (double)lags);
+    result.p_value = chi_squared_sf(result.statistic, (double)lags);
     return result;
 }
 

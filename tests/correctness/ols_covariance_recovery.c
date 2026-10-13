@@ -9,7 +9,7 @@ under STRESS=1), draw r of case c from rng_new(59 + c, r), standard normal
 shocks. Measured per case: the Monte Carlo variance of the slope over the
 draws, the mean over draws of each estimator's variance of the slope, and
 the share of draws whose normal 95 per cent interval, slope +- 1.96
-standard errors, holds 0.5. Nothing is excluded.
+standard errors (gauss_standard_quantile(0.975)), holds 0.5. Nothing is excluded.
 
 A. iid: x_t and u_t independent standard normals. Both estimators are
    right: classical over Monte Carlo in [0.9, 1.1], HAC (Bartlett, lag 4)
@@ -31,6 +31,7 @@ numbers go to out/ols_covariance_recovery_report.txt.
 */
 #include "../check.h"
 #include "../../regression.h"
+#include "../../dist/gauss.h"
 #include <sys/stat.h>
 
 typedef struct { double monte_carlo, classical, hac, classical_coverage, hac_coverage; } Outcome;
@@ -39,6 +40,7 @@ static Outcome run_case(int which, int R, int hac_lag) {
     int m = 400, burn = 200;
     double slopes_sum = 0, slopes_sq = 0, classical_sum = 0, hac_sum = 0;
     int classical_covered = 0, hac_covered = 0;
+    double z = gauss_standard_quantile(0.975);
     Mat x = mat_new(m, 2), y = mat_new(m, 1), variances = mat_new(1, 1);
     int slope[1] = { 1 };
     for (int r = 0; r < R; r++) {
@@ -64,8 +66,8 @@ static Outcome run_case(int which, int R, int hac_lag) {
         double v_hac = (double)variances.d[0];
         classical_sum += v_classical;
         hac_sum += v_hac;
-        if (fabs(b - 0.5) <= 1.96 * sqrt(v_classical)) classical_covered++;
-        if (fabs(b - 0.5) <= 1.96 * sqrt(v_hac)) hac_covered++;
+        if (fabs(b - 0.5) <= z * sqrt(v_classical)) classical_covered++;
+        if (fabs(b - 0.5) <= z * sqrt(v_hac)) hac_covered++;
         ols_free(&fit);
     }
     mat_free(x); mat_free(y); mat_free(variances);

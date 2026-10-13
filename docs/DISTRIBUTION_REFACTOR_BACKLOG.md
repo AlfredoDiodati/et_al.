@@ -4,34 +4,13 @@ Inventory of every distribution-related function or hardcoded distribution value
 
 ## To move into `dist/`
 
-### 1. Normal CDF: `special_norm_cdf` (`special.h:36`)
+### 1. Normal CDF: done
 
-The standard normal CDF, as `erfc(-x/sqrt(2))/2`.
+`special_norm_cdf` is now `dist/gauss.h`'s `gauss_standard_cdf`, unchanged in its arithmetic. Callers updated: `inference/mcs.h`, `tests/correctness/test_mcs.c`, `tests/integration/header_composition.c`. Its tests moved from `test_special.c` to `test_gauss.c`; its documentation from `docs/SPECIAL_DOCUMENTATION.md` to `docs/GAUSS_DOCUMENTATION.md`.
 
-Callers to update:
-- `inference/mcs.h:2561`, the Diebold-Mariano p-value
-- `tests/correctness/test_mcs.c` (3 uses)
-- `tests/correctness/test_special.c`
-- `tests/integration/header_composition.c`
+### 2. Chi-squared upper tail: done
 
-Docs that describe it: `docs/SPECIAL_DOCUMENTATION.md`, `README.md` (file tree and layering paragraph), `docs/MCS_DOCUMENTATION.md`.
-
-### 2. Chi-squared upper tail: `special_chi_squared_sf` (`special.h:322`)
-
-`P(X > x)` for a chi-squared, as `special_gammainc_q(df/2, x/2)`.
-
-Callers to update:
-- `stats.h:244`, the Ljung-Box p-value
-- `inference/seri_mcs.h:116`, the Seri et al. Wald p-value
-- `examples/qvarma_fixed_parameters_example.c:38`
-- `tests/correctness/qvarma_fixed_parameter_fit.c:471`
-- `tests/correctness/seri_mcs_correctness.c:227`
-- `tests/correctness/test_lhs.c:31`, a chi-squared goodness-of-fit test
-- `tests/correctness/test_stats.c`, `tests/correctness/test_special.c`, `tests/integration/header_composition.c`
-
-Docs: `docs/SPECIAL_DOCUMENTATION.md`, `docs/STATS_DOCUMENTATION.md`, `docs/SERI_MCS_DOCUMENTATION.md`, `README.md`.
-
-Layering constraint: `stats.h` sits directly above `linalg/mat.h`, below `linalg/solver.h`, while `dist/gauss.h` and `dist/student.h` sit above `linalg/solver.h`. A `dist/chi_squared.h` that includes only `special.h` keeps `stats.h` where it is; putting the function in a file that includes the linalg chain would pull `stats.h` up above `linalg/solver.h`.
+`special_chi_squared_sf` is now `chi_squared_sf` in a new `dist/chi_squared.h`, which includes only `special.h` so that `stats.h` can keep using it from below the linalg chain. Callers updated: `stats.h`, `inference/seri_mcs.h`, `examples/qvarma_fixed_parameters_example.c`, `tests/correctness/qvarma_fixed_parameter_fit.c`, `seri_mcs_correctness.c`, `test_lhs.c`, `test_stats.c`. Its tests are `tests/correctness/chi_squared_tail_correctness.c`; `test_special.c` keeps the incomplete gamma tests, rewritten against `Q`. Documentation: `docs/CHI_SQUARED_DOCUMENTATION.md`.
 
 ### 3. Student t density inside the score-driven models: done
 
@@ -46,15 +25,9 @@ Both models wrote the multivariate Student t log-density out themselves, in thei
 
 Left in the models, because they are not about the distribution: the score, the location recursions, and each model's link table. `_qvarma_likelihood_is_usable` and `_sdloc_likelihood_is_usable` are still two copies of the same objective check (not-a-number or plus infinity is unusable); that is a solver-side concern rather than a distribution one and was not moved.
 
-### 4. Normal quantiles with no quantile function behind them
+### 4. Normal quantile: done
 
-There is no normal inverse CDF anywhere in the library, so normal quantiles are typed in by hand:
-- `inference/unit_root.h:545-551`, `otto_small_b_critical`: a table of eight standard normal left-tail quantiles to four digits.
-- `1.96` as the 95 per cent two-sided normal quantile: `tests/correctness/ols_covariance_recovery.c:67-68`, `tests/correctness/qvarma_correctness.c:2287`, `tests/correctness/qvarma_recovery_study.c:274`.
-
-`LpBands`' `1.96` in `examples/lp_example.c`, `tests/correctness/lp_correctness.c`, `tests/correctness/lp_reference_agreement.c` and `tests/performance/bench_lp.c` is a different case: it is the `confint` multiplier lpirfs takes as an argument, so the value passed stays a number even once a quantile function exists.
-
-This is a missing primitive, not a misplaced one: it would be added to `dist/`, and the four places above switched to it.
+`dist/gauss.h` has `gauss_standard_quantile`, Wichura's AS 241. The hand-typed quantiles it replaces: the eight-value table in `inference/unit_root.h`'s `otto_small_b_critical`, now computed from the levels, and `1.96` in `tests/correctness/ols_covariance_recovery.c`, `qvarma_correctness.c` and `qvarma_recovery_study.c`. `LpBands`' `1.96` is lpirfs' `confint` argument and stays a number.
 
 ## Decided: scalar samplers stay in `random/random.h`
 

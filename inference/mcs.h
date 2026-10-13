@@ -2,7 +2,7 @@
 #include "../frame/frame.h"
 #include "../linalg/mat.h"
 #include "../random/random.h"
-#include "../special.h"
+#include "../dist/gauss.h"
 #include "../stats.h"
 
 /* Tests of equal predictive ability between competing forecasts: the
@@ -2558,7 +2558,7 @@ static inline DieboldMariano dm_test(const DataFrame *losses, const char *loss_a
        2 * (1 - Phi(|s|)) is the same number computed by subtracting a
        near-one quantity from one, which loses the whole answer exactly
        where a p-value matters most. */
-    r.pvalue = 2.0 * special_norm_cdf(-fabs(s));
+    r.pvalue = 2.0 * gauss_standard_cdf(-fabs(s));
     r.status = DM_OK;
     return r;
 }

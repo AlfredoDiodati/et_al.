@@ -1,10 +1,10 @@
-test run: di 13 okt 2026 17:35:26 CEST
+test run: di 13 okt 2026 18:21:41 CEST
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 96 suites
+make test and check.sh run the same 97 suites
 
 === build ===
 make: 'tests/correctness/poly_correctness' is up to date.
@@ -43,6 +43,7 @@ make: 'tests/correctness/fast_mcs_size_and_power' is up to date.
 make: 'tests/correctness/seri_mcs_correctness' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
+make: 'tests/correctness/chi_squared_tail_correctness' is up to date.
 make: 'tests/correctness/test_student' is up to date.
 make: 'tests/correctness/test_mvgauss' is up to date.
 make: 'tests/correctness/test_mvstudent' is up to date.
@@ -104,25 +105,7 @@ make: 'tests/integration/pipeline_ownership' is up to date.
 make: 'tests/integration/npz_to_statistics' is up to date.
 make: 'tests/integration/header_composition' is up to date.
 make: 'tests/integration/header_composition_f32' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/band_solve_example.c -lm -lopenblas -o examples/band_solve_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/basis_example.c -lm -lopenblas -o examples/basis_example
-In file included from examples/basis_example.c:4:
-./basis/spline.h: In function ‘_periodic_spline.constprop’:
-./basis/spline.h:1143:16: warning: ‘sites’ may be used uninitialized [-Wmaybe-uninitialized]
- 1143 |     Mat full = _spline_design_raw(knots, nk, sites, n, ord, &none, 1, 0);
-      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-./basis/spline.h:271:19: note: by argument 3 of type ‘const mreal *’ {aka ‘const double *’} to ‘_spline_design_raw.constprop’ declared here
-  271 | static inline Mat _spline_design_raw(const mreal *knots, int nk, const mreal *x, int nx,
-      |                   ^~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/encoder.c -lm -lopenblas -o examples/encoder
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/hp_filter_example.c -lm -lopenblas -o examples/hp_filter_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/lp_example.c -lm -lopenblas -o examples/lp_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/mlp_example.c -lm -lopenblas -o examples/mlp_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/ols_covariance_example.c -lm -lopenblas -o examples/ols_covariance_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_fixed_parameters_example.c -lm -lopenblas -o examples/qvarma_fixed_parameters_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/singular_draws_example.c -lm -lopenblas -o examples/singular_draws_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/var_example.c -lm -lopenblas -o examples/var_example
+make: Nothing to be done for 'examples'.
 
 === poly_correctness: PASS ===
 basis/poly.h correctness, float32 build
@@ -440,8 +423,6 @@ PASSED, 0 failures
 
 === test_special: PASS ===
 known values
-normal CDF known values
-normal CDF invariants: symmetry, monotonicity, pdf by finite difference
 incomplete gamma against closed forms
 incomplete gamma invariants
 incomplete gamma far upper tail, relative accuracy
@@ -455,7 +436,7 @@ large-x asymptotics
   at x = 5e14 the subtraction gives 34.0000000000, log(x) is 33.8456292144
   two half-steps against the exact whole step: worst relative 4.44e-16
   lgamma_diff vs the subtraction it replaces: worst relative 2.63e-13, which is the subtraction's own cancellation
-  lgamma_diff composition split against whole: worst relative 1.22e-15
+  lgamma_diff composition split against whole: worst relative 2.11e-15
   digamma_diff is the x-derivative of lgamma_diff to 1e-05
 test_special: all passed
 
@@ -505,17 +486,17 @@ independence: serial autocorrelation + cross-stream/seed correlation
 test_random: all passed
 
 === test_lhs: PASS ===
-random/lhs.h correctness, float64 build
+random/lhs.h correctness, float32 build
 
 stratification: one point per stratum per column
 float store: naive (stratum + jitter)/n leaves its stratum, lhs_random does not
-  n=  1000: naive crossings 0 / 2000000 (0.00e+00 per point)
-  n=100000: naive crossings 0 / 2000000 (0.00e+00 per point)
+  n=  1000: naive crossings 17 / 2000000 (8.50e-06 per point)
+  n=100000: naive crossings 2006 / 2000000 (1.00e-03 per point)
 extreme jitter: the largest and smallest a uniform draw can be
 no duplicate rows
 reproducibility, stream and seed divergence, column prefix
 marginal and within-stratum uniformity
-  pooled uniformity p = 0.999, jitter uniformity p = 0.0114, corr(stratum, jitter) = +0.003908
+  pooled uniformity p = 0.999, jitter uniformity p = 0.0113, corr(stratum, jitter) = +0.003908
 permutation uniformity over all 4! orderings
   48000 designs, ordering uniformity p = 0.184
 column independence at n = 2
@@ -560,7 +541,7 @@ mcs: size of the equivalence test under the three variance estimates
 test_mcs_variance: all passed
 
 === mcs_primitives: PASS ===
-inference/mcs.h structural primitives, float64 build
+inference/mcs.h structural primitives, float32 build
 
 mcs_n_series: one series per model, or one per unordered pair
 mcs_gather: the numeric block row-major, string columns stepped over
@@ -645,7 +626,35 @@ dlogpdf_loc/dlogpdf_scale
 degenerate scale (undocumented, unguarded - pinning current behavior)
 broadcast shape resolution
 sampling: moments + broadcast + independence (fixed seed)
+standard normal CDF known values
+standard normal CDF invariants: symmetry, monotonicity, density
+standard normal quantile against a long double Newton solve
+  11994 points, worst relative gap 5.54e-16 at p = 1.88e-275
+standard normal quantile: table values, ends, monotonicity, domain
 test_gauss: all passed
+
+=== chi_squared_tail_correctness: PASS ===
+dist/chi_squared.h, float64 build
+
+even degrees of freedom against the finite sum
+  df      2: worst relative gap 8.22e-16
+  df      4: worst relative gap 1.53e-15
+  df     10: worst relative gap 1.64e-15
+  df     30: worst relative gap 6.73e-15
+  df    200: worst relative gap 5.35e-14
+  df   2000: worst relative gap 9.18e-13
+  df  20000: worst relative gap 1.11e-11
+  df 200000: worst relative gap 1.04e-10
+  ok
+one degree of freedom against the standard normal
+  worst relative gap 8.74e-14
+  ok
+table critical values
+  ok
+monotone in x and in df, and the domain
+  ok
+
+PASSED, 0 failures
 
 === test_student: PASS ===
 known values
@@ -654,7 +663,7 @@ vs independent reference (broadcast + fast path)
 derivatives vs finite differences
 nu = infinity is the Gaussian, exactly
 a large finite nu converges on the Gaussian
-  worst gap to the Gaussian at nu = 1e14: 5.77e-15
+  worst gap to the Gaussian at nu = 1e14: 1.19e-07
 sampling: moments + independence + Gaussian-limit delegation (fixed seed)
 test_student: all passed
 
@@ -1845,4 +1854,4 @@ PASSED, 0 failures
 
 
 === summary ===
-99 passed, 0 failed
+100 passed, 0 failed

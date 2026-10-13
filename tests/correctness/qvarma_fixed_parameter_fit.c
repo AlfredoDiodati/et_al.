@@ -25,7 +25,7 @@ Built at float64: the likelihood ratio is a difference of two maxima of order
 */
 
 #include "../../sd/qvarma.h"
-#include "../../special.h"
+#include "../../dist/chi_squared.h"
 #include "../check.h"
 #include <string.h>
 
@@ -468,7 +468,7 @@ static MonteCarloSummary monte_carlo(const char *label, const QvarmaFixedParams 
             double statistic = 2.0 * ((double)unrestricted.log_likelihood
                                       - (double)restricted.log_likelihood);
             statistic_sum += statistic;
-            if (special_chi_squared_sf(statistic, df) < 0.05) rejections++;
+            if (chi_squared_sf(statistic, df) < 0.05) rejections++;
             summary.n_used++;
         } else {
             summary.n_not_converged++;

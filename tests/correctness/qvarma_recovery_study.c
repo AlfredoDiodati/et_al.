@@ -271,7 +271,7 @@ static Cell run_cell(const int *shape, const Regime *regime, int n_periods,
                     if (MISNAN(error_size) || MISINF(error_size)) continue;
                     part.se_rms[index] += error_size * error_size;
                     part.se_count[index]++;
-                    if (MABS(estimate.d[i] - true_theta.d[i]) <= (mreal)1.96 * error_size)
+                    if (MABS(estimate.d[i] - true_theta.d[i]) <= (mreal)gauss_standard_quantile(0.975) * error_size)
                         part.inside[index]++;
                 }
             }

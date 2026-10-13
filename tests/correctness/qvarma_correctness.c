@@ -2284,7 +2284,7 @@ static void test_standard_error_coverage(void) {
             _qvarma_unlink(&result.params, fitted_theta);
             for (int i = psi_at; i < omega_at + K; i++) {
                 if (!errors.is_maximum || MISNAN(errors.unconstrained.d[i])) continue;
-                mreal half_width = (mreal)1.96 * errors.unconstrained.d[i];
+                mreal half_width = (mreal)gauss_standard_quantile(0.975) * errors.unconstrained.d[i];
                 if (MABS(fitted_theta.d[i] - true_theta.d[i]) <= half_width) inside++;
                 total++;
             }

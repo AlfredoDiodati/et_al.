@@ -159,7 +159,7 @@ Since $M_k = M_{k+1} \cup \{e_k\}$, $\tilde L$ and $Q$ of every $M_k$ are obtain
 
 - **A model with $\hat\sigma^2_i = 0$.** The statistic is undefined. The call writes the model's name to stderr and aborts on an assert; it does not drop the model or add a floor to its variance, either of which would change the test silently. Zero variance is detected by comparing the column against its first entry, not $\hat\sigma^2_i$ against zero: the two-pass variance of a column holding 0.1 five times can come out as a tiny positive number, because the mean does not round back to 0.1. A variance below `DBL_MIN` is refused the same way, since its reciprocal is the model's weight.
 - **One model.** The confidence set is that model, with MCS p-value 1, no round, and `converged` 0, since no test was run.
-- **Many models.** The p-value of a set of $m$ models is a chi-squared tail at $m - 1$ degrees of freedom. `special.h` evaluates it with an iteration cap that grows with the degrees of freedom, accurate to $1.9 \times 10^{-10}$ absolute at a million (`make test-gammainc-python`); see `docs/SPECIAL_DOCUMENTATION.md`.
+- **Many models.** The p-value of a set of $m$ models is a chi-squared tail at $m - 1$ degrees of freedom. `dist/chi_squared.h` evaluates it through `special.h`'s incomplete gamma, with an iteration cap that grows with the degrees of freedom, accurate to $1.9 \times 10^{-10}$ absolute at a million (`make test-gammainc-python`); see `docs/SPECIAL_DOCUMENTATION.md`.
 - **Underflow of p-values.** For large $W_M$ the p-value underflows to exactly zero. `seri_mcs_pvalue` clamps to $[0, 1]$ and returns 0 for an infinite $W_M$.
 - **Missing entries.** A NaN or infinity anywhere in the numeric columns aborts, as in `mcs()`.
 

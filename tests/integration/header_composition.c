@@ -58,6 +58,7 @@ the lot as unused.
 #include "../../inference/qlr_test.h"
 #include "../../dist/broadcast.h"
 #include "../../dist/gauss.h"
+#include "../../dist/chi_squared.h"
 #include "../../dist/student.h"
 #include "../../dist/mv/gauss.h"
 #include "../../dist/mv/student.h"
@@ -121,7 +122,9 @@ static int touch_every_module(void) {
     tape_backward(tape, total);
     tape_free(tape);
 
-    if (special_norm_cdf(0) < 0.4 || special_norm_cdf(0) > 0.6) problems++;
+    if (gauss_standard_cdf(0) < 0.4 || gauss_standard_cdf(0) > 0.6) problems++;
+    if (gauss_standard_quantile(0.5) != 0) problems++;
+    if (chi_squared_sf(0, 3) != 1) problems++;
     if (special_digamma(1) > 0) problems++;
 
     Rng rng = rng_new(1ull, 0);

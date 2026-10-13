@@ -224,7 +224,7 @@ static double check_rounds_from_scratch(const DataFrame *frame, const SeriMCSRes
         double error = fabs(res->mcs.round_statistic[r - 1] - W) / fmax(1, fabs(W));
         if (error > largest) largest = error;
         CHECK_CLOSE(seri_mcs_statistic(n, res->L_bar, res->sigma2, models, m), W, tol, "seri_mcs_statistic");
-        CHECK_CLOSE(res->mcs.round_pvalue[r - 1], special_chi_squared_sf(res->mcs.round_statistic[r - 1], m - 1),
+        CHECK_CLOSE(res->mcs.round_pvalue[r - 1], chi_squared_sf(res->mcs.round_statistic[r - 1], m - 1),
                     1e-12, "p-value of a round against the chi-squared tail");
     }
     free(L_bar); free(sigma2); free(models);

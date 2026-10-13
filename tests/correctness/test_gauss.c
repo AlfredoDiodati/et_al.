@@ -1,6 +1,9 @@
 #include "../../dist/gauss.h"
 #include "../../stats.h"
 #include <stdio.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #define TOL     1e-4f
 #define TOL_MUL 1e-3f /* looser: accumulated roundoff across exp/log */
@@ -396,12 +399,183 @@ static void test_sampling(void) {
     }
 }
 
+/* gauss_standard_cdf at values known to more digits than a double holds.
+   The far tails are checked on a relative scale, since evaluating them on
+   erfc rather than erf is the point and an absolute tolerance would pass an
+   implementation that returned 0. */
+static void test_standard_cdf_known_values(void) {
+    puts("standard normal CDF known values");
+    assert(fabs(gauss_standard_cdf(0.0) - 0.5) < 1e-15);
+    assert(fabs(gauss_standard_cdf(1.0) - 0.84134474606854293) < 1e-15);
+    assert(fabs(gauss_standard_cdf(-1.0) - 0.15865525393145707) < 1e-15);
+    assert(fabs(gauss_standard_cdf(1.959963984540054) - 0.975) < 1e-15);
+    assert(fabs(gauss_standard_cdf(2.5758293035489004) - 0.995) < 1e-15);
+    double p6 = gauss_standard_cdf(-6.0), p6_expected = 9.865876450376946e-10;
+    assert(fabs(p6 - p6_expected) < 1e-12 * p6_expected);
+    double p10 = gauss_standard_cdf(-10.0), p10_expected = 7.619853024160525e-24;
+    assert(fabs(p10 - p10_expected) < 1e-12 * p10_expected);
+    assert(gauss_standard_cdf(40.0) == 1.0);
+    assert(gauss_standard_cdf(-40.0) >= 0.0 && gauss_standard_cdf(-40.0) < 1e-300);
+}
+
+/* Symmetry Phi(-x) = 1 - Phi(x) on an absolute scale, since the identity
+   itself loses the tail; monotonicity; and the derivative against the
+   density by central difference where the difference is well conditioned. */
+static void test_standard_cdf_invariants(void) {
+    puts("standard normal CDF invariants: symmetry, monotonicity, density");
+    double previous = gauss_standard_cdf(-8.0);
+    for (int i = -800; i <= 800; i++) {
+        double x = i / 100.0;
+        double f = gauss_standard_cdf(x);
+        assert(fabs(gauss_standard_cdf(-x) - (1.0 - f)) < 1e-14);
+        assert(f >= previous - 1e-15);
+        assert(f >= 0.0 && f <= 1.0);
+        previous = f;
+    }
+    srand(51);
+    for (int i = 0; i < 200; i++) {
+        double x = -4.0 + 8.0 * (double)(rand() % 10001) / 10000.0;
+        double h = 1e-4;
+        double fd = (gauss_standard_cdf(x + h) - gauss_standard_cdf(x - h)) / (2 * h);
+        double density = exp(-0.5 * x * x) / GAUSS_SQRT_2PI;
+        assert(fabs(fd - density) < 1e-7);
+    }
+}
+
+/* The quantile by Newton's method on log Phi(x) - log p in long double, Phi
+   from erfcl: an independent route to the same number, sharing nothing with
+   AS 241's rational approximations. On the log because in the far tail
+   Phi(x) is close to phi(x)/|x|, and Newton on Phi(x) - p itself then moves x
+   by about 1/|x| per step. Started from 0 for p near 1/2 and from the tail's
+   leading term -sqrt(-2 log p) otherwise. p <= 1/2. */
+static long double reference_quantile(long double p) {
+    const long double sqrt_2 = 1.41421356237309504880168872420969808L;
+    const long double sqrt_2pi = 2.50662827463100050241576528481104525L;
+    long double x = p > 0.3L ? 0 : -sqrtl(-2 * logl(p));
+    long double log_p = logl(p);
+    for (int step = 0; step < 100; step++) {
+        long double cdf = 0.5L * erfcl(-x / sqrt_2);
+        long double density = expl(-x * x / 2) / sqrt_2pi;
+        long double next = x - (logl(cdf) - log_p) * cdf / density;
+        if (next == x) break;
+        x = next;
+    }
+    return x;
+}
+
+/* gauss_standard_quantile against the long double reference over p from
+   1e-300 to 1/2, 40 points per decade, plus both branch boundaries of the
+   algorithm (p = 0.075 and p = exp(-25)) and a point either side of each,
+   to 1e-15 relative. The upper half is checked through symmetry on p = k/1024,
+   where 1 - p is exact, and the round trip through gauss_standard_cdf on the
+   whole lower grid, to a relative tolerance of 1e-15 (x^2 + 1): a relative
+   error e in x moves Phi(x) by about x^2 e relative in the tail. */
+static void test_standard_quantile_against_reference(void) {
+    puts("standard normal quantile against a long double Newton solve");
+    double worst = 0, worst_at = 0;
+    int checked = 0;
+    double boundaries[] = { 0.075, exp(-25.0) };
+    for (int pass = 0; pass < 2; pass++) {
+        int count = pass == 0 ? 40 * 300 + 1 : 6;
+        for (int i = 0; i < count; i++) {
+            double p;
+            if (pass == 0) {
+                p = pow(10.0, -300.0 + (double)i / 40.0);
+                if (p > 0.5) continue;
+            } else {
+                double centre = boundaries[i / 3];
+                p = centre * (1.0 + 1e-9 * (double)(i % 3 - 1));
+            }
+            double x = gauss_standard_quantile(p);
+            long double want = reference_quantile((long double)p);
+            if (want == 0) continue;
+            double gap = (double)fabsl(((long double)x - want) / want);
+            if (gap > worst) { worst = gap; worst_at = p; }
+            assert(gap < 1e-15);
+
+            double back = gauss_standard_cdf(x);
+            /* as a ratio: at p near 1e-300 the difference back - p and the
+               bound are subnormal, which -ffast-math flushes to zero */
+            assert(fabs(back / p - 1) <= 1e-15 * (x * x + 1));
+            checked++;
+        }
+    }
+    assert(gauss_standard_quantile(0.5) == 0.0);
+    for (int k = 1; k < 1024; k++) {
+        double p = (double)k / 1024.0;
+        double lower = gauss_standard_quantile(p), upper = gauss_standard_quantile(1.0 - p);
+        assert(fabs(lower + upper) <= 1e-15 * (fabs(lower) + 1e-300));
+    }
+    printf("  %d points, worst relative gap %.2e at p = %.3g\n", checked, worst, worst_at);
+}
+
+/* Table values a reader can check against any statistics text, the ends of
+   the domain, monotonicity, and an assert on p outside [0, 1] or not a
+   number, checked by running the call in a child that must die of SIGABRT. */
+static double g_bad_probability;
+
+static void call_standard_quantile(void) {
+    volatile double result = gauss_standard_quantile(g_bad_probability);
+    (void)result;
+}
+
+static void expect_abort(void (*fn)(void)) {
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        freopen("/dev/null", "w", stderr);
+        fn();
+        _exit(111);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+static void test_standard_quantile_edges(void) {
+    puts("standard normal quantile: table values, ends, monotonicity, domain");
+    assert(fabs(gauss_standard_quantile(0.975) - 1.959963984540054) < 1e-15 * 1.96);
+    assert(fabs(gauss_standard_quantile(0.95) - 1.6448536269514722) < 1e-15 * 1.65);
+    assert(fabs(gauss_standard_quantile(0.995) - 2.5758293035489004) < 1e-15 * 2.58);
+    assert(fabs(gauss_standard_quantile(0.025) + 1.959963984540054) < 1e-15 * 1.96);
+
+    uint64_t bits;
+    double low = gauss_standard_quantile(0.0), high = gauss_standard_quantile(1.0);
+    memcpy(&bits, &low, sizeof bits);
+    assert(bits == 0xFFF0000000000000ull);
+    memcpy(&bits, &high, sizeof bits);
+    assert(bits == 0x7FF0000000000000ull);
+    /* the smallest normal double; a subnormal p reads as zero under
+       -ffast-math, which sets the processor to treat subnormal inputs so */
+    double smallest = gauss_standard_quantile(2.2250738585072014e-308);
+    long double smallest_want = reference_quantile(2.2250738585072014e-308L);
+    assert(fabsl(((long double)smallest - smallest_want) / smallest_want) < 1e-15L);
+
+    double previous = gauss_standard_quantile(1e-12);
+    for (int i = 1; i < 4000; i++) {
+        double x = gauss_standard_quantile(1e-12 + (1.0 - 2e-12) * (double)i / 4000.0);
+        assert(x > previous);
+        previous = x;
+    }
+
+    volatile double zero = 0;
+    double bad[] = { -1e-300, -0.5, 1.0 + 1e-15, 2.0, zero / zero };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        g_bad_probability = bad[i];
+        expect_abort(call_standard_quantile);
+    }
+}
+
 int main(void) {
     test_pdf_logpdf();
     test_derivatives();
     test_degenerate_scale();
     test_broadcast_shape();
     test_sampling();
+    test_standard_cdf_known_values();
+    test_standard_cdf_invariants();
+    test_standard_quantile_against_reference();
+    test_standard_quantile_edges();
     puts("test_gauss: all passed");
     return 0;
 }
