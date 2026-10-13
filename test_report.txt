@@ -1,10 +1,10 @@
-test run: di 13 okt 2026 15:38:19 CEST
+test run: di 13 okt 2026 17:35:26 CEST
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 95 suites
+make test and check.sh run the same 96 suites
 
 === build ===
 make: 'tests/correctness/poly_correctness' is up to date.
@@ -40,12 +40,13 @@ make: 'tests/correctness/mcs_primitives' is up to date.
 make: 'tests/correctness/mcs_size_and_power' is up to date.
 make: 'tests/correctness/fast_mcs_correctness' is up to date.
 make: 'tests/correctness/fast_mcs_size_and_power' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/seri_mcs_correctness.c -lm -lopenblas -o tests/correctness/seri_mcs_correctness
+make: 'tests/correctness/seri_mcs_correctness' is up to date.
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
 make: 'tests/correctness/test_student' is up to date.
 make: 'tests/correctness/test_mvgauss' is up to date.
 make: 'tests/correctness/test_mvstudent' is up to date.
+make: 'tests/correctness/mvstudent_traced_agreement' is up to date.
 make: 'tests/correctness/test_matgauss' is up to date.
 make: 'tests/correctness/test_matgauss_recovery' is up to date.
 make: 'tests/correctness/mv_density_dispatch' is up to date.
@@ -60,8 +61,8 @@ make: 'tests/correctness/test_frame' is up to date.
 make: 'tests/correctness/test_csv' is up to date.
 make: 'tests/correctness/csv_missing_values' is up to date.
 make: 'tests/correctness/test_txt' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_npy.c -lm -lopenblas -o tests/correctness/test_npy
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_npz.c -lm -lopenblas -o tests/correctness/test_npz
+make: 'tests/correctness/test_npy' is up to date.
+make: 'tests/correctness/test_npz' is up to date.
 make: 'tests/correctness/float32_file_widening' is up to date.
 make: 'tests/correctness/test_json' is up to date.
 make: 'tests/correctness/test_sql' is up to date.
@@ -94,19 +95,37 @@ make: 'tests/correctness/lp_correctness' is up to date.
 make: 'tests/correctness/lp_recovery' is up to date.
 make: 'tests/integration/basis_to_regression' is up to date.
 make: 'tests/integration/frame_to_model' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_tensor.c -lm -lopenblas -o tests/integration/frame_to_tensor
+make: 'tests/integration/frame_to_tensor' is up to date.
 make: 'tests/integration/tensor_to_optimizer' is up to date.
 make: 'tests/integration/join_missing_values' is up to date.
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/tensor_example.c -lm -lopenblas -o examples/tensor_example
+make: 'tests/integration/pipeline_ownership' is up to date.
+make: 'tests/integration/npz_to_statistics' is up to date.
+make: 'tests/integration/header_composition' is up to date.
+make: 'tests/integration/header_composition_f32' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/band_solve_example.c -lm -lopenblas -o examples/band_solve_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/basis_example.c -lm -lopenblas -o examples/basis_example
+In file included from examples/basis_example.c:4:
+./basis/spline.h: In function ‘_periodic_spline.constprop’:
+./basis/spline.h:1143:16: warning: ‘sites’ may be used uninitialized [-Wmaybe-uninitialized]
+ 1143 |     Mat full = _spline_design_raw(knots, nk, sites, n, ord, &none, 1, 0);
+      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+./basis/spline.h:271:19: note: by argument 3 of type ‘const mreal *’ {aka ‘const double *’} to ‘_spline_design_raw.constprop’ declared here
+  271 | static inline Mat _spline_design_raw(const mreal *knots, int nk, const mreal *x, int nx,
+      |                   ^~~~~~~~~~~~~~~~~~
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/encoder.c -lm -lopenblas -o examples/encoder
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/hp_filter_example.c -lm -lopenblas -o examples/hp_filter_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/lp_example.c -lm -lopenblas -o examples/lp_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/mlp_example.c -lm -lopenblas -o examples/mlp_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/ols_covariance_example.c -lm -lopenblas -o examples/ols_covariance_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_fixed_parameters_example.c -lm -lopenblas -o examples/qvarma_fixed_parameters_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/singular_draws_example.c -lm -lopenblas -o examples/singular_draws_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/var_example.c -lm -lopenblas -o examples/var_example
 
 === poly_correctness: PASS ===
-basis/poly.h correctness, float64 build
+basis/poly.h correctness, float32 build
 
 contr.poly(4) against the contrasts worked out by hand
 the basis is orthonormal on the sample
@@ -120,7 +139,7 @@ polym: column count, products, and prediction
 PASSED, 0 failures
 
 === spline_design_correctness: PASS ===
-basis/spline.h design matrix correctness, float64 build
+basis/spline.h design matrix correctness, float32 build
 
 repeated boundary knots pick out one basis function (PR#16549)
 a seven-knot design against its exact fractions
@@ -135,7 +154,7 @@ strided views, unsorted knots, and a single evaluation point
 PASSED, 0 failures
 
 === spline_basis_correctness: PASS ===
-basis/spline.h regression basis correctness, float64 build
+basis/spline.h regression basis correctness, float32 build
 
 three boundary-knot choices give the same fitted function
 a one-point sample
@@ -150,7 +169,7 @@ a strided view of a sample gives the same bases as a copy of it
 PASSED, 0 failures
 
 === spline_objects_correctness: PASS ===
-basis/spline.h spline object correctness, float64 build
+basis/spline.h spline object correctness, float32 build
 
 the spline passes through every data point
 the second derivative vanishes at both ends
@@ -232,6 +251,7 @@ rolling_mean_correctness: all passed
 
 === hp_filter_correctness: PASS ===
 statsmodels test_hpfilter: US real GDP, lambda 1600, against Stata
+  (float64 only; skipped in this build)
 lambda 0, straight lines, the cycle orthogonal to 1 and t, short series, and a long double reference
 linearity, constants, time reversal, optimality, monotone in lambda, and the least squares line as lambda grows
 a matrix along each axis against one series at a time, a strided view, tensors, a NaN kept to its series
@@ -287,16 +307,17 @@ vec_solve_sym
 vec_lu_solve / vec_chol_solve
 mat_lstsq
 mat_lstsq_rd
+_trsv_lower_reciprocal
 test_solver: all passed
 
 === lstsq_rank_deficiency: PASS ===
-mat_lstsq: reporting a rank-deficient design, float64 build
+mat_lstsq: reporting a rank-deficient design, float32 build
 
 known rank-deficient designs
 rescaled columns
 either side of the tolerance
 random designs against Gram-Schmidt in long double, 2000 draws
-  1883 compared, 1069 of them rank deficient
+  1882 compared, 1069 of them rank deficient
 a strided view
 columns near the ends of the floating-point range
 NaN and infinite entries
@@ -306,14 +327,14 @@ NULL status on a rank-deficient design
 PASSED, 0 failures
 
 === chol_singularity: PASS ===
-mat_chol: reporting a matrix that is not positive-definite, float64 build
+mat_chol: reporting a matrix that is not positive-definite, float32 build
 
 known rejected matrices
 well-conditioned matrices factor
 rescaled variables
 either side of the tolerance
 random matrices against a Cholesky in long double, 2000 draws
-  1920 compared, 1478 of them rejected
+  1923 compared, 1483 of them rejected
 a NaN or an infinity on or below the diagonal
 a strided view, and the upper triangle
 a numerically zero pivot before the one _potrf stops at
@@ -322,42 +343,42 @@ NULL status on an indefinite matrix
 PASSED, 0 failures
 
 === singularity_rule_comparison: PASS ===
-the tolerance rule against the exact-zero rule, float64 build
+the tolerance rule against the exact-zero rule, float32 build
 
 exactly singular designs
   exact-zero rule missed 1499 of 1500 exactly singular designs
-  smallest largest |x| it let through: 7.69e+09
+  smallest largest |x| it let through: 18.8
 independence shrinking like 2^-k, true coefficients known
-  worst error * sine / MEPS: 4.67
+  worst error * sine / MEPS: 2.09
 trying to break either rule
   c2 = c1 - c0 with c1 nearly collinear with c0              exact 0, tolerance 0
   the same columns ordered w, K v, K v + w                   exact 0, tolerance 3
-  independent, columns 1 and 3 at 1e+200                     exact 0, tolerance 0
-  c2 = c0 - c1, all at 1e+200                                exact 0, tolerance 3
-  independent, columns 1 and 3 at 1e-200                     exact 0, tolerance 0
-  c2 = c0 - c1, all at 1e-200                                exact 0, tolerance 3
-  independent, columns 1 and 3 at 1e+150                     exact 0, tolerance 0
-  c2 = c0 - c1, all at 1e+150                                exact 0, tolerance 3
-  independent, columns 1 and 3 at 1e-150                     exact 0, tolerance 0
-  c2 = c0 - c1, all at 1e-150                                exact 0, tolerance 3
+  independent, columns 1 and 3 at 1e+30                      exact 0, tolerance 0
+  c2 = c0 - c1, all at 1e+30                                 exact 0, tolerance 3
+  independent, columns 1 and 3 at 1e-30                      exact 0, tolerance 0
+  c2 = c0 - c1, all at 1e-30                                 exact 0, tolerance 3
+  independent, columns 1 and 3 at 1e+18                      exact 0, tolerance 0
+  c2 = c0 - c1, all at 1e+18                                 exact 0, tolerance 3
+  independent, columns 1 and 3 at 1e-18                      exact 0, tolerance 0
+  c2 = c0 - c1, all at 1e-18                                 exact 0, tolerance 3
   second column subnormal                                    exact 2, tolerance 2
   one infinite entry in column 2                             exact 0, tolerance 2
   one NaN entry in column 2                                  exact 2, tolerance 2
   c3 = c0 + 2 c1 - c2, 200000 rows                           exact 0, tolerance 4
   40 x 40, last column c0 - c1 + c2                          exact 0, tolerance 40
 Cholesky on exactly singular Gram matrices
-  exact-zero rule missed 242 of 500 exactly singular Gram matrices
-  Cholesky scaled by 2^900: singular exact 4 tolerance 4, regular exact 0 tolerance 0
-  Cholesky scaled by 2^-900: singular exact 0 tolerance 4, regular exact 0 tolerance 0
-  Cholesky scaled by 2^400: singular exact 0 tolerance 4, regular exact 0 tolerance 0
-  Cholesky scaled by 2^-400: singular exact 4 tolerance 4, regular exact 0 tolerance 0
+  exact-zero rule missed 202 of 500 exactly singular Gram matrices
+  Cholesky scaled by 2^100: singular exact 0 tolerance 4, regular exact 0 tolerance 0
+  Cholesky scaled by 2^-100: singular exact 4 tolerance 4, regular exact 0 tolerance 0
+  Cholesky scaled by 2^50: singular exact 4 tolerance 4, regular exact 0 tolerance 0
+  Cholesky scaled by 2^-50: singular exact 0 tolerance 4, regular exact 0 tolerance 0
 
-full tables in out/singularity_rule_comparison_float64_report.txt
+full tables in out/singularity_rule_comparison_float32_report.txt
 
 PASSED, 0 failures
 
 === ols_pseudo_inverse_fallback: PASS ===
-ols: QR at full rank, the pseudo-inverse below it, float64 build
+ols: QR at full rank, the pseudo-inverse below it, float32 build
 
 full column rank
 known minimum-norm solutions
@@ -373,7 +394,7 @@ NaN and infinite entries
 PASSED, 0 failures
 
 === hac_covariance_correctness: PASS ===
-stats_hac_cov: the HAC long-run covariance matrix, float64 build
+stats_hac_cov: the HAC long-run covariance matrix, float32 build
 
 known values: lag 0 is the covariance, one column is stats_hac_var, a two-column series by hand
 invariants: symmetric, Bartlett positive semi-definite, shift, scale and permutation
@@ -384,11 +405,11 @@ a strided view, one observation, a constant column, lag n - 1, extreme magnitude
 PASSED, 0 failures
 
 === ols_covariance_correctness: PASS ===
-ols_covariance and ols_coefficient_variances, float64 build
+ols_covariance and ols_coefficient_variances, float32 build
 
 known values: a four-point simple regression by hand
 150 designs against the long double reference, and the selected variances against the diagonal
-  largest gap 0.0639 of 64 cond(x^T x) u
+  largest gap 0.0513 of 64 cond(x^T x) u
 lag 0 against White's formula; scaled columns and responses
 strided views, one degree of freedom, lag m - 1, extreme columns, an exact fit
 
@@ -406,12 +427,12 @@ lag_matrix: layout for K, p in 1..4, the longest lag, and a strided view
 lag_matrix_layout: all passed
 
 === rank_rule_consistency: PASS ===
-the package's rank decisions against one another, float64 build
+the package's rank decisions against one another, float32 build
 
 random designs, 2000 draws
-  implication compared on 2000 draws, 504 of them flagged by mat_lstsq
-  same-rule comparison on 1795 draws
-  374 draws accepted by mat_lstsq with a lower singular-value rank
+  implication compared on 1851 draws, 1364 of them flagged by mat_lstsq
+  same-rule comparison on 1322 draws
+  141 draws accepted by mat_lstsq with a lower singular-value rank
 singular values either side of the tolerance
 the converse fails for a column in much smaller units
 
@@ -647,6 +668,8 @@ per-observation loc
 views
 non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)
 sampling: empirical mean/covariance + row independence (fixed seed)
+  observation-level quadratic form and its adjoint: ok
+  usable factor: ok
 test_mvgauss: all passed
 
 === test_mvstudent: PASS ===
@@ -658,12 +681,26 @@ nu = infinity is the Gaussian, exactly
 a large finite nu: the normalization against its closed form
   d = 2 constant and d = 4 closed form hold to nu = 1e15
 a large finite nu: the density against the Gaussian it tends to
-  worst gap to the Gaussian at nu = 1e14: 7.11e-15
+  worst gap to the Gaussian at nu = 1e14: 2.38e-07
+the observation-level split against the batched functions
+  total, nu derivative and location score agree with the batched functions
 per-observation loc + views
 non-SPD / singular / mismatched covariance aborts (fork + expect SIGABRT)
 degenerate nu (undocumented, unguarded - pinning current behavior)
 sampling: moments + row independence + zero-score at truth (fixed seed)
 test_mvstudent: all passed
+
+=== mvstudent_traced_agreement: PASS ===
+dist/mv/student_traced.h, float64 build
+
+the traced split against the analytic one
+  worst relative gap: value 1.31e-15, adjoint 4.47e-15
+  ok
+lognorm's node against the ad_lgamma_diff composition
+  worst relative gap: value 2.58e-15, adjoint 1.11e-16
+  ok
+
+PASSED, 0 failures
 
 === test_matgauss: PASS ===
 known values
@@ -676,7 +713,7 @@ rowcov/colcov scale redundancy
 views
 badly scaled covariances
 pdf underflow floor
-   pdf first returns zero at 28x28 (n*p = 784); logpdf exact to 32x32
+   pdf first returns zero at 10x10 (n*p = 100); logpdf exact to 32x32
 bad shapes and non-positive-definite covariances abort
 standard draw == stacked standard normal vectors
 sampling: empirical vec covariance vs the Kronecker product (fixed seed)
@@ -685,28 +722,28 @@ test_matgauss: all passed
 
 === test_matgauss_recovery: PASS ===
 matgauss: covariance recovery from simulated samples
-  homogeneous diagonal   converged in <= 8 sweeps, score 1.0e-14
-  diagonal               converged in <= 8 sweeps, score 4.7e-14
-  sparse                 converged in <= 8 sweeps, score 3.6e-14
-  dense                  converged in <= 8 sweeps, score 7.1e-14
+  homogeneous diagonal   converged in <= 8 sweeps, score 4.9e-07
+  diagonal               converged in <= 8 sweeps, score 2.4e-06
+  sparse                 converged in <= 8 sweeps, score 8.4e-07
+  dense                  converged in <= 8 sweeps, score 2.4e-06
   30 replications per case per sample size, written to out/matgauss_recovery_report.txt
 test_matgauss_recovery: all passed
 
 === mv_density_dispatch: PASS ===
-dist/mv densities on both sides of the triangular-solve dispatch, float64 build
+dist/mv densities on both sides of the triangular-solve dispatch, float32 build
 
 mvgauss_logpdf, mvstudent_logpdf, mvstudent_dlogpdf_nu
-  d = 12, n =   64: worst relative errors 2.3e-16, 3.4e-16, 1.9e-13
-  d = 12, n = 4096: worst relative errors 3.2e-16, 4.0e-16, 4.9e-13
-  d = 12, n = 4097: worst relative errors 3.4e-16, 4.3e-16, 4.2e-13
-  d = 13, n =   64: worst relative errors 1.9e-16, 3.1e-16, 5.2e-13
-  d = 13, n = 4096: worst relative errors 3.7e-16, 3.8e-16, 5.3e-13
-  d = 13, n = 4097: worst relative errors 3.2e-16, 5.1e-16, 5.8e-13
-  d = 32, n =  100: worst relative errors 2.3e-16, 3.2e-16, 6.7e-13
+  d = 12, n =   64: worst relative errors 1.2e-07, 9.3e-08, 1.4e-07
+  d = 12, n = 4096: worst relative errors 1.7e-07, 1.4e-07, 2.5e-07
+  d = 12, n = 4097: worst relative errors 1.7e-07, 1.5e-07, 2.6e-07
+  d = 13, n =   64: worst relative errors 1.2e-07, 8.7e-08, 2.9e-07
+  d = 13, n = 4096: worst relative errors 1.5e-07, 1.4e-07, 2.6e-07
+  d = 13, n = 4097: worst relative errors 1.6e-07, 1.4e-07, 2.7e-07
+  d = 32, n =  100: worst relative errors 9.5e-08, 9.3e-08, 6.1e-07
 matgauss_logpdf and its three gradients
-  n = 12, p = 6: worst relative errors 1.1e-17, 4.5e-16, 1.1e-15, 1.0e-15
-  n = 13, p = 6: worst relative errors 8.8e-17, 5.6e-16, 9.0e-16, 9.1e-16
-  n = 24, p = 6: worst relative errors 5.9e-17, 8.3e-16, 2.6e-15, 3.5e-15
+  n = 12, p = 6: worst relative errors 7.1e-08, 4.1e-07, 1.1e-06, 7.2e-07
+  n = 13, p = 6: worst relative errors 2.3e-08, 2.9e-07, 5.3e-07, 5.8e-07
+  n = 24, p = 6: worst relative errors 2.3e-08, 4.1e-07, 9.2e-07, 1.6e-06
 
 PASSED, 0 failures
 
@@ -1369,10 +1406,21 @@ the likelihood as nu approaches the Gaussian limit
   nu     1e+12   model     -84.17232757   density     -84.17232757
   nu     1e+14   model     -84.17232757   density     -84.17232757
 
-the autodiff gradient against central differences
+the analytic gradient against central differences
   K=1, 5 parameters, worst relative error 2.44e-07 at Omega_inv[0,0]
   K=2, 10 parameters, worst relative error 1.02e-06 at a[0]
   K=3, 16 parameters, worst relative error 4.25e-07 at Omega_inv[2,2]
+  ok
+the analytic filter against the traced one
+  400 cases, worst relative error: value 8.90e-15, gradient 5.61e-12
+  ok
+the nu gradient at a light tail, against a long double reference
+  K=1 nu=  1e+06: worst gap to the reference, analytic 1.00e-09, traced 1.00e-09; between the two 3.38e-12
+  K=1 nu=  1e+10: worst gap to the reference, analytic 4.35e-13, traced 4.57e-13; between the two 4.43e-14
+  K=1 nu=  1e+14: worst gap to the reference, analytic 2.13e-09, traced 6.06e-09; between the two 3.93e-09
+  K=2 nu=  1e+06: worst gap to the reference, analytic 2.71e-11, traced 2.73e-11; between the two 2.81e-13
+  K=2 nu=  1e+10: worst gap to the reference, analytic 5.20e-13, traced 5.31e-13; between the two 4.98e-13
+  K=2 nu=  1e+14: worst gap to the reference, analytic 1.67e-09, traced 1.67e-09; between the two 3.11e-12
   ok
 the simulator and the filter agree on the recursion
   largest disagreement between the two residual paths 2.220e-16 over 200 periods
@@ -1487,14 +1535,14 @@ analytic against traced t-QVARMA filter, float64 build
 
 analytic filter against the traced one, over shapes and draws
   the ABM pipeline's shape                   n =  42, T = 120: value 1.50e-16, paths 1.19e-15, gradient 7.29e-13
-  no co-integrated block                     n =  20, T =  90: value 2.18e-16, paths 9.99e-16, gradient 9.13e-15
-  no co-integrated block, p = 3              n =  17, T =  80: value 2.13e-16, paths 8.26e-16, gradient 3.12e-14
-  rank two co-integration                    n =  59, T = 100: value 1.22e-16, paths 2.22e-15, gradient 1.46e-14
+  no co-integrated block                     n =  20, T =  90: value 0.00e+00, paths 9.99e-16, gradient 4.11e-15
+  no co-integrated block, p = 3              n =  17, T =  80: value 2.13e-16, paths 8.26e-16, gradient 9.02e-15
+  rank two co-integration                    n =  59, T = 100: value 2.37e-16, paths 2.22e-15, gradient 1.46e-14
   one beta per lag                           n =  47, T =  70: value 7.16e-16, paths 2.12e-14, gradient 2.45e-13
   longer warm-up convention                  n =  40, T =  60: value 2.28e-16, paths 1.29e-15, gradient 2.48e-14
-  q longer than p                            n =  41, T =  50: value 1.72e-16, paths 1.89e-15, gradient 3.04e-14
-  restricted Psi_star                        n =  51, T =  65: value 3.47e-16, paths 1.17e-15, gradient 2.36e-14
-  sample barely past the warm-up             n =  75, T =   6: value 1.62e-16, paths 3.33e-16, gradient 1.45e-15
+  q longer than p                            n =  41, T =  50: value 1.68e-16, paths 1.89e-15, gradient 3.04e-14
+  restricted Psi_star                        n =  51, T =  65: value 0.00e+00, paths 1.17e-15, gradient 2.36e-14
+  sample barely past the warm-up             n =  75, T =   6: value 1.62e-16, paths 3.33e-16, gradient 1.26e-15
   single I(0) series with a large I(1) block n =  71, T =  55: value 1.86e-16, paths 8.05e-16, gradient 3.70e-14
 
 both gradients against a central difference of the likelihood
@@ -1557,17 +1605,17 @@ does d(log-likelihood)/d(theta_nu) go to zero
   nu     1e+14   |d/d theta_nu|     1.9193e-13
 
 analytic against traced, out where the cancellation was
-  nu     3e+00   analytic    -898.1608363081   traced    -898.1608363081   gradient 4.00e-15 at 35
-  nu     3e+01   analytic    -867.2101418300   traced    -867.2101418300   gradient 2.05e-13 at 36
-  nu     3e+02   analytic    -866.9547518245   traced    -866.9547518245   gradient 1.90e-14 at 36
-  nu     3e+04   analytic    -867.1381357341   traced    -867.1381357341   gradient 7.20e-13 at 36
-  nu     3e+06   analytic    -867.1402818993   traced    -867.1402818993   gradient 2.21e-13 at 36
-  nu     3e+08   analytic    -867.1403033936   traced    -867.1403033936   gradient 1.04e-13 at 36
-  nu     1e+10   analytic    -867.1403036043   traced    -867.1403036043   gradient 1.84e-13 at 36
-  nu     1e+11   analytic    -867.1403036101   traced    -867.1403036101   gradient 1.74e-13 at 36
-  nu     1e+12   analytic    -867.1403036107   traced    -867.1403036107   gradient 5.67e-14 at 36
-  nu     1e+13   analytic    -867.1403036108   traced    -867.1403036108   gradient 2.60e-13 at 36
-  nu     1e+14   analytic    -867.1403036108   traced    -867.1403036108   gradient 2.08e-13 at 36
+  nu     3e+00   analytic    -898.1608363081   traced    -898.1608363081   gradient 7.20e-15 at 36
+  nu     3e+01   analytic    -867.2101418300   traced    -867.2101418300   gradient 4.94e-14 at 36
+  nu     3e+02   analytic    -866.9547518245   traced    -866.9547518245   gradient 4.34e-14 at 36
+  nu     3e+04   analytic    -867.1381357341   traced    -867.1381357341   gradient 1.93e-13 at 36
+  nu     3e+06   analytic    -867.1402818993   traced    -867.1402818993   gradient 2.41e-14 at 36
+  nu     3e+08   analytic    -867.1403033936   traced    -867.1403033936   gradient 6.15e-14 at 36
+  nu     1e+10   analytic    -867.1403036043   traced    -867.1403036043   gradient 3.00e-14 at 36
+  nu     1e+11   analytic    -867.1403036101   traced    -867.1403036101   gradient 1.51e-13 at 36
+  nu     1e+12   analytic    -867.1403036107   traced    -867.1403036107   gradient 1.90e-13 at 36
+  nu     1e+13   analytic    -867.1403036108   traced    -867.1403036108   gradient 9.09e-14 at 36
+  nu     1e+14   analytic    -867.1403036108   traced    -867.1403036108   gradient 7.67e-14 at 36
 
 
 PASSED, 0 failures
@@ -1746,7 +1794,7 @@ cluster + random: a range reclaimed from a machine that dies mid-job is recomput
 PASSED, 0 failures
 
 === optimizer_swap: PASS ===
-optimizer swap: does a model fit through the Optimizer interface, not just through Adam, float64 build
+optimizer swap: does a model fit through the Optimizer interface, not just through Adam, float32 build
 
 mlp_fit: an optimizer that is not Adam trains XOR to the same loss threshold the Adam test uses
 mlp_fit: one optimizer instance per trainable tensor, each built at that tensor's shape and freed exactly once
@@ -1797,4 +1845,4 @@ PASSED, 0 failures
 
 
 === summary ===
-98 passed, 0 failed
+99 passed, 0 failed

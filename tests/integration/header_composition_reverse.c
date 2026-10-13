@@ -28,6 +28,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../solver/adam.h"
 #include "../../solver/optimizer.h"
 #include "../../dist/mv/matgauss.h"
+#include "../../dist/mv/student_traced.h"
 #include "../../dist/mv/student.h"
 #include "../../dist/mv/gauss.h"
 #include "../../dist/student.h"

@@ -376,6 +376,14 @@ columns the loop still wins 2.4x in float64 and 1.4x in float32 — so raising
 it needs the benchmark extended first. `dist/mv`'s densities are the callers
 that reach the bound, since they solve for a whole sample at once.
 
+### One right-hand side against a factor in hand
+
+`_trsv_lower_reciprocal(trans, n, l, ldl, diagonal_reciprocal, b, x)` solves `L x = b` (`trans` `'N'`) or `L^T x = b` (`'T'`) for one right-hand side, with the reciprocals of `L`'s diagonal supplied by the caller. `x` and `b` may be the same array. It is `_trtrs_small` specialised to what a filter does: solve against the same factor once or twice per period, so the `n` divisions are hoisted out of the loop over periods by the caller and every solve multiplies. No singularity check, since the caller has already divided by the diagonal. Callers: `dist/mv/gauss.h`'s `mvgauss_chol_quadform_adjoint`, and `sd/score_driven_location.h`'s analytic filter and simulator.
+
+Taking `b` and `x` separately rather than solving in place only is a measured choice, rejected alternative included. The quadratic form's adjoint needs `L^-T z` without overwriting `z`, so the in-place form made it copy `z` first. Measured on `sd/qvarma.h`'s `qvarma_analytic_log_likelihood` with its gradient, at the ABM pipeline's shape (`K = 5`, `K_star = 3`, `p = q = 1`, `r = 2`, `R = 1`, shared beta, restricted `Psi_star`), `T = 400`, one fixed `theta`, 2000 evaluations per run after 200 discarded, 12 runs alternating with the build before this function existed, the order reversed on every other run: the in-place form's median time ratio was 1.018 and 1.020 in float64 under the two orders and 1.034 and 1.038 in float32; the separate-array form's was 0.998 and 0.998 in float64 and 1.002 and 1.002 in float32, with the sign of the individual ratios changing from run to run. The harness compared against the previous build and is not in the repo; `make bench-qvarma_analytic_filter` times the current one.
+
+`tests/correctness/test_solver.c`'s `test_trsv_lower_reciprocal` checks it against `vec_triangular_solve` and by its own residual, for `n = 1..20`, both transposes, a leading dimension equal to `n` and three wider, a diagonal spanning `1e-2` to `1e2`, an upper triangle filled with `1e30` that must not be read, and in place on even `n`, from `b` into `x` on odd `n`.
+
 ### The scratch identity comes off the stack
 
 `_potri`'s `n x n` identity is a stack array while it fits

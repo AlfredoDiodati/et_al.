@@ -61,6 +61,7 @@ the lot as unused.
 #include "../../dist/student.h"
 #include "../../dist/mv/gauss.h"
 #include "../../dist/mv/student.h"
+#include "../../dist/mv/student_traced.h"
 #include "../../dist/mv/matgauss.h"
 #include "../../solver/optimizer.h"
 #include "../../solver/adam.h"
@@ -154,6 +155,14 @@ static int touch_every_module(void) {
     AT(mean, 0, 0) = 0; AT(mean, 0, 1) = 0;
     Mat mv_density = mvgauss_logpdf(observation, mean, covariance);
     if (mv_density.r != 1) problems++;
+    {
+        Tape *tape = tape_new();
+        Mat nu_value = mat_lit(1, 1, 5.f);
+        Node *nu = ad_leaf(tape, nu_value);
+        if (mvstudent_lognorm_traced(tape, nu, 2)->val.d[0] >= 0) problems++;
+        mat_free(nu_value);
+        tape_free(tape);
+    }
 
     AdamHyperparams adam_hp = adam_hyperparams_default();
     Optimizer optimizer = adam_optimizer_init(&adam_hp, 2, 1);

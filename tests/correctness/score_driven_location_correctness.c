@@ -162,11 +162,11 @@ static void test_static_case_against_mvstudent(void) {
     printf("  ok\n");
 }
 
-/* The analytic gradient is the whole reason the filter is built on a tape,
-   so it is checked against central differences of the objective itself, at
-   several shapes and at a parameter vector that is not the truth. */
+/* The gradient the fit steps on is checked against central differences of the
+   objective itself, at several shapes and at a parameter vector that is not
+   the truth. */
 static void test_gradient_against_finite_differences(void) {
-    printf("the autodiff gradient against central differences\n");
+    printf("the analytic gradient against central differences\n");
     for (int K = 1; K <= 3; K++) {
         SdlocParams m = plausible_params(K);
         Rng rng = rng_new(555u + (unsigned)K, 0);
@@ -179,7 +179,7 @@ static void test_gradient_against_finite_differences(void) {
         /* move off the truth: a gradient near zero hides a scale error */
         for (int i = 0; i < n; i++) theta.d[i] += (mreal)(0.15 * rng_normal(&rng));
 
-        SdlocFitContext context = { y };
+        SdlocFitContext context = { y, NULL };
         Vec analytic = mat_new(n, 1);
         sdloc_negative_log_likelihood(theta, analytic, &context);
 
@@ -214,6 +214,185 @@ static void test_gradient_against_finite_differences(void) {
         mat_free(analytic); mat_free(theta); mat_free(y);
         sdloc_params_free(&m);
     }
+    printf("  ok\n");
+}
+
+/*
+The analytic filter against the traced one, value and gradient componentwise.
+
+The hand derivation can be wrong in a way reverse mode cannot, and a central
+difference only resolves the gradient to about 1e-6, which a wrong term of size
+1e-5 passes. So the two filters are compared directly, at a tolerance set by
+rounding rather than by a step size: 1e-9 relative to the larger of the traced
+value and 1 for the log-likelihood, and for each gradient coordinate.
+
+Swept over K from 1 to 4, sample lengths from the two-period minimum to 150,
+nu from 2.5, near the model's lower bound, to 1e10, and five random parameter
+vectors at each, drawn around a stationary point so the recursion stays
+bounded. At nu = 1e14 the two nu gradients differ by more than 1e-9 in some
+draws, so past 1e10 each is compared against a long double reference instead,
+in test_nu_gradient_at_a_light_tail.
+*/
+static void test_analytic_against_traced(void) {
+    printf("the analytic filter against the traced one\n");
+    const int lengths[] = { 2, 3, 40, 150 };
+    const double nus[] = { 2.5, 7.5, 1e3, 1e6, 1e10 };
+    double worst_value = 0, worst_gradient = 0;
+    int cases = 0;
+    for (int K = 1; K <= 4; K++)
+        for (size_t l = 0; l < sizeof lengths / sizeof lengths[0]; l++)
+            for (size_t v = 0; v < sizeof nus / sizeof nus[0]; v++)
+                for (int draw = 0; draw < 5; draw++) {
+                    int T = lengths[l];
+                    SdlocParams m = plausible_params(K);
+                    m.nu = (mreal)nus[v];
+                    Rng rng = rng_new(7000u + 100u * (unsigned)K + 10u * (unsigned)l + (unsigned)draw,
+                                      (uint64_t)v);
+                    Mat y = sdloc_simulate(&rng, &m, T);
+                    int n = sdloc_n_theta(K);
+                    Vec theta = mat_new(n, 1);
+                    _sdloc_unlink(&m, theta);
+                    for (int i = 0; i < n - 1; i++) theta.d[i] += (mreal)(0.3 * rng_normal(&rng));
+
+                    Vec analytic = mat_new(n, 1), traced = mat_new(n, 1);
+                    SdlocAnalytic *f = sdloc_analytic_new(K, T);
+                    mreal value = sdloc_analytic_log_likelihood(f, theta, y, analytic);
+                    mreal reference = sdloc_traced_log_likelihood(theta, y, traced);
+                    sdloc_analytic_free(f);
+
+                    double scale = fabs((double)reference) > 1 ? fabs((double)reference) : 1;
+                    double value_error = fabs((double)value - (double)reference) / scale;
+                    if (value_error > worst_value) worst_value = value_error;
+                    CHECK(value_error < 1e-9, "K=%d T=%d nu=%g: value %.17g against traced %.17g",
+                          K, T, nus[v], (double)value, (double)reference);
+                    for (int i = 0; i < n; i++) {
+                        double size = fabs((double)traced.d[i]) > 1 ? fabs((double)traced.d[i]) : 1;
+                        double error = fabs((double)analytic.d[i] - (double)traced.d[i]) / size;
+                        if (error > worst_gradient) worst_gradient = error;
+                        char name[32];
+                        _sdloc_theta_name(K, i, name, sizeof name);
+                        CHECK(error < 1e-9, "K=%d T=%d nu=%g %s: analytic %.17g against traced %.17g",
+                              K, T, nus[v], name, (double)analytic.d[i], (double)traced.d[i]);
+                    }
+                    cases++;
+                    mat_free(analytic); mat_free(traced); mat_free(theta); mat_free(y);
+                    sdloc_params_free(&m);
+                }
+    printf("  %d cases, worst relative error: value %.2e, gradient %.2e\n",
+           cases, worst_value, worst_gradient);
+    printf("  ok\n");
+}
+
+/* log Gamma(x + a) - log Gamma(x) in long double, by its asymptotic series
+   once x is large enough that the two lgammal values agree to every digit
+   they carry. Three terms leave an error of order x^-4. */
+static long double reference_lgamma_shift(long double x, long double a) {
+    if (x < 1e4L) return lgammal(x + a) - lgammal(x);
+    long double b1 = a * (a - 1) / 2, b2 = a * (a - 1) * (2 * a - 1) / 12;
+    long double b3 = a * a * (a - 1) * (a - 1) / 24;
+    return a * logl(x) + b1 / x - b2 / (x * x) + b3 / (x * x * x);
+}
+
+/* The log-likelihood at theta in long double, from the recursion in this
+   file's own words rather than from the header: the link, both substitutions
+   and the density written out, sharing no code with either filter. K <= 4. */
+static long double reference_log_likelihood(const mreal *theta, int K, Mat y) {
+    int T = y.c, at = 0;
+    long double m0[4], a[4], b[4], L[16] = { 0 }, half_logdet = 0;
+    for (int k = 0; k < K; k++) m0[k] = theta[at++];
+    for (int k = 0; k < K; k++) a[k] = tanhl(theta[at++]);
+    for (int k = 0; k < K; k++) b[k] = tanhl(theta[at++]);
+    for (int k = 0; k < K; k++) { L[k * K + k] = expl(theta[at]); half_logdet += theta[at]; at++; }
+    for (int i = 1; i < K; i++)
+        for (int j = 0; j < i; j++) L[i * K + j] = theta[at++];
+    long double nu = expl(theta[at]) + 2;
+    long double c = sqrtl((nu + K) * (nu + 2)), m[4], total = 0;
+    long double constant = reference_lgamma_shift(nu / 2, K / 2.0L)
+                         - K / 2.0L * logl(nu * 3.141592653589793238462643383279L) - half_logdet;
+    for (int k = 0; k < K; k++) m[k] = m0[k];
+    for (int t = 0; t < T; t++) {
+        long double v[4], z[4], x[4], q = 0;
+        for (int k = 0; k < K; k++) v[k] = (long double)AT(y, k, t) - m[k];
+        for (int i = 0; i < K; i++) {
+            long double acc = v[i];
+            for (int j = 0; j < i; j++) acc -= L[i * K + j] * z[j];
+            z[i] = acc / L[i * K + i];
+            q += z[i] * z[i];
+        }
+        total += constant - (nu + K) / 2 * log1pl(q / nu);
+        for (int i = K - 1; i >= 0; i--) {
+            long double acc = v[i];
+            for (int j = i + 1; j < K; j++) acc -= L[j * K + i] * x[j];
+            x[i] = acc / L[i * K + i];
+        }
+        long double shrink = c / (nu + q);
+        for (int k = 0; k < K; k++) m[k] = m0[k] * (1 - b[k]) + b[k] * m[k] + a[k] * shrink * x[k];
+    }
+    return total;
+}
+
+/*
+The nu coordinate of the gradient at nu from 1e6 to 1e14, against a central
+difference of the long double reference above with a step of 1e-4 in theta.
+
+This is the coordinate a hand derivation is most likely to get wrong at a
+light tail, because its terms are each of order 1/nu and cancel to order
+1/nu^2 unless they are combined before they are added; see the comment above
+SdlocAnalytic. The analytic gradient must sit within 1e-8 of the reference,
+relative to the larger of the reference and 1. The traced gradient's gap is
+printed beside it and not asserted, since the traced filter is the check on the
+analytic one rather than the subject here.
+*/
+static void test_nu_gradient_at_a_light_tail(void) {
+    printf("the nu gradient at a light tail, against a long double reference\n");
+    const double nus[] = { 1e6, 1e10, 1e14 };
+    for (int K = 1; K <= 2; K++)
+        for (size_t v = 0; v < sizeof nus / sizeof nus[0]; v++) {
+            double worst_analytic = 0, worst_traced = 0, worst_between = 0;
+            for (int draw = 0; draw < 5; draw++) {
+                int T = 150;
+                SdlocParams m = plausible_params(K);
+                m.nu = (mreal)nus[v];
+                /* test_analytic_against_traced's draws at T = 150, its nu grid
+                   continued past 1e10 on the next streams */
+                Rng rng = rng_new(7000u + 100u * (unsigned)K + 30u + (unsigned)draw, (uint64_t)(3 + v));
+                Mat y = sdloc_simulate(&rng, &m, T);
+                int n = sdloc_n_theta(K);
+                Vec theta = mat_new(n, 1);
+                _sdloc_unlink(&m, theta);
+                for (int i = 0; i < n - 1; i++) theta.d[i] += (mreal)(0.3 * rng_normal(&rng));
+
+                Vec analytic = mat_new(n, 1), traced = mat_new(n, 1);
+                SdlocAnalytic *f = sdloc_analytic_new(K, T);
+                sdloc_analytic_log_likelihood(f, theta, y, analytic);
+                sdloc_analytic_free(f);
+                sdloc_traced_log_likelihood(theta, y, traced);
+
+                mreal shifted[32];
+                for (int i = 0; i < n; i++) shifted[i] = theta.d[i];
+                long double step = 1e-4L;
+                shifted[n - 1] = theta.d[n - 1] + (mreal)step;
+                long double up = reference_log_likelihood(shifted, K, y);
+                shifted[n - 1] = theta.d[n - 1] - (mreal)step;
+                long double down = reference_log_likelihood(shifted, K, y);
+                double reference = (double)((up - down) / (2 * step));
+
+                double size = fabs(reference) > 1 ? fabs(reference) : 1;
+                double analytic_gap = fabs((double)analytic.d[n - 1] - reference) / size;
+                double traced_gap = fabs((double)traced.d[n - 1] - reference) / size;
+                double between = fabs((double)analytic.d[n - 1] - (double)traced.d[n - 1]) / size;
+                if (analytic_gap > worst_analytic) worst_analytic = analytic_gap;
+                if (traced_gap > worst_traced) worst_traced = traced_gap;
+                if (between > worst_between) worst_between = between;
+                CHECK(analytic_gap < 1e-8, "K=%d nu=%g draw %d: analytic %.12g against reference %.12g",
+                      K, nus[v], draw, (double)analytic.d[n - 1], reference);
+
+                mat_free(analytic); mat_free(traced); mat_free(theta); mat_free(y);
+                sdloc_params_free(&m);
+            }
+            printf("  K=%d nu=%7.0e: worst gap to the reference, analytic %.2e, traced %.2e;"
+                   " between the two %.2e\n", K, nus[v], worst_analytic, worst_traced, worst_between);
+        }
     printf("  ok\n");
 }
 
@@ -320,7 +499,7 @@ static void test_infeasible_points_return_a_sentinel(void) {
     int n = sdloc_n_theta(K);
     Vec feasible = mat_new(n, 1);
     _sdloc_unlink(&m, feasible);
-    SdlocFitContext context = { y };
+    SdlocFitContext context = { y, NULL };
     Vec gradient = mat_new(n, 1);
 
     mreal finite = sdloc_negative_log_likelihood(feasible, gradient, &context);
@@ -382,7 +561,7 @@ static void test_fit_diagnostics_describe_the_result(void) {
                1e-3 * (fabs((double)result.log_likelihood) + 1),
                "the reported log-likelihood is the one at the returned parameters");
 
-    SdlocFitContext context = { y };
+    SdlocFitContext context = { y, NULL };
     Vec gradient = mat_new(n, 1);
     sdloc_negative_log_likelihood(theta, gradient, &context);
     double squared = 0;
@@ -989,6 +1168,8 @@ int main(void) {
     test_static_case_against_mvstudent();
     test_light_tail_stays_computable();
     test_gradient_against_finite_differences();
+    test_analytic_against_traced();
+    test_nu_gradient_at_a_light_tail();
     test_simulator_matches_the_filter();
     test_infeasible_points_return_a_sentinel();
     test_fit_diagnostics_describe_the_result();

@@ -170,6 +170,82 @@ static inline Mat mvstudent_dlogpdf_nu(Mat x, Mat loc, Mat cov, mreal nu) {
     return o;
 }
 
+/*
+Observation by observation, for a filter.
+
+A model whose location changes every period, such as a score-driven filter,
+cannot call the batched functions in this file, which take one location for
+the whole sample and allocate. The functions below split the log-likelihood of
+T observations sharing nu and a scale Sigma = L L^T into the part that changes
+per observation and the part that does not:
+
+    sum_t log-pdf_t = T (lognorm(nu,d) - half_logdet) - (nu+d)/2 sum_t log1p(q_t/nu)
+
+with half_logdet = log|Sigma|/2 = sum_k log L_kk and q_t the observation's
+Mahalanobis form, from mvgauss_chol_quadform. A filter adds
+mvstudent_log_kernel per observation and finishes with
+mvstudent_loglik_from_log_sum. The gradient follows the same split: per
+observation, mvstudent_dobservation_dq and mvstudent_dobservation_dnu, the q
+derivative then carried to the deviation and to L by
+mvgauss_chol_quadform_adjoint; once, mvstudent_dloglik_dnu_from_log_sum, and
+-T for half_logdet. nu must be finite here: the Gaussian limit of the batched
+functions has no counterpart, since a filter's nu is a parameter in (2, inf).
+
+The kernel is log1p(q/nu), not log(nu + q) - log(nu) with the second log taken
+into the constant. The two are the same number and the second is cheaper, but
+it makes the sum a difference of two quantities of size T (nu+d)/2 log(nu)
+that has to resolve an answer of order T: at a large nu the answer falls below
+the last bit of the operands and the likelihood stops being computable long
+before the Gaussian limit. tests/correctness/qvarma_gaussian_limit.c measures
+where. It goes through special_log1p rather than MLOG1P because libm's log1p
+measured 17% slower than log in sd/qvarma.h's filter loop; special.h's header
+has the numbers.
+*/
+
+/* log1p(q/nu) for one observation. Takes 1/nu, which a filter computes once
+   per parameter set, so the per-observation cost is a multiply. */
+static inline mreal mvstudent_log_kernel(mreal q, mreal nu_reciprocal) {
+    return (mreal)special_log1p((double)(q * nu_reciprocal));
+}
+
+/* T (lognorm(nu,d) - half_logdet) - (nu+d)/2 log_sum: the total
+   log-likelihood of T observations, log_sum being the sum of their
+   mvstudent_log_kernel values. */
+static inline mreal mvstudent_loglik_from_log_sum(int T, mreal nu, int d, mreal half_logdet,
+                                                  mreal log_sum) {
+    mreal half_nu_d = (mreal)0.5 * (nu + (mreal)d);
+    mreal constant_part = mvstudent_lognorm(nu, d) - half_logdet;
+    return (mreal)T * constant_part - half_nu_d * log_sum;
+}
+
+/* The part of d/d(nu) of mvstudent_loglik_from_log_sum that is not per
+   observation: T dlognorm_dnu(nu,d) - log_sum/2. The rest is
+   mvstudent_dobservation_dnu summed over observations. */
+static inline mreal mvstudent_dloglik_dnu_from_log_sum(int T, mreal nu, int d, mreal log_sum) {
+    return (mreal)T * mvstudent_dlognorm_dnu(nu, d) - (mreal)0.5 * log_sum;
+}
+
+/* d/dq of one observation's term -(nu+d)/2 log1p(q/nu), which is
+   -(nu+d)/(2 s) with s = nu + q, the sum a filter already holds. */
+static inline mreal mvstudent_dobservation_dq(mreal nu, int d, mreal s) {
+    mreal half_nu_d = (mreal)0.5 * (nu + (mreal)d);
+    return -half_nu_d / s;
+}
+
+/* d/d(nu) at fixed q of one observation's term -(nu+d)/2 log1p(q/nu),
+   without its -log1p(q/nu)/2, which mvstudent_dloglik_dnu_from_log_sum takes
+   from the sum: (nu+d) q / (2 nu s), s = nu + q.
+
+   Added directly rather than reached through s = nu + q. That route gives
+   -(nu+d)/(2 s) per observation and leaves T (nu+d)/(2 nu) to be added back
+   once, two quantities of size T/2 whose difference is of order T q/nu^2: at
+   nu = 1e14 that is fifteen digits of cancellation, and a link such as
+   nu = 2 + exp(theta) then multiplies what is left by nu. */
+static inline mreal mvstudent_dobservation_dnu(mreal nu, int d, mreal q, mreal s) {
+    mreal half_nu_d = (mreal)0.5 * (nu + (mreal)d);
+    return half_nu_d * q / (nu * s);
+}
+
 /* Return d/d(cov) of the total log-likelihood sum_i log-pdf(x_i), as a
    d x d symmetric matrix: (sum_i c_i*w_i*w_i^T - n*cov^-1) / 2 with
    w_i = cov^-1 (x_i - loc) and the same robustness weight

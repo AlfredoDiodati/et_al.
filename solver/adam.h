@@ -35,8 +35,8 @@
    This file only needs linalg/mat.h - it operates on plain Mat gradients,
    however they were produced (a hand-derived analytical gradient like
    dist/gauss.h's, or a tape from ad.h's backward pass, or anything
-   else). It does not depend on ad.h, the same way dist/ does not: all
-   three sit above linalg/solver.h independently of each other. It does
+   else). It does not depend on ad.h, the same way dist/'s densities do
+   not: all three sit above linalg/solver.h independently of each other. It does
    include optimizer.h (the generic pluggable Optimizer interface, also in
    solver/) to provide adam_optimizer_init below - the adapter that lets a
    model's fit() (see nn/mlp.h) use Adam without hardcoding it. */

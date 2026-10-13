@@ -634,6 +634,89 @@ static void test_light_tail_density_converges(void) {
     mat_free(x); mat_free(loc); mat_free(cov); mat_free(gaussian);
 }
 
+/* The observation-level functions against the batched ones on the same
+   sample: a sample with one location and one scale is exactly the case both
+   can evaluate, so the split total, its nu derivative and the location score
+   reached through mvgauss_chol_quadform_adjoint must match mvstudent_logpdf,
+   mvstudent_dlogpdf_nu and mvstudent_dlogpdf_loc. nu runs from 2.5 to 1e12,
+   where log1p is what keeps the kernel computable. */
+static void test_observation_level(void) {
+    puts("the observation-level split against the batched functions");
+    srand(9090);
+    const double nus[] = { 2.5, 7.0, 1e4, 1e12 };
+    for (int d = 1; d <= 4; d++)
+        for (size_t v = 0; v < sizeof nus / sizeof nus[0]; v++) {
+            int n = 40;
+            mreal nu = (mreal)nus[v];
+            Mat x = mat_new(n, d), loc = mat_new(1, d), cov = mat_new(d, d);
+            for (int i = 0; i < n * d; i++) x.d[i] = (mreal)(rand() % 1000 - 500) / 200.0f;
+            for (int k = 0; k < d; k++) AT(loc, 0, k) = (mreal)(0.1f * (mreal)k);
+            for (int i = 0; i < d; i++)
+                for (int j = 0; j < d; j++) AT(cov, i, j) = i == j ? (mreal)(1.0f + 0.3f * (mreal)i) : (mreal)0.2f;
+
+            Mat l = mat_chol(cov, NULL);
+            mreal reciprocal[RD], deviation[RD], z[RD], w[RD], x_bar[RD], l_bar[RD * RD];
+            mreal half_logdet = 0;
+            for (int k = 0; k < d; k++) {
+                reciprocal[k] = 1 / AT(l, k, k);
+                half_logdet += MLOG(AT(l, k, k));
+            }
+            Mat score = mvstudent_dlogpdf_loc(x, loc, cov, nu);
+            mreal log_sum = 0, dnu_sum = 0;
+            for (int i = 0; i < n; i++) {
+                for (int k = 0; k < d; k++) deviation[k] = AT(x, i, k) - AT(loc, 0, k);
+                mreal q = mvgauss_chol_quadform(d, l.d, reciprocal, deviation, z);
+                mreal s = nu + q;
+                log_sum += mvstudent_log_kernel(q, 1 / nu);
+                dnu_sum += mvstudent_dobservation_dnu(nu, d, q, s);
+
+                for (int k = 0; k < d; k++) x_bar[k] = 0;
+                for (int k = 0; k < d * d; k++) l_bar[k] = 0;
+                mvgauss_chol_quadform_adjoint(d, l.d, reciprocal, z, mvstudent_dobservation_dq(nu, d, s), w,
+                                              x_bar, l_bar);
+                /* the derivative with respect to the observation is minus the
+                   one with respect to its location */
+                for (int k = 0; k < d; k++) {
+                    mreal want = AT(score, i, k);
+                    assert(MABS(-x_bar[k] - want) < TOL * (MABS(want) + 1));
+                }
+            }
+
+            Mat logpdf = mvstudent_logpdf(x, loc, cov, nu);
+            Mat dnu = mvstudent_dlogpdf_nu(x, loc, cov, nu);
+            double want_total = 0, want_dnu = 0;
+            for (int i = 0; i < n; i++) { want_total += (double)logpdf.d[i]; want_dnu += (double)dnu.d[i]; }
+            double total = (double)mvstudent_loglik_from_log_sum(n, nu, d, half_logdet, log_sum);
+            double total_dnu = (double)(mvstudent_dloglik_dnu_from_log_sum(n, nu, d, log_sum) + dnu_sum);
+            assert(fabs(total - want_total) < 1e-4 * (fabs(want_total) + 1));
+            assert(fabs(total_dnu - want_dnu) < TOL_SUM * (fabs(want_dnu) + 1e-3));
+
+            mat_free(x); mat_free(loc); mat_free(cov); mat_free(l);
+            mat_free(score); mat_free(logpdf); mat_free(dnu);
+        }
+
+    /* The per-observation derivatives against central differences of the
+       term -(nu+d)/2 log1p(q/nu), in double, written here from the formula. */
+    for (int d = 1; d <= 3; d++)
+        for (double nu = 2.5; nu < 1e5; nu *= 7)
+            for (double q = 0.01; q < 100; q *= 5) {
+                double h_q = 1e-6 * (q + 1), h_nu = 1e-6 * nu;
+                double up_q = -(nu + d) / 2 * log1p((q + h_q) / nu);
+                double down_q = -(nu + d) / 2 * log1p((q - h_q) / nu);
+                double up_nu = -(nu + h_nu + d) / 2 * log1p(q / (nu + h_nu));
+                double down_nu = -(nu - h_nu + d) / 2 * log1p(q / (nu - h_nu));
+                /* the -log1p(q/nu)/2 that mvstudent_dloglik_dnu_from_log_sum takes
+                   from the sum is put back */
+                double fd_q = (up_q - down_q) / (2 * h_q);
+                double fd_nu = (up_nu - down_nu) / (2 * h_nu) + 0.5 * log1p(q / nu);
+                double got_q = (double)mvstudent_dobservation_dq((mreal)nu, d, (mreal)(nu + q));
+                double got_nu = (double)mvstudent_dobservation_dnu((mreal)nu, d, (mreal)q, (mreal)(nu + q));
+                assert(fabs(got_q - fd_q) < TOL_FD * (fabs(fd_q) + 1e-6));
+                assert(fabs(got_nu - fd_nu) < TOL_FD * (fabs(fd_nu) + 1e-6));
+            }
+    printf("  total, nu derivative and location score agree with the batched functions\n");
+}
+
 int main(void) {
     test_univariate_consistency();
     test_known_values();
@@ -642,6 +725,7 @@ int main(void) {
     test_gaussian_limit();
     test_light_tail_normalization();
     test_light_tail_density_converges();
+    test_observation_level();
     test_per_obs_loc_and_views();
     test_degenerate_covariance();
     test_degenerate_nu();

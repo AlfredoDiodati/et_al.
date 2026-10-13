@@ -151,7 +151,7 @@ Unlike `mat_slice` and `mat_reshape`, which return zero-copy views, both of thes
 
 ### `ad_log1p`
 
-Elementwise `log(1 + a)`, `a > -1`, with `d/da = 1/(1 + a)`. Not a convenience spelling of `ad_log(t, ad_add(t, one, a))`: where `a` is small the sum keeps only the digits of `a` that survive alongside the leading one of `1`, and the log of that rounded sum is the log of a different number — at `a = 1e-18`, `log(1 + a)` is exactly `0` while `log1p(a)` is `a`. The case that needs it is a Student-t log-density at a large `nu`, whose per-observation term is `log(1 + q/nu)` with `q/nu` near zero. `dist/student.h` and `dist/mv/student.h` already compute it that way off the tape; `sd/qvarma.h` and `sd/score_driven_location.h` reach the same term through the tape and now use this.
+Elementwise `log(1 + a)`, `a > -1`, with `d/da = 1/(1 + a)`. Not a convenience spelling of `ad_log(t, ad_add(t, one, a))`: where `a` is small the sum keeps only the digits of `a` that survive alongside the leading one of `1`, and the log of that rounded sum is the log of a different number — at `a = 1e-18`, `log(1 + a)` is exactly `0` while `log1p(a)` is `a`. The case that needs it is a Student-t log-density at a large `nu`, whose per-observation term is `log(1 + q/nu)` with `q/nu` near zero. `dist/student.h` and `dist/mv/student.h` already compute it that way off the tape; `sd/qvarma.h` and `sd/score_driven_location.h` reach the same term through the tape, through `dist/mv/student_traced.h`'s `mvstudent_log_kernel_traced`, which uses this.
 
 ### `ad_lgamma`
 
@@ -163,7 +163,7 @@ Elementwise `log Gamma(a + shift) - log Gamma(a)`, `a > 0` and `shift >= 0`, wit
 
 Not `ad_sub(t, ad_lgamma(t, shifted), ad_lgamma(t, a))`. `log Gamma` grows like `a log a`, so for `a` large the two nodes agree to every digit they carry and their difference on the tape is noise — `docs/SPECIAL_DOCUMENTATION.md`'s "Differences, not terms" section has the measurement. The `shift` is a plain `mreal` in the node's `aux` field rather than a second `Node` for a reason beyond the usual untraced-scalar one: a difference of two Gamma arguments is the only shape that admits the stable evaluation, and taking the shift as a node would invite a caller to rebuild the unstable form. If a traced shift is ever needed, the derivative with respect to it is `psi(a + shift)`, which is `special_digamma` and needs no new machinery — but the stability argument would have to be re-made first.
 
-The Student-t log-normalization in `sd/qvarma.h` and `sd/score_driven_location.h` is this op with `shift = K/2`; both used the two-node spelling and both were wrong at a `nu` their own fits reached.
+The Student-t log-normalization in `sd/qvarma.h` and `sd/score_driven_location.h` used the two-node spelling and was wrong at a `nu` their own fits reached; this op with `shift = K/2` fixed it. Both models now reach the normalization through `dist/mv/student_traced.h`'s `mvstudent_lognorm_traced`, one node whose value and adjoint are `dist/mv/student.h`'s `mvstudent_lognorm` and `mvstudent_dlognorm_dnu`, which go through the same `special.h` pair. `tests/correctness/mvstudent_traced_agreement.c` checks that node against this op's composition.
 
 ### `ad_solve` / `ad_chol_solve`
 

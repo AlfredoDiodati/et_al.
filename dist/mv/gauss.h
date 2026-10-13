@@ -50,6 +50,72 @@ static inline Mat mvgauss_diff_t(Mat x, Mat loc) {
     return dt;
 }
 
+/* Whether a lower Cholesky factor (d x d, leading dimension d) can be solved
+   against: every diagonal entry positive and finite. A factor built as
+   exp(theta) on its diagonal overflows to infinity or underflows to exactly
+   zero at a large enough theta, and an optimizer's line search probes such
+   points, so a filter checks this and returns a sentinel rather than letting
+   the substitution divide by zero. MISINF and MISNAN rather than comparisons,
+   for the -ffast-math reason linalg/mat.h gives at their definition. */
+static inline int mvgauss_chol_factor_is_usable(int d, const mreal *l) {
+    for (int k = 0; k < d; k++) {
+        mreal diagonal = l[(size_t)k * d + k];
+        if (!(diagonal > 0) || MISINF(diagonal) || MISNAN(diagonal)) return 0;
+    }
+    return 1;
+}
+
+/* The Mahalanobis quadratic form of one observation, q = x^T (L L^T)^-1 x,
+   for a filter that evaluates a density one observation at a time against a
+   scale held as its lower Cholesky factor L (d x d, row-major, leading
+   dimension d) rather than refactorizing a covariance per period. x is the
+   observation's deviation from its location. diagonal_reciprocal holds the d
+   values 1/L_kk, computed once per parameter set. Writes z = L^-1 x, which
+   mvgauss_chol_quadform_adjoint needs, and returns q = z^T z. No allocation;
+   the batched mvgauss_logpdf computes the same q for all n rows at once.
+
+   The sum of squares is taken inside the forward substitution, in the order
+   z is produced. A separate loop after _trsv_lower_reciprocal is vectorized
+   under -ffast-math and sums in a different order, which changes the last
+   bits of q. */
+static inline mreal mvgauss_chol_quadform(int d, const mreal *l, const mreal *diagonal_reciprocal,
+                                          const mreal *x, mreal *z) {
+    mreal q = 0;
+    for (int i = 0; i < d; i++) {
+        const mreal *row = l + (size_t)i * d;
+        mreal acc = x[i];
+        for (int j = 0; j < i; j++) acc -= row[j] * z[j];
+        z[i] = acc * diagonal_reciprocal[i];
+        q += z[i] * z[i];
+    }
+    return q;
+}
+
+/* The adjoint of mvgauss_chol_quadform. q_bar is the derivative of the
+   objective with respect to q; this adds q_bar dq/dx to x_bar and q_bar dq/dL
+   to l_bar. Differentiating L z = x gives dz = L^-1 (dx - dL z), so with
+   w = L^-T z,
+
+       dq = 2 w . dx - 2 w^T dL z,
+
+   hence x_bar += 2 q_bar w and l_bar += -2 q_bar w z^T on the lower triangle
+   only, the upper triangle of L being structurally zero rather than a
+   parameter. ad.h's ad_chol_quadform computes the same pair on a tape. w is
+   d entries of caller scratch and is left holding L^-T z = Sigma^-1 x. */
+static inline void mvgauss_chol_quadform_adjoint(int d, const mreal *l,
+                                                 const mreal *diagonal_reciprocal,
+                                                 const mreal *z, mreal q_bar, mreal *w,
+                                                 mreal *x_bar, mreal *l_bar) {
+    _trsv_lower_reciprocal('T', d, l, d, diagonal_reciprocal, z, w);
+    mreal factor = -2 * q_bar;
+    for (int i = 0; i < d; i++) {
+        x_bar[i] += 2 * q_bar * w[i];
+        mreal scaled = factor * w[i];
+        mreal *row = l_bar + (size_t)i * d;
+        for (int j = 0; j <= i; j++) row[j] += scaled * z[j];
+    }
+}
+
 /* Return the log-pdf of each row of x under N(loc, cov) as an n x 1
    column: -q/2 - log(det(cov))/2 - (d/2)*log(2*pi), where q is the
    Mahalanobis quadratic form (x_i - loc)^T cov^-1 (x_i - loc). Computed

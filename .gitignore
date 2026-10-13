@@ -50,11 +50,13 @@ tests/correctness/qvarma_identification
 tests/correctness/qvarma_recovery_study
 tests/correctness/mcs_settings_study
 tests/correctness/qvarma_analytic_agreement
+tests/correctness/mvstudent_traced_agreement
 tests/correctness/qvarma_gaussian_limit
 tests/correctness/qvarma_fixed_parameter_fit
 tests/correctness/var_recovery
 tests/correctness/lp_recovery
 tests/performance/lp_throughput
+tests/performance/score_driven_location_gradient_cost
 liblp_f64.so
 liblp_f32.so
 tests/correctness/hp_filter_recovery

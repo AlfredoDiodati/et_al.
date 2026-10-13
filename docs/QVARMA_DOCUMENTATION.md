@@ -188,8 +188,12 @@ Both also evaluate the Student-t density the same way, and it is written the
 way it is for accuracy rather than for node count. The per-period term is
 `log1p(q_t/nu)`, not the one-node-cheaper `log(nu + q_t)` with the `log(nu)`
 half folded into the constant; the normalization is `special.h`'s
-`special_lgamma_diff(nu/2, K/2)`, reached through `ad_lgamma_diff` on the taped
-path, not two `lgamma` terms subtracted. Both cheaper spellings are exact
+`special_lgamma_diff(nu/2, K/2)`, not two `lgamma` terms subtracted. Neither is
+written in this file: the analytic filter takes the density from
+`dist/mv/student.h`'s observation-level functions and the quadratic form from
+`dist/mv/gauss.h`'s `mvgauss_chol_quadform`, and the traced filter takes the
+kernel and the total from `dist/mv/student_traced.h`. See
+`docs/MVSTUDENT_DOCUMENTATION.md`, "One observation at a time". Both cheaper spellings are exact
 identities and both lose the answer entirely at a `nu` that fits actually
 reach - see "A large `nu` is a flat direction, not a fitted value" in
 `docs/QVARMA_RELIABILITY_DOCUMENTATION.md` for the measurement and what it cost.
@@ -234,19 +238,11 @@ and under `mu_star_stationary_only` both `Psi_star` and `mu_star` are zero
 below row `K_star`, since `mu_star` starts at zero over the warm-up and has
 nothing driving it there.
 
-The one part of the adjoint worth writing down is the quadratic form, because
-it is where a hand derivation goes wrong. The forward solves
-`Omega_inv z_t = v_t` by forward substitution and takes `q_t = z_t . z_t`.
-Differentiating `Omega_inv z = v` gives `dz = Omega_inv^-1 (dv - dOmega_inv z)`,
-so with `w_t = Omega_inv^-T z_t` - a *back* substitution against the transpose,
-not a second forward one -
-
-    dq_t = 2 w_t . dv - 2 w_t' dOmega_inv z_t
-
-giving `v_t_bar += 2 q_t_bar w_t` and `Omega_inv_bar += -2 q_t_bar w_t z_t'`, a
-rank-one update masked to the lower triangle because the upper triangle is
-structurally zero rather than a parameter. It is the same pair
-`ad_chol_quadform`'s backward rule computes, reached without the node.
+The quadratic form's adjoint is where a hand derivation goes wrong, and it is
+not specific to this model: it is `dist/mv/gauss.h`'s
+`mvgauss_chol_quadform_adjoint`, whose documentation in
+`docs/MVGAUSS_DOCUMENTATION.md` writes the derivation out. The forward keeps
+`z_t = Omega_inv^-1 v_t` on the path because the adjoint needs it.
 
 The map from the constrained adjoints back to `theta` reads the same
 kind/scale/derivative table `_qvarma_link` and `_qvarma_unlink` read, through
@@ -1496,9 +1492,7 @@ any more: it is `stats.h`'s `stats_quantile_inplace`, the same selection
 The Student-t log-normalization was in it too, and worse: this file computed
 `lgamma((nu+K)/2) - lgamma(nu/2)` by hand when `dist/mv/student.h` already had
 `mvstudent_lognorm`, and the hand-rolled copy inherited none of that one's care.
-It is now the shared function. The per-period `log1p` term still has no shared
-form to call: `dist/mv/student.h` inlines it inside `mvstudent_logpdf`, which
-takes an `n x d` batch and runs its own Cholesky, and a filter that already has
-`q_t` and a factored inverse scale cannot reach it. The primitive that would
-close that gap is the t log-density given an already-computed quadratic form -
-one scalar function, plus its `nu` derivative - and it is not written yet.
+It is now the shared function, and so is the rest of the density: the
+per-period `log1p` term, the total, their derivatives and the quadratic form are
+`dist/mv/student.h`'s and `dist/mv/gauss.h`'s observation-level functions,
+shared with `sd/score_driven_location.h`.

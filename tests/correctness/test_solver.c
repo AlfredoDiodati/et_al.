@@ -673,6 +673,62 @@ static void test_band_solve_many(void) {
     puts("band solve, many right-hand sides");
 }
 
+/* _trsv_lower_reciprocal against vec_triangular_solve, for both transposes.
+   L is read through a leading dimension wider than n in half the cases, its
+   upper triangle holds 1e30 so a read of it shows up in the answer, and one
+   case per size has a diagonal spanning 1e-2 to 1e2. Also checked by its own
+   residual, op(L) x == b, which does not depend on vec_triangular_solve. */
+static void test_trsv_lower_reciprocal(void) {
+    puts("_trsv_lower_reciprocal");
+    for (int n = 1; n <= 20; n++)
+        for (int wide = 0; wide <= 1; wide++)
+            for (int scaled = 0; scaled <= 1; scaled++)
+                for (int transposed = 0; transposed <= 1; transposed++) {
+                    int ldl = n + (wide ? 3 : 0);
+                    Mat parent = mat_new(n, ldl);
+                    Mat l = mat_slice(parent, 0, n, 0, n);
+                    for (int i = 0; i < n; i++)
+                        for (int j = 0; j < ldl; j++) {
+                            mreal value = (mreal)(rand() % 1000 - 500) / 1000.0f;
+                            if (j > i) value = (mreal)1e30f;
+                            if (j == i) value = scaled ? (mreal)powf(10.0f, (mreal)(4 * i) / (mreal)(n > 1 ? n - 1 : 1) - 2)
+                                                       : (mreal)(1.0f + 0.5f * (mreal)(rand() % 100) / 100.0f);
+                            AT(parent, i, j) = value;
+                        }
+                    Mat lower = mat_new(n, n);
+                    for (int i = 0; i < n; i++)
+                        for (int j = 0; j <= i; j++) AT(lower, i, j) = AT(l, i, j);
+                    Vec b = rand_mat(n, 1);
+                    mreal *reciprocal = (mreal*)malloc((size_t)n * sizeof(mreal));
+                    mreal *x = (mreal*)malloc((size_t)n * sizeof(mreal));
+                    for (int i = 0; i < n; i++) { reciprocal[i] = 1 / AT(l, i, i); x[i] = b.d[i]; }
+
+                    char trans = transposed ? 'T' : 'N';
+                    /* in place on even sizes, from b into x on odd ones */
+                    if (n % 2) _trsv_lower_reciprocal(trans, n, l.d, ldl, reciprocal, b.d, x);
+                    else _trsv_lower_reciprocal(trans, n, l.d, ldl, reciprocal, x, x);
+                    Vec want = vec_triangular_solve(lower, b, 'L', trans, 'N');
+                    for (int i = 0; i < n; i++) {
+                        mreal size = MABS(want.d[i]) > 1 ? MABS(want.d[i]) : 1;
+                        assert(MABS(x[i] - want.d[i]) / size < TOL_MUL);
+                    }
+                    /* The residual is measured against sum_j |op(L)_ij x_j|, the size
+                       of the terms it is a sum of: with the scaled diagonal x grows
+                       large and the sum cancels down to b. */
+                    for (int i = 0; i < n; i++) {
+                        mreal acc = 0, magnitude = MABS(b.d[i]);
+                        for (int j = 0; j < n; j++) {
+                            mreal term = (transposed ? AT(lower, j, i) : AT(lower, i, j)) * x[j];
+                            acc += term;
+                            magnitude += MABS(term);
+                        }
+                        assert(MABS(acc - b.d[i]) <= TOL_MUL * magnitude);
+                    }
+                    free(reciprocal); free(x);
+                    mat_free(want); mat_free(b); mat_free(lower); mat_free(parent);
+                }
+}
+
 int main(void) {
     test_band_solve();
     test_band_solve_many();
@@ -681,6 +737,7 @@ int main(void) {
     test_reuse_solve();
     test_lstsq();
     test_lstsq_rd();
+    test_trsv_lower_reciprocal();
     puts("test_solver: all passed");
     return 0;
 }

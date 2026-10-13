@@ -61,6 +61,24 @@ Entry `(j,k)` is the partial derivative with respect to `cov[j][k]` treated as a
 
 This is the one function in `dist/` that returns an aggregated gradient instead of per-observation contributions, a deliberate deviation from the `dist/gauss.h` convention: each observation's contribution is itself a `d x d` matrix, and `n` of them would need a third axis `Mat` does not have. The summed gradient is also the object MLE fitting actually consumes; for per-observation detail, call it with a single row of `x`. `cov^-1` is obtained from the Cholesky factor already in hand (`?potri`, lower triangle mirrored to upper) rather than a fresh LU-based `mat_inv`.
 
+### One observation at a time
+
+```c
+int mvgauss_chol_factor_is_usable(int d, const mreal *l)
+mreal mvgauss_chol_quadform(int d, const mreal *l, const mreal *diagonal_reciprocal,
+    const mreal *x, mreal *z)
+void mvgauss_chol_quadform_adjoint(int d, const mreal *l, const mreal *diagonal_reciprocal,
+    const mreal *z, mreal q_bar, mreal *w, mreal *x_bar, mreal *l_bar)
+```
+
+The Mahalanobis form `q = x^T (L L^T)^-1 x` of one deviation `x` against a scale held as its lower Cholesky factor `L` (`d x d`, row-major, leading dimension `d`), for a filter that evaluates a density one period at a time and has the factor as a parameter rather than a covariance to factorize. `diagonal_reciprocal` holds `1/L_kk`, computed once per parameter set. `mvgauss_chol_quadform` writes `z = L^-1 x` and returns `q = z^T z`, summing as it substitutes. `mvgauss_chol_quadform_adjoint` adds `q_bar dq/dx` to `x_bar` and `q_bar dq/dL` to the lower triangle of `l_bar`: with `w = L^-T z`, which it leaves in the caller's scratch `w` and which equals `Sigma^-1 x`,
+
+    dq = 2 w . dx - 2 w^T dL z
+    x_bar += 2 q_bar w
+    l_bar += -2 q_bar w z^T (lower triangle)
+
+the same pair `ad.h`'s `ad_chol_quadform` computes on a tape. Both work on raw arrays and allocate nothing, through `linalg/factor.h`'s `_trsv_lower_reciprocal` for the back substitution. `mvgauss_chol_factor_is_usable` reports whether every diagonal entry of `L` is positive and finite, which a filter checks before solving, since an `exp` link overflows or underflows the diagonal at points a line search probes. Callers: `dist/mv/student.h`'s observation-level functions (documented there), `sd/qvarma.h` and `sd/score_driven_location.h`.
+
 ### `mvgauss_sample`
 
 Returns an `n x d` matrix whose row `i` is an independent draw from `N_d(loc_i, cov)`, via the standard construction `x = loc + L*z` with `L = mat_chol(cov)` and `z` standard normals — one Cholesky and one gemm (`Z * L^T`) for all `n` rows. `loc` is `1 x d` or `n x d` as usual; `rng` is the caller's explicit generator from `random/random.h` (see `docs/RANDOM_DOCUMENTATION.md`). Consumes exactly `n*d` `rng_normal` draws in row-major order; draws are generated in double and cast to `mreal`.
@@ -78,6 +96,8 @@ Every `Mat` returned from this header is an owner and must be freed with `mat_fr
 ## Testing
 
 `tests/correctness/test_mvgauss.c` checks, in order: exact collapse to `dist/gauss.h` at `d=1` (through that file's own public API, including the chain-rule identity for the cov gradient); known hand-computed values (standard bivariate normal at the origin: `pdf = 1/(2*pi)`; at `(1,1)`: `q = 2` exactly); the diagonal-cov factorization identity against `gauss_logpdf`; a correlated `2 x 2` covariance against an independent reference implementation written directly in the test file — Gauss-Jordan inverse + determinant in `double`, no Cholesky and no BLAS, so a bug shared with the header's factorization path cannot hide from the comparison; both analytic derivatives against central finite differences of that reference (with symmetric off-diagonal perturbations checked against `2*G[j][k]`, pinning down the independent-entry convention); the per-observation `n x d` `loc` path; and strided views of `x` and `loc`. `STRESS=1` adds randomized runs with a fixed seed over `d` in {1, 2, 3, 5} and `n` up to 40, with a random well-conditioned SPD covariance (`B*B^T + I`), comparing every output element against the double-precision reference. `mvgauss_sample` is checked statistically at fixed seeds: the empirical mean (`stats_vec_mean`) and full empirical covariance matrix (`stats_autocov` at lag 0) of a 40000-draw sample against `loc`/`cov`; row independence — every entry of the lag-1/lag-2 sample autocovariance matrix within a few standard errors of zero (the one shared Cholesky/gemm across rows must not couple them), and the per-row squared norm serially uncorrelated (dependence beyond second moments); per-observation `loc` placement; and sampler-level reproducibility.
+
+`test_observation_quadform` checks the one-observation form and its adjoint at `d = 1..6`, 20 random factors per size with one size-spanning case per `d` whose diagonal runs from `1e-1` to `1e1`, against the Gauss-Jordan reference: `q`, the residual `L z = x`, `w = Sigma^-1 x`, `x_bar` against `2 q_bar Sigma^-1 x`, and `l_bar` against `-2 q_bar Sigma^-1 x x^T Sigma^-1 L` on the lower triangle. Both adjoint outputs start nonzero, to check they accumulate, and the upper triangle of `l_bar` must come back untouched. `test_chol_factor_is_usable` puts zero, a negative number, an infinity, a not-a-number (stored through a `volatile`) and `1e-30` on each diagonal position in turn.
 
 ## Benchmark results
 

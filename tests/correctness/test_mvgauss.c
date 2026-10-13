@@ -508,6 +508,92 @@ static void test_sampling(void) {
     mat_free(loc); mat_free(cov);
 }
 
+/* mvgauss_chol_quadform and its adjoint, one observation at a time, against
+   the Gauss-Jordan reference: q = x' Sigma^-1 x, dq/dx = 2 Sigma^-1 x, and
+   dq/dL = -2 Sigma^-1 x x' Sigma^-1 L on the lower triangle, all in double
+   from Sigma = L L' with no triangular solve. The adjoint accumulates, so
+   x_bar and l_bar start from nonzero values that must survive, and the upper
+   triangle of l_bar must not be written. One case per size has a diagonal
+   spanning 1e-1 to 1e1. */
+static void test_observation_quadform(void) {
+    srand(4242);
+    for (int d = 1; d <= 6; d++)
+        for (int scaled = 0; scaled <= 1; scaled++)
+            for (int rep = 0; rep < 20; rep++) {
+                mreal l[RD * RD] = { 0 }, reciprocal[RD], x[RD], z[RD], w[RD];
+                mreal x_bar[RD], l_bar[RD * RD];
+                for (int i = 0; i < d; i++) {
+                    for (int j = 0; j < i; j++) l[i * d + j] = (mreal)(rand() % 1000 - 500) / 1000.0f;
+                    l[i * d + i] = scaled ? (mreal)powf(10.0f, (mreal)(2 * i) / (mreal)(d > 1 ? d - 1 : 1) - 1)
+                                          : (mreal)(0.6f + (mreal)(rand() % 100) / 100.0f);
+                    reciprocal[i] = 1 / l[i * d + i];
+                    x[i] = (mreal)(rand() % 1000 - 500) / 250.0f;
+                }
+                for (int i = 0; i < d * d; i++) l_bar[i] = (mreal)0.25f;
+                for (int i = 0; i < d; i++) x_bar[i] = (mreal)-0.5f;
+                mreal q_bar = (mreal)(rand() % 200 - 100) / 50.0f;
+
+                double sigma[RD * RD], inverse[RD * RD], sx[RD], q_ref = 0;
+                for (int i = 0; i < d; i++)
+                    for (int j = 0; j < d; j++) {
+                        double acc = 0;
+                        for (int k = 0; k < d; k++) acc += (double)l[i * d + k] * (double)l[j * d + k];
+                        sigma[i * d + j] = acc;
+                    }
+                ref_inv_det(sigma, inverse, d);
+                for (int i = 0; i < d; i++) {
+                    sx[i] = 0;
+                    for (int j = 0; j < d; j++) sx[i] += inverse[i * d + j] * (double)x[j];
+                    q_ref += (double)x[i] * sx[i];
+                }
+
+                mreal q = mvgauss_chol_quadform(d, l, reciprocal, x, z);
+                assert(fabs((double)q - q_ref) <= 2e-3 * (fabs(q_ref) + 1));
+                for (int i = 0; i < d; i++) {
+                    double acc = 0;
+                    for (int j = 0; j <= i; j++) acc += (double)l[i * d + j] * (double)z[j];
+                    assert(fabs(acc - (double)x[i]) <= 1e-3 * (fabs((double)x[i]) + 1));
+                }
+
+                mvgauss_chol_quadform_adjoint(d, l, reciprocal, z, q_bar, w, x_bar, l_bar);
+                for (int i = 0; i < d; i++) {
+                    double size = fabs(sx[i]) + 1;
+                    assert(fabs((double)w[i] - sx[i]) <= 2e-3 * size);
+                    assert(fabs((double)x_bar[i] - (-0.5 + 2 * (double)q_bar * sx[i])) <= 4e-3 * size * (fabs((double)q_bar) + 1));
+                }
+                for (int i = 0; i < d; i++)
+                    for (int j = 0; j < d; j++) {
+                        if (j > i) { assert(l_bar[i * d + j] == (mreal)0.25f); continue; }
+                        double dq_dl = 0;
+                        for (int k = 0; k < d; k++) dq_dl += -2 * sx[i] * sx[k] * (double)l[k * d + j];
+                        double want = 0.25 + (double)q_bar * dq_dl;
+                        assert(fabs((double)l_bar[i * d + j] - want) <= 5e-3 * (fabs(want) + 1));
+                    }
+            }
+    puts("  observation-level quadratic form and its adjoint: ok");
+}
+
+/* A factor is usable when its whole diagonal is positive and finite, and the
+   strict lower triangle plays no part. The non-finite entries are stored
+   through a volatile and read back through one, per README's pitfall on
+   -ffast-math keeping a NaN. */
+static void test_chol_factor_is_usable(void) {
+    mreal l[9] = { 1, 0, 0, -3, 2, 0, 5, 7, 0.5f };
+    assert(mvgauss_chol_factor_is_usable(3, l));
+    volatile mreal zero = 0;
+    mreal values[5] = { 0, -1, 1 / zero, zero / zero, (mreal)1e-30f };
+    int usable[5] = { 0, 0, 0, 0, 1 };
+    for (int v = 0; v < 5; v++)
+        for (int k = 0; k < 3; k++) {
+            mreal copy[9];
+            for (int i = 0; i < 9; i++) copy[i] = l[i];
+            volatile mreal *slot = &copy[k * 3 + k];
+            *slot = values[v];
+            assert(mvgauss_chol_factor_is_usable(3, copy) == usable[v]);
+        }
+    puts("  usable factor: ok");
+}
+
 int main(void) {
     test_univariate_consistency();
     test_known_values();
@@ -519,6 +605,8 @@ int main(void) {
     test_degenerate_covariance();
     test_sampling();
     test_stress();
+    test_observation_quadform();
+    test_chol_factor_is_usable();
     puts("test_mvgauss: all passed");
     return 0;
 }

@@ -546,8 +546,7 @@ static inline Node *ad_lgamma(Tape *t, Node *a) {
    adjoint go through the stable pair there. The shift is a plain scalar in
    aux rather than a second node because a difference of two Gamma arguments
    is the only shape that admits the stable evaluation; taking it as a node
-   would invite a caller to rebuild the unstable one. The t log-normalization
-   in sd/qvarma.h and sd/score_driven_location.h is this op with shift = K/2. */
+   would invite a caller to rebuild the unstable one. */
 static void ad_lgamma_diff_backward(Node *self) {
     Node *a = self->parents[0];
     mreal shift = self->aux;

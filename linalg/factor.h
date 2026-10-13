@@ -225,6 +225,36 @@ static inline void _trtrs_small(char uplo, char trans, char diag, int n, int nrh
     }
 }
 
+/* Solve op(L) x = b for lower triangular L (n x n, leading dimension ldl) and
+   one right-hand side, with the reciprocals of L's diagonal supplied by the
+   caller. trans 'N' solves L x = b from the first row forwards, 'T' solves
+   L^T x = b from the last row backwards, reading L^T's row i as L's column i.
+   x and b may be the same array, which solves in place; entry i of b is read
+   once, before entry i of x is written.
+
+   This is _trtrs_small for a filter that solves against the same factor once
+   or twice per observation: the caller computes the n reciprocals once per
+   parameter set, and every solve multiplies where _trtrs_small divides. No
+   singularity check, since the caller has already divided by the diagonal. */
+static inline void _trsv_lower_reciprocal(char trans, int n, const mreal *l, int ldl,
+                                          const mreal *diagonal_reciprocal,
+                                          const mreal *b, mreal *x) {
+    if (trans == 'T') {
+        for (int i = n - 1; i >= 0; i--) {
+            mreal acc = b[i];
+            for (int j = i + 1; j < n; j++) acc -= l[(size_t)j * ldl + i] * x[j];
+            x[i] = acc * diagonal_reciprocal[i];
+        }
+    } else {
+        for (int i = 0; i < n; i++) {
+            const mreal *row = l + (size_t)i * ldl;
+            mreal acc = b[i];
+            for (int j = 0; j < i; j++) acc -= row[j] * x[j];
+            x[i] = acc * diagonal_reciprocal[i];
+        }
+    }
+}
+
 /* Solve op(A) * X = B for triangular A, in place on B, where A is n x n
    and B is n x nrhs. uplo is 'L' or 'U', trans 'N' or 'T', diag 'N' for a
    stored diagonal or 'U' for an implicit unit one. Returns 0, or the

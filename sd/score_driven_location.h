@@ -4,7 +4,7 @@
 #include "../linalg/decomp.h"
 #include "../linalg/solver.h"
 #include "../random/random.h"
-#include "../dist/mv/student.h"
+#include "../dist/mv/student_traced.h"
 #include "../solver/lbfgs.h"
 
 /*
@@ -49,6 +49,14 @@ ad_triangular_solve is exactly that node.
 a and b are each a free K-vector, entries mapped into (-1, 1) by tanh. Both
 are bounded, not only b, even though only b's bound is a stationarity
 requirement of the recursion above.
+
+The filter exists twice. The traced one, _sdloc_filter, builds the recursion on
+an ad.h tape and is differentiated by reverse mode. The analytic one,
+sdloc_analytic_log_likelihood, runs the same recursion on plain arrays with its
+gradient derived by hand, and is what fit and the standard errors call. The
+traced one stays because a hand derivation can be wrong in a way reverse mode
+cannot, and tests/correctness/score_driven_location_correctness.c checks the
+two against each other.
 */
 
 typedef struct {
@@ -155,6 +163,39 @@ static inline void _sdloc_unlink(const SdlocParams *m, Vec theta) {
     assert(at == sdloc_n_theta(K));
 }
 
+/* One transform per coordinate of theta, in the layout _sdloc_link builds and
+   _sdloc_unlink inverts: the analytic link, its chain rule and the standard
+   errors all read this table, so none of them can drift from the others. */
+typedef enum { SDLOC_LINK_IDENTITY, SDLOC_LINK_TANH, SDLOC_LINK_EXP, SDLOC_LINK_EXP_PLUS_TWO } SdlocLink;
+
+static inline mreal sdloc_link_forward(SdlocLink kind, mreal theta) {
+    switch (kind) {
+        case SDLOC_LINK_TANH: return (mreal)tanh((double)theta);
+        case SDLOC_LINK_EXP: return (mreal)exp((double)theta);
+        case SDLOC_LINK_EXP_PLUS_TWO: return (mreal)(exp((double)theta) + 2.0);
+        default: return theta;
+    }
+}
+
+static inline mreal sdloc_link_derivative(SdlocLink kind, mreal constrained) {
+    switch (kind) {
+        case SDLOC_LINK_TANH: return 1 - constrained * constrained;
+        case SDLOC_LINK_EXP: return constrained;
+        case SDLOC_LINK_EXP_PLUS_TWO: return constrained - 2;
+        default: return 1;
+    }
+}
+
+static inline void _sdloc_link_kinds(int K, SdlocLink *out) {
+    int at = 0;
+    for (int i = 0; i < K; i++) out[at++] = SDLOC_LINK_IDENTITY;
+    for (int i = 0; i < 2 * K; i++) out[at++] = SDLOC_LINK_TANH;
+    for (int i = 0; i < K; i++) out[at++] = SDLOC_LINK_EXP;
+    for (int i = 0; i < K * (K - 1) / 2; i++) out[at++] = SDLOC_LINK_IDENTITY;
+    out[at++] = SDLOC_LINK_EXP_PLUS_TWO;
+    assert(at == sdloc_n_theta(K));
+}
+
 static inline void sdloc_params_from_theta(Vec theta, SdlocParams *m) {
     int K = m->K;
     Tape *tape = tape_new();
@@ -188,19 +229,6 @@ static inline Node *_sdloc_filter(Tape *tape, const SdlocLinked *linked, Mat y, 
     int K = y.r, T = y.c;
     assert(T > 1);
 
-    Node *half_nu_K = ad_scale(tape, ad_add(tape, linked->nu,
-                               sdloc_constant_node(tape, mat_fill(1, 1, (mreal)K))), (mreal)0.5);
-    /* lgamma((nu+K)/2) - lgamma(nu/2) as one op rather than two nodes
-       subtracted: log Gamma grows like its argument's own logarithm times
-       itself, so at a light tail the two are equal to every digit a double
-       carries. ad_lgamma_diff's own comment in ad.h has the measurement. */
-    Node *constant_part = ad_lgamma_diff(tape, ad_scale(tape, linked->nu, (mreal)0.5),
-                                         (mreal)K * (mreal)0.5);
-    constant_part = ad_sub(tape, constant_part,
-        ad_scale(tape, ad_log(tape, ad_scale(tape, linked->nu, (mreal)3.14159265358979323846)),
-                 (mreal)K * (mreal)0.5));
-    constant_part = ad_sub(tape, constant_part, linked->half_log_det_Sigma);
-
     /* sqrt((nu+K)(nu+2)), the scalar the kappa = 1/2 scaled score needs on
        top of qvarma.h's own kappa = 1 u_t; see this file's own header
        comment for the derivation. */
@@ -217,14 +245,7 @@ static inline Node *_sdloc_filter(Tape *tape, const SdlocLinked *linked, Mat y, 
         Node *v = ad_sub(tape, ad_leaf(tape, mat_slice(y, 0, K, t, t + 1)), m);
         Node *quadratic = ad_chol_quadform(tape, linked->Omega_inv, v);
         Node *nu_plus_q = ad_add(tape, linked->nu, quadratic);
-        /* log1p(q_t/nu), not log(nu + q_t) with the log(nu) half taken out to
-           the constant. The two are the same number, and the second costs one
-           node fewer since nu + q_t is here anyway for the score, but it turns
-           the sum into a difference of two quantities of size T (nu+K)/2
-           log(nu) that has to resolve an answer of order T: past a nu of about
-           1e6 the likelihood stops being computable, long before the Gaussian
-           limit the t is heading for. */
-        Node *log_term = ad_log1p(tape, ad_ediv(tape, quadratic, linked->nu));
+        Node *log_term = mvstudent_log_kernel_traced(tape, quadratic, linked->nu);
         log_sum = log_sum ? ad_add(tape, log_sum, log_term) : log_term;
         if (v_out) v_out[t] = v;
 
@@ -237,8 +258,8 @@ static inline Node *_sdloc_filter(Tape *tape, const SdlocLinked *linked, Mat y, 
         }
     }
 
-    return ad_sub(tape, ad_scale(tape, constant_part, (mreal)T),
-                  ad_emul(tape, half_nu_K, log_sum));
+    return mvstudent_loglik_from_log_sum_traced(tape, T, linked->nu, K,
+                                                linked->half_log_det_Sigma, log_sum);
 }
 
 typedef struct {
@@ -337,13 +358,15 @@ static inline int _sdloc_status_is_valid(double stored) {
            && stored == (double)(int)stored;
 }
 
+/* Whether the filter can run at these parameters: a factor it can solve
+   against and a nu the model admits. Read off the constrained values, which
+   the traced and the analytic representation both hold as plain arrays. */
+static inline int _sdloc_scale_is_usable(const mreal *Omega_inv, int K, mreal nu) {
+    return mvgauss_chol_factor_is_usable(K, Omega_inv) && nu > 2 && !MISINF(nu) && !MISNAN(nu);
+}
+
 static inline int sdloc_scale_is_usable(const SdlocLinked *linked, int K) {
-    for (int k = 0; k < K; k++) {
-        mreal diagonal = AT(linked->Omega_inv->val, k, k);
-        if (!(diagonal > 0) || MISINF(diagonal) || MISNAN(diagonal)) return 0;
-    }
-    mreal nu = linked->nu->val.d[0];
-    return nu > 2 && !MISINF(nu) && !MISNAN(nu);
+    return _sdloc_scale_is_usable(linked->Omega_inv->val.d, K, linked->nu->val.d[0]);
 }
 
 /*
@@ -373,51 +396,339 @@ static inline int _sdloc_likelihood_is_usable(mreal log_likelihood) {
     return !(MISINF(log_likelihood) && log_likelihood > 0);
 }
 
+/*
+The recursion of _sdloc_filter, differentiated analytically rather than by the
+tape: value and gradient on plain arrays, no node, no BLAS call and no
+allocation between the first period and the last. The workspace is built once
+per shape and sample length and reused by every evaluation of a fit.
+
+The Student t part of the likelihood is not written here. The quadratic form
+q_t = v_t' Sigma^-1 v_t and its adjoint are dist/mv/gauss.h's
+mvgauss_chol_quadform and mvgauss_chol_quadform_adjoint, and the density's
+terms and their derivatives are dist/mv/student.h's observation-level
+functions. What is derived here is the score and the location recursion.
+
+Forward, per period t, with m_1 = m0 and L = Omega_inv:
+
+    v_t = y_t - m_t
+    z_t = L^-1 v_t, q_t = z_t' z_t, s_t = nu + q_t
+    x_t = L^-T v_t, shrink_t = c / s_t, c = sqrt((nu+K)(nu+2))
+    m_{t+1} = m0 (.) (1 - b) + b (.) m_t + a (.) (shrink_t x_t)
+
+The path keeps m_t, z_t and x_t, and s_t after them, 3K+1 numbers per period.
+
+Backward, from the last period to the first, with m_bar the adjoint of m_{t+1}
+arriving from the period after:
+
+    m0_bar += m_bar (.) (1 - b)
+    b_bar += m_bar (.) (m_t - m0)
+    a_bar += m_bar (.) (shrink_t x_t)
+    x_bar = shrink_t a (.) m_bar
+    shrink_bar = (a (.) m_bar) . x_t
+
+and the adjoint of m_t from the recursion is b (.) m_bar. x_t = L^-T v_t gives,
+with g = L^-1 x_bar,
+
+    v_bar += g, L_bar += -x_t g' on the lower triangle,
+
+from dx = L^-T (dv - dL' x). shrink_t = c(nu)/(nu + q_t) gives
+q_bar += -shrink_bar shrink_t / s_t, and at fixed q_t
+
+    d shrink_t / d nu = shrink_t [ (q_t - K) / (2 (nu+K) s_t) + (q_t - 2) / (2 (nu+2) s_t) ],
+
+the derivative of log c - log s_t with each pair of terms already combined:
+taken one at a time, 1/(2(nu+K)) + 1/(2(nu+2)) - 1/s_t is three terms of size
+1/nu whose sum is of size 1/nu^2. The density adds its own q_bar and nu_bar,
+the quadratic form carries q_bar to v_bar and L_bar, and v_t = y_t - m_t
+subtracts v_bar from the adjoint of m_t. At the first period m_1 = m0 adds what
+is left to m0_bar.
+
+The constrained adjoints reach theta through the same link table _sdloc_link
+and _sdloc_unlink use, and half_log_det_Sigma, the sum of the raw diagonal
+coordinates, adds -T to each of them directly.
+*/
+typedef struct {
+    int K, T, n_theta, path_stride;
+    mreal *m0, *a, *b, *Omega_inv, *Omega_inv_reciprocal;
+    mreal nu, half_log_det_Sigma, log_sum, score_scale;
+    mreal *path;
+    mreal *m0_bar, *a_bar, *b_bar, *Omega_inv_bar;
+    mreal *m_bar, *v, *v_bar, *x_bar, *w;
+    mreal *constrained;
+    SdlocLink *link_kinds;
+} SdlocAnalytic;
+
+/* Build the workspace for K series and T periods. Free with
+   sdloc_analytic_free. */
+static inline SdlocAnalytic *sdloc_analytic_new(int K, int T) {
+    assert(K > 0 && T > 1);
+    SdlocAnalytic *f = (SdlocAnalytic*)malloc(sizeof(SdlocAnalytic));
+    f->K = K;
+    f->T = T;
+    f->n_theta = sdloc_n_theta(K);
+    f->path_stride = 3 * K + 1;
+    size_t square = (size_t)K * K;
+    f->m0 = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->a = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->b = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->Omega_inv = (mreal*)malloc(square * sizeof(mreal));
+    f->Omega_inv_reciprocal = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->path = (mreal*)malloc((size_t)T * f->path_stride * sizeof(mreal));
+    f->m0_bar = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->a_bar = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->b_bar = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->Omega_inv_bar = (mreal*)malloc(square * sizeof(mreal));
+    f->m_bar = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->v = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->v_bar = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->x_bar = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->w = (mreal*)malloc((size_t)K * sizeof(mreal));
+    f->constrained = (mreal*)malloc((size_t)f->n_theta * sizeof(mreal));
+    f->link_kinds = (SdlocLink*)malloc((size_t)f->n_theta * sizeof(SdlocLink));
+    assert(f->m0 && f->a && f->b && f->Omega_inv && f->Omega_inv_reciprocal && f->path
+           && f->m0_bar && f->a_bar && f->b_bar && f->Omega_inv_bar && f->m_bar && f->v
+           && f->v_bar && f->x_bar && f->w && f->constrained && f->link_kinds);
+    _sdloc_link_kinds(K, f->link_kinds);
+    return f;
+}
+
+static inline void sdloc_analytic_free(SdlocAnalytic *f) {
+    if (!f) return;
+    free(f->m0); free(f->a); free(f->b); free(f->Omega_inv); free(f->Omega_inv_reciprocal);
+    free(f->path);
+    free(f->m0_bar); free(f->a_bar); free(f->b_bar); free(f->Omega_inv_bar);
+    free(f->m_bar); free(f->v); free(f->v_bar); free(f->x_bar); free(f->w);
+    free(f->constrained); free(f->link_kinds);
+    free(f);
+}
+
+/* theta to the constrained parameters, the map _sdloc_link builds on the tape,
+   read off the same link table. The constrained values go into f->constrained
+   too, since the chain rule is written in terms of them. */
+static inline void _sdloc_analytic_link(SdlocAnalytic *f, Vec theta) {
+    int K = f->K, at = 0;
+    assert(theta.r == f->n_theta && theta.c == 1);
+    for (int i = 0; i < f->n_theta; i++)
+        f->constrained[i] = sdloc_link_forward(f->link_kinds[i], theta.d[i]);
+
+    for (int k = 0; k < K; k++) f->m0[k] = f->constrained[at++];
+    for (int k = 0; k < K; k++) f->a[k] = f->constrained[at++];
+    for (int k = 0; k < K; k++) f->b[k] = f->constrained[at++];
+    for (size_t i = 0; i < (size_t)K * K; i++) f->Omega_inv[i] = 0;
+    f->half_log_det_Sigma = 0;
+    for (int k = 0; k < K; k++) {
+        f->Omega_inv[(size_t)k * K + k] = f->constrained[at];
+        f->half_log_det_Sigma += theta.d[at];
+        at++;
+    }
+    for (int i = 1; i < K; i++)
+        for (int j = 0; j < i; j++) f->Omega_inv[(size_t)i * K + j] = f->constrained[at++];
+    f->nu = f->constrained[at++];
+    assert(at == f->n_theta);
+}
+
+/* m_{t+1} = m0 (.) (1 - b) + b (.) m_t + a (.) (shrink x_t), shared by the
+   analytic filter and sdloc_simulate so the two cannot drift apart. */
+static inline void _sdloc_location_step(int K, const mreal *m0, const mreal *a, const mreal *b,
+                                        const mreal *m, mreal shrink, const mreal *x,
+                                        mreal *m_next) {
+    for (int k = 0; k < K; k++)
+        m_next[k] = m0[k] * (1 - b[k]) + b[k] * m[k] + a[k] * (shrink * x[k]);
+}
+
+static inline mreal *_sdloc_analytic_slot(const SdlocAnalytic *f, int t) {
+    return f->path + (size_t)t * f->path_stride;
+}
+
+/* The forward recursion, filling the path and returning the total
+   log-likelihood. The caller has checked the scale is usable, so no diagonal
+   entry of Omega_inv is zero. */
+static inline mreal _sdloc_analytic_forward(SdlocAnalytic *f, Mat y) {
+    int K = f->K, T = f->T;
+    mreal nu = f->nu;
+    mreal nu_reciprocal = (mreal)1 / nu;
+    f->score_scale = (mreal)sqrt(((double)nu + K) * ((double)nu + 2));
+    for (int k = 0; k < K; k++)
+        f->Omega_inv_reciprocal[k] = (mreal)1 / f->Omega_inv[(size_t)k * K + k];
+
+    mreal log_sum = 0;
+    for (int k = 0; k < K; k++) _sdloc_analytic_slot(f, 0)[k] = f->m0[k];
+    for (int t = 0; t < T; t++) {
+        mreal *slot = _sdloc_analytic_slot(f, t);
+        mreal *m = slot, *z = slot + K, *x = slot + 2 * K;
+        for (int k = 0; k < K; k++) f->v[k] = AT(y, k, t) - m[k];
+
+        mreal quadratic = mvgauss_chol_quadform(K, f->Omega_inv, f->Omega_inv_reciprocal, f->v, z);
+        mreal s = nu + quadratic;
+        slot[3 * K] = s;
+        log_sum += mvstudent_log_kernel(quadratic, nu_reciprocal);
+
+        if (t + 1 < T) {
+            _trsv_lower_reciprocal('T', K, f->Omega_inv, K, f->Omega_inv_reciprocal, f->v, x);
+            _sdloc_location_step(K, f->m0, f->a, f->b, m, f->score_scale / s, x,
+                                 _sdloc_analytic_slot(f, t + 1));
+        }
+    }
+    f->log_sum = log_sum;
+    return mvstudent_loglik_from_log_sum(T, nu, K, f->half_log_det_Sigma, log_sum);
+}
+
+/* The adjoint of the recursion above, walked backwards over the stored path;
+   see the comment above SdlocAnalytic for the derivation. Fills gradient with
+   the derivative of the log-likelihood, not of its negation, with respect to
+   theta. */
+static inline void _sdloc_analytic_backward(SdlocAnalytic *f, Vec gradient) {
+    int K = f->K, T = f->T;
+    mreal nu = f->nu;
+    assert(gradient.r == f->n_theta && gradient.c == 1);
+
+    for (int k = 0; k < K; k++) { f->m0_bar[k] = 0; f->a_bar[k] = 0; f->b_bar[k] = 0; f->m_bar[k] = 0; }
+    for (size_t i = 0; i < (size_t)K * K; i++) f->Omega_inv_bar[i] = 0;
+    mreal nu_bar = mvstudent_dloglik_dnu_from_log_sum(T, nu, K, f->log_sum);
+
+    for (int t = T - 1; t >= 0; t--) {
+        const mreal *slot = _sdloc_analytic_slot(f, t);
+        const mreal *m = slot, *z = slot + K, *x = slot + 2 * K;
+        mreal s = slot[3 * K];
+        /* q_t from z_t rather than as s - nu, which subtracts two numbers that
+           agree to every digit once nu is large. */
+        mreal quadratic = 0;
+        for (int k = 0; k < K; k++) quadratic += z[k] * z[k];
+        for (int k = 0; k < K; k++) f->v_bar[k] = 0;
+        mreal q_bar = 0;
+
+        if (t + 1 < T) {
+            mreal shrink = f->score_scale / s, shrink_bar = 0;
+            for (int k = 0; k < K; k++) {
+                mreal next_bar = f->m_bar[k];
+                f->m0_bar[k] += next_bar * (1 - f->b[k]);
+                f->b_bar[k] += next_bar * (m[k] - f->m0[k]);
+                f->a_bar[k] += next_bar * (shrink * x[k]);
+                mreal score_bar = f->a[k] * next_bar;
+                shrink_bar += score_bar * x[k];
+                f->x_bar[k] = shrink * score_bar;
+                f->m_bar[k] = f->b[k] * next_bar;
+            }
+            q_bar += -shrink_bar * shrink / s;
+            nu_bar += shrink_bar * shrink
+                      * ((quadratic - (mreal)K) / (2 * (nu + (mreal)K) * s)
+                         + (quadratic - 2) / (2 * (nu + 2) * s));
+
+            /* x_t = L^-T v_t: g = L^-1 x_bar, in place on x_bar. */
+            _trsv_lower_reciprocal('N', K, f->Omega_inv, K, f->Omega_inv_reciprocal, f->x_bar,
+                                   f->x_bar);
+            for (int i = 0; i < K; i++) {
+                f->v_bar[i] += f->x_bar[i];
+                mreal *row = f->Omega_inv_bar + (size_t)i * K;
+                for (int j = 0; j <= i; j++) row[j] -= x[i] * f->x_bar[j];
+            }
+        }
+
+        q_bar += mvstudent_dobservation_dq(nu, K, s);
+        nu_bar += mvstudent_dobservation_dnu(nu, K, quadratic, s);
+        mvgauss_chol_quadform_adjoint(K, f->Omega_inv, f->Omega_inv_reciprocal, z, q_bar, f->w,
+                                      f->v_bar, f->Omega_inv_bar);
+
+        for (int k = 0; k < K; k++) f->m_bar[k] -= f->v_bar[k];
+    }
+    for (int k = 0; k < K; k++) f->m0_bar[k] += f->m_bar[k];
+
+    mreal *g = gradient.d;
+    int at = 0;
+    for (int k = 0; k < K; k++) g[at++] = f->m0_bar[k];
+    for (int k = 0; k < K; k++) g[at++] = f->a_bar[k];
+    for (int k = 0; k < K; k++) g[at++] = f->b_bar[k];
+    int diagonal_at = at;
+    for (int k = 0; k < K; k++) g[at++] = f->Omega_inv_bar[(size_t)k * K + k];
+    for (int i = 1; i < K; i++)
+        for (int j = 0; j < i; j++) g[at++] = f->Omega_inv_bar[(size_t)i * K + j];
+    g[at++] = nu_bar;
+    assert(at == f->n_theta);
+
+    for (int i = 0; i < f->n_theta; i++)
+        g[i] *= sdloc_link_derivative(f->link_kinds[i], f->constrained[i]);
+    for (int k = 0; k < K; k++) g[diagonal_at + k] += -(mreal)T;
+}
+
+/*
+Total log-likelihood at theta, and its gradient when gradient.d is not NULL,
+without a tape. y must be the K x T matrix the workspace was built for. An
+unusable scale or likelihood returns minus infinity and a zeroed gradient, the
+sentinel the traced path returns, since a line search probes points the model
+cannot be evaluated at.
+*/
+static inline mreal sdloc_analytic_log_likelihood(SdlocAnalytic *f, Vec theta, Mat y,
+                                                  Vec gradient) {
+    assert(y.r == f->K && y.c == f->T);
+    _sdloc_analytic_link(f, theta);
+    if (!_sdloc_scale_is_usable(f->Omega_inv, f->K, f->nu)) {
+        if (gradient.d) for (int i = 0; i < f->n_theta; i++) gradient.d[i] = 0;
+        return -(mreal)INFINITY;
+    }
+    mreal value = _sdloc_analytic_forward(f, y);
+    if (!_sdloc_likelihood_is_usable(value)) {
+        if (gradient.d) for (int i = 0; i < f->n_theta; i++) gradient.d[i] = 0;
+        return -(mreal)INFINITY;
+    }
+    if (gradient.d) _sdloc_analytic_backward(f, gradient);
+    return value;
+}
+
 static inline mreal sdloc_log_likelihood_at(Vec theta, Mat y) {
+    SdlocAnalytic *analytic = sdloc_analytic_new(y.r, y.c);
+    Vec no_gradient = { 0, 0, 0, NULL };
+    mreal value = sdloc_analytic_log_likelihood(analytic, theta, y, no_gradient);
+    sdloc_analytic_free(analytic);
+    return value;
+}
+
+/* The traced counterpart of sdloc_log_likelihood_at, with the same sentinel,
+   for checking the analytic filter against reverse mode. Fills gradient with
+   the tape's gradient of the log-likelihood when gradient.d is not NULL. */
+static inline mreal sdloc_traced_log_likelihood(Vec theta, Mat y, Vec gradient) {
     int K = y.r;
     Tape *tape = tape_new();
     Node *theta_node = ad_leaf(tape, theta);
     SdlocLinked linked = _sdloc_link(tape, theta_node, K);
-    if (!sdloc_scale_is_usable(&linked, K)) {
-        sdloc_linked_free(&linked);
-        tape_free(tape);
-        return -(mreal)INFINITY;
+    mreal value = -(mreal)INFINITY;
+    if (sdloc_scale_is_usable(&linked, K)) {
+        Node *objective = _sdloc_filter(tape, &linked, y, NULL);
+        if (_sdloc_likelihood_is_usable(objective->val.d[0])) {
+            value = objective->val.d[0];
+            if (gradient.d) {
+                tape_backward(tape, objective);
+                for (int i = 0; i < theta.r; i++) gradient.d[i] = theta_node->grad.d[i];
+            }
+        }
     }
-    mreal value = _sdloc_filter(tape, &linked, y, NULL)->val.d[0];
-    sdloc_linked_free(&linked);
-    tape_free(tape);
-    return _sdloc_likelihood_is_usable(value) ? value : -(mreal)INFINITY;
-}
-
-typedef struct { Mat observations; } SdlocFitContext;
-
-static inline mreal sdloc_negative_log_likelihood(Vec theta, Vec gradient, void *context) {
-    SdlocFitContext *fit_context = (SdlocFitContext*)context;
-    int K = fit_context->observations.r;
-    Tape *tape = tape_new();
-    Node *theta_node = ad_leaf(tape, theta);
-    SdlocLinked linked = _sdloc_link(tape, theta_node, K);
-    if (!sdloc_scale_is_usable(&linked, K)) {
-        if (gradient.d) for (int i = 0; i < theta.r; i++) gradient.d[i] = 0;
-        sdloc_linked_free(&linked);
-        tape_free(tape);
-        return (mreal)INFINITY;
-    }
-    Node *objective = _sdloc_filter(tape, &linked, fit_context->observations, NULL);
-    if (!_sdloc_likelihood_is_usable(objective->val.d[0])) {
-        if (gradient.d) for (int i = 0; i < theta.r; i++) gradient.d[i] = 0;
-        sdloc_linked_free(&linked);
-        tape_free(tape);
-        return (mreal)INFINITY;
-    }
-    mreal value = -objective->val.d[0];
-    if (gradient.d) {
-        tape_backward(tape, ad_scale(tape, objective, (mreal)-1));
-        for (int i = 0; i < theta.r; i++) gradient.d[i] = theta_node->grad.d[i];
-    }
+    if (MISINF(value) && gradient.d) for (int i = 0; i < theta.r; i++) gradient.d[i] = 0;
     sdloc_linked_free(&linked);
     tape_free(tape);
     return value;
+}
+
+/*
+The objective the solver minimises, the negative log-likelihood, from the
+analytic filter. workspace is reused across every evaluation of one fit;
+leaving it NULL makes each call build and release its own, which is what a
+caller assembling this struct by hand gets.
+*/
+typedef struct {
+    Mat observations;
+    SdlocAnalytic *workspace;
+} SdlocFitContext;
+
+static inline mreal sdloc_negative_log_likelihood(Vec theta, Vec gradient, void *context) {
+    SdlocFitContext *fit_context = (SdlocFitContext*)context;
+    Mat y = fit_context->observations;
+    SdlocAnalytic *analytic = fit_context->workspace;
+    SdlocAnalytic *owned = analytic ? NULL : sdloc_analytic_new(y.r, y.c);
+    if (owned) analytic = owned;
+
+    mreal value = sdloc_analytic_log_likelihood(analytic, theta, y, gradient);
+    if (gradient.d) for (int i = 0; i < theta.r; i++) gradient.d[i] = -gradient.d[i];
+    if (owned) sdloc_analytic_free(owned);
+    return -value;
 }
 
 /* Maximum likelihood, starting from initial_guess, which is not modified. */
@@ -433,6 +744,7 @@ static inline SdlocFitResult sdloc_fit(Mat y, const SdlocParams *initial_guess,
 
     SdlocFitContext context;
     context.observations = y;
+    context.workspace = sdloc_analytic_new(K, T);
 
     LbfgsOptions solver = lbfgs_default_options();
     solver.max_iterations = options.max_iterations;
@@ -442,6 +754,7 @@ static inline SdlocFitResult sdloc_fit(Mat y, const SdlocParams *initial_guess,
     solver.initial_step = options.initial_step;
     solver.log_stream = options.trace;
     LbfgsResult solved = lbfgs(sdloc_negative_log_likelihood, &context, start, solver);
+    sdloc_analytic_free(context.workspace);
 
     SdlocFitResult result;
     result.params = sdloc_params_new(K);
@@ -467,15 +780,12 @@ static inline SdlocFitResult sdloc_fit(Mat y, const SdlocParams *initial_guess,
 }
 
 /*
-Draw T periods from the model at m, the counterpart of _sdloc_filter and
-written against the same recursion so the two conventions cannot drift: m_1
-= m0, and every period's shock is drawn from t_K(0, Sigma, nu) exactly as
-the filter's own density assumes.
-
-The scaled score is computed here directly rather than on a tape, since no
-gradient is wanted: Sigma^-1/2 v_t is the same triangular solve
-ad_triangular_solve performs in the filter, against the same Omega_inv and
-with the same transpose.
+Draw T periods from the model at m. m_1 = m0, and every period's shock is drawn
+from t_K(0, Sigma, nu) exactly as the filter's density assumes. The quadratic
+form, Sigma^-1/2 v_t = Omega_inv^-T v_t and the location update are the
+analytic filter's own kernels, mvgauss_chol_quadform, _trsv_lower_reciprocal
+and _sdloc_location_step, so the simulator and the estimator read the same
+recursion through the same code.
 
 Returns K x T, one column per period; caller must mat_free. Requires nu > 2,
 so the shocks have a covariance at all.
@@ -483,38 +793,39 @@ so the shocks have a covariance at all.
 static inline Mat sdloc_simulate(Rng *rng, const SdlocParams *m, int T) {
     assert(T > 0 && m->nu > 2 && m->K > 0);
     int K = m->K;
+    assert(m->Omega_inv.stride == K && m->m0.stride == 1 && m->a.stride == 1 && m->b.stride == 1);
 
     Mat zero_location = mat_new(1, K);
     Mat shocks = mvstudent_sample(rng, zero_location, m->Sigma, m->nu, T);
     mat_free(zero_location);
 
     Mat y = mat_new(K, T);
-    Vec mean = mat_copy(m->m0);
-    Vec residual = mat_new(K, 1);
+    mreal *buffer = (mreal*)malloc((size_t)5 * K * sizeof(mreal));
+    assert(buffer);
+    mreal *mean = buffer, *next = buffer + K, *residual = buffer + 2 * K;
+    mreal *z = buffer + 3 * K, *reciprocal = buffer + 4 * K;
+    for (int k = 0; k < K; k++) {
+        mean[k] = AT(m->m0, k, 0);
+        reciprocal[k] = (mreal)1 / AT(m->Omega_inv, k, k);
+    }
     mreal score_scale = (mreal)sqrt(((double)m->nu + K) * ((double)m->nu + 2));
 
     for (int t = 0; t < T; t++) {
         for (int k = 0; k < K; k++) {
-            AT(residual, k, 0) = AT(shocks, t, k);
-            AT(y, k, t) = AT(mean, k, 0) + AT(residual, k, 0);
+            residual[k] = AT(shocks, t, k);
+            AT(y, k, t) = mean[k] + residual[k];
         }
         if (t + 1 >= T) break;
 
-        Vec solved = vec_chol_solve(m->Omega_inv, residual);
-        mreal quadratic = 0;
-        for (int k = 0; k < K; k++) quadratic += AT(residual, k, 0) * AT(solved, k, 0);
-        mat_free(solved);
-
-        Vec half = vec_triangular_solve(m->Omega_inv, residual, 'L', 'T', 'N');
-        mreal shrink = score_scale / (m->nu + quadratic);
-        for (int k = 0; k < K; k++)
-            AT(mean, k, 0) = AT(m->m0, k, 0) * (1 - AT(m->b, k, 0))
-                           + AT(m->b, k, 0) * AT(mean, k, 0)
-                           + AT(m->a, k, 0) * shrink * AT(half, k, 0);
-        mat_free(half);
+        mreal quadratic = mvgauss_chol_quadform(K, m->Omega_inv.d, reciprocal, residual, z);
+        _trsv_lower_reciprocal('T', K, m->Omega_inv.d, K, reciprocal, residual, residual);
+        _sdloc_location_step(K, m->m0.d, m->a.d, m->b.d, mean, score_scale / (m->nu + quadratic),
+                             residual, next);
+        for (int k = 0; k < K; k++) mean[k] = next[k];
     }
 
-    mat_free(shocks); mat_free(mean); mat_free(residual);
+    free(buffer);
+    mat_free(shocks);
     return y;
 }
 
@@ -735,36 +1046,6 @@ static inline SdlocFitResult sdloc_fit_cached(Mat y, const SdlocParams *initial_
     return result;
 }
 
-typedef enum { SDLOC_LINK_IDENTITY, SDLOC_LINK_TANH, SDLOC_LINK_EXP, SDLOC_LINK_EXP_PLUS_TWO } SdlocLink;
-
-static inline mreal sdloc_link_forward(SdlocLink kind, mreal theta) {
-    switch (kind) {
-        case SDLOC_LINK_TANH: return (mreal)tanh((double)theta);
-        case SDLOC_LINK_EXP: return (mreal)exp((double)theta);
-        case SDLOC_LINK_EXP_PLUS_TWO: return (mreal)(exp((double)theta) + 2.0);
-        default: return theta;
-    }
-}
-
-static inline mreal sdloc_link_derivative(SdlocLink kind, mreal constrained) {
-    switch (kind) {
-        case SDLOC_LINK_TANH: return 1 - constrained * constrained;
-        case SDLOC_LINK_EXP: return constrained;
-        case SDLOC_LINK_EXP_PLUS_TWO: return constrained - 2;
-        default: return 1;
-    }
-}
-
-static inline void _sdloc_link_kinds(int K, SdlocLink *out) {
-    int at = 0;
-    for (int i = 0; i < K; i++) out[at++] = SDLOC_LINK_IDENTITY;
-    for (int i = 0; i < 2 * K; i++) out[at++] = SDLOC_LINK_TANH;
-    for (int i = 0; i < K; i++) out[at++] = SDLOC_LINK_EXP;
-    for (int i = 0; i < K * (K - 1) / 2; i++) out[at++] = SDLOC_LINK_IDENTITY;
-    out[at++] = SDLOC_LINK_EXP_PLUS_TWO;
-    assert(at == sdloc_n_theta(K));
-}
-
 static inline void _sdloc_theta_name(int K, int index, char *out, int size) {
     int at = 0;
     if (index < at + K) { snprintf(out, size, "m0[%d]", index - at); return; }
@@ -789,7 +1070,7 @@ static inline void _sdloc_theta_name(int K, int index, char *out, int size) {
 
 static inline Mat _sdloc_hessian(Vec theta, Mat y) {
     int n = theta.r;
-    SdlocFitContext context = { y };
+    SdlocFitContext context = { y, sdloc_analytic_new(y.r, y.c) };
     Mat H = mat_new(n, n);
     Vec forward = mat_new(n, 1), backward = mat_new(n, 1), probe = mat_new(n, 1);
     mreal step = sizeof(mreal) == sizeof(double) ? (mreal)1e-4 : (mreal)1e-3;
@@ -808,6 +1089,7 @@ static inline Mat _sdloc_hessian(Vec theta, Mat y) {
             AT(H, i, j) = AT(H, j, i) = mean;
         }
     mat_free(forward); mat_free(backward); mat_free(probe);
+    sdloc_analytic_free(context.workspace);
     return H;
 }
 

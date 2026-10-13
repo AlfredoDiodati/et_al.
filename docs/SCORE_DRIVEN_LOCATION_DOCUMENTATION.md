@@ -30,7 +30,37 @@ Both are the expressions Blazsek, Escribano and Licht's equations 6 and 7 give, 
 
 A symmetric, eigendecomposition-based square root is an equally valid alternative that this file does not implement. The two give different filtered paths, so this is a convention that changes the answer, stated rather than buried.
 
-Computing `Sigma^-1/2 v_t` as a differentiable node needs a one-sided triangular solve returning the solved vector itself, which neither `sd/qvarma.h`'s `u_t` (a plain elementwise rescaling of `v_t`, no matrix multiply at all) nor `ad_chol_solve` (the full `Omega_inv Omega_inv'` system) nor `ad_chol_quadform` (a scalar, not the vector) provides. `ad.h`'s `ad_triangular_solve` is exactly that node, and this model is its first caller — see `docs/AD_DOCUMENTATION.md`.
+Computing `Sigma^-1/2 v_t` as a differentiable node needs a one-sided triangular solve returning the solved vector itself, which neither `sd/qvarma.h`'s `u_t` (a plain elementwise rescaling of `v_t`, no matrix multiply at all) nor `ad_chol_solve` (the full `Omega_inv Omega_inv'` system) nor `ad_chol_quadform` (a scalar, not the vector) provides. `ad.h`'s `ad_triangular_solve` is exactly that node, and this model is its first caller — see `docs/AD_DOCUMENTATION.md`. The analytic filter below solves the same system with `linalg/factor.h`'s `_trsv_lower_reciprocal`.
+
+## Two filters
+
+The recursion is implemented twice, and both compute the same log-likelihood and gradient.
+
+- `_sdloc_filter` builds it on an `ad.h` tape and is differentiated by reverse mode. `sdloc_traced_log_likelihood` wraps it with the sentinel checks.
+- `sdloc_analytic_log_likelihood` runs it on plain arrays, with the gradient derived by hand from the recursion and evaluated in a backward pass over the stored path. It allocates nothing between the first period and the last; `sdloc_analytic_new(K, T)` builds the workspace once. `sdloc_fit`, `sdloc_log_likelihood_at`, `sdloc_negative_log_likelihood` and the standard errors' Hessian all use it.
+
+The traced filter stays because a hand derivation can be wrong in a way reverse mode cannot; the test compares the two.
+
+Nothing about the Student t density is written in this file. Both filters take it from `dist/`:
+
+- the quadratic form `q_t = v_t' Sigma^-1 v_t` and its adjoint: `mvgauss_chol_quadform` and `mvgauss_chol_quadform_adjoint` in `dist/mv/gauss.h`;
+- the per-period kernel `log1p(q_t/nu)`, the total, and their derivatives in `q_t` and `nu`: the observation-level functions in `dist/mv/student.h`;
+- the traced counterparts of the kernel and the total: `dist/mv/student_traced.h`;
+- whether a factor can be solved against: `mvgauss_chol_factor_is_usable`.
+
+`sd/qvarma.h` takes the same pieces from the same places. What the analytic filter derives here is the score and the location recursion only; the derivation is written out in the comment above `SdlocAnalytic`. One point in it: `shrink_t = sqrt((nu+K)(nu+2)) / (nu + q_t)` has a `nu` derivative made of three terms of size `1/nu` that sum to something of size `1/nu^2`, so it is evaluated with the terms already combined, `shrink_t [(q_t - K)/(2(nu+K)s_t) + (q_t - 2)/(2(nu+2)s_t)]`, rather than added one at a time.
+
+### Speed
+
+`make bench-score_driven_location_gradient_cost` writes `out/score_driven_location_gradient_cost_report.txt`. It times both filters, value and gradient at the true parameters, and a full fit from the truth with each, over 10 alternating rounds. The setup is in the file's header. On the development machine (AMD Ryzen 7 4800H, float64):
+
+| case | traced evaluation | analytic evaluation | traced fit | analytic fit |
+|---|---|---|---|---|
+| `K = 2, T = 400` | 681 us | 38 us | 23.1 ms | 1.3 ms |
+| `K = 3, T = 1000` | 736 us | 89 us | 16.8 ms | 2.7 ms |
+| `K = 5, T = 1000` | 782 us | 150 us | 26.9 ms | 5.0 ms |
+
+These are best times. The two fits take the same number of iterations and reach the same log-likelihood to ten decimals. At `K = 3` the median ratio of fit times was 8.8 with the traced arm run first and 13.5 with the analytic arm first, a spread the other two cases did not show.
 
 ## Initialization
 
@@ -89,8 +119,14 @@ void         sdloc_params_free(SdlocParams *m);
 void         sdloc_params_from_theta(Vec theta, SdlocParams *m);
 
 Node *_sdloc_filter(Tape *tape, const SdlocLinked *linked, Mat y, Node **v_out);
+mreal sdloc_traced_log_likelihood(Vec theta, Mat y, Vec gradient);
+
+SdlocAnalytic *sdloc_analytic_new(int K, int T);
+void sdloc_analytic_free(SdlocAnalytic *f);
+mreal sdloc_analytic_log_likelihood(SdlocAnalytic *f, Vec theta, Mat y, Vec gradient);
+
 mreal sdloc_log_likelihood_at(Vec theta, Mat y);
-mreal sdloc_negative_log_likelihood(Vec theta, Vec gradient, void *context);
+mreal sdloc_negative_log_likelihood(Vec theta, Vec gradient, void *context); /* context: SdlocFitContext */
 
 SdlocFitOptions sdloc_default_fit_options(void);
 SdlocFitResult  sdloc_fit(Mat y, const SdlocParams *initial_guess, SdlocFitOptions options);
@@ -113,9 +149,9 @@ int        sdloc_load_fit(SdlocFitResult *result, Mat y, const char *path);
 
 `y` is `K x T`, one column per period, matching `dist/mv/`'s convention that a column is one observation of a vector-valued variable. `T > 1` is required.
 
-`sdloc_fit` builds the optimizer itself. Its signature takes the data, an initial guess and the fit options, and nothing else — a caller never assembles an `LbfgsOptions`, and whatever it legitimately needs to tune is a field of `SdlocFitOptions`. The lower-level pieces (`_sdloc_filter`, `sdloc_negative_log_likelihood`, `sdloc_params_from_theta`) stay public so a custom loop is possible.
+`sdloc_fit` builds the optimizer itself. Its signature takes the data, an initial guess and the fit options, and nothing else — a caller never assembles an `LbfgsOptions`, and whatever it legitimately needs to tune is a field of `SdlocFitOptions`. The lower-level pieces (`_sdloc_filter`, `sdloc_analytic_log_likelihood`, `sdloc_negative_log_likelihood`, `sdloc_params_from_theta`) stay public so a custom loop is possible. `SdlocFitContext` is `{ observations, workspace }`; a `workspace` left `NULL` makes each call build and release its own.
 
-`sdloc_simulate` is written against the same recursion as `_sdloc_filter` and reads the same fields, so their conventions cannot silently diverge; the test checks the two residual paths agree to `4e-16` over 200 periods.
+`sdloc_simulate` runs the recursion through the analytic filter's own kernels, `mvgauss_chol_quadform`, `_trsv_lower_reciprocal` and `_sdloc_location_step`, and reads the same fields, so their conventions cannot silently diverge; the test checks the residual path rebuilt by hand agrees with the traced filter's to `2.2e-16` over 200 periods.
 
 ### Infeasible points return a sentinel, they do not abort
 
@@ -178,8 +214,10 @@ The failure this file is built against is a filter that returns a plausible log-
 - **The parameter count** against the blocks it is made of, at `K = 1..5`.
 - **The link round trips** in both directions, and imposes what it claims: `a` and `b` inside `(-1,1)`, a positive `Omega_inv` diagonal, a structurally zero upper triangle, `nu > 2`. `Sigma` and `half_log_det_Sigma` are checked against the factor they are derived from.
 - **The static case against `dist/mv/student.h`.** With `a = b = 0` the recursion is `m_t = m0` for every `t`, so the log-likelihood must be the sum of `T` i.i.d. multivariate-t log densities — a completely independent implementation sharing no code with the filter. A wrong constant term or a wrong quadratic form cannot survive this.
-- **The autodiff gradient against central differences**, at `K = 1, 2, 3` and at a parameter vector deliberately off the truth, since a gradient near zero hides a scale error. Worst relative error `1.0e-06`.
-- **The simulator against the filter**: the residual path rebuilt by hand from the simulated series matches the one the filter reports to `4.4e-16` over 200 periods.
+- **The analytic gradient against central differences**, at `K = 1, 2, 3` and at a parameter vector deliberately off the truth, since a gradient near zero hides a scale error. Worst relative error `1.0e-06`.
+- **The analytic filter against the traced one**, value and every gradient coordinate, over `K = 1..4`, `T` in {2, 3, 40, 150}, `nu` in {2.5, 7.5, 1e3, 1e6, 1e10} and five random parameter vectors each: 400 cases, tolerance `1e-9` relative to the larger of the traced value and 1. Worst value gap `8.9e-15`, worst gradient gap `5.6e-12`.
+- **The `nu` gradient at a light tail** against a central difference of a long double reference written in the test from the recursion, with a stable `log Gamma` difference: `K = 1, 2`, `T = 150`, `nu` in {1e6, 1e10, 1e14}, five draws each. The analytic gradient must sit within `1e-8`; its worst gap was `2.1e-9`, at `K = 1, nu = 1e14`, where the traced gradient's was `6.1e-9` and the gap between the two `3.9e-9`. That is more than the agreement test's `1e-9`, which is why that test stops at `nu = 1e10`.
+- **The simulator against the filter**: the residual path rebuilt by hand from the simulated series matches the one the traced filter reports to `2.2e-16` over 200 periods.
 - **Infeasible points return the sentinel** and zero the gradient, rather than aborting, at three diagonal `theta` values covering both routes: `-800` and `800`, where the factor underflows to zero or overflows and the check on the parameters catches it, and `-400`, where the factor is an ordinary number and only the check on the computed value can. Asserted through `MISNAN`/`MISINF`, never a comparison against a large number.
 - **The reported diagnostics describe the returned parameters**, not the point before the last step: the log-likelihood and gradient are recomputed at the returned `theta` and compared, the three information criteria against their definitions, and `is_converged` against `status`.
 - **The cache round trips** and refuses a fit written on a different sample, and returns 0 rather than aborting on a missing file. It refuses a diagnostics block missing a field rather than reading past it, and a refused load leaves the caller's model untouched.
@@ -200,8 +238,9 @@ order `T`. Measured on a 30-period, two-variable sample: the log-likelihood read
 `-84.1723` correctly through `nu = 1e10`, then `-84.25` at `nu = 1e12`, then
 exactly `-64` at `nu = 1e14`, against a true `-84.1723`.
 
-The filter now uses `ad_log1p` and `ad_lgamma_diff`, and
-`test_light_tail_stays_computable` in
+Both filters now take the density from `dist/mv/student.h` and its traced
+counterpart, which evaluate the kernel as `log1p(q_t/nu)` and the normalization
+through `special_lgamma_diff`, and `test_light_tail_stays_computable` in
 `tests/correctness/score_driven_location_correctness.c` pins it against an
 elementary closed form - `a = 0` makes `m_t = m_0` for every period, so the
 sample is iid t about a fixed location, and `K = 2` makes the normalization the
