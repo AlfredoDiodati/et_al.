@@ -2296,3 +2296,30 @@ A side effect in shared code: `QR_UNBLOCKED_MAX` in `linalg/factor.h`
 factors QRs of up to 48 columns without blocking, and `mat_lstsq` at 33 to
 48 columns takes 0.55 to 0.98 of its former time
 (`docs/SOLVER_DOCUMENTATION.md`).
+
+## 23. Selection: the branch-free gain without the sorted-input loss (`stats.h`)
+
+`stats_quickselect` ships the two-way partition with pdqsort's equal-pivot
+step (`repeat` in `docs/STATS_PERFORMANCE_DOCUMENTATION.md`). The same
+selection with both passes branch-free (`repeat_bl`) was measured about twice
+as fast on distinct values in random order (1.82 to 2.27 times from 10,000 to
+2,000,000 elements) and 7 to 29 per cent slower on distinct values already
+in ascending order, on an Intel Core i5-7400 with 4 threads, float32; the
+runs and their setup are in that file.
+
+Diagnosis, not profiled: the shipped loop branches on every comparison. On
+random input the branch goes either way about half of the time and is
+mispredicted; on sorted input it always goes the same way and costs nothing.
+The branch-free loop writes every element whatever the comparison says, which
+pays where the branch is mispredicted and costs where it is not.
+
+The shipped `repeat` is itself behind the selection it replaced on sorted
+input, a cost accepted when it was deployed: 7 to 18 per cent slower descending and up to 11 per cent ascending, in
+run 7 of that file, the first run on the shipped build. The copy timed before
+the deployment did not show it, so part of this item is finding out why the
+shipped build and the copy differ.
+
+`tests/performance/median_candidates.c` holds both versions and the selection
+before either, and times all of them on random, sorted and repeated input; a
+new candidate is added there as another arm.
+

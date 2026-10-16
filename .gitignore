@@ -72,6 +72,8 @@ tests/correctness/test_mcs_variance_candidate
 tests/performance/qvarma_*
 tests/performance/cumsum_threshold
 tests/performance/dargsort_threshold
+tests/performance/median_repeated_values
+tests/performance/median_candidates
 tests/performance/rolling_mean_threshold
 tests/performance/eig_sym_status
 tests/performance/lbfgs_candidates

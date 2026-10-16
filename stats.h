@@ -613,22 +613,51 @@ static inline int stats_partition(mreal *arr, int lo, int hi) {
     return i;
 }
 
+/* Moves the elements of arr[lo..hi] equal to pivot to the front and returns
+   the index past the last of them. The caller guarantees no element is below
+   pivot, so equal is the same as <=. */
+static inline int stats_gather_equal(mreal *arr, int lo, int hi, mreal pivot) {
+    int i = lo;
+    for (int j = lo; j <= hi; j++)
+        if (arr[j] <= pivot) { stats_swap_mreal(&arr[i], &arr[j]); i++; }
+    return i;
+}
+
 /* Quickselect: after this call, arr[k] holds the value that would be at
    index k (0-indexed) if arr were fully sorted - a partial sort, O(n)
    average instead of a full qsort's O(n log n), the same technique
    behind NumPy's np.partition/np.median. Every element left of k ends up
    <= arr[k], every element right >= arr[k], which is all stats_median
    below needs (plus, for an even n, a linear scan of the left partition
-   for its max - see there). */
+   for its max - see there).
+
+   The two-way partition leaves values equal to the pivot on its right, so
+   when k falls inside a long run of equal values each pass used to remove
+   one element of the run: quadratic in the run's length, 2,024 s for the
+   median of 2,000,000 equal values. The equal-pivot step of pdqsort fixes
+   that. After moving right past a pivot, arr[lo - 1] is that pivot and
+   nothing in arr[lo..hi] is below it; when the next pivot equals it, one
+   pass gathers the run at the front and the selection stops if k is in it.
+   On distinct values in random order it measured within noise of the
+   selection before it, and on input already sorted 7 to 18 per cent slower,
+   which was accepted for removing the collapse. Measured in
+   docs/STATS_PERFORMANCE_DOCUMENTATION.md. */
 static inline void stats_quickselect(mreal *arr, int lo, int hi, int k) {
+    int lower_bound_known = 0;
     while (lo < hi) {
         int mid = lo + (hi - lo) / 2;
         stats_median_of_three(arr, lo, mid, hi);
+        if (lower_bound_known && !(arr[lo - 1] < arr[mid])) {
+            int past_equal = stats_gather_equal(arr, lo, hi, arr[lo - 1]);
+            if (k < past_equal) return;
+            lo = past_equal;
+            continue;
+        }
         stats_swap_mreal(&arr[mid], &arr[hi]);
         int p = stats_partition(arr, lo, hi);
         if (p == k) return;
         else if (k < p) hi = p - 1;
-        else lo = p + 1;
+        else { lo = p + 1; lower_bound_known = 1; }
     }
 }
 

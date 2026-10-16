@@ -1314,6 +1314,37 @@ static void test_quantile_vs_reference(void) {
     }
 }
 
+/* Long runs of equal values are where the selection's equal-pivot step runs:
+   the middle index falls inside a run, and a pivot equal to the previous one
+   gathers the run in one pass. Samples of 1 to 4 levels, the odd counts
+   putting the median at the centre of a run, each in random, ascending and
+   descending order, plus a single value at either end of a run so the run is
+   not the minimum of the sample. */
+static void test_selection_long_runs(void) {
+    puts("median and quantile on long runs of equal values, against a full sort");
+    srand(4343);
+    for (int trial = 0; trial < 120; trial++) {
+        int n = 1 + rand() % 3000;
+        int levels = 1 + trial % 4;
+        int order = (trial / 4) % 3;
+        Mat x = mat_new(n, 1);
+        double *reference = (double *)malloc((size_t)n * sizeof *reference);
+        for (int i = 0; i < n; i++) {
+            int source = order == 0 ? rand() % n : order == 1 ? i : n - 1 - i;
+            AT(x, i, 0) = (mreal)((long long)source * levels / n);
+        }
+        if (trial % 5 == 0) AT(x, rand() % n, 0) = -1;
+        if (trial % 7 == 0) AT(x, rand() % n, 0) = (mreal)(levels + 1);
+        for (int i = 0; i < n; i++) reference[i] = (double)AT(x, i, 0);
+        assert(fabs((double)stats_median(x) - ref_median(reference, n)) < 1e-4);
+        for (int k = 0; k <= 10; k++) {
+            double p = 0.1 * k;
+            assert(fabs((double)stats_quantile(x, (mreal)p) - ref_quantile(reference, n, p)) < 1e-4);
+        }
+        free(reference); mat_free(x);
+    }
+}
+
 /* Q = T(T+2) sum_k rho_k^2 / (T-k), written out from the definition over a
    plain buffer with its own autocorrelation, so neither stats_autocorr nor
    the scaling can be wrong in both places at once. */
@@ -1439,6 +1470,7 @@ int main(void) {
     test_quantile_views_and_adversarial();
     test_all_finite();
     test_quantile_vs_reference();
+    test_selection_long_runs();
     test_ljung_box();
     puts("test_stats: all passed");
     return 0;

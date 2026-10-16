@@ -401,6 +401,26 @@ tests/performance/dargsort_threshold: tests/performance/dargsort_threshold.c sta
 bench-dargsort_threshold: tests/performance/dargsort_threshold
 	./tests/performance/dargsort_threshold
 
+# stats_median on samples where most values are equal, against a sample of
+# distinct values of the same length, at every hardware thread. Some cells take
+# minutes per call; results go to out/median_repeated_values_report.txt.
+tests/performance/median_repeated_values: tests/performance/median_repeated_values.c stats.h dist/chi_squared.h random/random.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/median_repeated_values.c $(LDLIBS) -o tests/performance/median_repeated_values
+
+bench-median_repeated_values: tests/performance/median_repeated_values
+	./tests/performance/median_repeated_values
+
+# The selection behind stats_median against the one it replaced and two
+# alternatives, on repeated, random and sorted input. Every arm is checked
+# against a full sort before anything is timed; some cells of the replaced
+# selection take minutes per call. An optional N=<n> caps the sample length
+# for a quick run. Results go to out/median_candidates_report.txt.
+tests/performance/median_candidates: tests/performance/median_candidates.c stats.h dist/chi_squared.h random/random.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/median_candidates.c $(LDLIBS) -o tests/performance/median_candidates
+
+bench-median_candidates: tests/performance/median_candidates
+	./tests/performance/median_candidates $(N)
+
 bench-tensor_omp_threshold: tests/performance/tensor_omp_threshold
 	./tests/performance/tensor_omp_threshold
 
@@ -1413,4 +1433,4 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: seri-runs-npz bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model
+.PHONY: seri-runs-npz bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model
