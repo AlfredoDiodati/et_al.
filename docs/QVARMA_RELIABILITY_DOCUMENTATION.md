@@ -69,61 +69,81 @@ not been done.
 
 The paper states that every parameter is root-T consistent. Cointegration
 theory suggests the co-integration parameters may converge faster,
-at rate T. Measured on one design, they do not: every estimated parameter
-except the I(1) intercepts converges at root T.
+at rate T, and the case where the loadings of the two lags are collinear is
+the one theory singles out. Measured on two designs, one with collinear
+loadings and one without, they do not: every estimated parameter except the
+I(1) intercepts converges at root T in both.
 
-Setup, from `make study-qvarma_consistency_rate`: a t-QVARMA(1,1,2) with
-`K = 3`, `K_star = 1`, `R = 1`, one `beta` shared by both lags, the paper's
-warm-up, and true values `c = (1, 0.7, 0.9)`, `Phi_star = 0.5`, `Psi_star`
-with diagonal `(0.30, 0.25, 0.20)` and off-diagonal entries between -0.05 and
-0.05, `Omega_inv` diagonal 0.6065 with off-diagonal entries 0.02 to 0.05,
-`nu = 8`, `alpha_1 = (0.30, 0.20)`, `alpha_2 = (0.15, 0.05)`,
-`beta = (1, 1.2)`. At each T in 400, 800, ..., 51200, 1000 samples, each
-from its own seed, each fitted from the true values with the default fit
-options, float64. The measure is the sample standard deviation of each
-estimate on the paper's scale over the fits that converged, and the ratio
-`sd(T) / sd(2T)`: 1.414 at rate root T, 2 at rate T. Every fit converged
-except 13 at T = 400 and 1 at T = 800. The full run took about 45 minutes on
-an AMD Ryzen 7 4800H at 16 threads.
+Setup, from `make study-qvarma_consistency_rate`, which runs both designs: a
+t-QVARMA(1,1,2) with `K = 3`, `K_star = 1`, `R = 1`, one `beta` shared by
+both lags, the paper's warm-up, and true values `c = (1, 0.7, 0.9)`,
+`Phi_star = 0.5`, `Psi_star` with diagonal `(0.30, 0.25, 0.20)` and
+off-diagonal entries between -0.05 and 0.05, `Omega_inv` diagonal 0.6065 with
+off-diagonal entries 0.02 to 0.05, `nu = 8`, `alpha_1 = (0.30, 0.20)`,
+`beta = (1, 1.2)`. The two designs differ only in `alpha_2`:
+
+- `noncollinear`: `alpha_2 = (0.15, 0.05)`, not a multiple of `alpha_1`.
+- `collinear`: `alpha_2 = (0.15, 0.10) = 0.5 alpha_1`.
+
+At each T in 400, 800, ..., 51200, 1000 samples, each from its own seed,
+each fitted from the true values with the default fit options, float64. The
+seed of run k at length index h is `20261110 + h * 1000000 + k`, the same in
+both designs, so the two share their innovations and their difference is
+measured with less noise than either rate. The measure is the sample standard
+deviation of each estimate on the paper's scale over the fits that converged,
+and the ratio `sd(T) / sd(2T)`: 1.414 at rate root T, 2 at rate T. Every fit
+converged except, in `noncollinear`, 13 at T = 400 and 1 at T = 800, and in
+`collinear`, 10 at T = 400; all of those stopped at the iteration limit except
+one line-search failure in `noncollinear` at T = 400. The designs took about
+45 and 42 minutes on an AMD Ryzen 7 4800H at 16 threads.
 
 Ratio per doubling, averaged over the five doublings from 1600 to 51200 as
 `(sd(1600) / sd(51200))^(1/5)`:
 
-| parameter | ratio |
-|---|---|
-| `alpha_1`, `alpha_2` | 1.432 to 1.458 |
-| `beta` | 1.442 |
-| long-run loading `sum_l Psi_dag_l`, I(1) block (derived) | 1.420 to 1.432 |
-| `Phi_star` | 1.457 |
-| `Psi_star` | 1.391 to 1.449 |
-| `Omega_inv` | 1.391 to 1.419 |
-| `nu` | 1.426 |
-| `c`, I(0) series | 1.417 |
-| `c`, I(1) series | 1.065, 1.067 |
+| parameter | noncollinear | collinear |
+|---|---|---|
+| `alpha_1`, `alpha_2` | 1.432 to 1.458 | 1.434 to 1.456 |
+| `beta` | 1.442 | 1.436 |
+| long-run loading `sum_l Psi_dag_l`, I(1) block (derived) | 1.420 to 1.432 | 1.418 to 1.430 |
+| `Phi_star` | 1.457 | 1.458 |
+| `Psi_star` | 1.391 to 1.449 | 1.391 to 1.447 |
+| `Omega_inv` | 1.391 to 1.419 | 1.391 to 1.419 |
+| `nu` | 1.426 | 1.426 |
+| `c`, I(0) series | 1.417 | 1.417 |
+| `c`, I(1) series | 1.065, 1.067 | 1.056, 1.058 |
 
-The individual ratios behind those averages, every parameter except the I(1)
-intercepts, every doubling from 1600 on, lie between 1.288 and 1.561. With
-1000 fits per length that spread is consistent with sampling noise. The co-integration
-parameters sit slightly above 1.414, but `Phi_star`, which has nothing to do
-with co-integration, sits there too. So the excess is not specific to
-co-integration. It most likely means the samples are not yet long enough for
-the asymptotic rate to fully show, not that the rate is faster than root T.
+Collinearity changes neither the rate nor the level: at T = 51200 the
+standard deviations of the `alpha` and `beta` entries in `collinear` are
+within 5% of those in `noncollinear`, `beta[1,2]` 0.0247 against 0.0259.
+
+The individual ratios behind those averages in `noncollinear`, every
+parameter except the I(1) intercepts, every doubling from 1600 on, lie between
+1.288 and 1.561. With 1000 fits per length that spread is consistent with
+sampling noise. The co-integration parameters sit slightly above 1.414, but
+`Phi_star`, which has nothing to do with co-integration, sits there too. So
+the excess is not specific to co-integration. It most likely means the samples
+are not yet long enough for the asymptotic rate to fully show, not that the
+rate is faster than root T. Because the designs share seeds, the agreement
+between the two columns is not a second independent confirmation of that.
 
 Below T = 1600 the ratios are not rates. Several are between 6 and 185, from
 fits in which `alpha_1` and the `Psi_star` entries on the I(1) rows grow
 together in opposite directions while the long-run loading stays near its
-true value. One fit at T = 400 has `alpha_1[1,1] = 10.5` against a true 0.3
-and `Psi_star_1[2,2] = -10.1` against 0.25. That is the overlap between
-`mu_star` and `mu_dag` described at `phi_star_bound` in `sd/qvarma.h`. 63 of
-987 converged fits at T = 400 have `alpha_1[1,1]` more than 1 away from the
-truth, 5 of 999 at T = 800, none from T = 1600 on. Neither
+true value. One fit at T = 400 in `noncollinear` has `alpha_1[1,1] = 10.5`
+against a true 0.3 and `Psi_star_1[2,2] = -10.1` against 0.25. That is the
+overlap between `mu_star` and `mu_dag` described at `phi_star_bound` in
+`sd/qvarma.h`. Fits with `alpha_1[1,1]` more than 1 away from the truth: in
+`noncollinear` 63 of 987 converged at T = 400 and 5 of 999 at T = 800, in
+`collinear` 64 of 990 and 6 of 1000, none from T = 1600 on in either. Neither
 `mu_star_stationary_only`, which removes that overlap, nor any shape other
 than this one has been measured.
 
-The outputs are `out/qvarma_consistency_rate_study_ratios.csv`,
-`out/qvarma_consistency_rate_study_sd.csv`, the report beside them, and one
-`out/qvarma_consistency_rate_study_estimates_T<T>.csv` per length with every
-fit's estimates and stopping reason.
+The outputs of each design are
+`out/qvarma_consistency_rate_study_<design>_ratios.csv`,
+`out/qvarma_consistency_rate_study_<design>_sd.csv`, the report beside them,
+and one `out/qvarma_consistency_rate_study_<design>_estimates_T<T>.csv` per
+length with every fit's estimates and stopping reason. One design alone runs
+with `./tests/correctness/qvarma_consistency_rate_study <design>`.
 
 ## Shapes and regimes that are hard to fit
 

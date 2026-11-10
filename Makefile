@@ -1003,16 +1003,19 @@ study-qvarma_recovery: tests/correctness/qvarma_recovery_study
 	./tests/correctness/qvarma_recovery_study
 
 # Not a pass/fail test: how fast the spread of each t-QVARMA(1,1,2) estimate
-# shrinks as the sample doubles from 400 to 51200, 1000 fits per length.
-# Writes out/qvarma_consistency_rate_study_*.{csv,txt} and resumes from the
-# per-run files it appends to if stopped. RUNS, MAX_ITERATIONS and
+# shrinks as the sample doubles from 400 to 51200, 1000 fits per length, for
+# two designs that differ only in whether alpha_1 and alpha_2 are collinear.
+# Writes out/qvarma_consistency_rate_study_<design>_*.{csv,txt} and resumes
+# from the per-run files it appends to if stopped, so a design already run
+# only reloads. RUNS, MAX_ITERATIONS and
 # FORCE_REFIT=1 are read from the environment. float64: the spread at the
 # longest samples is several orders of magnitude below one.
 tests/correctness/qvarma_consistency_rate_study: tests/correctness/qvarma_consistency_rate_study.c $(QVARMA_DEPS)
 	$(CC) $(STAT_CFLAGS) -fopenmp tests/correctness/qvarma_consistency_rate_study.c $(LDLIBS) -o tests/correctness/qvarma_consistency_rate_study
 
 study-qvarma_consistency_rate: tests/correctness/qvarma_consistency_rate_study
-	./tests/correctness/qvarma_consistency_rate_study
+	./tests/correctness/qvarma_consistency_rate_study noncollinear
+	./tests/correctness/qvarma_consistency_rate_study collinear
 
 # Timings and design-space work for solver/lbfgs.h and sd/qvarma.h. Never
 # part of `test` or `bench.sh`: each compares a candidate implementation

@@ -10,6 +10,8 @@ This study measures that ratio for every parameter.
 Fixed: one true parameter set (build_truth below), K = 3 series with the first
 one I(0) and the other two I(1), co-integrating rank R = 1, p = 1, q = 1,
 r = 2, one beta shared by both co-integration lags, the paper's warm-up.
+The true parameters come in two designs, chosen by the first command-line
+argument, that differ only in alpha_2 (see DESIGNS). Both use the same seeds.
 Varied: the sample length, over HORIZONS. At each length RUNS independent
 samples are simulated (default 1000), every one from its own seed, SEED_BASE +
 horizon_index * SEEDS_PER_HORIZON + run, so no two samples anywhere in the
@@ -28,8 +30,8 @@ sum_l Psi_dag_l, restricted to its I(1) block, is reported as a derived
 quantity: it is the matrix the stochastic trend enters the levels through, and
 its rate can differ from that of the alpha_l it is summed from.
 
-Every finished run is appended to out/qvarma_consistency_rate_study_estimates_T<T>.csv
-as soon as it finishes, so a run that stops for any reason resumes where it
+Every finished run is appended to
+out/qvarma_consistency_rate_study_<design>_estimates_T<T>.csv as soon as it finishes, so a run that stops for any reason resumes where it
 left off: on the next start the runs already on disk are skipped. The first
 line of each file is a fingerprint of everything that decides an estimate
 (precision, fit options, truth, seeds, T); a file whose fingerprint differs is
@@ -37,9 +39,9 @@ discarded and that length starts again. A change inside sd/qvarma.h itself is
 not part of the fingerprint. FORCE_REFIT=1 discards every file and starts over.
 
 Writes, once every length is complete,
-  out/qvarma_consistency_rate_study_ratios.csv   sd(T) / sd(2T) per parameter
-  out/qvarma_consistency_rate_study_sd.csv       sd(T) per parameter and length
-  out/qvarma_consistency_rate_study_report.txt   setup, convergence counts
+  out/qvarma_consistency_rate_study_<design>_ratios.csv   sd(T) / sd(2T) per parameter
+  out/qvarma_consistency_rate_study_<design>_sd.csv       sd(T) per parameter and length
+  out/qvarma_consistency_rate_study_<design>_report.txt   setup, convergence counts
 and one progress line per length on stderr.
 
 RUNS overrides the runs per length and MAX_ITERATIONS the solver budget
@@ -47,7 +49,8 @@ RUNS overrides the runs per length and MAX_ITERATIONS the solver budget
 OpenMP reports, each fit on its own RNG stream, so the estimates do not depend
 on thread count or on the order threads finish in.
 
-Run with make study-qvarma_consistency_rate.
+Run with make study-qvarma_consistency_rate, which runs both designs, or
+directly as tests/correctness/qvarma_consistency_rate_study <design>.
 */
 
 #include "../../sd/qvarma.h"
@@ -72,7 +75,16 @@ static const int HORIZONS[] = { 400, 800, 1600, 3200, 6400, 12800, 25600, 51200 
 #define LINE_LENGTH 16384
 #define N_LEADING_FIELDS 7
 
-static QvarmaParams build_truth(void) {
+/* In the collinear design alpha_2 is 0.5 alpha_1, so both co-integration lags
+   load the score along the same direction. */
+typedef struct { const char *name; mreal alpha_2[2]; } Design;
+static const Design DESIGNS[] = {
+    { "noncollinear", { 0.15, 0.05 } },
+    { "collinear", { 0.15, 0.10 } }
+};
+#define N_DESIGNS ((int)(sizeof DESIGNS / sizeof DESIGNS[0]))
+
+static QvarmaParams build_truth(const Design *design) {
     int K = 3, K_star = 1, p = 1, q = 1, r = 2, R = 1;
     QvarmaParams truth = qvarma_params_new(K, K_star, p, q, r, R, /*shared_beta*/1, /*warmup_longest*/0);
 
@@ -89,7 +101,6 @@ static QvarmaParams build_truth(void) {
         0.03, 0.02, 0.6065
     };
     mreal alpha_1[] = { 0.30, 0.20 };
-    mreal alpha_2[] = { 0.15, 0.05 };
     /* The first R columns of beta are the identity normalization. */
     mreal beta[] = { 1.0, 1.2 };
 
@@ -98,7 +109,7 @@ static QvarmaParams build_truth(void) {
     memcpy(truth.Psi_star[0].d, Psi_star, sizeof Psi_star);
     memcpy(truth.Omega_inv.d, Omega_inv, sizeof Omega_inv);
     memcpy(truth.alpha[0].d, alpha_1, sizeof alpha_1);
-    memcpy(truth.alpha[1].d, alpha_2, sizeof alpha_2);
+    memcpy(truth.alpha[1].d, design->alpha_2, sizeof design->alpha_2);
     memcpy(truth.beta[0].d, beta, sizeof beta);
     truth.nu = 8;
 
@@ -192,8 +203,8 @@ static void describe_configuration(char *out, size_t size, const QvarmaParams *t
         at += snprintf(out + at, size - (size_t)at, "%s%.17g", i ? "," : "", (double)values[i]);
 }
 
-static void estimates_path(char *out, size_t size, int T) {
-    snprintf(out, size, "out/qvarma_consistency_rate_study_estimates_T%d.csv", T);
+static void estimates_path(char *out, size_t size, const char *design, int T) {
+    snprintf(out, size, "out/qvarma_consistency_rate_study_%s_estimates_T%d.csv", design, T);
 }
 
 static void format_column_header(char *out, size_t size, char (*names)[NAME_LENGTH], int n_parameters) {
@@ -242,10 +253,10 @@ its complete, first-seen lines, so a line cut off by a crash cannot be joined
 to the next append. On return done[run] is 1 for every run below runs that is
 on disk, and the file exists with its header.
 */
-static void prepare_estimates_file(int T, const char *fingerprint_line, char (*names)[NAME_LENGTH],
+static void prepare_estimates_file(const char *design, int T, const char *fingerprint_line, char (*names)[NAME_LENGTH],
                                    int n_parameters, int runs, char *done, int force_refit) {
     char path[256], partial[300];
-    estimates_path(path, sizeof path, T);
+    estimates_path(path, sizeof path, design, T);
     snprintf(partial, sizeof partial, "%s.partial", path);
     memset(done, 0, (size_t)runs);
 
@@ -323,11 +334,11 @@ typedef struct {
     double mean_iterations;
 } HorizonSummary;
 
-static HorizonSummary summarize_horizon(int T, int n_parameters, int runs) {
+static HorizonSummary summarize_horizon(const char *design, int T, int n_parameters, int runs) {
     HorizonSummary summary;
     memset(&summary, 0, sizeof summary);
     char path[256];
-    estimates_path(path, sizeof path, T);
+    estimates_path(path, sizeof path, design, T);
     FILE *input = fopen(path, "r");
     assert(input);
     char *line = malloc(LINE_LENGTH);
@@ -368,7 +379,18 @@ static double wall_seconds(void) {
 #endif
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    const Design *chosen = NULL;
+    for (int d = 0; d < N_DESIGNS && argc > 1; d++)
+        if (strcmp(argv[1], DESIGNS[d].name) == 0) chosen = &DESIGNS[d];
+    if (!chosen) {
+        fprintf(stderr, "usage: %s <design>, design one of:", argv[0]);
+        for (int d = 0; d < N_DESIGNS; d++) fprintf(stderr, " %s", DESIGNS[d].name);
+        fprintf(stderr, "\n");
+        return 2;
+    }
+    const char *design = chosen->name;
+
     /* The fits run in parallel, one per thread, so BLAS inside each runs on
        one thread and the total is the whole machine. */
     if (openblas_set_num_threads) openblas_set_num_threads(1);
@@ -387,7 +409,7 @@ int main(void) {
     threads = omp_get_max_threads();
 #endif
 
-    QvarmaParams truth = build_truth();
+    QvarmaParams truth = build_truth(chosen);
     static char names[MAX_PARAMETERS][NAME_LENGTH];
     mreal true_values[MAX_PARAMETERS];
     int n_derived = 0;
@@ -403,14 +425,14 @@ int main(void) {
         describe_configuration(configuration, LINE_LENGTH, &truth, options, T);
         snprintf(fingerprint_line, 256, "# fingerprint %016llx\n",
                  (unsigned long long)fnv1a(configuration));
-        prepare_estimates_file(T, fingerprint_line, names, n_parameters, runs, done, force_refit);
+        prepare_estimates_file(design, T, fingerprint_line, names, n_parameters, runs, done, force_refit);
 
         int n_pending = 0;
         for (int run = 0; run < runs; run++)
             if (!done[run]) pending[n_pending++] = run;
 
         char path[256];
-        estimates_path(path, sizeof path, T);
+        estimates_path(path, sizeof path, design, T);
         FILE *append = fopen(path, "a");
         assert(append);
         double started = wall_seconds();
@@ -431,15 +453,19 @@ int main(void) {
             free(line);
         }
         fclose(append);
-        fprintf(stderr, "T = %d: %d runs fitted now, %d already on disk, %.0f s, %d threads\n",
-                T, n_pending, runs - n_pending, wall_seconds() - started, threads);
+        fprintf(stderr, "%s, T = %d: %d runs fitted now, %d already on disk, %.0f s, %d threads\n",
+                design, T, n_pending, runs - n_pending, wall_seconds() - started, threads);
     }
 
     static HorizonSummary summaries[N_HORIZONS];
-    for (int h = 0; h < N_HORIZONS; h++) summaries[h] = summarize_horizon(HORIZONS[h], n_parameters, runs);
+    for (int h = 0; h < N_HORIZONS; h++) summaries[h] = summarize_horizon(design, HORIZONS[h], n_parameters, runs);
 
-    FILE *ratios = fopen("out/qvarma_consistency_rate_study_ratios.csv", "w");
-    FILE *deviations = fopen("out/qvarma_consistency_rate_study_sd.csv", "w");
+    char ratios_path[256], deviations_path[256], report_path[256];
+    snprintf(ratios_path, sizeof ratios_path, "out/qvarma_consistency_rate_study_%s_ratios.csv", design);
+    snprintf(deviations_path, sizeof deviations_path, "out/qvarma_consistency_rate_study_%s_sd.csv", design);
+    snprintf(report_path, sizeof report_path, "out/qvarma_consistency_rate_study_%s_report.txt", design);
+    FILE *ratios = fopen(ratios_path, "w");
+    FILE *deviations = fopen(deviations_path, "w");
     assert(ratios && deviations);
     fprintf(ratios, "parameter,kind,true_value");
     fprintf(deviations, "parameter,kind,true_value");
@@ -461,9 +487,9 @@ int main(void) {
     fclose(ratios);
     fclose(deviations);
 
-    FILE *report = fopen("out/qvarma_consistency_rate_study_report.txt", "w");
+    FILE *report = fopen(report_path, "w");
     assert(report);
-    fprintf(report, "t-QVARMA(1,1,2) consistency rate study\n\n");
+    fprintf(report, "t-QVARMA(1,1,2) consistency rate study, %s design\n\n", design);
     fprintf(report, "%s build, %d threads, %d runs per sample length, max_iterations %d\n",
             sizeof(mreal) == sizeof(double) ? "float64" : "float32", threads, runs,
             options.max_iterations);
@@ -494,9 +520,9 @@ int main(void) {
             fprintf(report, " %.3g", summaries[h].mean[i] - (double)true_values[i]);
         fprintf(report, "\n");
     }
-    fprintf(report, "\nRatios: out/qvarma_consistency_rate_study_ratios.csv\n");
-    fprintf(report, "Standard deviations: out/qvarma_consistency_rate_study_sd.csv\n");
-    fprintf(report, "Every run: out/qvarma_consistency_rate_study_estimates_T<T>.csv\n");
+    fprintf(report, "\nRatios: %s\n", ratios_path);
+    fprintf(report, "Standard deviations: %s\n", deviations_path);
+    fprintf(report, "Every run: out/qvarma_consistency_rate_study_%s_estimates_T<T>.csv\n", design);
     fclose(report);
 
     free(configuration);
