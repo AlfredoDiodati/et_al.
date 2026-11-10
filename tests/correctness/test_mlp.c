@@ -1,6 +1,7 @@
 #include "../../nn/mlp.h"
 #include "../../solver/adam.h"
 #include <stdio.h>
+#include <sys/stat.h>
 
 #define TOL     1e-4f
 #define TOL_FD  1e-2f /* finite-difference truncation/roundoff, same as test_ad.c */
@@ -337,7 +338,7 @@ static void test_save_load_roundtrip(void) {
     fit.epochs_run = 0;
     Mat before = mlp_forecast(&fit, x);
 
-    const char *path = "/tmp/test_mlp_roundtrip.json";
+    const char *path = "out/test_mlp_roundtrip.json";
     mlp_save(&fit.model, path);
     MLP loaded = mlp_load(path, ad_tanh, ad_identity);
     remove(path);
@@ -360,6 +361,7 @@ static void test_save_load_roundtrip(void) {
 }
 
 int main(void) {
+    mkdir("out", 0777);
     test_forward_known();
     test_gradient_fd();
     test_adversarial_shapes();

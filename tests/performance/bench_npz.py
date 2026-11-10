@@ -29,6 +29,8 @@ import zlib
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRATCH = os.path.join(ROOT, "out")
+os.makedirs(SCRATCH, exist_ok=True)
 subprocess.run(["make", "libnpz.so"], cwd=ROOT, check=True)
 time.sleep(1)
 
@@ -104,7 +106,7 @@ def savez_kwargs(numeric, labels):
     return out
 
 
-with tempfile.TemporaryDirectory() as tmp:
+with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
     header("df_write_npz (vs numpy.savez, stored members)")
     for n in [10_000, 100_000, 1_000_000]:
         numeric, labels = make_arrays(n)

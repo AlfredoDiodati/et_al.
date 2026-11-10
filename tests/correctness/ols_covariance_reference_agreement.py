@@ -41,6 +41,8 @@ import numpy as np
 import statsmodels.api as sm
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRATCH = os.path.join(ROOT, "out")
+os.makedirs(SCRATCH, exist_ok=True)
 subprocess.run(["make", "libolscov_f64.so", "libolscov_f32.so"], cwd=ROOT, check=True)
 
 failures = []
@@ -84,7 +86,7 @@ def statsmodels_covariance(x, y, kind, lag, kernel):
 
 def lpirfs_covariances(x, y, lags):
     """lpirfs:::newey_west for every lag in lags, x without its intercept column."""
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         np.savetxt(os.path.join(tmp, "x.csv"), x[:, 1:], delimiter=",", fmt="%.17g")
         np.savetxt(os.path.join(tmp, "y.csv"), y, delimiter=",", fmt="%.17g")
         script = (f"x <- as.matrix(read.csv('{tmp}/x.csv', header = FALSE)); y <- read.csv('{tmp}/y.csv', header = FALSE)[, 1]; "

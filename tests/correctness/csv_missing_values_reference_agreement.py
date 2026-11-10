@@ -38,6 +38,8 @@ import pandas as pd
 import polars as pl
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRATCH = os.path.join(ROOT, "out")
+os.makedirs(SCRATCH, exist_ok=True)
 subprocess.run(["make", "libcsvna_f64.so"], cwd=ROOT, check=True)
 lib = ctypes.CDLL(os.path.join(ROOT, "libcsvna_f64.so"))
 lib.c_read_csv_with_markers.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int),
@@ -89,7 +91,7 @@ def check(name, label, our_types, our_values, their_types, their_values, our_row
                 return
 
 
-with tempfile.TemporaryDirectory() as tmp:
+with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
     for f in range(300):
         rows, cols = int(rng.integers(1, 31)), int(rng.integers(1, 7))
         markers = ["NA", ""] if f % 2 else ["NA"]

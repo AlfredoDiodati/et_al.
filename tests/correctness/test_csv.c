@@ -87,7 +87,7 @@ static DataFrame random_dataframe_for_csv(int max_r, int max_c) {
 static void test_random_write_read_roundtrip_stress(void) {
     puts("  random write/read round-trip fuzzing (fixed seed, fragile-biased)");
     srand(43);
-    const char *path = "/tmp/et_al_test_csv_fuzz.csv";
+    const char *path = "out/test_csv_fuzz.csv";
     for (int trial = 0; trial < 100; trial++) {
         DataFrame original = random_dataframe_for_csv(8, 6);
         df_write_csv(&original, path, csv_write_options_default());
@@ -103,7 +103,7 @@ static void test_random_write_read_roundtrip_stress(void) {
 static void test_basic_header_and_types(void) {
     puts("basic CSV: header, numeric/string column inference");
 
-    const char *path = "/tmp/et_al_test_basic.csv";
+    const char *path = "out/test_csv_basic.csv";
     write_file(path, "name,age,score\nAlice,30,95.5\nBob,25,88.0\n");
 
     DataFrame df = df_read_csv(path, csv_read_options_default());
@@ -125,7 +125,7 @@ static void test_basic_header_and_types(void) {
 static void test_quoting(void) {
     puts("CSV quoting: embedded delimiter and escaped quotes");
 
-    const char *path = "/tmp/et_al_test_quoting.csv";
+    const char *path = "out/test_csv_quoting.csv";
     /* "Smith, John" has an embedded comma inside quotes; "He said ""hi""" has an escaped quote */
     write_file(path, "name,note\n\"Smith, John\",30\n\"He said \"\"hi\"\"\",40\n");
 
@@ -142,7 +142,7 @@ static void test_quoting(void) {
 static void test_no_header(void) {
     puts("no header: generated col0/col1/... names");
 
-    const char *path = "/tmp/et_al_test_noheader.csv";
+    const char *path = "out/test_csv_noheader.csv";
     write_file(path, "1,2\n3,4\n5,6\n");
 
     CsvReadOptions opts = csv_read_options_default();
@@ -169,7 +169,7 @@ static void test_no_header(void) {
 static void test_missing_values_become_string_column(void) {
     puts("a column with an NA marker becomes a string column, not numeric-with-NaN");
 
-    const char *path = "/tmp/et_al_test_na.csv";
+    const char *path = "out/test_csv_na.csv";
     write_file(path, "x\n1.5\nNA\n4.0\n");
 
     DataFrame df = df_read_csv(path, csv_read_options_default());
@@ -186,7 +186,7 @@ static void test_missing_values_become_string_column(void) {
 static void test_blank_lines_skipped(void) {
     puts("blank lines are skipped, not turned into a one-empty-field row");
 
-    const char *path = "/tmp/et_al_test_blank.csv";
+    const char *path = "out/test_csv_blank.csv";
     write_file(path, "a,b\n1,2\n\n3,4\n");
 
     DataFrame df = df_read_csv(path, csv_read_options_default());
@@ -200,7 +200,7 @@ static void test_blank_lines_skipped(void) {
 static void test_custom_delimiter(void) {
     puts("custom delimiter: semicolon-separated");
 
-    const char *path = "/tmp/et_al_test_semicolon.csv";
+    const char *path = "out/test_csv_semicolon.csv";
     write_file(path, "a;b\n1;2\n3;4\n");
 
     CsvReadOptions opts = csv_read_options_default();
@@ -216,7 +216,7 @@ static void test_custom_delimiter(void) {
 static void test_adversarial(void) {
     puts("adversarial: single row, single column, no trailing newline");
 
-    const char *path = "/tmp/et_al_test_adversarial.csv";
+    const char *path = "out/test_csv_adversarial.csv";
     write_file(path, "only\n42"); /* no trailing newline */
 
     DataFrame df = df_read_csv(path, csv_read_options_default());
@@ -245,7 +245,7 @@ static void expect_abort(void (*fn)(void)) {
     assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 
-static const char *g_bad_csv_path = "/tmp/et_al_test_bad.csv";
+static const char *g_bad_csv_path = "out/test_csv_bad.csv";
 static void call_df_read_csv(void) {
     DataFrame df = df_read_csv(g_bad_csv_path, csv_read_options_default());
     (void)df;
@@ -274,7 +274,7 @@ static void test_ragged_row_and_empty_file_abort(void) {
 static void test_unterminated_quote_tolerated(void) {
     puts("unterminated quote at EOF: silently tolerated, not rejected (pinning current behavior)");
 
-    const char *path = "/tmp/et_al_test_unterminated_quote.csv";
+    const char *path = "out/test_csv_unterminated_quote.csv";
     write_file(path, "name\n\"abc"); /* opening quote, no closing quote, no trailing newline */
 
     DataFrame df = df_read_csv(path, csv_read_options_default());
@@ -288,7 +288,7 @@ static void test_unterminated_quote_tolerated(void) {
 static void test_write_read_roundtrip(void) {
     puts("write/read round-trip: mixed numeric+string columns, values needing quoting");
 
-    const char *path = "/tmp/et_al_test_write_roundtrip.csv";
+    const char *path = "out/test_csv_write_roundtrip.csv";
 
     DataFrame df = df_new(3);
     Vec score = mat_lit(3, 1, 1.5f, 2.5f, 3.5f);
@@ -318,7 +318,7 @@ static void test_write_read_roundtrip(void) {
 static void test_write_no_header(void) {
     puts("write with write_header=0: no header row, columns get generated names on reread");
 
-    const char *path = "/tmp/et_al_test_write_noheader.csv";
+    const char *path = "out/test_csv_write_noheader.csv";
     DataFrame df = df_new(2);
     Vec x = mat_lit(2, 1, 7.f, 8.f);
     df_add_numeric_col(&df, "x", x);
@@ -339,6 +339,7 @@ static void test_write_no_header(void) {
 }
 
 int main(void) {
+    frame_mkdir_p("out");
     test_basic_header_and_types();
     test_quoting();
     test_no_header();

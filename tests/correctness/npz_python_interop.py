@@ -44,6 +44,8 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+SCRATCH = os.path.join(ROOT, "out")
+os.makedirs(SCRATCH, exist_ok=True)
 DRIVER = os.path.join(HERE, "npz_python_interop")
 
 failures = []
@@ -303,7 +305,7 @@ def main():
     dtype = np.float64 if precision == "<f8" else np.float32
     print(f"frame/npz.h built at {precision}, numpy {np.__version__}\n")
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         check_numpy_reads_what_c_wrote(tmp, dtype)
         check_numpy_reads_what_c_wrote(tmp, dtype, compressed=True)
         check_c_reads_what_numpy_wrote(tmp, dtype)

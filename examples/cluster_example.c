@@ -11,11 +11,11 @@
        ./examples/cluster_example --cluster-worker
 
    or, to avoid copying the program out again after every rebuild, start the
-   deploy daemon once in a scratch directory and let each run ship the
-   current build to it:
+   deploy daemon once from the repo root, in a scratch directory under out/,
+   and let each run ship the current build to it:
 
-       mkdir -p /tmp/et_al_cluster && cd /tmp/et_al_cluster
-       /path/to/cluster_example --cluster-daemon
+       mkdir -p out/cluster_daemon && cd out/cluster_daemon
+       ../../examples/cluster_example --cluster-daemon
 
    Then run this program with no arguments on the machine you are driving
    from. It finds the others by broadcast, so there is nothing to configure

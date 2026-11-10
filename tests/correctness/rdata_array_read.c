@@ -514,7 +514,7 @@ static void test_synthetic_dataframe_and_refsxp(void) {
 
     RBuild b;
     build_synthetic_workspace(&b);
-    const char *path = "/tmp/et_al_test_rdata_synthetic.RData";
+    const char *path = "out/rdata_array_read_synthetic.RData";
     write_file(path, b.d, b.n);
     free(b.d);
 
@@ -553,7 +553,7 @@ static void test_synthetic_dataframe_and_refsxp(void) {
     remove(path);
 }
 
-static const char *g_bad_path = "/tmp/et_al_test_rdata_bad.RData";
+static const char *g_bad_path = "out/rdata_array_read_bad.RData";
 static void call_rdata_read(void) {
     RData d = rdata_read(g_bad_path);
     (void)d;
@@ -690,7 +690,7 @@ static void test_refsxp_long_form(void) {
     rb_real_vec(&b, (double[]){ 2.0 }, 1, 0);
     rb_nilvalue(&b);
 
-    const char *path = "/tmp/et_al_test_rdata_reflong.RData";
+    const char *path = "out/rdata_array_read_reflong.RData";
     write_file(path, b.d, b.n);
     free(b.d);
 
@@ -752,7 +752,7 @@ static void test_api_contract_violations(void) {
     rb_vec_header(&b, 1, 0);
     rb_real_vec(&b, (double[]){ 1.0 }, 1, 0);
     rb_nilvalue(&b);
-    const char *path = "/tmp/et_al_test_rdata_notdf.RData";
+    const char *path = "out/rdata_array_read_notdf.RData";
     write_file(path, b.d, b.n);
     free(b.d);
 
@@ -779,7 +779,7 @@ static void test_api_contract_violations(void) {
 
 static unsigned char g_rdata_fuzz_buf[4096];
 static size_t g_rdata_fuzz_len;
-static const char *g_rdata_fuzz_path = "/tmp/et_al_test_rdata_fuzz.RData";
+static const char *g_rdata_fuzz_path = "out/rdata_array_read_fuzz.RData";
 
 static void call_rdata_read_fuzz(void) {
     RData d = rdata_read(g_rdata_fuzz_path);
@@ -851,6 +851,7 @@ static void test_fuzz_stress(void) {
 }
 
 int main(void) {
+    frame_mkdir_p("out");
     test_real_sample_file();
     test_real_altrep_and_factor_fixture();
     test_one_shot_convenience_api();

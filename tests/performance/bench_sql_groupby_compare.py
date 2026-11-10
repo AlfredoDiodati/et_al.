@@ -21,6 +21,8 @@ import pandas as pd
 import polars as pl
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRATCH = os.path.join(ROOT, "out")
+os.makedirs(SCRATCH, exist_ok=True)
 subprocess.run(["make", "libsqlgroupbycompare.so"], cwd=ROOT, check=True)
 time.sleep(1)
 
@@ -104,7 +106,7 @@ def run_size(n, cardinality, tmp):
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         print("=== GROUP BY: production vs v1 (hash construction) vs v2 (+ direct per-group agg) vs pandas vs Polars ===")
         print("(ratio in parens is production-time / variant-time - >1.0 means faster than production)")
         print("query: SELECT c0, SUM(c1), AVG(c2) FROM df GROUP BY c0")

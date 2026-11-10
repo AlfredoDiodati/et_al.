@@ -64,6 +64,8 @@ import tempfile
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRATCH = os.path.join(ROOT, "out")
+os.makedirs(SCRATCH, exist_ok=True)
 subprocess.run(["make", "liblp_f64.so", "liblp_f32.so"], cwd=ROOT, check=True)
 
 R_SCRIPT = r'''
@@ -96,7 +98,7 @@ comparisons = 0
 
 def run_lpirfs(y, switching, spec):
     """y is K x T; returns the flattened responses in this library's [k][h][j] order."""
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         columns = {f"y{k}": y[k] for k in range(y.shape[0])}
         if switching is not None:
             columns["switching"] = switching
@@ -235,7 +237,7 @@ cases.append(("calibration-shaped K=5 lags=4", y, (moving_average, None), 4, 15,
 def lpirfs_jorda_data():
     """interest_rules_var_data as lpirfs ships it: output gap, inflation and
     the federal funds rate, one row per variable."""
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         path = os.path.join(tmp, "jorda.csv")
         subprocess.run(["Rscript", "-e", f"write.csv(lpirfs::interest_rules_var_data, '{path}', row.names = FALSE)"],
                        check=True, capture_output=True)

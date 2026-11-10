@@ -1,4 +1,5 @@
 #include "../../json.h"
+#include <sys/stat.h>
 
 /* Deep structural equality, used as the round-trip oracle throughout this
    file: no independent reference JSON implementation exists in C to
@@ -169,7 +170,7 @@ static void test_adversarial(void) {
 static void test_file_roundtrip(void) {
     puts("file round-trip: json_write_file then json_parse_file");
 
-    const char *path = "/tmp/et_al_test.json";
+    const char *path = "out/test_json_roundtrip.json";
     JsonValue *root = json_object();
     json_object_set(root, "a", json_number(42));
     json_object_set(root, "b", json_string("hello"));
@@ -290,6 +291,7 @@ static void test_random_roundtrip_stress(void) {
 }
 
 int main(void) {
+    mkdir("out", 0777);
     test_known_output_parse();
     test_string_escaping();
     test_unicode_escape();

@@ -49,8 +49,8 @@ itself, which is also how the batch gets developed. On another machine, either
 start a worker or, better on two machines that were built separately, start the
 deploy daemon and let this run ship its own binary across:
 
-  mkdir -p /tmp/et_al_cluster && cd /tmp/et_al_cluster
-  /path/to/qvarma_cluster_fits --cluster-daemon
+  mkdir -p out/cluster_daemon && cd out/cluster_daemon
+  ../../tests/performance/qvarma_cluster_fits --cluster-daemon
 
 Where broadcast does not reach, or where the network's gateway answers every
 port and the scan wastes seconds on it, CLUSTER_ADDRS names the machines

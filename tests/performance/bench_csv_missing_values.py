@@ -24,6 +24,8 @@ import pandas as pd
 import polars as pl
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRATCH = os.path.join(ROOT, "out")
+os.makedirs(SCRATCH, exist_ok=True)
 subprocess.run(["make", "libcsvnabench.so"], cwd=ROOT, check=True)
 time.sleep(2)  # let the CPU settle after compilation
 
@@ -59,7 +61,7 @@ def write_file(path, rows, missing):
 
 lines = [__doc__.strip(), "", "| rows | this library (ms) | pandas (ms) | polars (ms) | pandas / this | polars / this |", "|---|---|---|---|---|---|"]
 marker_cost = ["", "The marker's own cost, a file without NA read with and without the list:", ""]
-with tempfile.TemporaryDirectory() as tmp:
+with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
     for rows in (10_000, 100_000):
         path = os.path.join(tmp, f"na_{rows}.csv")
         write_file(path, rows, 0.1)

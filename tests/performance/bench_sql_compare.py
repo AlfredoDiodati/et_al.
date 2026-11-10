@@ -19,6 +19,8 @@ import pandas as pd
 import polars as pl
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRATCH = os.path.join(ROOT, "out")
+os.makedirs(SCRATCH, exist_ok=True)
 subprocess.run(["make", "libsqlcompare.so"], cwd=ROOT, check=True)
 time.sleep(2)
 
@@ -119,7 +121,7 @@ def run_size(n, ncols, tmp):
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         print("=== production vs v2/v3cold/v3warm/v4/v5/v6 vs pandas vs Polars ===")
         print("(ratio in parens is production-time / variant-time - >1.0 means faster than production)")
         print("Both row count AND column count swept together - per this session's standing")

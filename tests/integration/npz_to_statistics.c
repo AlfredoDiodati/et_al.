@@ -53,8 +53,8 @@ critical values at float32.
 #include "../../inference/cointegration.h"
 
 #define DATASET "examples/datasets/us_real.csv"
-#define NPZ_PATH "/tmp/et_al_integration_npz_to_statistics.npz"
-#define NPY_PATH "/tmp/et_al_integration_npz_to_statistics.npy"
+#define NPZ_PATH "out/npz_to_statistics.npz"
+#define NPY_PATH "out/npz_to_statistics.npy"
 
 /* Both arms hold the same bytes, so a statistic computed from them differs
    only by how the compiler vectorized each loop - the same reasoning
@@ -352,6 +352,7 @@ static void test_windowed_roundtrip_stress(const DataFrame *csv) {
 }
 
 int main(void) {
+    frame_mkdir_p("out");
     DataFrame csv = df_read_csv(DATASET, csv_read_options_default());
     df_write_npz(&csv, NPZ_PATH);
     DataFrame npz = df_read_npz(NPZ_PATH);

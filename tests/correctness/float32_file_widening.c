@@ -13,7 +13,7 @@
    Every path a '<f4' value can take is covered: df_read_npy, tensor_read_npy,
    and df_read_npz with stored and deflated members, 1D and 2D, beside '<f8'
    and '<U' members in the same archive. The files are built by a second
-   implementation of the two formats in this file, written to /tmp and
+   implementation of the two formats in this file, written to out/ and
    removed, so a member's data can be placed at an offset that is not a
    multiple of 4 and a member can be truncated on purpose. What is still
    refused (big-endian, half precision, integers, complex64, which has the
@@ -234,8 +234,8 @@ static int count_wrong_in_frame(const DataFrame *df, int first_column, const uin
     return wrong;
 }
 
-static const char *npy_path = "/tmp/et_al_float32_file_widening.npy";
-static const char *npz_path = "/tmp/et_al_float32_file_widening.npz";
+static const char *npy_path = "out/float32_file_widening.npy";
+static const char *npz_path = "out/float32_file_widening.npz";
 
 /* Bit patterns of every class of float32 value, with the edges of each. */
 static const uint32_t value_classes[] = {
@@ -649,6 +649,7 @@ static void test_random_archives(void) {
 }
 
 int main(void) {
+    frame_mkdir_p("out");
     stress = getenv("STRESS") != NULL;
     check_banner("float32 files read by a double build");
     test_every_class_of_value();

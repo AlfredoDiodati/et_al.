@@ -19,6 +19,7 @@ ET_AL. is a pure C11 econometrics and machine learning compute stack, built to r
   - [Model fitting API](#model-fitting-api)
   - [Installation tiers](#installation-tiers)
   - [Testing requirements](#testing-requirements)
+  - [Where files are written](#where-files-are-written)
 - [Design principles](#design-principles)
   - [1. Matrices are views over flat buffers, not rectangular blocks](#1-matrices-are-views-over-flat-buffers-not-rectangular-blocks)
   - [2. One memory convention, stated once, followed everywhere](#2-one-memory-convention-stated-once-followed-everywhere)
@@ -426,6 +427,18 @@ make CC=gcc CFLAGS="-fsanitize=address,undefined -g -O1" test
 ```
 
 Note the flag order: `CFLAGS` must be passed as a `make` command-line argument (`make CFLAGS=... test`), not a shell environment-variable prefix (`CFLAGS=... make test`) — the Makefile's own `CFLAGS` assignment is unconditional and silently overrides an inherited environment variable, but a command-line argument to `make` itself takes precedence over both. This catches use-after-free on freed owners, out-of-bounds access through views with wrong strides, integer overflow in index calculations, and leaks on an error path that a crash-only test would never exercise — not optional when touching memory-management code anywhere in this project. This applies equally when an LLM writes or modifies tests: the prompt must explicitly request boundary-focused cases, fixed-seed fuzzing biased toward fragile inputs, invariant checks rather than just spot-checks, a reference-implementation comparison, stress of the most fragile code paths, and sanitizer-compatible code.
+
+### Where files are written
+
+**Nothing in this repository reads or writes a path outside it.** A test, benchmark, example, script or Makefile rule puts every file it creates (reports, caches, fixtures it writes to read back, scratch directories) under one of the repository's ignored output directories: `out/` at the root, or `tests/integration/out/` and `examples/out/` where a suite already uses one. Never `/tmp`, the home directory, or any other absolute path. Instructions in a doc file or a comment follow the same rule: a scratch directory the reader is told to create is under `out/`, as `docs/CLUSTER_DOCUMENTATION.md`'s deploy daemon is.
+
+- C paths are relative to the repository root, the working directory `make`, `check.sh` and `bench.sh` run from, and the binary creates the directory before writing (`frame_mkdir_p("out")`, or `mkdir("out", 0777)` where `frame/` is not included).
+- A file a suite writes is named after the script that wrote it, `out/test_csv_basic.csv` rather than `out/basic.csv`, so two suites never share a path.
+- A Python or R driver builds its paths from its own location (`ROOT` in every `tests/**/*.py`), so it works from any directory, and a temporary directory is `tempfile.TemporaryDirectory(dir=SCRATCH)` with `SCRATCH` the repository's `out/`, never the system default.
+
+A fixed path under `/tmp` is shared by every checkout and every user on the machine, so two runs of one suite overwrite each other's files, and what a run leaves there is out of reach of `git status` and `git clean`.
+
+Two exceptions, both because the other end is outside the repository by its nature. `make install-core` and `make install-model` write to `$(PREFIX)`, `/usr/local` by default. `tests/correctness/fast_mcs_reference_agreement.py` reads the authors' fastMCS code from the directory the `FASTMCS_REFERENCE` environment variable names. Neither writes a result outside the repository. `check.sh` fails if a tracked source file names `/tmp`, a home directory, or a temporary directory outside the repository.
 
 ## Design principles
 

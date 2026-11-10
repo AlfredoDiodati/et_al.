@@ -111,6 +111,23 @@ same_suites_as_make_test() {
 
 run "same_suites_as_make_test" same_suites_as_make_test
 
+# Every file a run creates stays inside the repository, under out/ (README's
+# "Where files are written"). This lists the tracked sources that name /tmp, a
+# home directory, or a temporary directory the system chooses. Prose files are
+# skipped since the README states the rule using those same words.
+paths_outside_repo() {
+    local found
+    found=$(git grep -nIE '/tmp\b|/home/|\$HOME|~/|gettempdir|TemporaryDirectory\(\)|mkdtemp|mkstemp|tmpnam|tmpfile\(|tempdir\(\)|tempfile\(' \
+        -- . ':!*.md' ':!*.txt' ':!check.sh')
+    if [ -n "$found" ]; then
+        printf "paths outside the repository, move them under out/:\n%s\n" "$found"
+        return 1
+    fi
+    printf "no tracked source names a path outside the repository\n"
+}
+
+run "paths_outside_repo" paths_outside_repo
+
 printf "building...\n"
 printf "=== build ===\n" >> "$REPORT"
 BUILD_TARGETS=""

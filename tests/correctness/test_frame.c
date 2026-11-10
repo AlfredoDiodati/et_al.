@@ -244,13 +244,13 @@ static void test_duplicate_column_name(void) {
 static void test_mkdir_p(void) {
     puts("frame_mkdir_p: recursive directory creation");
 
-    const char *leaf = "/tmp/et_al_test_frame_mkdirp/a/b/c";
+    const char *leaf = "out/test_frame_mkdirp/a/b/c";
     frame_mkdir_p(leaf);
     struct stat st;
     assert(stat(leaf, &st) == 0 && S_ISDIR(st.st_mode));
     /* every intermediate component was created too, not just the leaf */
-    assert(stat("/tmp/et_al_test_frame_mkdirp/a", &st) == 0 && S_ISDIR(st.st_mode));
-    assert(stat("/tmp/et_al_test_frame_mkdirp/a/b", &st) == 0 && S_ISDIR(st.st_mode));
+    assert(stat("out/test_frame_mkdirp/a", &st) == 0 && S_ISDIR(st.st_mode));
+    assert(stat("out/test_frame_mkdirp/a/b", &st) == 0 && S_ISDIR(st.st_mode));
 
     /* idempotent: calling it again on an already-fully-existing path
        (including the leaf itself) must not crash or fail */
@@ -259,18 +259,18 @@ static void test_mkdir_p(void) {
 
     /* adversarial: a path whose parent didn't exist yet either, and a
        single-level relative-feeling path under an existing root */
-    frame_mkdir_p("/tmp/et_al_test_frame_mkdirp/x/y/z/w");
-    assert(stat("/tmp/et_al_test_frame_mkdirp/x/y/z/w", &st) == 0 && S_ISDIR(st.st_mode));
+    frame_mkdir_p("out/test_frame_mkdirp/x/y/z/w");
+    assert(stat("out/test_frame_mkdirp/x/y/z/w", &st) == 0 && S_ISDIR(st.st_mode));
 
     /* cleanup - remove deepest-first, both trees created above */
-    rmdir("/tmp/et_al_test_frame_mkdirp/x/y/z/w");
-    rmdir("/tmp/et_al_test_frame_mkdirp/x/y/z");
-    rmdir("/tmp/et_al_test_frame_mkdirp/x/y");
-    rmdir("/tmp/et_al_test_frame_mkdirp/x");
-    rmdir("/tmp/et_al_test_frame_mkdirp/a/b/c");
-    rmdir("/tmp/et_al_test_frame_mkdirp/a/b");
-    rmdir("/tmp/et_al_test_frame_mkdirp/a");
-    rmdir("/tmp/et_al_test_frame_mkdirp");
+    rmdir("out/test_frame_mkdirp/x/y/z/w");
+    rmdir("out/test_frame_mkdirp/x/y/z");
+    rmdir("out/test_frame_mkdirp/x/y");
+    rmdir("out/test_frame_mkdirp/x");
+    rmdir("out/test_frame_mkdirp/a/b/c");
+    rmdir("out/test_frame_mkdirp/a/b");
+    rmdir("out/test_frame_mkdirp/a");
+    rmdir("out/test_frame_mkdirp");
 }
 
 int main(void) {

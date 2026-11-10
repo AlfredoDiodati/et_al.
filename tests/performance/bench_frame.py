@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRATCH = os.path.join(ROOT, "out")
+os.makedirs(SCRATCH, exist_ok=True)
 subprocess.run(["make", "libframe.so"], cwd=ROOT, check=True)
 time.sleep(2)
 
@@ -75,7 +77,7 @@ COLS = 8
 rng = np.random.default_rng(42)
 names = ",".join(f"c{j}" for j in range(COLS))
 
-with tempfile.TemporaryDirectory() as tmp:
+with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
     header("df_read_csv (vs pandas.read_csv, all-numeric + header)")
     for n in [10_000, 100_000, 1_000_000]:
         data = rng.standard_normal((n, COLS)).astype(np.float32)

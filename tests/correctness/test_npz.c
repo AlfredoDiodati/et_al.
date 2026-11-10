@@ -423,7 +423,7 @@ static void build_fixture_npz(const char *path, const FixtureArray *arrays, int 
 static void test_numeric_roundtrip(void) {
     puts("numeric round-trip: values, column names and order survive write/read");
 
-    const char *path = "/tmp/et_al_test_npz_numeric.npz";
+    const char *path = "out/test_npz_numeric.npz";
     DataFrame df = df_new(3);
     Vec gdp = mat_lit(3, 1, 1.5f, -2.25f, 300.f);
     Vec cpi = mat_lit(3, 1, 0.f, 1e-30f, 1e30f);
@@ -452,7 +452,7 @@ static void test_numeric_roundtrip(void) {
 static void test_mixed_columns_preserve_declaration_order(void) {
     puts("mixed numeric/string columns keep declaration order through the archive");
 
-    const char *path = "/tmp/et_al_test_npz_mixed.npz";
+    const char *path = "out/test_npz_mixed.npz";
     DataFrame df = df_new(3);
     const char *quarter[3] = { "1973 March", "1973 June", "1973 September" };
     Vec gdp = mat_lit(3, 1, 5642.669f, 5704.098f, 5748.5f);
@@ -483,7 +483,7 @@ static void test_mixed_columns_preserve_declaration_order(void) {
 static void test_row_names_roundtrip(void) {
     puts("row labels survive as the reserved " FRAME_NPZ_ROW_NAMES_KEY " member, not as a column");
 
-    const char *path = "/tmp/et_al_test_npz_rownames.npz";
+    const char *path = "out/test_npz_rownames.npz";
     DataFrame df = df_new(3);
     Vec x = mat_lit(3, 1, 1.f, 2.f, 3.f);
     df_add_numeric_col(&df, "x", x);
@@ -513,7 +513,7 @@ static void test_row_names_roundtrip(void) {
 static void test_unicode_strings_roundtrip(void) {
     puts("UTF-8 string columns round-trip through numpy's UCS-4 dtype (1-, 2-, 3- and 4-byte sequences)");
 
-    const char *path = "/tmp/et_al_test_npz_unicode.npz";
+    const char *path = "out/test_npz_unicode.npz";
     DataFrame df = df_new(4);
     Vec x = mat_lit(4, 1, 1.f, 2.f, 3.f, 4.f);
     df_add_numeric_col(&df, "x", x);
@@ -536,7 +536,7 @@ static void test_unicode_strings_roundtrip(void) {
 static void check_numpy_fixture(const char *label, const unsigned char *bytes, size_t n) {
     printf("real numpy archive (%s): values, dtypes, 2D expansion and unicode all read back\n", label);
 
-    const char *path = "/tmp/et_al_test_npz_numpy.npz";
+    const char *path = "out/test_npz_numpy.npz";
     write_bytes(path, bytes, n);
     DataFrame df = df_read_npz(path);
 
@@ -576,7 +576,7 @@ static void test_reads_real_numpy_archives(void) {
 static void test_adversarial_shapes(void) {
     puts("adversarial: one row, one column, and an all-empty string column");
 
-    const char *path = "/tmp/et_al_test_npz_adversarial.npz";
+    const char *path = "out/test_npz_adversarial.npz";
     DataFrame single = df_new(1);
     Vec one = mat_lit(1, 1, 99.f);
     df_add_numeric_col(&single, "only", one);
@@ -626,8 +626,8 @@ static int df_identical(const DataFrame *a, const DataFrame *b);
 static void test_compressed_archive_means_the_same_thing(void) {
     puts("df_write_npz_compressed: smaller file, same frame back");
 
-    const char *plain_path = "/tmp/et_al_test_npz_plain.npz";
-    const char *compressed_path = "/tmp/et_al_test_npz_compressed.npz";
+    const char *plain_path = "out/test_npz_plain.npz";
+    const char *compressed_path = "out/test_npz_compressed.npz";
 
     int r = 2000;
     DataFrame df = df_new(r);
@@ -700,7 +700,7 @@ static void test_compressed_archive_means_the_same_thing(void) {
 static void test_rebuilt_metadata_drives_sql_and_join(void) {
     puts("a frame rebuilt from the archive is a valid df_sql and df_join input");
 
-    const char *path = "/tmp/et_al_test_npz_metadata.npz";
+    const char *path = "out/test_npz_metadata.npz";
     DataFrame df = df_new(4);
     const char *region[4] = { "north", "south", "north", "east" };
     Vec gdp = mat_lit(4, 1, 10.f, 20.f, 30.f, 40.f);
@@ -761,7 +761,7 @@ static void expect_abort(void (*fn)(void)) {
     assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 
-static const char *g_bad_path = "/tmp/et_al_test_npz_bad.npz";
+static const char *g_bad_path = "out/test_npz_bad.npz";
 static void call_df_read_npz(void) { DataFrame df = df_read_npz(g_bad_path); (void)df; }
 
 static void test_malformed_npz_aborts(void) {
@@ -865,7 +865,7 @@ static void test_malformed_npz_aborts(void) {
     remove(g_bad_path);
 }
 
-static const char *g_write_path = "/tmp/et_al_test_npz_write_bad.npz";
+static const char *g_write_path = "out/test_npz_write_bad.npz";
 
 static void write_empty_frame(void) {
     DataFrame df = df_new(4);
@@ -960,7 +960,7 @@ static int df_identical(const DataFrame *a, const DataFrame *b) {
 static void test_random_roundtrip_stress(void) {
     puts("  random mixed-column round-trip fuzzing (fixed seed, unicode and fragile magnitudes)");
     srand(46);
-    const char *path = "/tmp/et_al_test_npz_fuzz.npz";
+    const char *path = "out/test_npz_fuzz.npz";
     for (int trial = 0; trial < 200; trial++) {
         DataFrame original = random_dataframe();
         /* both writers over the same corpus: the deflated path has to
@@ -977,6 +977,7 @@ static void test_random_roundtrip_stress(void) {
 }
 
 int main(void) {
+    frame_mkdir_p("out");
     test_numeric_roundtrip();
     test_mixed_columns_preserve_declaration_order();
     test_row_names_roundtrip();

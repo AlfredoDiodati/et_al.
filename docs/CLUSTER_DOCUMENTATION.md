@@ -65,11 +65,11 @@ Then, on each of the other machines, either run a worker directly:
 ./myprog --cluster-worker
 ```
 
-or start the deploy daemon once in a scratch directory and never copy the program out again:
+or start the deploy daemon once, from the project root, in a scratch directory under `out/` and never copy the program out again:
 
 ```bash
-mkdir -p /tmp/et_al_cluster && cd /tmp/et_al_cluster
-/path/to/myprog --cluster-daemon
+mkdir -p out/cluster_daemon && cd out/cluster_daemon
+../../myprog --cluster-daemon
 ```
 
 Finally, on the machine you are driving from, run it with no arguments:
@@ -110,11 +110,11 @@ One binary, three modes. Every machine runs the same executable - C cannot send 
 
 The coordinator finds machines by UDP broadcast, so there are no addresses to configure and nothing to edit when a machine's IP changes. A machine sitting on both wifi and ethernet answers the same broadcast through both, which is why an answer carries a per-process instance id and is deduplicated on that rather than on its address - without it, such a machine would be counted and connected to twice.
 
-The deploy daemon removes the other setup chore, which is copying a rebuilt binary out to every machine before every run. Started once per machine in a scratch directory, it accepts the coordinator's own executable image, writes it as `./cluster_deployed_worker`, and runs it as a worker. After that the only thing ever installed on a machine is the daemon, and the code it runs is whatever was just built:
+The deploy daemon removes the other setup chore, which is copying a rebuilt binary out to every machine before every run. Started once per machine in a scratch directory under the project's `out/`, it accepts the coordinator's own executable image, writes it as `./cluster_deployed_worker`, and runs it as a worker. After that the only thing ever installed on a machine is the daemon, and the code it runs is whatever was just built:
 
 ```bash
-mkdir -p /tmp/et_al_cluster && cd /tmp/et_al_cluster
-/path/to/myprog --cluster-daemon
+mkdir -p out/cluster_daemon && cd out/cluster_daemon
+../../myprog --cluster-daemon
 ```
 
 Where a broadcast does not reach - two subnets, a VPN - `cluster_open_addrs` takes a list of `"ip"` or `"ip:port"` strings instead, and nothing else changes.

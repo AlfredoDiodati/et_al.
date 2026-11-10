@@ -16,6 +16,8 @@ import numpy as np
 import polars as pl
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRATCH = os.path.join(ROOT, "out")
+os.makedirs(SCRATCH, exist_ok=True)
 if not os.environ.get("JOIN_BENCH_SKIP_MAKE"):
     subprocess.run(["make", "libjoincompare.so"], cwd=ROOT, check=True)
 time.sleep(1)
@@ -142,7 +144,7 @@ def run_size_string(n_left, n_right, cardinality, tmp):
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         print("=== df_join (frame/join.h) vs real Polars .join(), INNER/LEFT/FULL ===")
         print("(ratio in parens is c-time / polars-time - >1.0 means df_join is faster)")
         print("cardinality: number of distinct id values both sides draw from. Output")
