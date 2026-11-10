@@ -6,17 +6,19 @@ already run. Read the two together: nothing here makes sense without the
 parameter blocks that file names.
 
 Everything below is measured rather than argued, and the setup is stated with
-each number. The two sources are
+each number. The three sources are
 `tests/correctness/qvarma_recovery_study.c` at 12 replications per cell,
-float64, seeded, and the curvature measurements in
-`tests/correctness/qvarma_identification.c`. **These are floors**: they are
-measured at the true parameters, and a real application knows less than that.
+float64, seeded, the curvature measurements in
+`tests/correctness/qvarma_identification.c`, and the convergence rates in
+`tests/correctness/qvarma_consistency_rate_study.c`. **These are floors**: they
+are measured at the true parameters, and a real application knows less than
+that.
 
 ## Read this before interpreting an estimate
 
 | condition | what becomes unreliable | measurement |
 |---|---|---|
-| **any model with an I(1) block** | `c` | Two orders of magnitude less curvature than the same shape without one (9.87, 25.1, 44.5 at T = 250, 1000, 2000 against 684, 2869, 5722), growing by 4.50 across an eightfold sample against 8.37. `c` converges more slowly than the square root of the sample and should not be read as a level. |
+| **any model with an I(1) block** | `c` | Two orders of magnitude less curvature than the same shape without one (9.87, 25.1, 44.5 at T = 250, 1000, 2000 against 684, 2869, 5722), growing by 4.50 across an eightfold sample against 8.37. `c` converges more slowly than the square root of the sample and should not be read as a level. The intercepts of the I(1) series are the ones affected: their spread shrinks by 1.07 per doubling of T against 1.417 for the I(0) one, see [How fast each estimate converges](#how-fast-each-estimate-converges). |
 | **`Psi_star` near zero** | `Phi_star` | `mu_star` barely moves, so `Phi_star` multiplies nothing. Curvature +16.82 at `Psi_star ~ 0.12` against -2.54 at `Psi_star ~ 0.02`: negative, so the truth is not even a local maximum at T = 500. The estimate drifts to the stationary boundary. |
 | **`alpha` near zero** | `beta` | `Psi_dag = alpha beta` is near zero whatever `beta` is. Curvature 27.46 at `alpha ~ 0.20` against 2.574 at `alpha ~ 0.02`; recovery error 107 against a typical 0.3. |
 
@@ -62,6 +64,66 @@ do not compare two such values across fits. Reparameterizing in `1/nu`, which
 would make the Gaussian case a reachable boundary point rather than a limit at
 infinity, is listed under future work in `docs/QVARMA_DOCUMENTATION.md` and has
 not been done.
+
+## How fast each estimate converges
+
+The paper states that every parameter is root-T consistent. Cointegration
+theory suggests the co-integration parameters may converge faster,
+at rate T. Measured on one design, they do not: every estimated parameter
+except the I(1) intercepts converges at root T.
+
+Setup, from `make study-qvarma_consistency_rate`: a t-QVARMA(1,1,2) with
+`K = 3`, `K_star = 1`, `R = 1`, one `beta` shared by both lags, the paper's
+warm-up, and true values `c = (1, 0.7, 0.9)`, `Phi_star = 0.5`, `Psi_star`
+with diagonal `(0.30, 0.25, 0.20)` and off-diagonal entries between -0.05 and
+0.05, `Omega_inv` diagonal 0.6065 with off-diagonal entries 0.02 to 0.05,
+`nu = 8`, `alpha_1 = (0.30, 0.20)`, `alpha_2 = (0.15, 0.05)`,
+`beta = (1, 1.2)`. At each T in 400, 800, ..., 51200, 1000 samples, each
+from its own seed, each fitted from the true values with the default fit
+options, float64. The measure is the sample standard deviation of each
+estimate on the paper's scale over the fits that converged, and the ratio
+`sd(T) / sd(2T)`: 1.414 at rate root T, 2 at rate T. Every fit converged
+except 13 at T = 400 and 1 at T = 800. The full run took about 45 minutes on
+an AMD Ryzen 7 4800H at 16 threads.
+
+Ratio per doubling, averaged over the five doublings from 1600 to 51200 as
+`(sd(1600) / sd(51200))^(1/5)`:
+
+| parameter | ratio |
+|---|---|
+| `alpha_1`, `alpha_2` | 1.432 to 1.458 |
+| `beta` | 1.442 |
+| long-run loading `sum_l Psi_dag_l`, I(1) block (derived) | 1.420 to 1.432 |
+| `Phi_star` | 1.457 |
+| `Psi_star` | 1.391 to 1.449 |
+| `Omega_inv` | 1.391 to 1.419 |
+| `nu` | 1.426 |
+| `c`, I(0) series | 1.417 |
+| `c`, I(1) series | 1.065, 1.067 |
+
+The individual ratios behind those averages, every parameter except the I(1)
+intercepts, every doubling from 1600 on, lie between 1.288 and 1.561. With
+1000 fits per length that spread is consistent with sampling noise. The co-integration
+parameters sit slightly above 1.414, but `Phi_star`, which has nothing to do
+with co-integration, sits there too. So the excess is not specific to
+co-integration. It most likely means the samples are not yet long enough for
+the asymptotic rate to fully show, not that the rate is faster than root T.
+
+Below T = 1600 the ratios are not rates. Several are between 6 and 185, from
+fits in which `alpha_1` and the `Psi_star` entries on the I(1) rows grow
+together in opposite directions while the long-run loading stays near its
+true value. One fit at T = 400 has `alpha_1[1,1] = 10.5` against a true 0.3
+and `Psi_star_1[2,2] = -10.1` against 0.25. That is the overlap between
+`mu_star` and `mu_dag` described at `phi_star_bound` in `sd/qvarma.h`. 63 of
+987 converged fits at T = 400 have `alpha_1[1,1]` more than 1 away from the
+truth, 5 of 999 at T = 800, none from T = 1600 on. Neither
+`mu_star_stationary_only`, which removes that overlap, nor any shape other
+than this one has been measured.
+
+The outputs are `out/qvarma_consistency_rate_study_ratios.csv`,
+`out/qvarma_consistency_rate_study_sd.csv`, the report beside them, and one
+`out/qvarma_consistency_rate_study_estimates_T<T>.csv` per length with every
+fit's estimates and stopping reason.
 
 ## Shapes and regimes that are hard to fit
 

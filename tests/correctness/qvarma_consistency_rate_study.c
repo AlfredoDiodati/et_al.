@@ -198,7 +198,7 @@ static void estimates_path(char *out, size_t size, int T) {
 
 static void format_column_header(char *out, size_t size, char (*names)[NAME_LENGTH], int n_parameters) {
     int at = snprintf(out, size, "run,seed,status,is_converged,niter,gradient_norm,log_likelihood");
-    for (int i = 0; i < n_parameters; i++) at += snprintf(out + at, size - (size_t)at, ",%s", names[i]);
+    for (int i = 0; i < n_parameters; i++) at += snprintf(out + at, size - (size_t)at, ",\"%s\"", names[i]);
     at += snprintf(out + at, size - (size_t)at, "\n");
     assert((size_t)at < size);
 }
@@ -450,8 +450,8 @@ int main(void) {
     fprintf(deviations, "\n");
     for (int i = 0; i < n_parameters; i++) {
         const char *kind = i < n_parameters - n_derived ? "estimated" : "derived";
-        fprintf(ratios, "%s,%s,%.17g", names[i], kind, (double)true_values[i]);
-        fprintf(deviations, "%s,%s,%.17g", names[i], kind, (double)true_values[i]);
+        fprintf(ratios, "\"%s\",%s,%.17g", names[i], kind, (double)true_values[i]);
+        fprintf(deviations, "\"%s\",%s,%.17g", names[i], kind, (double)true_values[i]);
         for (int h = 0; h + 1 < N_HORIZONS; h++)
             fprintf(ratios, ",%.6g", summaries[h].sd[i] / summaries[h + 1].sd[i]);
         for (int h = 0; h < N_HORIZONS; h++) fprintf(deviations, ",%.6g", summaries[h].sd[i]);
