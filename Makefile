@@ -780,12 +780,13 @@ test-seri-mcs-r: libserimcs_f64.so libserimcs_f32.so
 
 # Checks inference/fast_mcs.h against the authors' implementation of the
 # paper, run on the same draws; needs numpy and a clone of
-# https://github.com/Sylvain-Barde/fastMCS:
-# make test-fast-mcs-python FASTMCS_REFERENCE=path/to/fastMCS PYTHON=...
+# https://github.com/Sylvain-Barde/fastMCS in _temp/fastMCS:
+# git clone https://github.com/Sylvain-Barde/fastMCS _temp/fastMCS
+# make test-fast-mcs-python PYTHON=...
 libfastmcs_f64.so: tests/correctness/fast_mcs_reference_agreement.c $(FAST_MCS_DEPS)
 	$(CC) $(CFLAGS) -DMAT_DOUBLE -shared -fPIC tests/correctness/fast_mcs_reference_agreement.c $(LDLIBS) -o libfastmcs_f64.so
 test-fast-mcs-python: libfastmcs_f64.so
-	FASTMCS_REFERENCE=$(FASTMCS_REFERENCE) $(or $(PYTHON),python3) tests/correctness/fast_mcs_reference_agreement.py
+	$(or $(PYTHON),python3) tests/correctness/fast_mcs_reference_agreement.py
 
 test-rolling-mean-python: librolling_f64.so librolling_f32.so
 	$(or $(PYTHON),python3) tests/correctness/rolling_mean_reference_agreement.py

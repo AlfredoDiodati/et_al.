@@ -143,7 +143,7 @@ In the paper's order the first two cannot act, because every earlier model's t-s
 |---|---|---|---|
 | `tests/correctness/fast_mcs_correctness.c` | does it compute Algorithm 3, and does it equal `mcs()` where Proposition 1 says it must | `make test` | 0.15 s |
 | `tests/correctness/fast_mcs_size_and_power.c` | does it cover and eliminate as the MCS should, on `mcs_size_and_power.c`'s design | `make test` | 0.40 s |
-| `tests/correctness/fast_mcs_reference_agreement.py` | on the same draws, where does it differ from the authors' code, and which of the two equals the exact algorithms | `make test-fast-mcs-python FASTMCS_REFERENCE=<clone> PYTHON=<python with numpy>` | 36 s |
+| `tests/correctness/fast_mcs_reference_agreement.py` | on the same draws, where does it differ from the authors' code, and which of the two equals the exact algorithms | `git clone https://github.com/Sylvain-Barde/fastMCS _temp/fastMCS`, then `make test-fast-mcs-python PYTHON=<python with numpy>` | 36 s |
 | `tests/performance/fast_mcs_against_mcs.c` | is it cheaper than `mcs()`, and how far apart are their answers | `make bench-fast_mcs_against_mcs` | 14 s |
 
 **`fast_mcs_correctness.c`** compares against a reference written from the paper with nothing reused from either header:

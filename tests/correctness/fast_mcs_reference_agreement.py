@@ -1,11 +1,12 @@
 """Checks inference/fast_mcs.h against the authors' own implementation.
 
-    make test-fast-mcs-python FASTMCS_REFERENCE=path/to/fastMCS     (PYTHON=... for an interpreter with numpy)
+    git clone https://github.com/Sylvain-Barde/fastMCS _temp/fastMCS
+    make test-fast-mcs-python     (PYTHON=... for an interpreter with numpy)
 
 Outside make test, since it needs Python with numpy and a clone of
 https://github.com/Sylvain-Barde/fastMCS, the implementation Barde (2026)
-links. FASTMCS_REFERENCE is that clone's directory, or its fastMCS.py; the
-commit it is at is printed.
+links. The clone lives in _temp/fastMCS inside this repository, which git
+ignores; the commit it is at is printed.
 
 What is compared. Both sides get the same losses and the same resamples:
 the row indices mcs() and fast_mcs() draw are taken from this library
@@ -67,14 +68,11 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 subprocess.run(["make", "libfastmcs_f64.so"], cwd=ROOT, check=True)
 
-reference_path = os.environ.get("FASTMCS_REFERENCE")
-if not reference_path:
-    sys.exit("FASTMCS_REFERENCE is not set: clone https://github.com/Sylvain-Barde/fastMCS and pass its directory")
-if os.path.isdir(reference_path):
-    reference_path = os.path.join(reference_path, "fastMCS.py")
+reference_dir = os.path.join(ROOT, "_temp", "fastMCS")
+reference_path = os.path.join(reference_dir, "fastMCS.py")
 if not os.path.isfile(reference_path):
-    sys.exit("no fastMCS.py at " + reference_path)
-reference_dir = os.path.dirname(os.path.abspath(reference_path))
+    sys.exit("no fastMCS.py at " + reference_path
+             + ": from the repository root run git clone https://github.com/Sylvain-Barde/fastMCS _temp/fastMCS")
 commit = subprocess.run(["git", "-C", reference_dir, "log", "-1", "--format=%H %cd"],
                         capture_output=True, text=True).stdout.strip() or "not a git checkout"
 
