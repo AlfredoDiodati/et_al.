@@ -121,3 +121,6 @@ mat_example
 
 # temporary files copied in the repo for momentary use (e.g. give as context for llms)
 _temp/
+.claude/
+.claude-tmp/
+.DS_Store
