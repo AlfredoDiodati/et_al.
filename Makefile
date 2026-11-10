@@ -1002,6 +1002,18 @@ tests/correctness/qvarma_recovery_study: tests/correctness/qvarma_recovery_study
 study-qvarma_recovery: tests/correctness/qvarma_recovery_study
 	./tests/correctness/qvarma_recovery_study
 
+# Not a pass/fail test: how fast the spread of each t-QVARMA(1,1,2) estimate
+# shrinks as the sample doubles from 400 to 51200, 1000 fits per length.
+# Writes out/qvarma_consistency_rate_study_*.{csv,txt} and resumes from the
+# per-run files it appends to if stopped. RUNS, MAX_ITERATIONS and
+# FORCE_REFIT=1 are read from the environment. float64: the spread at the
+# longest samples is several orders of magnitude below one.
+tests/correctness/qvarma_consistency_rate_study: tests/correctness/qvarma_consistency_rate_study.c $(QVARMA_DEPS)
+	$(CC) $(STAT_CFLAGS) -fopenmp tests/correctness/qvarma_consistency_rate_study.c $(LDLIBS) -o tests/correctness/qvarma_consistency_rate_study
+
+study-qvarma_consistency_rate: tests/correctness/qvarma_consistency_rate_study
+	./tests/correctness/qvarma_consistency_rate_study
+
 # Timings and design-space work for solver/lbfgs.h and sd/qvarma.h. Never
 # part of `test` or `bench.sh`: each compares a candidate implementation
 # against the one it would replace, on its own, rather than against an
@@ -1434,4 +1446,4 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: seri-runs-npz bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery install-core install-model uninstall-core uninstall-model
+.PHONY: seri-runs-npz bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery study-qvarma_consistency_rate install-core install-model uninstall-core uninstall-model
