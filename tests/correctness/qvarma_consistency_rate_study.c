@@ -30,6 +30,27 @@ sum_l Psi_dag_l, restricted to its I(1) block, is reported as a derived
 quantity: it is the matrix the stochastic trend enters the levels through, and
 its rate can differ from that of the alpha_l it is summed from.
 
+The same runs also measure the rate at which the bias shrinks, for every
+reported quantity except the intercepts c. If the bias is kappa / T, it halves
+when T doubles; at rate 1 / sqrt(T) it shrinks by 0.707 instead. At each
+length, over the converged runs, the bias is b(T) = mean estimate - truth and
+its Monte Carlo standard error is se(T) = sd(T) / sqrt(converged). A length is
+usable when |b(T)| > 2 se(T). For each pair of consecutive lengths T, 2T that
+are both usable, r(T) = b(2T) / b(T) is reported with its delta-method standard
+error |r| sqrt((se(T) / b(T))^2 + (se(2T) / b(2T))^2), the two lengths having
+independent seeds. A bias of order 1 / T is a small fraction of a spread of
+order 1 / sqrt(T), so the lengths up to BIAS_LONGEST_T get BIAS_RUNS runs
+(default 12000) instead of RUNS. The standard deviations and their ratios still
+use only the first RUNS runs at every length, so every length is measured on
+the same number of samples. The bias uses every run on disk.
+
+Per parameter, the usable pairs are also pooled into one r, the mean of their
+r weighted by 1 / standard error^2, with standard error 1 / sqrt(sum of the
+weights). It is pooled twice: over every usable pair, and over the usable pairs
+from T = BIAS_POOL_FROM_T on, which leaves out the two lengths where nearly
+all the fits with alpha and Psi_star far from the truth in opposite directions
+occur, and where those fits dominate the mean estimate.
+
 Every finished run is appended to
 out/qvarma_consistency_rate_study_<design>_estimates_T<T>.csv as soon as it finishes, so a run that stops for any reason resumes where it
 left off: on the next start the runs already on disk are skipped. The first
@@ -42,9 +63,13 @@ Writes, once every length is complete,
   out/qvarma_consistency_rate_study_<design>_ratios.csv   sd(T) / sd(2T) per parameter
   out/qvarma_consistency_rate_study_<design>_sd.csv       sd(T) per parameter and length
   out/qvarma_consistency_rate_study_<design>_report.txt   setup, convergence counts
+  out/qvarma_consistency_rate_study_<design>_bias.csv     b(T) and se(T) per parameter and length
+  out/qvarma_consistency_rate_study_<design>_bias_ratios.csv   r(T) for every usable pair
+  out/qvarma_consistency_rate_study_<design>_bias_pooled.csv   pooled r per parameter
 and one progress line per length on stderr.
 
-RUNS overrides the runs per length and MAX_ITERATIONS the solver budget
+RUNS overrides the runs per length (default 1000), BIAS_RUNS the runs at the
+lengths up to BIAS_LONGEST_T, and MAX_ITERATIONS the solver budget
 (default 4000). Runs within one length are fitted in parallel on every thread
 OpenMP reports, each fit on its own RNG stream, so the estimates do not depend
 on thread count or on the order threads finish in.
@@ -74,6 +99,8 @@ static const int HORIZONS[] = { 400, 800, 1600, 3200, 6400, 12800, 25600, 51200 
 #define NAME_LENGTH 48
 #define LINE_LENGTH 16384
 #define N_LEADING_FIELDS 7
+#define BIAS_LONGEST_T 6400
+#define BIAS_POOL_FROM_T 1600
 
 /* In the collinear design alpha_2 is 0.5 alpha_1, so both co-integration lags
    load the score along the same direction. */
@@ -399,6 +426,14 @@ int main(int argc, char **argv) {
     int runs = 1000;
     const char *requested = getenv("RUNS");
     if (requested && atoi(requested) > 0) runs = atoi(requested);
+    int bias_runs = 12000;
+    const char *requested_bias = getenv("BIAS_RUNS");
+    if (requested_bias && atoi(requested_bias) > 0) bias_runs = atoi(requested_bias);
+    int runs_at[N_HORIZONS], most_runs = runs;
+    for (int h = 0; h < N_HORIZONS; h++) {
+        runs_at[h] = HORIZONS[h] <= BIAS_LONGEST_T && bias_runs > runs ? bias_runs : runs;
+        if (runs_at[h] > most_runs) most_runs = runs_at[h];
+    }
     QvarmaFitOptions options = qvarma_default_fit_options();
     const char *cap = getenv("MAX_ITERATIONS");
     if (cap && atoi(cap) > 0) options.max_iterations = atoi(cap);
@@ -416,8 +451,8 @@ int main(int argc, char **argv) {
     int n_parameters = collect_parameters(&truth, true_values, names, &n_derived);
 
     char *configuration = malloc(LINE_LENGTH), *fingerprint_line = malloc(256);
-    char *done = malloc((size_t)runs);
-    int *pending = malloc((size_t)runs * sizeof *pending);
+    char *done = malloc((size_t)most_runs);
+    int *pending = malloc((size_t)most_runs * sizeof *pending);
     assert(configuration && fingerprint_line && done && pending);
 
     for (int h = 0; h < N_HORIZONS; h++) {
@@ -425,10 +460,10 @@ int main(int argc, char **argv) {
         describe_configuration(configuration, LINE_LENGTH, &truth, options, T);
         snprintf(fingerprint_line, 256, "# fingerprint %016llx\n",
                  (unsigned long long)fnv1a(configuration));
-        prepare_estimates_file(design, T, fingerprint_line, names, n_parameters, runs, done, force_refit);
+        prepare_estimates_file(design, T, fingerprint_line, names, n_parameters, runs_at[h], done, force_refit);
 
         int n_pending = 0;
-        for (int run = 0; run < runs; run++)
+        for (int run = 0; run < runs_at[h]; run++)
             if (!done[run]) pending[n_pending++] = run;
 
         char path[256];
@@ -454,11 +489,14 @@ int main(int argc, char **argv) {
         }
         fclose(append);
         fprintf(stderr, "%s, T = %d: %d runs fitted now, %d already on disk, %.0f s, %d threads\n",
-                design, T, n_pending, runs - n_pending, wall_seconds() - started, threads);
+                design, T, n_pending, runs_at[h] - n_pending, wall_seconds() - started, threads);
     }
 
-    static HorizonSummary summaries[N_HORIZONS];
-    for (int h = 0; h < N_HORIZONS; h++) summaries[h] = summarize_horizon(design, HORIZONS[h], n_parameters, runs);
+    static HorizonSummary summaries[N_HORIZONS], bias_summaries[N_HORIZONS];
+    for (int h = 0; h < N_HORIZONS; h++) {
+        summaries[h] = summarize_horizon(design, HORIZONS[h], n_parameters, runs);
+        bias_summaries[h] = summarize_horizon(design, HORIZONS[h], n_parameters, runs_at[h]);
+    }
 
     char ratios_path[256], deviations_path[256], report_path[256];
     snprintf(ratios_path, sizeof ratios_path, "out/qvarma_consistency_rate_study_%s_ratios.csv", design);
@@ -486,6 +524,69 @@ int main(int argc, char **argv) {
     }
     fclose(ratios);
     fclose(deviations);
+
+    /* collect_parameters lists the K intercepts first, and they are left out
+       of the bias study. */
+    int first_bias_parameter = truth.K;
+    static double bias[MAX_PARAMETERS][N_HORIZONS], bias_se[MAX_PARAMETERS][N_HORIZONS];
+    static int usable_pairs[MAX_PARAMETERS];
+    for (int i = first_bias_parameter; i < n_parameters; i++)
+        for (int h = 0; h < N_HORIZONS; h++) {
+            bias[i][h] = bias_summaries[h].mean[i] - (double)true_values[i];
+            bias_se[i][h] = bias_summaries[h].sd[i] / sqrt((double)bias_summaries[h].converged);
+        }
+
+    char bias_path[256], bias_ratios_path[256], bias_pooled_path[256];
+    snprintf(bias_path, sizeof bias_path, "out/qvarma_consistency_rate_study_%s_bias.csv", design);
+    snprintf(bias_ratios_path, sizeof bias_ratios_path, "out/qvarma_consistency_rate_study_%s_bias_ratios.csv", design);
+    snprintf(bias_pooled_path, sizeof bias_pooled_path, "out/qvarma_consistency_rate_study_%s_bias_pooled.csv", design);
+    FILE *bias_file = fopen(bias_path, "w");
+    FILE *bias_ratios = fopen(bias_ratios_path, "w");
+    FILE *bias_pooled = fopen(bias_pooled_path, "w");
+    assert(bias_file && bias_ratios && bias_pooled);
+    fprintf(bias_file, "parameter,kind,true_value");
+    for (int h = 0; h < N_HORIZONS; h++) fprintf(bias_file, ",bias_T%d", HORIZONS[h]);
+    for (int h = 0; h < N_HORIZONS; h++) fprintf(bias_file, ",se_T%d", HORIZONS[h]);
+    fprintf(bias_file, "\n");
+    fprintf(bias_ratios, "parameter,kind,T,bias_T,bias_2T,se_T,se_2T,r,r_standard_error,same_sign\n");
+    fprintf(bias_pooled, "parameter,kind,pairs,r_pooled,r_pooled_standard_error,"
+            "pairs_from_T%d,r_pooled_from_T%d,r_pooled_from_T%d_standard_error\n",
+            BIAS_POOL_FROM_T, BIAS_POOL_FROM_T, BIAS_POOL_FROM_T);
+    for (int i = first_bias_parameter; i < n_parameters; i++) {
+        /* Index 0 pools every usable pair, index 1 the pairs from BIAS_POOL_FROM_T on. */
+        double weight_sum[2] = { 0, 0 }, weighted_r_sum[2] = { 0, 0 };
+        int pooled_pairs[2] = { 0, 0 };
+        const char *kind = i < n_parameters - n_derived ? "estimated" : "derived";
+        fprintf(bias_file, "\"%s\",%s,%.17g", names[i], kind, (double)true_values[i]);
+        for (int h = 0; h < N_HORIZONS; h++) fprintf(bias_file, ",%.6g", bias[i][h]);
+        for (int h = 0; h < N_HORIZONS; h++) fprintf(bias_file, ",%.6g", bias_se[i][h]);
+        fprintf(bias_file, "\n");
+        for (int h = 0; h + 1 < N_HORIZONS; h++) {
+            double b1 = bias[i][h], b2 = bias[i][h + 1], s1 = bias_se[i][h], s2 = bias_se[i][h + 1];
+            if (!(fabs(b1) > 2 * s1 && fabs(b2) > 2 * s2)) continue;
+            double r = b2 / b1;
+            double r_se = fabs(r) * sqrt((s1 / b1) * (s1 / b1) + (s2 / b2) * (s2 / b2));
+            fprintf(bias_ratios, "\"%s\",%s,%d,%.6g,%.6g,%.6g,%.6g,%.6g,%.6g,%d\n", names[i], kind,
+                    HORIZONS[h], b1, b2, s1, s2, r, r_se, (b1 > 0) == (b2 > 0));
+            usable_pairs[i]++;
+            for (int pool = 0; pool < 2; pool++) {
+                if (pool == 1 && HORIZONS[h] < BIAS_POOL_FROM_T) continue;
+                weight_sum[pool] += 1 / (r_se * r_se);
+                weighted_r_sum[pool] += r / (r_se * r_se);
+                pooled_pairs[pool]++;
+            }
+        }
+        fprintf(bias_pooled, "\"%s\",%s", names[i], kind);
+        for (int pool = 0; pool < 2; pool++) {
+            if (pooled_pairs[pool]) fprintf(bias_pooled, ",%d,%.6g,%.6g", pooled_pairs[pool],
+                                            weighted_r_sum[pool] / weight_sum[pool], 1 / sqrt(weight_sum[pool]));
+            else fprintf(bias_pooled, ",0,,");
+        }
+        fprintf(bias_pooled, "\n");
+    }
+    fclose(bias_file);
+    fclose(bias_ratios);
+    fclose(bias_pooled);
 
     FILE *report = fopen(report_path, "w");
     assert(report);
@@ -520,8 +621,20 @@ int main(int argc, char **argv) {
             fprintf(report, " %.3g", summaries[h].mean[i] - (double)true_values[i]);
         fprintf(report, "\n");
     }
+    fprintf(report, "\nBias study, every parameter except c. Runs on disk and converged per length:\n");
+    for (int h = 0; h < N_HORIZONS; h++)
+        fprintf(report, "  T = %d: %d runs, %d converged\n", HORIZONS[h], bias_summaries[h].runs_on_disk,
+                bias_summaries[h].converged);
+    fprintf(report, "A length is usable when |bias| > 2 se. Reference r = b(2T) / b(T): 0.5 at rate 1/T,\n");
+    fprintf(report, "0.707 at rate 1/sqrt(T). Parameters with no pair of consecutive usable lengths,\n");
+    fprintf(report, "whose bias is too small to measure at these lengths:\n");
+    for (int i = first_bias_parameter; i < n_parameters; i++)
+        if (!usable_pairs[i]) fprintf(report, "  %s\n", names[i]);
     fprintf(report, "\nRatios: %s\n", ratios_path);
     fprintf(report, "Standard deviations: %s\n", deviations_path);
+    fprintf(report, "Bias: %s\n", bias_path);
+    fprintf(report, "Bias ratios: %s\n", bias_ratios_path);
+    fprintf(report, "Pooled bias ratios: %s\n", bias_pooled_path);
     fprintf(report, "Every run: out/qvarma_consistency_rate_study_%s_estimates_T<T>.csv\n", design);
     fclose(report);
 

@@ -9,8 +9,8 @@ Everything below is measured rather than argued, and the setup is stated with
 each number. The three sources are
 `tests/correctness/qvarma_recovery_study.c` at 12 replications per cell,
 float64, seeded, the curvature measurements in
-`tests/correctness/qvarma_identification.c`, and the convergence rates in
-`tests/correctness/qvarma_consistency_rate_study.c`. **These are floors**: they
+`tests/correctness/qvarma_identification.c`, and the convergence rates of the
+spread and of the bias in `tests/correctness/qvarma_consistency_rate_study.c`. **These are floors**: they
 are measured at the true parameters, and a real application knows less than
 that.
 
@@ -144,6 +144,111 @@ The outputs of each design are
 and one `out/qvarma_consistency_rate_study_<design>_estimates_T<T>.csv` per
 length with every fit's estimates and stopping reason. One design alone runs
 with `./tests/correctness/qvarma_consistency_rate_study <design>`.
+
+## How fast each bias shrinks
+
+A second-order expansion of the impulse responses needs the bias of every
+parameter they depend on to be of order 1/T. Measured on the two designs of the
+previous section, it is: no parameter whose bias can be measured shrinks more
+slowly than 1/T, and none behaves like 1/sqrt(T).
+
+Setup, from the same `make study-qvarma_consistency_rate` run and the same two
+designs, `noncollinear` and `collinear`, with the same truth, fit options and
+seed formula as above. Every parameter except the intercepts `c` is measured,
+including the derived long-run loading. At T = 400, 800, 1600, 3200 and 6400
+there are 12000 samples per length, the first 1000 being the ones the previous
+section uses and runs 1000 to 11999 having seeds no other sample uses; at
+12800, 25600 and 51200 there are the same 1000 as before. Over the converged
+fits at one length:
+
+- the bias is `b(T) = mean estimate - truth`, and its Monte Carlo standard error
+  is `se(T) = sd(T) / sqrt(converged)`, with `sd` over the same fits;
+- a length is usable for a parameter when `|b(T)| > 2 se(T)`;
+- for each pair of consecutive usable lengths, `r(T) = b(2T) / b(T)`, with
+  delta-method standard error `|r| sqrt((se(T) / b(T))^2 + (se(2T) / b(2T))^2)`,
+  the two lengths having independent seeds. `r` is 0.5 at rate 1/T and 0.707
+  at rate 1/sqrt(T);
+- the pairs of one parameter are pooled into one `r`, weighted by
+  `1 / se(r)^2`, with standard error `1 / sqrt(sum of weights)`, once over every
+  usable pair and once over the usable pairs starting at T = 1600 or later.
+
+Every length is kept, including every converged fit at T = 400 and 800. Fits
+that did not converge are excluded: in `noncollinear` 161 at T = 400 and 7 at
+T = 800, in `collinear` 142 and 7; every fit at the longer lengths converged.
+
+Pooled `r`, then its standard error and the number of usable pairs. A dash means
+no pair of consecutive lengths is usable.
+
+| parameter | noncollinear, all pairs | noncollinear, from 1600 | collinear, all pairs | collinear, from 1600 |
+|---|---|---|---|---|
+| `Phi_star_1` | 0.483 (0.031, 4) | 0.471 (0.057, 2) | 0.485 (0.028, 4) | 0.480 (0.054, 2) |
+| `Psi_star_1[1,1]` | 0.345 (0.048, 2) | - | 0.346 (0.052, 2) | - |
+| `Psi_star_1[1,2]` | 0.667 (0.179, 3) | 0.669 (0.259, 1) | 0.680 (0.182, 3) | 0.676 (0.262, 1) |
+| `Psi_star_1[2,2]` | 0.020 (0.008, 4) | 0.323 (0.104, 2) | - | - |
+| `Psi_star_1[2,3]` | 0.027 (0.009, 4) | 0.391 (0.091, 2) | 0.270 (0.091, 2) | 0.270 (0.091, 2) |
+| `Psi_star_1[3,2]` | 0.485 (0.057, 2) | 0.485 (0.057, 2) | 0.375 (0.092, 1) | 0.375 (0.092, 1) |
+| `Psi_star_1[3,3]` | 0.351 (0.149, 1) | 0.351 (0.149, 1) | - | - |
+| `Omega_inv[1,1]` | 0.507 (0.035, 4) | 0.543 (0.077, 2) | 0.507 (0.035, 4) | 0.541 (0.077, 2) |
+| `Omega_inv[2,2]` | 0.494 (0.018, 4) | 0.478 (0.042, 2) | 0.494 (0.019, 4) | 0.478 (0.043, 2) |
+| `Omega_inv[3,3]` | 0.461 (0.021, 4) | 0.512 (0.054, 2) | 0.463 (0.020, 4) | 0.512 (0.052, 2) |
+| `nu` | 0.453 (0.039, 4) | 0.454 (0.087, 2) | 0.450 (0.040, 4) | 0.452 (0.089, 2) |
+| `alpha_1[1,1]` | 0.035 (0.010, 4) | 0.451 (0.070, 2) | 0.322 (0.091, 2) | 0.322 (0.091, 2) |
+| `alpha_1[2,1]` | 0.446 (0.066, 2) | 0.446 (0.066, 2) | 0.308 (0.107, 1) | 0.308 (0.107, 1) |
+| `alpha_2[1,1]` | 0.022 (0.008, 4) | 0.390 (0.080, 2) | 0.277 (0.088, 2) | 0.277 (0.088, 2) |
+| `alpha_2[2,1]` | 0.438 (0.079, 2) | 0.438 (0.079, 2) | 0.367 (0.130, 1) | 0.367 (0.130, 1) |
+| `beta[1,2]` | 0.293 (0.018, 5) | 0.493 (0.049, 3) | 0.299 (0.024, 4) | 0.480 (0.060, 2) |
+| `long_run_Psi_dag[1,1]` (derived) | 0.496 (0.067, 3) | 0.694 (0.210, 1) | 0.511 (0.135, 3) | 0.796 (0.380, 1) |
+| `long_run_Psi_dag[1,2]` (derived) | 0.477 (0.195, 1) | - | 0.600 (0.370, 1) | - |
+| `long_run_Psi_dag[2,1]` (derived) | 0.472 (0.062, 3) | 0.705 (0.210, 1) | 0.459 (0.117, 3) | 0.813 (0.383, 1) |
+| `long_run_Psi_dag[2,2]` (derived) | 0.501 (0.199, 1) | - | 0.622 (0.370, 1) | - |
+
+No usable pair in either design, so a bias too small to measure at any of these
+lengths: `Psi_star_1[1,3]`, `Psi_star_1[2,1]`, `Psi_star_1[3,1]` and the three
+off-diagonal entries of `Omega_inv`; in `collinear` also `Psi_star_1[2,2]` and
+`Psi_star_1[3,3]`. In every usable pair the two biases have the same sign.
+
+Reading the table:
+
+- Where the measurement is precise, `r` is 0.5. `Phi_star`, the diagonal of
+  `Omega_inv` and `nu` pool to between 0.450 and 0.507 over all pairs, with
+  standard errors of 0.018 to 0.040, and to between 0.45 and 0.54 from 1600
+  on. `beta` pools to 0.49 from 1600 on. Over all pairs these are 6 to 12
+  standard errors below 0.707, and from 1600 on 2 to 6.
+- Several pooled values are below 0.5, meaning the bias more than halves
+  between those lengths. `beta` over all pairs is 0.29 because its pairs at
+  400 and 800 give 0.21 and 0.40 in `noncollinear`; from 1600 on it is 0.5.
+  `Psi_star_1[1,1]`, measurable only from 400 to 1600, gives 0.345. A bias
+  that falls faster than 1/T between two lengths is still of order 1/T.
+- The values near 0.02 are not rates. In `noncollinear` the bias of
+  `alpha_1[1,1]` is -1.80 at T = 400 against a true 0.3, -0.30 at 800 and
+  -0.007 at 1600; `alpha_2[1,1]`, `Psi_star_1[2,2]` and `Psi_star_1[2,3]` move
+  the same way with the opposite sign. These come from the fits with `alpha_1` and
+  `Psi_star` far from the truth in opposite directions described in the
+  previous section: over all 12000 samples, the fits with `alpha_1[1,1]` more
+  than 1 from the truth are 688 of 11839 converged at T = 400 and 85 of 11993
+  at 800 in `noncollinear`, 711 of 11858 and 90 of 11993 in `collinear`, and
+  at T = 1600 none in `noncollinear` and 1 of 12000 in `collinear`. In
+  `collinear` they leave T = 800 unusable for those entries (the bias of
+  `alpha_1[1,1]` there is 0.012 with standard error 0.20), so no pair starting
+  at 400 or 800 enters its `r`. The one fit at 1600 does: it raises the `collinear` standard error of `alpha_1[1,1]` at
+  1600 to 0.0048 against 0.0007 in `noncollinear`, and it is why the
+  `collinear` pairs of `alpha` and `Psi_star_1[2,3]` that start at 1600 give
+  0.19 to 0.26.
+- The only pooled values near 0.707 are `Psi_star_1[1,2]` and the long-run
+  loading from 1600 on, and each has a standard error of 0.18 to 0.38, so
+  they do not separate 0.5 from 0.707. Over all pairs the long-run loading
+  pools to between 0.46 and 0.62.
+
+The two designs agree. Collinearity changes which lengths are usable for
+`alpha` and the I(1)-row `Psi_star` entries, not the conclusion. They use the
+same seeds, so they are not two independent confirmations.
+
+The outputs of each design are
+`out/qvarma_consistency_rate_study_<design>_bias.csv`, `b(T)` and `se(T)` per
+parameter and length, `out/qvarma_consistency_rate_study_<design>_bias_ratios.csv`,
+every usable pair, and `out/qvarma_consistency_rate_study_<design>_bias_pooled.csv`,
+the table above. The report beside them lists the runs and converged fits per
+length and the parameters with no usable pair.
 
 ## Shapes and regimes that are hard to fit
 

@@ -1003,11 +1003,12 @@ study-qvarma_recovery: tests/correctness/qvarma_recovery_study
 	./tests/correctness/qvarma_recovery_study
 
 # Not a pass/fail test: how fast the spread of each t-QVARMA(1,1,2) estimate
-# shrinks as the sample doubles from 400 to 51200, 1000 fits per length, for
+# shrinks as the sample doubles from 400 to 51200, 1000 fits per length, and
+# how fast its bias shrinks, from 12000 fits per length up to T = 6400, for
 # two designs that differ only in whether alpha_1 and alpha_2 are collinear.
 # Writes out/qvarma_consistency_rate_study_<design>_*.{csv,txt} and resumes
 # from the per-run files it appends to if stopped, so a design already run
-# only reloads. RUNS, MAX_ITERATIONS and
+# only reloads. RUNS, BIAS_RUNS, MAX_ITERATIONS and
 # FORCE_REFIT=1 are read from the environment. float64: the spread at the
 # longest samples is several orders of magnitude below one.
 tests/correctness/qvarma_consistency_rate_study: tests/correctness/qvarma_consistency_rate_study.c $(QVARMA_DEPS)

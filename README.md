@@ -167,7 +167,7 @@ make test-basis-r           # basis/ against a live R and its splines package; n
 make MAT_DOUBLE=1 test      # same targets, built against cblas_d* (float64)
 
 make study-qvarma_recovery  # the Monte Carlo recovery study; not part of `test`
-make study-qvarma_consistency_rate  # sd(T) / sd(2T) of every t-QVARMA(1,1,2) estimate, T = 400 to 51200; not part of `test`
+make study-qvarma_consistency_rate  # sd(T) / sd(2T) and bias(2T) / bias(T) of every t-QVARMA(1,1,2) estimate, T = 400 to 51200; not part of `test`
 ```
 
 `make test-npz-python`, `make test-cumsum-python`, `make test-rolling-mean-python`, `make test-hp-filter-python`, `make test-lp-python`, `make test-ols-covariance-python`, `make test-fast-mcs-python`, `make test-gammainc-python`, `make test-seri-mcs-r`, `make test-lhs-r` and `make test-basis-r` are the eleven suites here that run another language's interpreter, and are deliberately outside `make test` and `check.sh` for it. `make test-lhs-r` checks `random/lhs.h` against R's `lhs` package; R is a development-tier dependency in exactly the standing numpy has here, and `docs/LHS_DOCUMENTATION.md` says what that suite can establish that a self-contained one cannot (two generators cannot produce the same designs, only the same distribution of designs). `make test-basis-r` checks `basis/poly.h` and `basis/spline.h` against R's `stats` and `splines`, and is the opposite case: every function on both sides is a deterministic function of the same input, so the comparison is element by element rather than distributional, and what a passing run establishes is that the reimplementation is the same function to floating-point tolerance rather than merely one of the same family.
