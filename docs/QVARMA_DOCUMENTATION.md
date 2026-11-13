@@ -683,6 +683,7 @@ stops changing.
     make examples/qvarma_fixed_parameters_example   nu chosen by hand, a profile over it
     make study-qvarma_recovery                      the Monte Carlo recovery study
     make study-qvarma_consistency_rate              how fast each estimate's spread and bias shrink with T
+    make study-qvarma_parameter_space               from what T a K = 5 shape is recovered, over the parameter space
     make tests/performance/qvarma_performance       timings, never part of make test
     make bench-qvarma_precision                     both precisions side by side
 

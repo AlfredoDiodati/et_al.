@@ -9,8 +9,10 @@ Everything below is measured rather than argued, and the setup is stated with
 each number. The three sources are
 `tests/correctness/qvarma_recovery_study.c` at 12 replications per cell,
 float64, seeded, the curvature measurements in
-`tests/correctness/qvarma_identification.c`, and the convergence rates of the
-spread and of the bias in `tests/correctness/qvarma_consistency_rate_study.c`. **These are floors**: they
+`tests/correctness/qvarma_identification.c`, the convergence rates of the
+spread and of the bias in `tests/correctness/qvarma_consistency_rate_study.c`,
+and the sweep over the parameter space of a `K = 5` shape in
+`tests/correctness/qvarma_parameter_space_study.c`. **These are floors**: they
 are measured at the true parameters, and a real application knows less than
 that.
 
@@ -283,6 +285,140 @@ the table above, and `out/qvarma_consistency_rate_study_<design>_bias_ratios.csv
 them lists the runs and converged fits per length and the parameters too small
 to measure.
 
+## From what sample length a K = 5 shape is recovered, over the parameter space
+
+One truth, as in the two sections above, says nothing about the rest of the
+parameter space. Measured over 181 truths of a t-QVARMA(1,1,2) with `K = 5`,
+`K_star = 2`, `R = 1`: started at the true parameters, the fit is the maximum
+likelihood estimate the asymptotic theory describes from T = 2000 on, its
+standard errors are honest to within two or three points of coverage at every
+length, and its sampling spread is what it is for 55 parameters.
+
+Two checks say so, neither of which depends on the scale of any parameter.
+The likelihood ratio `2 (log-likelihood at the fit - log-likelihood at the
+truth)` is chi-squared with 55 degrees of freedom when the fit is the maximum
+and the asymptotics hold, median 54.3, central 95% band 36.4 to 77.4. Over
+the 181 fits from the truth its median is 59.5, 59.0, 55.3, 54.1 and 53.4 at
+T = 400, 1000, 2000, 5000 and 10000, with 90%, 94%, 97%, 93% and 95% of the
+fits inside the band and the rest above it, none below. A Kolmogorov-Smirnov
+test of the 181 values against that chi-squared (`inference/kolmogorov_smirnov.h`)
+rejects at T = 400 and 1000, p below 0.001, and accepts from T = 2000 on,
+p = 0.33, 0.74 and 0.37: at the two short lengths the whole distribution sits
+10% and 9% above the limit, the finite-sample inflation of a 55-parameter
+likelihood ratio, and from T = 2000 it is the limit. The second check is
+coverage: with the standard error of every estimate taken from the Hessian at
+the fit, the truth lies within 1.96 of them in 93.6%, 94.5%, 94.8%, 95.5% and
+95.5% of the coordinates at the five lengths, against a nominal 95%, over the
+fits whose Hessian decomposed (80% of them at T = 400, 93% to 97% from
+T = 1000). By block the only coordinate short of nominal is `Phi_star`, 0.76,
+0.81, 0.86, 0.92 and 0.93; the intercepts of the I(1) series, whose spread
+shrinks more slowly than root T in the consistency study, cover at 0.93 to
+0.975, `beta` at 0.89 to 0.95, `nu` at 0.93 to 0.98, `Psi_star` and
+`Omega_inv` at 0.93 to 0.96.
+
+The worst-parameter error of those fits, median 0.71 at T = 400 falling to
+0.11 at T = 10000 at the root-T rate, is therefore the spread of a correct
+estimator, not a failure to find the maximum, and whether it is small enough
+is a question about the application: in the worst of 50 coordinates, 0.11 at
+T = 10000 is what this model gives.
+
+Started 0.25 away from the truth per unconstrained coordinate, the search
+fails in a growing share of cells: 10%, 13%, 16%, 16% and 27% of the fits end
+below the likelihood at the truth, where the maximum was not reached, and the
+rest sit in the band like the fits from the truth; the Kolmogorov-Smirnov test
+rejects at every length for that reason, and the Hessian decomposes in only
+68% to 81% of these fits. So the sample-size question splits in two. The
+estimator behaves as theory says from T = 2000, with a 10% inflated
+likelihood ratio and standard errors still honest at 400 and 1000. The search
+from an uninformed start fails in a tenth to a quarter of the cells, more
+often at longer samples, and a fit whose log-likelihood is below the one at a
+known good point, or which stops in the line search, is to be restarted
+rather than read.
+
+Setup, from `make study-qvarma_parameter_space`, 15 minutes on an AMD Ryzen
+7 4800H at 16 threads: 200 configurations, the rows of a Latin hypercube over
+`Phi_star` in (-0.3, 0.95), the `Psi_star` diagonal in (0.02, 0.5) and
+off-diagonal in (0, 0.15), `nu` in (3, 60) on the log scale, the
+error-correction speed `beta' (alpha_1 + alpha_2)` in (0.1, 1.5),
+`alpha_2 / alpha_1` in (-0.6, 0.9), the free `beta` entries in (0.2, 3), the
+`Omega_inv` diagonal in (0.3, 3) on the log scale and its below-diagonal
+entries up to 0.6 of the diagonal; the entries inside each block are jittered
+by a generator seeded from the configuration index. Every truth has an
+invertible filter: the recursion that rebuilds the locations from the data,
+linearized at a zero residual, has spectral radius under 0.98 on the part of
+its state the data reaches (`filter_linearization_radius` in the study). The
+error-correction axis and the `Phi_star` range give that for each block on
+its own, `0 < beta' (alpha_1 + alpha_2) < 2` and `|Phi_star - Psi_star[i,i]| < 1`;
+the jitter is redrawn, up to 32 times, until the full linearization passes,
+and 19 of the 200 configurations never pass and have no cells; they are
+listed in the truths file with `kept = 0`. Each kept
+configuration is simulated once at T = 400, 1000, 2000, 5000 and 10000, seed
+`20261112 + config * 1e8 + horizon_index * 1e6`, and fitted twice with the
+default options, from the truth and from the true unconstrained vector plus
+0.25 times a standard normal per coordinate. The error of a fit is the largest
+`|estimate - truth|` on the paper's scale over the estimated parameters other
+than `c` and `nu`, unconverged fits included; the scaled error divides each
+difference by `max(1, |truth|)`.
+
+| T | start | converged of 181 | at the cap | stalled in the line search | below likelihood at truth | median LR | LR in band | KS p | coverage | median error | 90th percentile | under 0.10 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 400 | truth | 138 | 43 | 0 | 0 | 59.5 | 90% | 0.000 | 0.936 | 0.711 | 4.99 | 0% |
+| 400 | perturbed | 123 | 43 | 15 | 18 | 58.6 | 81% | 0.000 | 0.937 | 0.744 | 6.50 | 0% |
+| 1000 | truth | 139 | 41 | 1 | 0 | 59.0 | 94% | 0.000 | 0.945 | 0.437 | 2.48 | 0% |
+| 1000 | perturbed | 127 | 32 | 22 | 23 | 56.5 | 82% | 0.001 | 0.943 | 0.500 | 2.85 | 0% |
+| 2000 | truth | 133 | 48 | 0 | 0 | 55.3 | 97% | 0.326 | 0.948 | 0.312 | 0.878 | 11% |
+| 2000 | perturbed | 116 | 39 | 26 | 28 | 53.2 | 82% | 0.000 | 0.947 | 0.378 | 2.08 | 9% |
+| 5000 | truth | 134 | 47 | 0 | 0 | 54.1 | 93% | 0.738 | 0.955 | 0.173 | 0.596 | 25% |
+| 5000 | perturbed | 110 | 43 | 26 | 28 | 52.1 | 79% | 0.000 | 0.956 | 0.191 | 0.973 | 23% |
+| 10000 | truth | 137 | 44 | 0 | 0 | 53.4 | 95% | 0.374 | 0.955 | 0.112 | 0.406 | 47% |
+| 10000 | perturbed | 91 | 42 | 42 | 49 | 47.6 | 68% | 0.000 | 0.954 | 0.181 | 1.52 | 37% |
+
+`KS p` is the Kolmogorov-Smirnov p-value of the 181 likelihood ratios against
+chi-squared with 55 degrees of freedom; `coverage` the fraction of estimated
+coordinates whose truth lies within 1.96 standard errors, pooled over the
+cells whose Hessian decomposed.
+
+Two and six perturbed-start fits, at T = 5000 and 10000, ended on a
+non-finite objective. The fits above the likelihood-ratio band, 2% to 9% from
+the truth, are the ones with the largest errors, 257 at T = 400 and one fit
+at T = 2000 from the perturbed start that left the parameter space
+altogether: the overlap between `mu_star` and `mu_dag` described above,
+`alpha` and the I(1) rows of `Psi_star` growing together in opposite
+directions, which appears here at every length rather than only below
+T = 1600.
+
+The parameter that sets the error is `beta` in about half the cells and
+`Psi_star` in a third; `beta` is the block whose true entries reach 3, and
+the block table in the report shows it: at T = 10000 from the truth the
+median largest error inside each block is 0.013 for `Phi_star`, 0.065 for
+`Psi_star`, 0.020 for `Omega_inv`, 0.038 for `alpha`, 0.071 for `beta` and
+0.019 for the long-run loading.
+
+The 4000-iteration cap is not what limits the accuracy. The 422 fits that
+stopped at it were run again from the same start with a budget of 16000
+(`CAPPED_MAX_ITERATIONS=16000`, 10 minutes more): 395 of them converged, after
+a median of 5300 to 7700 iterations, and their errors did not move. Per length
+from the truth, the median error of those fits before and after is 3.04 and
+4.18 at T = 400, 1.11 and 1.50 at 1000, 0.55 and 0.56 at 2000, 0.42 and 0.48
+at 5000, 0.20 and 0.24 at 10000; the fraction within 0.10 is unchanged at
+every length and start except T = 10000 from the truth, 16% to 18%. Those
+fits were already at the maximum to the precision that matters, and letting
+them finish moves nothing: with the refits in place of the capped fits the
+tables above change in the third digit, the median error at T = 10000 from
+the truth is 0.110 against 0.112, and the likelihood ratios are the same.
+
+Not measured: any shape other than this one, and more than one sample per
+configuration and length (`REPLICATIONS`). The outputs are
+`out/qvarma_parameter_space_study_report.txt`, `_summary.csv` per length and
+start, `_by_block.csv` per parameter block, `_by_cell.csv` per fit,
+`_coverage.csv` per coordinate, `_truths.csv` per configuration with its
+axes, true values, whether it was kept and the radius of its filter
+linearization, `_estimates_T<T>.csv` with every estimate, its standard error,
+stopping reason, gradient norm and the log-likelihood at the truth, and for
+the refits `_capped_refit_cap16000.csv`, `_summary_cap16000.csv`,
+`_by_block_cap16000.csv`, `_coverage_cap16000.csv` and
+`_estimates_T<T>_cap16000.csv`.
+
 ## Shapes and regimes that are hard to fit
 
 Convergence out of 12, at T = 500, from a start perturbed by 0.25 per
@@ -341,6 +477,13 @@ did not converge from a different start rather than reading its estimates.**
 The `se` column above is the signal to watch, not the convergence flag alone.
 
 ## Can the standard errors be believed
+
+On the `K = 5` shape of the previous section, 181 truths and five lengths,
+the coverage of the Hessian standard errors is 0.936 to 0.955 pooled over all
+coordinates, with `Phi_star` the one block short of nominal at the short
+lengths (0.76 at T = 400, 0.93 at T = 10000); the per-block table is in that
+section. The rest of this section is the older measurement on the `K = 3`
+shapes.
 
 Pooled over the shape and regime sweeps. `cover` is how often the truth fell
 within 1.96 reported errors, nominal 0.95; `se/rmse` compares the reported error
