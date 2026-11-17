@@ -5,8 +5,9 @@ positive-definite banded system.
 
 The reference is written here: the dense matrix rebuilt from the band, a
 Cholesky factorization of it and the two triangular solves in long double,
-with nothing from the library underneath. Every comparison is against that,
-or against an invariant that holds in exact arithmetic:
+with nothing from the library underneath. Most comparisons are against that;
+the others are invariants that hold in exact arithmetic, or another solver in
+the library on the same system:
 
 - a 3 x 3 tridiagonal matrix whose factor, determinant and solution are
   known by hand;
@@ -16,12 +17,14 @@ or against an invariant that holds in exact arithmetic:
   dense matrix;
 - the solve residual, one right-hand side and many, and many against one at
   a time;
-- scaling: the factor of S a S, S diagonal over twelve orders of magnitude,
-  is S times the factor of a;
+- scaling: the factor of S a S, S diagonal over twelve orders of magnitude
+  at float64 and six at float32, is S times the factor of a;
 - the Hodrick-Prescott matrix I + lambda D'D at lambda 1600 and 129600, the
-  first banded positive-definite system this library solves;
-- rejection: a negative pivot, an exactly singular matrix, a zero matrix and
-  a NaN on and off the diagonal, each at the index the definition gives;
+  system filter/hp.h solves by banded LU, against the reference up to
+  n = 203 and against vec_band_solve at n = 2000;
+- rejection: a negative pivot, an exactly singular and a numerically
+  singular matrix, a zero matrix and a NaN on and off the diagonal, each at
+  the index the definition gives;
 - strided views of the band, of the factor and of the right-hand side, a
   band wider than the matrix, n = 1 and kd = 0;
 - the blocked path, at every block width and on both sides of each switch,
@@ -283,8 +286,9 @@ static void test_degenerate_shapes(void) {
     CHECK_NEAR(mat_band_chol_logdet(ld), logdet, 32 * U * logdet, "diagonal log-determinant");
     mat_free(ld); mat_free(diagonal);
 
-    /* the dense case through the band: kd = n - 1, and kd = n + 2 with the
-       extra columns past the end of every row holding garbage */
+    /* the dense case through the band: kd = n - 1, and kd = n + 1 with the
+       entries past the end of the matrix holding 1e30, which must not be
+       read */
     Rng rng = rng_new(2026, 900);
     Mat dense_band = random_band(&rng, 7, 6, 7, 0.5);
     check_factorization(dense_band, 1e3, "kd = n - 1");
@@ -398,7 +402,11 @@ static void test_hodrick_prescott(void) {
                         AT(full, j, 2 + d) = v;
                     }
                 Vec x_lu = vec_band_solve(full, 2, 2, y);
-                double bound = 64 * (1 + 16 * lambdas[k]) * U * 101;
+                /* the conditioning bound of docs/HP_FILTER_DOCUMENTATION.md,
+                   64 (1 + 16 lambda) u max|y| */
+                double ymax = 0;
+                for (int i = 0; i < n; i++) if (MABS(AT(y, i, 0)) > ymax) ymax = MABS(AT(y, i, 0));
+                double bound = 64 * (1 + 16 * lambdas[k]) * U * ymax;
                 for (int i = 0; i < n; i++) CHECK_NEAR(AT(x, i, 0), AT(x_lu, i, 0), bound, "HP solve against banded LU");
                 mat_free(x_lu); mat_free(full); mat_free(x); mat_free(y); mat_free(l); mat_free(band);
                 continue;

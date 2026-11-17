@@ -1,7 +1,7 @@
 """brent_bounded against scipy.optimize's bounded scalar minimizer.
 
-Setup: float64; each library at its default thread count on this machine,
-read at run time. Each time is the best of 5 batches in microseconds per
+Setup: float64; each library at its default thread count, read at run time
+and printed. Each time is the best of 5 batches in microseconds per
 search, a batch being repeated searches until it takes 20 ms, the clock read
 once per batch. Within a row the arms alternate in four rounds, the order
 reversed every other round, and each arm keeps its best.

@@ -923,9 +923,10 @@ static inline int _gbsv(mreal *ab, int n, int kl, int ku, int ldab,
    diagonal, scale the kd entries below it, and subtract their outer product
    from the kd x kd block that follows. That block's column j + 1 + r, from
    row j + 1 + r down, is again consecutive, so every update is a contiguous
-   run. The work is n * kd^2 / 2 multiply-adds; it is written out rather
-   than issued as ?syr for the reason _gbtf2 gives, the update being bounded
-   by the bandwidth whatever n is. */
+   run. The work is n * kd^2 / 2 multiply-adds, written out rather than
+   issued as one ?syr per column, which costs more than it saves at the
+   bandwidths this kernel is used for; from PBTRF_BLOCKED_MIN_KD up,
+   _pbtrf_blocked below hands the update to BLAS-3 instead. */
 
 /* Factor in place. Returns 0, or the one-based index of the first pivot
    that is not positive or is not a number, matching ?pbtrf's info; the
@@ -1033,9 +1034,8 @@ static inline int _pbtrf_blocked(mreal *ab, int n, int kd, int ldab, int nb) {
    56 the trailing updates are too small for a BLAS call to pay for itself.
    The fastest width does not grow smoothly with kd: from 80 to 128 nb 8
    beats nb 16 by 1.4x to 1.8x, while at 64 and from 144 up it is the other
-   way round. That reproduced in both sweeps and in a second run, and is
-   most likely where OpenBLAS starts threading ?syrk and ?gemm. At 144 nb 16
-   and nb 64 are within 2 per cent of each other. */
+   way round, in both sweeps of the benchmark; why is not known. At 144
+   nb 16 and nb 64 are within 2 per cent of each other. */
 #define PBTRF_BLOCKED_MIN_KD 56
 static inline int _pbtrf_nb_for(int kd) {
     if (kd < PBTRF_BLOCKED_MIN_KD) return 0;

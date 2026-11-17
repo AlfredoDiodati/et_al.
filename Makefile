@@ -730,9 +730,9 @@ test-cumsum-python: libcumsum_f64.so libcumsum_f32.so
 tests/correctness/band_chol_correctness: tests/correctness/band_chol_correctness.c linalg/solver.h linalg/decomp.h linalg/factor.h linalg/mat.h random/random.h tests/check.h
 	$(CC) $(CFLAGS) tests/correctness/band_chol_correctness.c $(LDLIBS) -o tests/correctness/band_chol_correctness
 
-# solver/brent.h computes in double whatever MAT_DOUBLE says, so one build
-# covers it; CFLAGS rather than STAT_CFLAGS only so the float32 build of
-# linalg/mat.h underneath is the one compiled with it.
+# solver/brent.h computes in double whatever MAT_DOUBLE says. The test is
+# built with CFLAGS all the same, so that it also compiles against each
+# precision of linalg/mat.h, which brent.h includes.
 tests/correctness/brent_correctness: tests/correctness/brent_correctness.c solver/brent.h linalg/mat.h random/random.h tests/check.h
 	$(CC) $(CFLAGS) tests/correctness/brent_correctness.c $(LDLIBS) -o tests/correctness/brent_correctness
 
@@ -786,6 +786,13 @@ libbrent_ieee.so: $(BRENT_DEPS)
 	$(CC) $(filter-out -ffast-math,$(CFLAGS)) -ffp-contract=off -shared -fPIC tests/correctness/brent_reference_agreement.c $(LDLIBS) -o libbrent_ieee.so
 test-brent-python: libbrent.so libbrent_ieee.so
 	$(or $(PYTHON),python3) tests/correctness/brent_reference_agreement.py
+
+# Injects the faults listed in tests/correctness/mutation_detection.py into a
+# copy of the sources under out/mutation_detection/ and checks that the
+# banded Cholesky and solver/brent.h tests catch them. Outside `test`: it
+# rebuilds a test binary for every fault, and one check needs scipy.
+test-mutations:
+	$(or $(PYTHON),python3) tests/correctness/mutation_detection.py
 
 # Checks frame/csv.h's missing-value markers against pandas, polars and R:
 # make test-csv-na-python PYTHON=...
@@ -1526,4 +1533,4 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: seri-runs-npz bench-band_chol_block_threshold bench-band_chol_solve_threshold test-band-chol-python test-brent-python bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery study-qvarma_consistency_rate study-qvarma_parameter_space install-core install-model uninstall-core uninstall-model
+.PHONY: seri-runs-npz test-mutations bench-band_chol_block_threshold bench-band_chol_solve_threshold test-band-chol-python test-brent-python bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery study-qvarma_consistency_rate study-qvarma_parameter_space install-core install-model uninstall-core uninstall-model

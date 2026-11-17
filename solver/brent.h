@@ -22,13 +22,14 @@ It finds a local minimum. On a unimodal function over [lower, upper] that is
 the minimum; otherwise it is one of them.
 
 Why it is double whatever mreal is. A scalar search stores nothing, so float
-buys no speed, and its stopping rule sqrt(eps) * |x| + xatol / 3 is
-meaningless in float32 for any xatol below about 1e-4 * |x|. The constant
-sqrt(2.2e-16) is scipy's.
+buys no speed, and in float32 neighbouring values of x are 1.2e-7 |x| apart,
+so an xatol below about 4e-7 |x| would ask for a bracket narrower than float32
+can represent. The constant sqrt(2.2e-16) in the stopping rule is scipy's.
 
-Why it is not an Optimizer, nor an lbfgs. Like solver/lbfgs.h it chooses its
-own trial points, so it takes the function rather than a gradient; unlike it,
-the variable is a scalar and the search is confined to an interval.
+Why it is neither a solver/optimizer.h Optimizer nor part of solver/lbfgs.h.
+Like lbfgs it chooses its own trial points, so it takes the function rather
+than a gradient; unlike lbfgs, the variable is a scalar and the search is
+confined to an interval.
 */
 
 /* The function being minimised. context carries whatever it needs, in place
@@ -100,9 +101,9 @@ Minimise objective over [lower, upper]. The bounds must be finite with lower
 programmer error and asserts.
 
 Every point evaluated lies in [lower, upper], and each one after the first is
-at least tol1 = sqrt(eps) |xf| + xatol / 3 from the best point so far. A
-minimum at a bound is therefore approached rather than evaluated, and the
-answer lies within about xatol of it. The search stops when xf is within
+at least tol1 = sqrt(2.2e-16) |xf| + xatol / 3 from the best point so far.
+A minimum at a bound is therefore approached rather than evaluated, and the
+answer lies within about 4 tol1 of it. The search stops when xf is within
 2 tol1 of the middle of a bracket at most 4 tol1 wide, or after
 max_evaluations evaluations.
 

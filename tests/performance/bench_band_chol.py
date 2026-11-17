@@ -2,13 +2,12 @@
 
 Setup: float64 positive-definite bands B B^T + I, B lower triangular of
 bandwidth kd with entries from numpy's default_rng(0); every library at its
-default thread count on this machine, read at run time; every call
+default thread count, read at run time and printed; every call
 allocating its result. Each time is the best of 5 batches in microseconds per
 call, a batch being repeated calls until it takes 20 ms, the clock read once
 per batch. Within a row the arms alternate, in four rounds whose order is
-reversed every other round, and each arm keeps its best: this machine drifts
-by several per cent over a session, and timing one arm after another would
-measure the drift.
+reversed every other round, and each arm keeps its best, so that a machine
+whose speed drifts over a run does not favour whichever arm ran first.
 
 Rows, each the same problem for every library:
 - factor: mat_band_chol against scipy.linalg.cholesky_banded(lower=True)

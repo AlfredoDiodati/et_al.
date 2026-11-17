@@ -1416,12 +1416,13 @@ only non-zero is a far corner.
 
 ### Not implemented
 
-No blocked band factorization (`?gbtrf` proper), no transposed solve, no
-multiple right-hand sides, and no reusable factored form of the kind
-`mat_lu`/`vec_lu_solve` are for one another. The blocked variant pays only
-at a bandwidth large enough for its block updates to reach BLAS-3, which is
-far above anything a spline produces; the other three have no caller. Each
-is a small addition to this group when one arrives.
+No blocked band factorization (`?gbtrf` proper), no transposed solve, and
+no reusable factored form of the kind `mat_lu`/`vec_lu_solve` are for one
+another; several right-hand sides are `_gbtrs_rhs`, reached through
+`mat_band_solve`. The blocked variant pays only at a bandwidth large enough
+for its block updates to reach BLAS-3, which is far above anything a spline
+produces; the other two have no caller. Each is a small addition to this
+group when one arrives.
 
 ## `_pbtf2`, `_pbtrf_blocked`, `_pbtrf`, `_pbtrs`, `_pbtrs_rhs` — banded Cholesky and its solve
 
@@ -1494,10 +1495,10 @@ ahead; the switch is therefore at 56. `_pbtrf_nb_for` takes nb 16 from 56
 to 79, nb 8 from 80 to 143, and nb 64 from 144 on; at 144 nb 16 and nb 64
 are within 2 per cent. The width that wins does not grow smoothly with
 `kd`: from 80 to 128 nb 8 beats nb 16 by 1.4x to 1.8x, while at 64 and from
-144 up the order reverses. That reproduced in both sweeps of two separate
-runs. The likeliest cause is the size at which OpenBLAS starts threading
-`?syrk` and `?gemm`, which would also explain nb 32 at `kd = 32` taking
-5.0 times the unblocked time; it has not been measured directly. Above
+144 up the order reverses, in both sweeps of the benchmark, and nb 32 at
+`kd = 32` takes 5.0 times the unblocked time. Why is not known. One
+explanation, not tested, is the size at which OpenBLAS starts threading
+`?syrk` and `?gemm`. Above
 `kd = 400` the gain keeps growing, 11.7x at 800, since the unblocked
 kernel's update is a rank-one pass over `kd^2 / 2` entries per column.
 
@@ -1520,14 +1521,13 @@ The written-out loop is faster at `n = 100000` for every `kd` from 1 to
 1.33x at `kd = 1`); `?tbsv` is faster at `n = 2000` from `kd = 96` to 400
 (1.03x to 1.07x), and the two are within 2 per cent at `kd = 2`. No
 bandwidth separates them, so there is no dispatch and the loop is used
-throughout. This is an exception to design principle 3 made on a
-measurement, not a preference; a different machine or OpenBLAS build is
-reason to rerun it.
+throughout. This departs from design principle 3 in the root
+`README.md`, on the strength of that benchmark, which is the one to rerun
+on a different machine or OpenBLAS build.
 
 ### Verification
 
 `tests/correctness/band_chol_correctness.c` and
 `tests/correctness/band_chol_reference_agreement.py`, described in
 `docs/DECOMP_DOCUMENTATION.md`'s "Testing the banded Cholesky". The blocked
-path is reached through `mat_band_chol` at `kd` 56 and above, and the
-sixteen mutations listed there include eight of `_pbtrf_blocked` alone.
+path is reached through `mat_band_chol` at `kd` 56 and above.

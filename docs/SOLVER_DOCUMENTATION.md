@@ -175,7 +175,7 @@ The recovered rank is within 1 of the true rank at every size: float32 rounding 
 | n = 20000, kd = 200, 1 rhs | 3990 | 4379 | 44302 | 65102 | - |
 | n = 20000, kd = 200, 100 rhs | 112360 | 431505 | 153893 | 508881 | - |
 
-Every row is faster than every reference. The thinnest margin is one right-hand side at `n = 2000, kd = 200`, 4 per cent, which is within the drift of this machine over a session. Many right-hand sides are where the margin is widest, 6x to 30x at `kd = 2`: scipy's `?pbtrs` walks the band once per column, `_pbtrs_rhs` once for all of them.
+Every row is faster than every reference. The thinnest margin is one right-hand side at `n = 2000, kd = 200`, 4 per cent. Many right-hand sides are where the margin is widest, 6x to 30x at `kd = 2`: scipy's `?pbtrs` walks the band once per column, `_pbtrs_rhs` once for all of them.
 
 ## Known limitations and future work
 

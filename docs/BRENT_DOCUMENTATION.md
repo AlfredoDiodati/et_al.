@@ -8,7 +8,7 @@
 
 It finds a local minimum. On a function with one minimum in the interval that is the minimum.
 
-It is the third member of `solver/`. Like `solver/lbfgs.h` it chooses its own trial points and so takes the function rather than a gradient, which is why it does not implement `solver/optimizer.h`'s `Optimizer`. Unlike `lbfgs`, the variable is a scalar and the search stays inside an interval. The first intended caller is the concentrated likelihood of a single parameter, such as the signal-to-noise ratio of the Hodrick-Prescott trend model, searched over its logarithm.
+It is the third optimizer in `solver/`, beside `solver/adam.h` and `solver/lbfgs.h`. Like `solver/lbfgs.h` it chooses its own trial points and so takes the function rather than a gradient, which is why it does not implement `solver/optimizer.h`'s `Optimizer`. Unlike `lbfgs`, the variable is a scalar and the search stays inside an interval.
 
 ## API reference
 
@@ -44,7 +44,7 @@ BrentResult brent_bounded(BrentObjective objective, void *context,
 
 The status values are scipy's. The bounds must be finite with `lower <= upper`, `max_evaluations` at least 1 and `xatol` at least 0; anything else is a programmer error and asserts. `lower == upper` is allowed and evaluates that one point.
 
-**Why double whatever `mreal` is.** A scalar search stores nothing, so float32 buys no speed, and its stopping rule `sqrt(eps) |x| + xatol / 3` cannot be met in float32 for an `xatol` below about `1e-4 |x|`. The constant is scipy's `sqrt(2.2e-16)`, so the double search is scipy's search. `special.h` is double-native for the same kind of reason.
+**Why double whatever `mreal` is.** A scalar search stores nothing, so float32 buys no speed. In float32 neighbouring values of `x` are `1.2e-7 |x|` apart, so an `xatol` below about `4e-7 |x|` would ask for a bracket narrower than float32 can represent. The constant in the stopping rule is scipy's `sqrt(2.2e-16)`, so the double search is scipy's search.
 
 ## Stopping and accuracy
 
@@ -75,13 +75,13 @@ On finite objectives this changes nothing. Two differences from scipy follow, bo
 `tests/correctness/brent_reference_agreement.py` (`make test-brent-python`, outside `make test` because it needs scipy) runs 350 searches against `minimize_scalar(method="bounded")` and compares whole paths, not only answers. The cases are the objectives above at three tolerances, caps of 1 to 8, an objective infinite over part of the interval, a likelihood-shaped curve, and 300 random functions `c0 sin x + c1 cos 2x + c2 x^2` on random intervals with random `xatol`, from `default_rng(2026)`. Two builds take part:
 
 - `libbrent_ieee.so`, without `-ffast-math` and with `-ffp-contract=off`, rounds every operation as Python does. All 350 searches visit the same points as scipy's, the largest gap 1.4e-17 of the interval width, with the same answer, value, evaluation count and status.
-- `libbrent.so`, the project's own flags. Fused multiply-adds round the parabola differently, and when a parabolic step lands exactly on the minimum the sign of the next step is a rounding-level quantity: on `(x - 1)^2` over `[-4, 4]` the fourth point is `1 - 3.3e-6` here and `1 + 3.3e-6` in scipy. 305 of the 350 searches follow scipy's path. Every one ends with scipy's status, and within `8 tol1` of scipy's answer except one, which lies 1.87 times that away with a value equal to scipy's within `8 eps max(1, |f|)`, the flatness limit above.
+- `libbrent.so`, the project's own flags. Fused multiply-adds round the parabola differently, and when a parabolic step lands exactly on the minimum the sign of the next step is a rounding-level quantity: on `(x - 1)^2` over `[-4, 4]` the fourth point is `1 - 3.3e-6` in this build and `1 + 3.3e-6` in scipy. 305 of the 350 searches follow scipy's path. Every one ends with scipy's status, and within `8 tol1` of scipy's answer except one, which lies 1.87 times that away with a value equal to scipy's within `8 eps max(1, |f|)`, the flatness limit above.
 
-Mutations of `solver/brent.h`: golden-section steps only, the bracket update reversed, the cap tested one evaluation late, the `tol1` floor on the step removed and the not-finite status never set each fail `brent_correctness.c`; NaN left unconverted fails its first-point case; a zero step given a negative sign passes it and fails the strict build's path comparison. Removing the finiteness check on the parabola passes both: on this machine the comparisons that follow already reject a NaN or an infinite `p` at run time. The check stays, because `-ffast-math` allows the compiler to assume no such value exists.
+`brent_bounded` tests the parabola's `p` and `q` for finiteness before comparing them. With GCC 15.2 on x86-64 neither test file can tell that check from its absence, since the comparisons that follow already reject a NaN or an infinity at run time. It stays because `-ffast-math` allows the compiler to assume no such value exists, and a later compiler may act on that.
 
 ## Speed
 
-`tests/performance/bench_brent.py` (in `bench.sh`). Setup: float64, every library at its default thread count (16 threads here), best of 5 batches of at least 20 ms per search, the arms alternated over four rounds with the order reversed every other round. scipy's objective is a Python function, as it is for any scipy user, and this library's is the same function in C; the time is the whole search. numpy has no scalar minimizer. Microseconds per search, timed inside C:
+`tests/performance/bench_brent.py` (in `bench.sh`). Setup: float64, every library at its default thread count (16 hardware threads on the machine these numbers come from), best of 5 batches of at least 20 ms per search, the arms alternated over four rounds with the order reversed every other round. scipy's objective is a Python function, as it is for any scipy user, and this library's is the same function in C; the time is the whole search. numpy has no scalar minimizer. Microseconds per search, timed inside C:
 
 | case | `brent_bounded` | ctypes call | `minimize_scalar` | `fminbound` | evaluations | scipy's |
 |---|---|---|---|---|---|---|
@@ -95,7 +95,7 @@ The Cauchy row's scipy objective is vectorised with numpy. The HP rows minimise 
 
 The first two rows measure the search alone and scipy's Python overhead. In the HP rows the margin narrows from 6.1x at `T = 203` to 2.0x at `T = 2000`, as the banded solve comes to dominate.
 
-The HP rows are totals over 20 datasets because one dataset can mislead. The objective carries rounding noise of a few `1e-11` near its minimum: `z' M^-1 z` is a sum of about 2000 terms of both signs, and `M`'s condition number is near `1e6` at the `q` found. Where `-ffast-math` rounds differently from scipy, one search can meet a spuriously low value and spend many more evaluations than scipy's on the same data, or the reverse. Over these 20 datasets the totals are 290 here and 303 there. Three of the 40 searches end further than `8 tol1` from scipy's answer; scipy's own objective puts the two answers within `1e-11 max(1, |f|)` of each other, so the benchmark accepts them on value and says so in its output.
+The HP rows are totals over 20 datasets because one dataset can mislead. The objective carries rounding noise near its minimum: `z' M^-1 z` is a sum of about `T` terms of both signs, and `M` is ill-conditioned at the small `q` found. Where `-ffast-math` rounds differently from scipy, one search can meet a spuriously low value and spend many more evaluations than scipy's on the same data, or the reverse. Over these 20 datasets at `T = 2000` the totals are 290 evaluations in this library and 303 in scipy. Three of the 40 searches end further than `8 tol1` from scipy's answer; scipy's own objective puts the two answers within `1e-11 max(1, |f|)` of each other, so the benchmark accepts them on value and says so in its output.
 
 ## Known limitations and future work
 

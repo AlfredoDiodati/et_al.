@@ -21,21 +21,21 @@ is built twice:
   so the search can go round the other side: on (x - 1)^2 over [-4, 4] the
   fourth point is 1 - 3.3e-6 here and 1 + 3.3e-6 in scipy. Only the outcome
   is compared there: the same status, and answers within 8 tol1 of each
-  other, tol1 = sqrt(2.2e-16) |x| + xatol / 3, the width of the final
-  bracket on either side. Where xatol is so small that the function's
+  other, tol1 = sqrt(2.2e-16) |x| + xatol / 3, since the stopping rule
+  leaves each within about 4 tol1 of a minimiser. Where xatol is so small that the function's
   values no longer tell points apart, which happens about sqrt(eps) from a
   smooth minimum, the answers may be further apart than that; they are then
   accepted when their values agree within 8 eps max(1, |f|) and they lie
-  within 1e-4 of the interval width, which keeps them in one dip of the
+  within 1e-4 times the interval width, which keeps them in one dip of the
   function. Two answers at different local minima fail both.
 
 Cases: the objectives of tests/correctness/brent_correctness.c on their
 intervals, at xatol 1e-5 (scipy's default), 1e-8 and 1e-12; evaluation caps
 of 1 to 8; an objective infinite over part of the interval; and 300 random
 smooth functions c0 sin x + c1 cos 2x + c2 x^2 with c from default_rng(2026)
-on random intervals inside [-10, 10]. The one documented difference, scipy's
-status 2 for a NaN seen at the last evaluation, is not exercised here; it is
-checked in brent_correctness.c.
+on random intervals inside [-10, 10], and a likelihood-shaped curve. The two
+documented differences from scipy both concern NaN values and are not
+exercised here; brent_correctness.c checks this library's behaviour there.
 """
 import ctypes
 import math

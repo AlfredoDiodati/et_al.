@@ -24,6 +24,7 @@ compared in brent_reference_agreement.py. Covered:
 #include "../../solver/brent.h"
 #include "../check.h"
 
+/* scipy's sqrt(2.2e-16), the constant of brent_bounded's stopping rule */
 #define SQRT_EPS 1.4832396974191326e-08
 
 /* Every point the search evaluated and the value it was given there, so the
