@@ -16,7 +16,10 @@ Subjects:
   without -ffast-math compares every point a search evaluates with scipy's;
 - filter/kalman.h, against tests/correctness/kalman_correctness.c: one term
   dropped from each method's derivative recursion and from the prediction's,
-  and one from two of the value recursions.
+  and one from two of the value recursions; in the Woodbury value on reduced
+  observations, the residual e dropped and the stored Z_o'Z_o left unused; in
+  the derivatives batched over the coordinates, the transpose in T dP T'
+  skipped and the last coordinate left out of the stacked dP S P product.
 
 One mutation is expected to go undetected: removing the finiteness test on the
 parabola in brent_bounded. With GCC on x86-64 the comparisons after it already
@@ -131,6 +134,29 @@ MUTATIONS = [
     ("univariate value: gain not divided by F", "filter/kalman.h",
      "for (int b = 0; b < m; b++) a[b] += Pz[b] * F_reciprocal * v;",
      "for (int b = 0; b < m; b++) a[b] += Pz[b] * v;", KALMAN, True),
+    ("reduced observations: residual e dropped from v'v", "filter/kalman.h",
+     "vv = (mreal)(w->prepared_e[prepared] + (double)_kalman_dot(k, vo, vo));",
+     "vv = (mreal)((double)_kalman_dot(k, vo, vo));", KALMAN, True),
+    ("reduced observations: stored Z_o'Z_o not used", "filter/kalman.h",
+     "        S = w->prepared_S + (size_t)prepared * mm;", "", KALMAN, True),
+    ("batched prediction derivative: transpose in T dP T' skipped", "filter/kalman.h",
+     "X_transposed[(size_t)i * mm + (size_t)r * m + c] = X[(size_t)i * mm + (size_t)c * m + r];",
+     "X_transposed[(size_t)i * mm + (size_t)r * m + c] = X[(size_t)i * mm + (size_t)r * m + c];", KALMAN, True),
+    ("batched update derivative: last coordinate left out of dP S P", "filter/kalman.h",
+     "mat_gemm(0, 0, k * m, m, m, -h, w->dP, m, SP, m, 1, Y_stack, m);",
+     "mat_gemm(0, 0, (k - 1) * m, m, m, -h, w->dP, m, SP, m, 1, Y_stack, m);", KALMAN, True),
+    ("diagonal T: a full matrix taken as diagonal", "filter/kalman.h",
+     "if (a != b && A.d[(size_t)a * A.stride + b] != 0) return 0;", "(void)0;", KALMAN, True),
+    ("diagonal T value: T_a in place of T_b in T Ptt T'", "filter/kalman.h",
+     "w->P[ab] = w->RQR[ab] + w->TP[ab] * T[(size_t)b * T_diagonal_step];",
+     "w->P[ab] = w->RQR[ab] + w->TP[ab] * T_a;", KALMAN, True),
+    ("diagonal T derivative: T_a in place of T_b in T dP T'", "filter/kalman.h",
+     "dP[(size_t)a * m + b] = T_a * dPtt[(size_t)a * m + b] * T[(size_t)b * T_diagonal_step];",
+     "dP[(size_t)a * m + b] = T_a * dPtt[(size_t)a * m + b] * T_a;", KALMAN, True),
+    ("diagonal dT derivative: transpose of dT Ptt T' dropped", "filter/kalman.h",
+     "+ ds->T.d[(size_t)b * dT_diagonal_step] * w->TP[(size_t)a * m + b];", ";", KALMAN, True),
+    ("diagonal dT derivative: dT a_{t|t} dropped", "filter/kalman.h",
+     "da[a] += ds->T.d[(size_t)a * dT_diagonal_step] * w->att[a];", "(void)0;", KALMAN, True),
 ]
 
 

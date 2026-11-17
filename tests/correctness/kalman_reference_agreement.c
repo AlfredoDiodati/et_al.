@@ -48,7 +48,7 @@ int c_filter(int method, int N, int m, int r, int n_periods,
              const double *d, const double *c, const double *y_rows, const double *a1, const double *P1,
              double *out, double *logdetF, double *quad, double *a, double *P, double *att, double *Ptt, double *v) {
     GivenSystem g = { N, m, r, method == KALMAN_WOODBURY ? 1 : N, method == KALMAN_DENSE ? N : 1, Z, T, H, R, Q, d, c };
-    KalmanModel model = { N, m, r, 0, (KalmanMethod)method, given_system, NULL, NULL, &g };
+    KalmanModel model = { N, m, r, 0, (KalmanMethod)method, given_system, NULL, NULL, &g, 0 };
     KalmanWorkspace *w = kalman_workspace_new(&model);
     Mat y = columns_of(y_rows, n_periods, N), a1m = matrix_of(a1, m, 1), P1m = matrix_of(P1, m, m);
     KalmanInit init = { a1m, P1m };

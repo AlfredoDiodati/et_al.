@@ -1558,3 +1558,55 @@ uninstall-core: uninstall-model
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
 .PHONY: seri-runs-npz test-mutations bench-band_chol_block_threshold bench-band_chol_solve_threshold test-band-chol-python test-brent-python bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery study-qvarma_consistency_rate study-qvarma_parameter_space install-core install-model uninstall-core uninstall-model
+
+# Where one evaluation of the Woodbury Kalman filter spends its time, stage by
+# stage, on ss/dynamic_factor.h's systems; see the file's header. Writes
+# out/kalman_woodbury_profile_report.txt. Not part of `test` or bench.sh.
+tests/performance/kalman_woodbury_profile: tests/performance/kalman_woodbury_profile.c $(DYNAMIC_FACTOR_DEPS)
+	$(CC) $(STAT_CFLAGS) tests/performance/kalman_woodbury_profile.c $(LDLIBS) -o tests/performance/kalman_woodbury_profile
+bench-kalman_woodbury_profile: tests/performance/kalman_woodbury_profile
+	./tests/performance/kalman_woodbury_profile
+
+# The Kalman filter's correctness suites against a candidate rewrite of
+# filter/kalman.h and ss/dynamic_factor.h instead of the shipped headers,
+# the gate a candidate passes before its speed is worth reading:
+#
+#   make test-kalman-candidate KALMAN_CANDIDATE=filter/kalman_new.h DYNAMIC_FACTOR_CANDIDATE=ss/dynamic_factor_new.h
+#   STRESS=1 make test-kalman-candidate ...
+#
+# A candidate sits beside the header it would replace, so its relative
+# includes resolve. Built with a _candidate suffix and removed after, so a
+# candidate run never leaves a binary where `make test` looks for one.
+KALMAN_CANDIDATE ?= filter/kalman.h
+DYNAMIC_FACTOR_CANDIDATE ?= ss/dynamic_factor.h
+test-kalman-candidate:
+	$(CC) $(STAT_CFLAGS) -I. -DKALMAN_HEADER='"$(KALMAN_CANDIDATE)"' tests/correctness/kalman_correctness.c $(LDLIBS) -o tests/correctness/kalman_correctness_candidate
+	$(CC) $(STAT_CFLAGS) -I. -DDYNAMIC_FACTOR_HEADER='"$(DYNAMIC_FACTOR_CANDIDATE)"' tests/correctness/dynamic_factor_correctness.c $(LDLIBS) -o tests/correctness/dynamic_factor_correctness_candidate
+	./tests/correctness/kalman_correctness_candidate
+	./tests/correctness/dynamic_factor_correctness_candidate
+	rm -f tests/correctness/kalman_correctness_candidate tests/correctness/dynamic_factor_correctness_candidate
+
+# A candidate rewrite of ss/dynamic_factor.h and the filter/kalman.h it
+# includes against the shipped headers, agreement first and time second;
+# see tests/performance/kalman_candidates.c. With no KALMAN_ARM_CANDIDATE
+# both arms are the shipped headers, the harness checking itself. Always
+# rebuilt, since the candidate is a command-line variable. Exits nonzero when
+# the arms disagree. Writes out/kalman_candidates_report.txt. Not part of
+# `test` or bench.sh:
+#
+#   make bench-kalman_candidates KALMAN_ARM_CANDIDATE=ss/dynamic_factor_new.h
+KALMAN_ARM_CANDIDATE ?= ss/dynamic_factor.h
+bench-kalman_candidates: tests/performance/kalman_candidates.c tests/performance/kalman_arm.c tests/performance/kalman_arm.h
+	$(CC) $(STAT_CFLAGS) -I. -DKALMAN_ARM_HEADER='"ss/dynamic_factor.h"' -DKALMAN_ARM_ENTRY=kalman_arm_production -c tests/performance/kalman_arm.c -o tests/performance/kalman_arm_production.o
+	$(CC) $(STAT_CFLAGS) -I. -DKALMAN_ARM_HEADER='"$(KALMAN_ARM_CANDIDATE)"' -DKALMAN_ARM_ENTRY=kalman_arm_candidate -c tests/performance/kalman_arm.c -o tests/performance/kalman_arm_candidate.o
+	$(CC) $(STAT_CFLAGS) -DKALMAN_ARM_CANDIDATE_NAME='"$(KALMAN_ARM_CANDIDATE)"' tests/performance/kalman_candidates.c tests/performance/kalman_arm_production.o tests/performance/kalman_arm_candidate.o $(LDLIBS) -o tests/performance/kalman_candidates
+	rm -f tests/performance/kalman_arm_production.o tests/performance/kalman_arm_candidate.o
+	./tests/performance/kalman_candidates
+
+# What the gradient part of one Woodbury Kalman evaluation is made of, piece
+# by piece, on ss/dynamic_factor.h's systems; see the file's header. Writes
+# out/kalman_derivative_profile_report.txt. Not part of `test` or bench.sh.
+tests/performance/kalman_derivative_profile: tests/performance/kalman_derivative_profile.c $(DYNAMIC_FACTOR_DEPS)
+	$(CC) $(STAT_CFLAGS) tests/performance/kalman_derivative_profile.c $(LDLIBS) -o tests/performance/kalman_derivative_profile
+bench-kalman_derivative_profile: tests/performance/kalman_derivative_profile
+	./tests/performance/kalman_derivative_profile

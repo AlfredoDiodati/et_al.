@@ -341,6 +341,8 @@ static inline KalmanModel _dynamic_factor_kalman_model(DynamicFactorContext *c, 
     model.link = with_theta ? _dynamic_factor_kalman_link : NULL;
     model.extra_log_likelihood = c->collapsed ? _dynamic_factor_collapsed_correction : NULL;
     model.context = c;
+    /* Z_t comes from M and d_t is zero, whatever theta is */
+    model.observation_is_fixed = 1;
     return model;
 }
 

@@ -167,6 +167,13 @@ typedef struct {
     KalmanLinkFn link;                    /* NULL: context is already set */
     KalmanExtraFn extra_log_likelihood;   /* NULL: none */
     void *context;
+    /* 1 promises that Z_t and d_t do not depend on theta, and that a y handed
+       to a workspace is not modified while that workspace lives. The
+       Woodbury method then reduces each period's observations once per y,
+       and an evaluation no longer reads them; see
+       kalman_prepare_observations. 0 for anything else, and the default of
+       an initializer that leaves the field out. */
+    int observation_is_fixed;
 } KalmanModel;
 
 /* a_1 and P_1. Not owned. */
@@ -221,6 +228,8 @@ typedef struct {
     int *observed;
     mreal *y_observed, *a, *P, *att, *Ptt, *v_full;
     mreal *RQR, *RQ, *RdQ, *TP, *dRQR, *mm_a, *mm_b;
+    /* the prediction derivatives batched over the coordinates: k m x m stacks */
+    mreal *dP_stack_a, *dP_stack_b;
     mreal *da, *dP, *datt, *dPtt, *theta_gradient;
     double *dl;
 
@@ -230,11 +239,25 @@ typedef struct {
     mreal *Ho, *M, *dM, *F, *L, *Finv, *KT, *e, *dF, *dFe, *q, *nm;
     /* KALMAN_WOODBURY */
     mreal *S, *g, *LU, *Gt, *SP, *PSP, *w, *dS, *dg, *dw, *Y;
+    /* the Woodbury derivatives batched over the coordinates: dg for each, Y as a
+       k m x m stack, and its m x k m transpose the solve takes */
+    mreal *dg_all, *Y_stack, *Y_columns;
+    double *vdv_all, *dlogdet_all, *dh_all, *dsigma2_all;
     MatPivot *piv;
     /* KALMAN_UNIVARIATE */
     mreal *Pz, *dPz;
     /* simulation */
     mreal *draw, *shock, *shock_factor;
+
+    /* kalman_prepare_observations: per period t, the observed count n_t,
+       k_t = min(n_t, m) rows of A_t (m x m storage), u_t (m), e_t and
+       S_t = Z_o'Z_o (m x m), for the y it was built from */
+    int prepared_periods;
+    const mreal *prepared_y;
+    int prepared_rows, prepared_stride;
+    int *prepared_n, *prepared_k;
+    mreal *prepared_A, *prepared_u, *prepared_S;
+    double *prepared_e;
 } KalmanWorkspace;
 
 static inline void *_kalman_calloc(KalmanWorkspace *w, size_t count, size_t size) {
@@ -273,6 +296,8 @@ static inline KalmanWorkspace *kalman_workspace_new(const KalmanModel *model) {
     w->dRQR = _KALMAN_REALS(w, mm);
     w->mm_a = _KALMAN_REALS(w, mm);
     w->mm_b = _KALMAN_REALS(w, mm);
+    w->dP_stack_a = _KALMAN_REALS(w, (size_t)k * mm);
+    w->dP_stack_b = _KALMAN_REALS(w, (size_t)k * mm);
     w->da = _KALMAN_REALS(w, (size_t)k * m);
     w->dP = _KALMAN_REALS(w, (size_t)k * mm);
     w->datt = _KALMAN_REALS(w, (size_t)k * m);
@@ -315,6 +340,13 @@ static inline KalmanWorkspace *kalman_workspace_new(const KalmanModel *model) {
         w->dg = _KALMAN_REALS(w, m);
         w->dw = _KALMAN_REALS(w, m);
         w->Y = _KALMAN_REALS(w, mm);
+        w->dg_all = _KALMAN_REALS(w, (size_t)k * m);
+        w->Y_stack = _KALMAN_REALS(w, (size_t)k * mm);
+        w->Y_columns = _KALMAN_REALS(w, (size_t)k * mm);
+        w->vdv_all = (double*)_kalman_calloc(w, (size_t)k, sizeof(double));
+        w->dlogdet_all = (double*)_kalman_calloc(w, (size_t)k, sizeof(double));
+        w->dh_all = (double*)_kalman_calloc(w, (size_t)k, sizeof(double));
+        w->dsigma2_all = (double*)_kalman_calloc(w, (size_t)k, sizeof(double));
         w->piv = (MatPivot*)_kalman_calloc(w, (size_t)m, sizeof(MatPivot));
     } else {
         w->Pz = _KALMAN_REALS(w, m);
@@ -323,8 +355,19 @@ static inline KalmanWorkspace *kalman_workspace_new(const KalmanModel *model) {
     return w;
 }
 
+static inline void _kalman_prepared_free(KalmanWorkspace *w) {
+    free(w->prepared_n); free(w->prepared_k);
+    free(w->prepared_A); free(w->prepared_u); free(w->prepared_S); free(w->prepared_e);
+    w->prepared_n = w->prepared_k = NULL;
+    w->prepared_A = w->prepared_u = w->prepared_S = NULL;
+    w->prepared_e = NULL;
+    w->prepared_periods = 0;
+    w->prepared_y = NULL;
+}
+
 static inline void kalman_workspace_free(KalmanWorkspace *w) {
     if (!w) return;
+    _kalman_prepared_free(w);
     for (int i = 0; i < w->n_blocks; i++) free(w->blocks[i]);
     free(w);
 }
@@ -402,35 +445,94 @@ static inline int _kalman_drqr(KalmanWorkspace *w, const KalmanSystem *s, const 
     return 1;
 }
 
+/* 1 when every off-diagonal entry of the m x m matrix A is zero. */
+static inline int _kalman_is_diagonal(Mat A, int m) {
+    for (int a = 0; a < m; a++)
+        for (int b = 0; b < m; b++)
+            if (a != b && A.d[(size_t)a * A.stride + b] != 0) return 0;
+    return 1;
+}
+
 /*
 a_{t+1} = T_t a_{t|t} + c_t and P_{t+1} = T_t P_{t|t} T_t' + R_t Q_t R_t',
 from w->att, w->Ptt into w->a, w->P, and the same for every tangent when
 with_tangents is set. w->RQR must already hold this period's R Q R'.
+
+T_t is checked for being diagonal every period, at m^2 comparisons, and a
+diagonal T_t is applied entry by entry, which turns each product with it from
+m^3 into m^2 work; the same holds for each tangent's dT_t.
 */
 static inline void _kalman_predict_step(KalmanWorkspace *w, const KalmanSystem *s, int with_tangents) {
     int m = w->m;
     size_t mm = (size_t)m * m;
-    mat_gemm(0, 0, m, 1, m, 1, s->T.d, s->T.stride, w->att, 1, 0, w->a, 1);
-    for (int i = 0; i < m; i++) w->a[i] += _kalman_entry(s->c, i);
-    mat_gemm(0, 0, m, m, m, 1, s->T.d, s->T.stride, w->Ptt, m, 0, w->TP, m);
-    for (size_t i = 0; i < mm; i++) w->P[i] = w->RQR[i];
-    mat_gemm(0, 1, m, m, m, 1, w->TP, m, s->T.d, s->T.stride, 1, w->P, m);
+    const mreal *T = s->T.d;
+    size_t T_diagonal_step = (size_t)s->T.stride + 1;
+    int T_is_diagonal = _kalman_is_diagonal(s->T, m);
+    if (T_is_diagonal) {
+        for (int a = 0; a < m; a++) {
+            mreal T_a = T[(size_t)a * T_diagonal_step];
+            w->a[a] = T_a * w->att[a] + _kalman_entry(s->c, a);
+            for (int b = 0; b < m; b++) {
+                size_t ab = (size_t)a * m + b;
+                w->TP[ab] = T_a * w->Ptt[ab];
+                w->P[ab] = w->RQR[ab] + w->TP[ab] * T[(size_t)b * T_diagonal_step];
+            }
+        }
+    } else {
+        mat_gemm(0, 0, m, 1, m, 1, T, s->T.stride, w->att, 1, 0, w->a, 1);
+        for (int i = 0; i < m; i++) w->a[i] += _kalman_entry(s->c, i);
+        mat_gemm(0, 0, m, m, m, 1, T, s->T.stride, w->Ptt, m, 0, w->TP, m);
+        for (size_t i = 0; i < mm; i++) w->P[i] = w->RQR[i];
+        mat_gemm(0, 1, m, m, m, 1, w->TP, m, T, s->T.stride, 1, w->P, m);
+    }
     _kalman_symmetrize(w->P, m);
     if (!with_tangents) return;
 
-    for (int i = 0; i < w->k; i++) {
+    int k = w->k;
+    if (T_is_diagonal) {
+        for (int i = 0; i < k; i++) {
+            const mreal *dPtt = w->dPtt + (size_t)i * mm;
+            mreal *dP = w->dP + (size_t)i * mm;
+            for (int a = 0; a < m; a++) {
+                mreal T_a = T[(size_t)a * T_diagonal_step];
+                for (int b = 0; b < m; b++) dP[(size_t)a * m + b] = T_a * dPtt[(size_t)a * m + b] * T[(size_t)b * T_diagonal_step];
+            }
+        }
+    } else {
+        /* T dP_{t|t} T' for every coordinate in two products over the stack of
+           the k derivatives, k m x m: X = [dP_1; ...; dP_k] T', whose block i
+           transposed is T dP_i because dP_i is symmetric, and that stack of
+           transposes times T' again. Every update leaves dP_{t|t} symmetrized. */
+        mreal *X = w->dP_stack_a, *X_transposed = w->dP_stack_b;
+        mat_gemm(0, 1, k * m, m, m, 1, w->dPtt, m, T, s->T.stride, 0, X, m);
+        for (int i = 0; i < k; i++)
+            for (int r = 0; r < m; r++)
+                for (int c = 0; c < m; c++) X_transposed[(size_t)i * mm + (size_t)r * m + c] = X[(size_t)i * mm + (size_t)c * m + r];
+        mat_gemm(0, 1, k * m, m, m, 1, X_transposed, m, T, s->T.stride, 0, w->dP, m);
+    }
+
+    for (int i = 0; i < k; i++) {
         const KalmanSystem *ds = &w->tangents[i];
         mreal *da = w->da + (size_t)i * m, *dP = w->dP + (size_t)i * mm;
-        const mreal *datt = w->datt + (size_t)i * m, *dPtt = w->dPtt + (size_t)i * mm;
-        mat_gemm(0, 0, m, 1, m, 1, s->T.d, s->T.stride, datt, 1, 0, da, 1);
-        if (ds->nonzero & KALMAN_T) mat_gemm(0, 0, m, 1, m, 1, ds->T.d, ds->T.stride, w->att, 1, 1, da, 1);
+        const mreal *datt = w->datt + (size_t)i * m;
+        if (T_is_diagonal)
+            for (int a = 0; a < m; a++) da[a] = T[(size_t)a * T_diagonal_step] * datt[a];
+        else mat_gemm(0, 0, m, 1, m, 1, T, s->T.stride, datt, 1, 0, da, 1);
+        int dT_is_diagonal = (ds->nonzero & KALMAN_T) && _kalman_is_diagonal(ds->T, m);
+        size_t dT_diagonal_step = (size_t)ds->T.stride + 1;
+        if (dT_is_diagonal)
+            for (int a = 0; a < m; a++) da[a] += ds->T.d[(size_t)a * dT_diagonal_step] * w->att[a];
+        else if (ds->nonzero & KALMAN_T) mat_gemm(0, 0, m, 1, m, 1, ds->T.d, ds->T.stride, w->att, 1, 1, da, 1);
         if (ds->nonzero & KALMAN_C)
             for (int j = 0; j < m; j++) da[j] += ds->c.d[(size_t)j * ds->c.stride];
 
-        mat_gemm(0, 0, m, m, m, 1, s->T.d, s->T.stride, dPtt, m, 0, w->mm_b, m);
-        mat_gemm(0, 1, m, m, m, 1, w->mm_b, m, s->T.d, s->T.stride, 0, dP, m);
-        if (ds->nonzero & KALMAN_T) {
-            /* dT Ptt T' and its transpose; Ptt T' is the transpose of T Ptt */
+        /* dT Ptt T' and its transpose; Ptt T' is the transpose of T Ptt */
+        if (dT_is_diagonal) {
+            for (int a = 0; a < m; a++)
+                for (int b = 0; b < m; b++)
+                    dP[(size_t)a * m + b] += ds->T.d[(size_t)a * dT_diagonal_step] * w->TP[(size_t)b * m + a]
+                                             + ds->T.d[(size_t)b * dT_diagonal_step] * w->TP[(size_t)a * m + b];
+        } else if (ds->nonzero & KALMAN_T) {
             mat_gemm(0, 1, m, m, m, 1, ds->T.d, ds->T.stride, w->TP, m, 0, w->mm_b, m);
             for (int a = 0; a < m; a++)
                 for (int b = 0; b < m; b++) dP[(size_t)a * m + b] += w->mm_b[(size_t)a * m + b] + w->mm_b[(size_t)b * m + a];
@@ -506,7 +608,7 @@ static inline int _kalman_update_dense(KalmanWorkspace *w, const KalmanSystem *s
     int m = w->m;
     size_t mm = (size_t)m * m;
     *logdet_out = 0; *quad_out = 0;
-    if (n == 0) { _kalman_copy_state(w, with_tangents); return 0; }
+    if (n <= 0) { _kalman_copy_state(w, with_tangents); return 0; }
 
     mreal *Zo = w->Zo, *vo = w->vo, *M = w->M, *F = w->F, *L = w->L, *KT = w->KT, *e = w->e;
     _kalman_gather_rows(s->Z, w->observed, n, m, Zo);
@@ -676,6 +778,93 @@ static inline int _kalman_update_univariate(KalmanWorkspace *w, const KalmanSyst
 }
 
 /*
+The observations of every period reduced once, for a model whose Z_t and d_t
+do not depend on theta. With r = y_o - d_o, the n observed entries of period
+t, and Z_o their rows of Z_t, every evaluation of the Woodbury update needs
+only
+
+    S = Z_o'Z_o,  g = Z_o'(r - Z_o a),  v'v = |r - Z_o a|^2
+
+at the predicted state a. When n >= m, Z_o = Q R with Q n x m orthonormal and
+R m x m upper triangular, and with u = Q'r and e = |r - Q u|^2,
+
+    |r - Z_o a|^2 = e + |u - R a|^2,  Z_o'(r - Z_o a) = R'(u - R a),
+
+so A = R stands in for Z_o. When n < m, A = Z_o, u = r and e = 0. Either way
+an evaluation costs O(k m) per period for these, k = min(n, m), in place of
+O(n m^2), and reads neither y nor Z_t. The sum of squares is e plus a sum of
+squares, both non-negative, rather than r'r - 2 a'Z_o'r + a'S a, whose terms
+cancel when the residuals are small against y. e is the norm of the residual
+vector itself, for the same reason. Storage is 2 m^2 + m + 1 numbers per
+period.
+
+Computed once per y: kalman_log_likelihood calls this itself the first time it
+sees a y, for a model with observation_is_fixed set and the Woodbury method.
+The system callback is run for every period to read Z_t and d_t.
+*/
+static inline void kalman_prepare_observations(KalmanWorkspace *w, Mat y) {
+    assert(w->model.observation_is_fixed && w->model.method == KALMAN_WOODBURY
+           && "kalman_prepare_observations: for a Woodbury model whose Z_t and d_t are fixed");
+    assert(y.r == w->N);
+    int m = w->m, n_periods = y.c;
+    size_t mm = (size_t)m * m;
+    _kalman_prepared_free(w);
+    w->prepared_n = (int*)calloc((size_t)n_periods + 1, sizeof(int));
+    w->prepared_k = (int*)calloc((size_t)n_periods + 1, sizeof(int));
+    w->prepared_A = (mreal*)calloc((size_t)n_periods * mm + 1, sizeof(mreal));
+    w->prepared_u = (mreal*)calloc((size_t)n_periods * m + 1, sizeof(mreal));
+    w->prepared_S = (mreal*)calloc((size_t)n_periods * mm + 1, sizeof(mreal));
+    w->prepared_e = (double*)calloc((size_t)n_periods + 1, sizeof(double));
+    assert(w->prepared_n && w->prepared_k && w->prepared_A && w->prepared_u && w->prepared_S && w->prepared_e);
+    for (int t = 0; t < n_periods; t++) {
+        KalmanSystem *s = &w->system;
+        memset(s, 0, sizeof(*s));
+        w->model.system(t, w->model.context, s, NULL);
+        _kalman_check_system(w, s);
+        int n = _kalman_gather_observed(w, y, t);
+        int k = n < m ? n : m;
+        w->prepared_n[t] = n;
+        w->prepared_k[t] = k;
+        if (n <= 0) continue;
+        mreal *A = w->prepared_A + (size_t)t * mm, *u = w->prepared_u + (size_t)t * m;
+        mreal *S = w->prepared_S + (size_t)t * mm;
+        Mat Zo = mat_new(n, m);
+        Vec r = mat_new(n, 1);
+        _kalman_gather_rows(s->Z, w->observed, n, m, Zo.d);
+        for (int j = 0; j < n; j++) r.d[j] = w->y_observed[j] - _kalman_entry(s->d, w->observed[j]);
+        mat_gemm(1, 0, m, m, n, 1, Zo.d, m, Zo.d, m, 0, S, m);
+        _kalman_symmetrize(S, m);
+        if (n < m) {
+            memcpy(A, Zo.d, (size_t)n * m * sizeof(mreal));
+            memcpy(u, r.d, (size_t)n * sizeof(mreal));
+            w->prepared_e[t] = 0;
+        } else {
+            Mat Q, R;
+            mat_qr(Zo, &Q, &R);
+            memcpy(A, R.d, mm * sizeof(mreal));
+            mat_gemm(1, 0, m, 1, n, 1, Q.d, Q.stride, r.d, 1, 0, u, 1);
+            /* the residual r - Q u itself, squared and summed */
+            mat_gemm(0, 0, n, 1, m, -1, Q.d, Q.stride, u, 1, 1, r.d, 1);
+            double e = 0;
+            for (int j = 0; j < n; j++) e += (double)r.d[j] * (double)r.d[j];
+            w->prepared_e[t] = e;
+            mat_free(Q); mat_free(R);
+        }
+        mat_free(Zo); mat_free(r);
+    }
+    w->prepared_periods = n_periods;
+    w->prepared_y = y.d;
+    w->prepared_rows = y.r;
+    w->prepared_stride = y.stride;
+}
+
+/* Whether the workspace holds the reduction of this y. */
+static inline int _kalman_is_prepared_for(const KalmanWorkspace *w, Mat y) {
+    return w->prepared_y != NULL && w->prepared_y == y.d && w->prepared_periods == y.c
+        && w->prepared_rows == y.r && w->prepared_stride == y.stride;
+}
+
+/*
 The Woodbury update for H_t = s I, h = 1 / s, over the n observed rows o:
 
     S = Z_o'Z_o,  g = Z_o'v,  Inner = I + h P S
@@ -693,25 +882,40 @@ dInner = dh P S + h dP S + h P dS,
 and when Z and d do not move, dg = -S da and v'dv = -g'da, so a tangent
 costs m x m work only. Returns 0, or 1 when s is not positive or Inner is
 singular.
+
+prepared is the period index when the workspace holds this period's
+reduction (kalman_prepare_observations), -1 otherwise.
 */
 static inline int _kalman_update_woodbury(KalmanWorkspace *w, const KalmanSystem *s, int n,
-                                          int with_tangents, double *logdet_out, double *quad_out) {
+                                          int with_tangents, double *logdet_out, double *quad_out, int prepared) {
     int m = w->m;
     size_t mm = (size_t)m * m;
     *logdet_out = 0; *quad_out = 0;
     mreal sigma2 = s->H.d[0];
     if (!(sigma2 > 0) || MISNAN(sigma2) || MISINF(sigma2)) return 1;
-    if (n == 0) { _kalman_copy_state(w, with_tangents); return 0; }
+    if (n <= 0) { _kalman_copy_state(w, with_tangents); return 0; }
     mreal h = 1 / sigma2;
 
     mreal *Zo = w->Zo, *vo = w->vo, *S = w->S, *g = w->g, *LU = w->LU;
-    _kalman_gather_rows(s->Z, w->observed, n, m, Zo);
-    for (int j = 0; j < n; j++)
-        vo[j] = w->y_observed[j] - _kalman_dot(m, Zo + (size_t)j * m, w->a) - _kalman_entry(s->d, w->observed[j]);
-    mat_gemm(1, 0, m, m, n, 1, Zo, m, Zo, m, 0, S, m);
-    _kalman_symmetrize(S, m);
-    mat_gemm(1, 0, m, 1, n, 1, Zo, m, vo, 1, 0, g, 1);
-    mreal vv = _kalman_dot(n, vo, vo);
+    mreal vv;
+    if (prepared >= 0) {
+        int k = w->prepared_k[prepared];
+        const mreal *A = w->prepared_A + (size_t)prepared * mm, *u = w->prepared_u + (size_t)prepared * m;
+        S = w->prepared_S + (size_t)prepared * mm;
+        /* vo holds u - A a, k entries */
+        memcpy(vo, u, (size_t)k * sizeof(mreal));
+        mat_gemm(0, 0, k, 1, m, -1, A, m, w->a, 1, 1, vo, 1);
+        mat_gemm(1, 0, m, 1, k, 1, A, m, vo, 1, 0, g, 1);
+        vv = (mreal)(w->prepared_e[prepared] + (double)_kalman_dot(k, vo, vo));
+    } else {
+        _kalman_gather_rows(s->Z, w->observed, n, m, Zo);
+        for (int j = 0; j < n; j++)
+            vo[j] = w->y_observed[j] - _kalman_dot(m, Zo + (size_t)j * m, w->a) - _kalman_entry(s->d, w->observed[j]);
+        mat_gemm(1, 0, m, m, n, 1, Zo, m, Zo, m, 0, S, m);
+        _kalman_symmetrize(S, m);
+        mat_gemm(1, 0, m, 1, n, 1, Zo, m, vo, 1, 0, g, 1);
+        vv = _kalman_dot(n, vo, vo);
+    }
 
     /* Inner = I + h P S */
     mat_gemm(0, 0, m, m, m, h, w->P, m, S, m, 0, LU, m);
@@ -742,14 +946,26 @@ static inline int _kalman_update_woodbury(KalmanWorkspace *w, const KalmanSystem
     double trace_PttS = 0;
     for (size_t j = 0; j < mm; j++) trace_PttS += (double)w->Ptt[j] * (double)S[j];
 
-    for (int i = 0; i < w->k; i++) {
+    /* Three passes over the coordinates. The first computes, per coordinate,
+       dg, v'dv, the log-determinant's derivative and Y less its h dP S P_{t|t}
+       term; then that term for every coordinate is one product over the k m x m
+       stack of the dP, and Inner^-1 Y is one solve with k m right-hand sides
+       against the factor in hand; the last pass finishes each coordinate. */
+    int k = w->k;
+    mreal *Y_stack = w->Y_stack, *Y_columns = w->Y_columns;
+    for (int i = 0; i < k; i++) {
         const KalmanSystem *ds = &w->tangents[i];
         const mreal *da = w->da + (size_t)i * m, *dP = w->dP + (size_t)i * mm;
-        mreal *datt = w->datt + (size_t)i * m, *dPtt = w->dPtt + (size_t)i * mm;
         mreal dsigma2 = (ds->nonzero & KALMAN_H) ? ds->H.d[0] : 0;
         mreal dh = -dsigma2 * h * h;
         int z_moves = (ds->nonzero & KALMAN_Z) != 0;
         int observation_moves = z_moves || (ds->nonzero & KALMAN_D);
+        assert(!(observation_moves && prepared >= 0)
+               && "kalman: a model with observation_is_fixed has a tangent of Z or d");
+        dg = w->dg_all + (size_t)i * m;
+        Y = Y_stack + (size_t)i * mm;
+        w->dsigma2_all[i] = dsigma2;
+        w->dh_all[i] = dh;
 
         mreal vdv;
         if (observation_moves) {
@@ -777,9 +993,9 @@ static inline int _kalman_update_woodbury(KalmanWorkspace *w, const KalmanSystem
             vdv = -_kalman_dot(m, g, da);
         }
 
-        /* Y = dP - dInner P_{t|t}, dInner P_{t|t} = dh P S P_{t|t} + h dP S P_{t|t} + h P dS P_{t|t} */
+        /* Y = dP - dInner P_{t|t}, dInner P_{t|t} = dh P S P_{t|t} + h dP S P_{t|t} + h P dS P_{t|t};
+           the h dP S P_{t|t} term is added for all coordinates after this pass */
         for (size_t j = 0; j < mm; j++) Y[j] = dP[j] - dh * PSP[j];
-        mat_gemm(0, 0, m, m, m, -h, dP, m, SP, m, 1, Y, m);
         double dlogdet = (double)n * dsigma2 * h + (double)dh * trace_PttS;
         double trace_GdP = 0;
         for (size_t j = 0; j < mm; j++) trace_GdP += (double)Gt[j] * (double)dP[j];
@@ -791,16 +1007,32 @@ static inline int _kalman_update_woodbury(KalmanWorkspace *w, const KalmanSystem
             for (size_t j = 0; j < mm; j++) trace_PttdS += (double)w->Ptt[j] * (double)dS[j];
             dlogdet += (double)h * trace_PttdS;
         }
-        memcpy(dPtt, Y, mm * sizeof(mreal));
-        _getrs('N', m, m, LU, m, w->piv, dPtt, m);
+        w->vdv_all[i] = vdv;
+        w->dlogdet_all[i] = dlogdet;
+    }
+
+    mat_gemm(0, 0, k * m, m, m, -h, w->dP, m, SP, m, 1, Y_stack, m);
+    /* Inner^-1 [Y_1 ... Y_k]: the stack laid out as m rows of k m columns */
+    for (int i = 0; i < k; i++)
+        for (int r = 0; r < m; r++)
+            memcpy(Y_columns + (size_t)r * k * m + (size_t)i * m, Y_stack + (size_t)i * mm + (size_t)r * m, (size_t)m * sizeof(mreal));
+    _getrs('N', m, k * m, LU, m, w->piv, Y_columns, k * m);
+
+    for (int i = 0; i < k; i++) {
+        const mreal *da = w->da + (size_t)i * m;
+        mreal *datt = w->datt + (size_t)i * m, *dPtt = w->dPtt + (size_t)i * mm;
+        const mreal *dg_i = w->dg_all + (size_t)i * m;
+        double dh = w->dh_all[i];
+        for (int r = 0; r < m; r++)
+            memcpy(dPtt + (size_t)r * m, Y_columns + (size_t)r * k * m + (size_t)i * m, (size_t)m * sizeof(mreal));
         _kalman_symmetrize(dPtt, m);
 
         mat_gemm(0, 0, m, 1, m, 1, dPtt, m, g, 1, 0, dw, 1);
-        mat_gemm(0, 0, m, 1, m, 1, w->Ptt, m, dg, 1, 1, dw, 1);
-        double dquad = (double)dh * vv + 2.0 * h * vdv - 2.0 * h * dh * gw
-                       - (double)h * h * ((double)_kalman_dot(m, dg, w->w) + (double)_kalman_dot(m, g, dw));
-        w->dl[i] += -0.5 * (dlogdet + dquad);
-        for (int b = 0; b < m; b++) datt[b] = da[b] + dh * w->w[b] + h * dw[b];
+        mat_gemm(0, 0, m, 1, m, 1, w->Ptt, m, dg_i, 1, 1, dw, 1);
+        double dquad = dh * vv + 2.0 * h * w->vdv_all[i] - 2.0 * h * dh * gw
+                       - (double)h * h * ((double)_kalman_dot(m, dg_i, w->w) + (double)_kalman_dot(m, g, dw));
+        w->dl[i] += -0.5 * (w->dlogdet_all[i] + dquad);
+        for (int b = 0; b < m; b++) datt[b] = da[b] + (mreal)dh * w->w[b] + h * dw[b];
     }
     return 0;
 }
@@ -866,10 +1098,12 @@ static inline void _kalman_store_update(const KalmanWorkspace *w, const KalmanSy
 The whole filter. Fills *log_likelihood, w->dl when with_tangents, and paths
 when not NULL. Returns -1 when every period was evaluated, otherwise the
 first period whose update failed. The model's context must already hold the
-parameters.
+parameters. use_prepared reads the observations from the workspace's
+reduction of y, which the caller has checked is current, and needs no paths.
 */
 static inline int _kalman_run(KalmanWorkspace *w, Mat y, KalmanInit init, int with_tangents,
-                              KalmanPaths *paths, double *log_likelihood) {
+                              KalmanPaths *paths, double *log_likelihood, int use_prepared) {
+    assert(!(use_prepared && paths));
     int m = w->m, n_periods = y.c;
     size_t mm = (size_t)m * m;
     assert(y.r == w->N && "kalman: y must be N x n_periods, one column per period");
@@ -893,7 +1127,7 @@ static inline int _kalman_run(KalmanWorkspace *w, Mat y, KalmanInit init, int wi
         w->model.system(t, w->model.context, s, with_tangents ? w->tangents : NULL);
         _kalman_check_system(w, s);
 
-        int n = _kalman_gather_observed(w, y, t);
+        int n = use_prepared ? w->prepared_n[t] : _kalman_gather_observed(w, y, t);
         if (paths) {
             _kalman_store_prediction(w, paths, t);
             _kalman_full_innovation(w, s, n);
@@ -902,7 +1136,7 @@ static inline int _kalman_run(KalmanWorkspace *w, Mat y, KalmanInit init, int wi
         int failed;
         if (w->model.method == KALMAN_DENSE) failed = _kalman_update_dense(w, s, n, with_tangents, &logdet, &quad);
         else if (w->model.method == KALMAN_UNIVARIATE) failed = _kalman_update_univariate(w, s, n, with_tangents, &logdet, &quad);
-        else failed = _kalman_update_woodbury(w, s, n, with_tangents, &logdet, &quad);
+        else failed = _kalman_update_woodbury(w, s, n, with_tangents, &logdet, &quad, use_prepared ? t : -1);
         if (failed) {
             *log_likelihood = -INFINITY;
             return t;
@@ -937,8 +1171,10 @@ static inline mreal kalman_log_likelihood(KalmanWorkspace *w, Vec theta, Mat y, 
         assert(theta.r == w->k && theta.c == 1);
         w->model.link(theta, w->model.context);
     }
+    int use_prepared = w->model.observation_is_fixed && w->model.method == KALMAN_WOODBURY;
+    if (use_prepared && !_kalman_is_prepared_for(w, y)) kalman_prepare_observations(w, y);
     double value;
-    int failed_at = _kalman_run(w, y, init, with_tangents, NULL, &value);
+    int failed_at = _kalman_run(w, y, init, with_tangents, NULL, &value, use_prepared);
     if (failed_at < 0 && w->model.extra_log_likelihood) {
         Vec extra_gradient = { w->k, 1, 1, with_tangents ? w->theta_gradient : NULL };
         value += (double)w->model.extra_log_likelihood(w->model.context, extra_gradient);
@@ -972,7 +1208,7 @@ static inline KalmanPaths kalman_filter(KalmanWorkspace *w, Vec theta, Mat y, Ka
     }
     KalmanPaths paths = _kalman_paths_new(w, y.c);
     double value;
-    paths.failed_at = _kalman_run(w, y, init, 0, &paths, &value);
+    paths.failed_at = _kalman_run(w, y, init, 0, &paths, &value, 0);
     paths.log_likelihood = paths.failed_at < 0 && _kalman_likelihood_is_usable(value) ? value : -INFINITY;
     return paths;
 }
@@ -982,7 +1218,7 @@ static inline KalmanPaths kalman_filter(KalmanWorkspace *w, Vec theta, Mat y, Ka
 static inline void kalman_predict(const KalmanSystem *system, Vec a, Mat P, Vec a_next, Mat P_next) {
     int m = a.r, r = system->Q.r;
     assert(a.c == 1 && P.r == m && P.c == m && a_next.r == m && P_next.r == m && P_next.c == m);
-    KalmanModel shape = { 1, m, r, 0, KALMAN_WOODBURY, NULL, NULL, NULL, NULL };
+    KalmanModel shape = { 1, m, r, 0, KALMAN_WOODBURY, NULL, NULL, NULL, NULL, 0 };
     KalmanWorkspace w;
     memset(&w, 0, sizeof(w));
     w.model = shape;

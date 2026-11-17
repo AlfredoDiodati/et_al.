@@ -25,7 +25,12 @@ Z_t is a strided view into M throughout, so this is also where filter/kalman.h
 reads a strided Z.
 */
 
-#include "../../ss/dynamic_factor.h"
+/* DYNAMIC_FACTOR_HEADER is set by make test-kalman-candidate to run this suite
+   against a candidate rewrite instead of the shipped header. */
+#ifndef DYNAMIC_FACTOR_HEADER
+#define DYNAMIC_FACTOR_HEADER "../../ss/dynamic_factor.h"
+#endif
+#include DYNAMIC_FACTOR_HEADER
 #include "../check.h"
 #include <sys/stat.h>
 

@@ -24,7 +24,7 @@ M is the n_periods x N x (p + 1) covariate array, and its last column is dropped
 
 ## Estimation
 
-- `dynamic_factor_fit(y, M, initial_guess, initialization, options)`, the source's `fit`: `KALMAN_WOODBURY` on y, value and gradient in one pass.
+- `dynamic_factor_fit(y, M, initial_guess, initialization, options)`, the source's `fit`: `KALMAN_WOODBURY` on y, value and gradient in one pass. The model sets `observation_is_fixed`, since Z_t comes from M and d_t is zero whatever theta is, so the filter reduces each period's observations once per fit and an evaluation does not read y or M again; see `docs/KALMAN_DOCUMENTATION.md`.
 - `dynamic_factor_fit_collapsed(...)`, the source's `fit_collapsed`, same arguments: each period collapsed once onto the p loadings, `Gamma_t = (Z_t'Z_t)^-1` and `ystar_t = Gamma_t Z_t'y_t` with the unobserved rows of Z_t set to zero, through a Cholesky factor of `Z_t'Z_t` rather than an inverse; then `KALMAN_DENSE` on ystar with observation matrix I and variance `sigma2 Gamma_t`, plus the source's `_collapsed_correction`, `-(n - T p)/2 log sigma2 + 1/2 sum_t log det Gamma_t - 1/(2 sigma2) sum_t |y_t - Z_t ystar_t|^2`, n the number of observed entries. The collapse does not depend on theta, so it is computed once per fit. It asserts when a period has fewer than p observed entries, since `Z_t'Z_t` is then singular.
 - `initialization` is a `KalmanInit`, a_1 and P_1; R is the identity. `options` is `KalmanFitOptions`; `fit` builds the optimizer (`solver/lbfgs.h`) itself.
 - `DynamicFactorFit` holds the constrained estimate and its theta, the estimator, the maximum without the 2 pi constant, the gradient norm, `niter`, `total_niter`, `nruns`, `is_converged`, `status`, `status_is_known`, `run_status`, and the filter's paths at the estimate (of y for the filtered estimator, of ystar for the collapsed one). Free with `dynamic_factor_fit_free`.
@@ -54,7 +54,7 @@ Each starts from the last update of the fit, `att_T` and `Ptt_T`, as the source'
 
 ## Testing
 
-`tests/correctness/dynamic_factor_correctness.c` (`make test`, 0.29 s), on data from the model's equations written out in the test:
+`tests/correctness/dynamic_factor_correctness.c` (`make test`, 0.22 s), on data from the model's equations written out in the test:
 
 - the link and its inverse, theta to parameters to theta within 1e-12;
 - the gradient of both estimators against a central difference at steps 1e-4 and 5e-5 combined to cancel the h^2 term, within 1e-6 relative, at three random theta, and the two estimators' likelihoods within 1e-10 and gradients within 1e-8 of each other;
@@ -80,7 +80,7 @@ The fits agree to what two optimizers with different stopping rules leave, not t
 
 ## Performance
 
-A whole fit is not benchmarked against the source: this is model tier, which the README's benchmarking policy compares only between versions of this package. The evaluation a fit repeats is benchmarked, on this model's systems, as part of `filter/kalman.h`'s benchmark; see `docs/KALMAN_DOCUMENTATION.md`.
+A whole fit is not benchmarked against the source: this is model tier, which the README's benchmarking policy compares only between versions of this package. The evaluation a fit repeats is benchmarked, on this model's systems, as part of `filter/kalman.h`'s benchmark; see `docs/KALMAN_DOCUMENTATION.md`. A whole fit is compared between versions of this package by `make bench-kalman_candidates`: at n = 2000, N = 100, p = 5 a fit took 1.936 s, then 1.767 s after the observations were reduced once per fit, then 1.154 s after the derivatives were computed over all coordinates at once, then 0.838 s after the diagonal B was applied entry by entry, always in 72 iterations; the record is in that doc's Changes measured.
 
 ## Known limitations
 

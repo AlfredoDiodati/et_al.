@@ -76,6 +76,9 @@ tests/performance/cumsum_threshold
 tests/performance/dargsort_threshold
 tests/performance/median_repeated_values
 tests/performance/median_candidates
+tests/performance/kalman_candidates
+tests/performance/kalman_woodbury_profile
+tests/performance/kalman_derivative_profile
 tests/performance/rolling_mean_threshold
 tests/performance/band_chol_block_threshold
 tests/performance/band_chol_solve_threshold

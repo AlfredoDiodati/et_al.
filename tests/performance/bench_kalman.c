@@ -125,7 +125,7 @@ double c_time_filter(int method, int N, int m, int r, int n,
                      const double *d, const double *c, const double *y_rows, const double *a1, const double *P1,
                      double *value) {
     GivenSystem g = { N, m, r, method == KALMAN_WOODBURY ? 1 : N, method == KALMAN_DENSE ? N : 1, Z, T, H, R, Q, d, c };
-    KalmanModel model = { N, m, r, 0, (KalmanMethod)method, given_system, NULL, NULL, &g };
+    KalmanModel model = { N, m, r, 0, (KalmanMethod)method, given_system, NULL, NULL, &g, 0 };
     KalmanWorkspace *w = kalman_workspace_new(&model);
     Mat y = columns_of(y_rows, n, N), a1m = matrix_of(a1, m, 1), P1m = matrix_of(P1, m, m);
     KalmanInit init = { a1m, P1m };

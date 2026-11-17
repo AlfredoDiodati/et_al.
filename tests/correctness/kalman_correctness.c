@@ -33,7 +33,12 @@ the header but the system callback. Covered:
 STRESS=1 widens the random sweeps.
 */
 
-#include "../../filter/kalman.h"
+/* KALMAN_HEADER is set by make test-kalman-candidate to run this suite against
+   a candidate rewrite of the header instead of the shipped one. */
+#ifndef KALMAN_HEADER
+#define KALMAN_HEADER "../../filter/kalman.h"
+#endif
+#include KALMAN_HEADER
 #include "../check.h"
 
 static int stress = 0;
@@ -118,10 +123,14 @@ static LinearSystem *linear_system_new(Rng *rng, KalmanMethod method, int N, int
     s->dc = (mreal*)calloc((size_t)k * m, sizeof(mreal));
     s->bits = (unsigned*)calloc((size_t)k, sizeof(unsigned));
     s->theta = (mreal*)calloc((size_t)k, sizeof(mreal));
-    /* one block per coordinate, so a wrong derivative names its block */
+    /* one block per coordinate, so a wrong derivative names its block, rotated
+       by a random shift so that every position, the last included, is sometimes
+       a block that moves P: code that treats the coordinates as one stack can
+       otherwise lose one whose derivative of P is always zero and pass */
     unsigned order[7] = { KALMAN_Z, KALMAN_T, KALMAN_H, KALMAN_R, KALMAN_Q, KALMAN_D, KALMAN_C };
+    int shift = (int)rng_below(rng, 7);
     for (int i = 0; i < k; i++) {
-        unsigned bit = order[i];
+        unsigned bit = order[(i + shift) % 7];
         if (bit == KALMAN_R && R_is_identity) bit = KALMAN_Q;
         s->bits[i] = bit;
         if (bit == KALMAN_Z) fill_normal(rng, s->dZ + (size_t)i * N * m, (size_t)N * m, 0.5);
@@ -192,7 +201,7 @@ static void linear_system(int t, void *context, KalmanSystem *system, KalmanSyst
 }
 
 static KalmanModel linear_model(LinearSystem *s) {
-    KalmanModel model = { s->N, s->m, s->r, s->k, s->method, linear_system, linear_link, NULL, s };
+    KalmanModel model = { s->N, s->m, s->r, s->k, s->method, linear_system, linear_link, NULL, s, 0 };
     return model;
 }
 
@@ -420,8 +429,8 @@ static double relative_gap(double got, double want) {
 /* The derivative along coordinate i by central differences at steps h and
    h / 2, combined to cancel the h^2 error term. h = 1e-4 rather than smaller
    because the likelihood carries rounding noise of a few 1e-14 relative,
-   which a single quotient at step 1e-6 turns into an error of 3e-5 relative
-   on one system of the STRESS=1 sweep (univariate, N = 26, m = 6, T = 8). */
+   which a single quotient at step 1e-6 turns into errors of 3e-6 to 1e-5
+   relative on several systems of the STRESS=1 sweep. */
 static double central_difference(double (*f)(void *, Vec), void *context, Vec theta, Vec shifted, int i) {
     double h = 1e-4, quotient[2];
     for (int halving = 0; halving < 2; halving++, h /= 2) {
@@ -450,9 +459,9 @@ static double linear_central_difference(KalmanWorkspace *w, Vec theta, Vec shift
 
 /* One random system against the reference, its gradient against central
    differences, and the value with and without the gradient. */
-static void check_against_reference(Rng *rng, KalmanMethod method, int N, int m, int r, int n_periods,
-                                    int R_is_identity, double missing, int whole_periods) {
-    LinearSystem *s = linear_system_new(rng, method, N, m, r, n_periods, R_is_identity);
+static void check_system_against_reference(Rng *rng, LinearSystem *s, const char *kind, double missing, int whole_periods) {
+    KalmanMethod method = s->method;
+    int N = s->N, m = s->m, n_periods = s->n_periods;
     Mat y = simulate_observations(rng, s, missing, whole_periods);
     Mat a1, P1;
     KalmanInit init = diffuse_init(m, &a1, &P1, 2);
@@ -461,7 +470,7 @@ static void check_against_reference(Rng *rng, KalmanMethod method, int N, int m,
     KalmanWorkspace *w = kalman_workspace_new(&model);
     Vec theta = theta_of(s);
     char label[160];
-    snprintf(label, sizeof label, "%s N=%d m=%d r=%d T=%d", kalman_method_name(method), N, m, s->r, n_periods);
+    snprintf(label, sizeof label, "%s%s N=%d m=%d r=%d T=%d", kind, kalman_method_name(method), N, m, s->r, n_periods);
 
     Reference ref = reference_filter(s, y, a1, P1);
     KalmanPaths paths = kalman_filter(w, theta, y, init);
@@ -507,7 +516,49 @@ static void check_against_reference(Rng *rng, KalmanMethod method, int N, int m,
     kalman_workspace_free(w);
     mat_free(theta); mat_free(gradient); mat_free(shifted);
     mat_free(y); mat_free(a1); mat_free(P1);
+}
+
+static void check_against_reference(Rng *rng, KalmanMethod method, int N, int m, int r, int n_periods,
+                                    int R_is_identity, double missing, int whole_periods) {
+    LinearSystem *s = linear_system_new(rng, method, N, m, r, n_periods, R_is_identity);
+    check_system_against_reference(rng, s, "", missing, whole_periods);
     linear_system_free(s);
+}
+
+static void zero_off_diagonal(mreal *A, int m) {
+    for (int a = 0; a < m; a++)
+        for (int b = 0; b < m; b++)
+            if (a != b) A[(size_t)a * m + b] = 0;
+}
+
+/* T_t diagonal, which the prediction step applies entry by entry, in every
+   period or in a random four fifths of them, so the filter switches between
+   the diagonal and the general product from one period to the next. The
+   coordinate that moves T moves it along a diagonal direction, which keeps
+   T_t diagonal at every theta, or along a full one at theta_i = 0, which
+   leaves T_t diagonal at theta but not dT_t, and not T_t at the shifted
+   points of the central difference. */
+static void test_diagonal_transition(void) {
+    Rng rng = rng_new(53, 16);
+    int sweeps = stress ? 150 : 24;
+    for (int sweep = 0; sweep < sweeps; sweep++) {
+        KalmanMethod method = (KalmanMethod)(sweep % 3);
+        int N = 1 + (int)rng_below(&rng, stress ? 30 : 10);
+        int m = 1 + (int)rng_below(&rng, 6), r = 1 + (int)rng_below(&rng, 4);
+        int n_periods = 5 + (int)rng_below(&rng, 30);
+        LinearSystem *s = linear_system_new(&rng, method, N, m, r, n_periods, (int)rng_below(&rng, 2));
+        int every_period = (int)rng_below(&rng, 2), dT_is_full = (int)rng_below(&rng, 2);
+        for (int t = 0; t < n_periods; t++)
+            if (every_period || rng_uniform(&rng) < 0.8) zero_off_diagonal(s->T + (size_t)t * m * m, m);
+        for (int i = 0; i < s->k; i++)
+            if (s->bits[i] == KALMAN_T) {
+                if (dT_is_full) s->theta[i] = 0;
+                else zero_off_diagonal(s->dT + (size_t)i * m * m, m);
+            }
+        check_system_against_reference(&rng, s, dT_is_full ? "diagonal T, full dT, " : "diagonal T, diagonal dT, ",
+                                       rng_uniform(&rng) * 0.4, (int)rng_below(&rng, 2));
+        linear_system_free(s);
+    }
 }
 
 static void test_against_reference(void) {
@@ -768,7 +819,7 @@ static void test_collapse(void) {
     Mat a1, P1;
     KalmanInit init = diffuse_init(m, &a1, &P1, 3);
     Vec none = { 0, 0, 0, NULL };
-    KalmanModel full_model = { N, m, m, 0, KALMAN_DENSE, fixed_system, NULL, NULL, &full };
+    KalmanModel full_model = { N, m, m, 0, KALMAN_DENSE, fixed_system, NULL, NULL, &full, 0 };
     KalmanWorkspace *w_full = kalman_workspace_new(&full_model);
     double full_value = kalman_log_likelihood(w_full, none, y, init, none);
 
@@ -777,7 +828,7 @@ static void test_collapse(void) {
     Mat identity = mat_new(m, m);
     for (int i = 0; i < m; i++) AT(identity, i, i) = 1;
     FixedSystem small = { identity, full.T, Hstar, full.Q };
-    KalmanModel small_model = { m, m, m, 0, KALMAN_DENSE, fixed_system, NULL, NULL, &small };
+    KalmanModel small_model = { m, m, m, 0, KALMAN_DENSE, fixed_system, NULL, NULL, &small, 0 };
     KalmanWorkspace *w_small = kalman_workspace_new(&small_model);
     double collapsed = kalman_log_likelihood(w_small, none, ystar, init, none);
     double correction = kalman_collapse_correction(y, ystar, full.Z, full.H, Hstar);
@@ -808,7 +859,7 @@ static void test_simulation(void) {
     double Q[9] = { 0.4, 0.1, 0.0, 0.1, 0.3, -0.05, 0.0, -0.05, 0.2 };
     for (int i = 0; i < 9; i++) { f.H.d[i] = (mreal)H[i]; f.Q.d[i] = (mreal)Q[i]; }
     for (int i = 0; i < N; i++) AT(f.Z, i, i) = 1;
-    KalmanModel model = { N, N, N, 0, KALMAN_DENSE, fixed_system, NULL, NULL, &f };
+    KalmanModel model = { N, N, N, 0, KALMAN_DENSE, fixed_system, NULL, NULL, &f, 0 };
     KalmanWorkspace *w = kalman_workspace_new(&model);
     Rng rng = rng_new(13, 7);
     Vec none = { 0, 0, 0, NULL }, a0 = mat_new(N, 1);
@@ -865,15 +916,88 @@ static void test_simulation(void) {
     linear_system_free(s);
 }
 
+/* observation_is_fixed: the Woodbury filter on observations reduced once
+   against the same filter reading them every evaluation, on a system whose
+   coordinates move T, H, R, Q and c but not Z or d. Periods with nothing
+   observed, with fewer observed entries than the state has, and with all of
+   them; y replaced by another matrix between evaluations, which the
+   workspace has to notice; the dense method, which the field does not
+   change. Fits through this path are checked in
+   tests/correctness/dynamic_factor_correctness.c, whose filtered estimator
+   sets the field. */
+static void test_fixed_observation(void) {
+    Rng rng = rng_new(41, 14);
+    int sweeps = stress ? 60 : 12;
+    double worst_value = 0, worst_gradient = 0;
+    for (int sweep = 0; sweep < sweeps; sweep++) {
+        int N = 2 + (int)rng_below(&rng, 14), m = 1 + (int)rng_below(&rng, 5), r = 1 + (int)rng_below(&rng, 3);
+        int n_periods = 10 + (int)rng_below(&rng, 30);
+        LinearSystem *s = linear_system_new(&rng, KALMAN_WOODBURY, N, m, r, n_periods, (int)rng_below(&rng, 2));
+        for (int i = 0; i < s->k; i++)
+            if (s->bits[i] == KALMAN_Z || s->bits[i] == KALMAN_D) {
+                s->bits[i] = i % 2 ? KALMAN_T : KALMAN_C;
+                fill_normal(&rng, s->dT + (size_t)i * m * m, (size_t)m * m, 0.3);
+                fill_normal(&rng, s->dc + (size_t)i * m, (size_t)m, 0.5);
+            }
+        Mat y = simulate_observations(&rng, s, 0.3, 1);
+        mreal nan = check_non_finite(0);
+        for (int t = 0; t < n_periods; t += 3)
+            for (int i = 1; i < N; i++) AT(y, i, t) = nan;
+        Mat a1, P1;
+        KalmanInit init = diffuse_init(m, &a1, &P1, 2);
+        KalmanModel model = linear_model(s), fixed = model;
+        fixed.observation_is_fixed = 1;
+        KalmanWorkspace *w_read = kalman_workspace_new(&model), *w_fixed = kalman_workspace_new(&fixed);
+        Vec theta = theta_of(s), g_read = mat_new(s->k, 1), g_fixed = mat_new(s->k, 1), none = { 0, 0, 0, NULL };
+        Mat other = simulate_observations(&rng, s, 0.1, 0);
+        Mat inputs[3] = { y, other, y };
+        for (int which = 0; which < 3; which++) {
+            double read = kalman_log_likelihood(w_read, theta, inputs[which], init, g_read);
+            double reduced = kalman_log_likelihood(w_fixed, theta, inputs[which], init, g_fixed);
+            double reduced_value_only = kalman_log_likelihood(w_fixed, theta, inputs[which], init, none);
+            worst_value = fmax(worst_value, relative_gap(reduced, read));
+            CHECK(reduced == reduced_value_only, "fixed observation: the value with and without the gradient differ");
+            double largest = 0;
+            for (int i = 0; i < s->k; i++) largest = fmax(largest, fabs(g_read.d[i]));
+            for (int i = 0; i < s->k; i++)
+                worst_gradient = fmax(worst_gradient, fabs(g_fixed.d[i] - g_read.d[i]) / fmax(1, largest));
+        }
+        kalman_workspace_free(w_read); kalman_workspace_free(w_fixed);
+        mat_free(theta); mat_free(g_read); mat_free(g_fixed); mat_free(y); mat_free(other);
+        mat_free(a1); mat_free(P1);
+        linear_system_free(s);
+    }
+    CHECK(worst_value < 1e-12, "fixed observation: likelihoods differ by %.3g relative", worst_value);
+    CHECK(worst_gradient < 1e-10, "fixed observation: gradients differ by %.3g relative", worst_gradient);
+
+    /* the field changes nothing for the dense method */
+    Rng dense_rng = rng_new(42, 15);
+    LinearSystem *s = linear_system_new(&dense_rng, KALMAN_DENSE, 5, 2, 2, 20, 0);
+    Mat y = simulate_observations(&dense_rng, s, 0.2, 1);
+    Mat a1, P1;
+    KalmanInit init = diffuse_init(2, &a1, &P1, 2);
+    KalmanModel model = linear_model(s), fixed = model;
+    fixed.observation_is_fixed = 1;
+    KalmanWorkspace *w_read = kalman_workspace_new(&model), *w_fixed = kalman_workspace_new(&fixed);
+    Vec theta = theta_of(s), none = { 0, 0, 0, NULL };
+    CHECK(kalman_log_likelihood(w_read, theta, y, init, none) == kalman_log_likelihood(w_fixed, theta, y, init, none),
+          "observation_is_fixed changed the dense method's likelihood");
+    kalman_workspace_free(w_read); kalman_workspace_free(w_fixed);
+    mat_free(theta); mat_free(y); mat_free(a1); mat_free(P1);
+    linear_system_free(s);
+}
+
 int main(void) {
     stress = getenv("STRESS") != NULL;
     check_banner("kalman_correctness: filter/kalman.h");
     test_local_level();
     test_against_reference();
+    test_diagonal_transition();
     test_methods_agree();
     test_strided_views();
     test_adversarial();
     test_collapse();
     test_simulation();
+    test_fixed_observation();
     return check_report();
 }

@@ -1,4 +1,4 @@
-test run: di 17 nov 2026 14:35:08 CET
+test run: di 17 nov 2026 20:25:16 CET
 
 === tracked_build_output: PASS ===
 no build output is tracked
@@ -21,8 +21,8 @@ make: 'tests/correctness/cumsum_correctness' is up to date.
 make: 'tests/correctness/rolling_mean_correctness' is up to date.
 make: 'tests/correctness/hp_filter_correctness' is up to date.
 make: 'tests/correctness/hp_filter_recovery' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/kalman_correctness.c -lm -lopenblas -o tests/correctness/kalman_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/dynamic_factor_correctness.c -lm -lopenblas -o tests/correctness/dynamic_factor_correctness
+make: 'tests/correctness/kalman_correctness' is up to date.
+make: 'tests/correctness/dynamic_factor_correctness' is up to date.
 make: 'tests/correctness/test_mat_special' is up to date.
 make: 'tests/correctness/test_decomp' is up to date.
 make: 'tests/correctness/test_solver' is up to date.
