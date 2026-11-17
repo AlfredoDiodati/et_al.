@@ -93,6 +93,37 @@ static inline Mat mat_band_solve(Mat band, int kl, int ku, Mat b) {
     return x;
 }
 
+/* Solve a*X = B for symmetric positive-definite banded a, given the factor
+   mat_band_chol returned for it: the banded counterpart of vec_chol_solve,
+   and what scipy.linalg.cho_solve_banded((factor, True), b) computes. b is
+   n x nrhs and may be a strided view; the result is an n x nrhs owner, and
+   neither argument is modified.
+
+   One column goes through factor.h's _pbtrs, several through _pbtrs_rhs,
+   which updates each row across all the columns together, so many
+   right-hand sides cost one pass over the band. The two compute the same
+   eliminations and agree to rounding rather than bit for bit, as
+   mat_band_solve's two paths do.
+
+   The factor is trusted: one computed for a different matrix gives a wrong
+   answer without complaint, as with vec_chol_solve. */
+static inline Mat mat_band_chol_solve(Mat factor, Mat b) {
+    assert(factor.d && factor.r >= 1 && factor.c >= 1);
+    assert(b.r == factor.r && b.c >= 1);
+    int n = factor.r, kd = factor.c - 1;
+    /* The kernels take the factor's row stride as their ldab, so a strided
+       view of a factor is read where it is. */
+    Mat x = mat_copy(b);
+    if (x.c == 1) _pbtrs(factor.d, n, kd, factor.stride, x.d);
+    else _pbtrs_rhs(factor.d, n, kd, factor.stride, x.d, x.stride, x.c);
+    return x;
+}
+
+static inline Vec vec_band_chol_solve(Mat factor, Vec b) {
+    assert(b.c == 1);
+    return mat_band_chol_solve(factor, b);
+}
+
 /* Solve a*x = b for x via symmetric indefinite factorization
    (Bunch-Kaufman), for symmetric a that is not necessarily positive-definite -
    e.g. a sample covariance matrix perturbed to indefiniteness by

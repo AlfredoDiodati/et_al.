@@ -908,6 +908,209 @@ static inline int _gbsv(mreal *ab, int n, int kl, int ku, int ldab,
     return 0;
 }
 
+/* Banded Cholesky and the solve over it: the pair ?pbtf2/?pbtrs in their
+   lower form, which is what scipy.linalg.cholesky_banded(lower=True) and
+   cho_solve_banded reach.
+
+   Band storage is the lower half of the one _gbtf2 reads, with kl = kd and
+   ku = 0: column j of the symmetric matrix, from the diagonal down, is kd + 1
+   consecutive entries, so a(j + i, j) sits at ab[j * ldab + i] for i in
+   0..kd. The factor overwrites it in the same layout, L(j + i, j) where
+   a(j + i, j) was. No pivoting, so unlike _gbtf2 there is no fill-in and
+   ldab = kd + 1 is enough.
+
+   One column at a time, right-looking: take the square root of the
+   diagonal, scale the kd entries below it, and subtract their outer product
+   from the kd x kd block that follows. That block's column j + 1 + r, from
+   row j + 1 + r down, is again consecutive, so every update is a contiguous
+   run. The work is n * kd^2 / 2 multiply-adds; it is written out rather
+   than issued as ?syr for the reason _gbtf2 gives, the update being bounded
+   by the bandwidth whatever n is. */
+
+/* Factor in place. Returns 0, or the one-based index of the first pivot
+   that is not positive or is not a number, matching ?pbtrf's info; the
+   columns before it hold their final factor and the rest are partly
+   updated. */
+static inline int _pbtf2(mreal *ab, int n, int kd, int ldab) {
+    for (int j = 0; j < n; j++) {
+        mreal *restrict column = &ab[(size_t)j * ldab];
+        mreal pivot = column[0];
+        /* MISNAN as well, since -ffast-math may fold a NaN through the
+           comparison as if it were positive. */
+        if (!(pivot > 0) || MISNAN(pivot)) return j + 1;
+        pivot = MSQRT(pivot);
+        column[0] = pivot;
+        int below = n - 1 - j < kd ? n - 1 - j : kd;
+        mreal inverse = 1 / pivot;
+        for (int i = 1; i <= below; i++) column[i] *= inverse;
+        for (int r = 1; r <= below; r++) {
+            mreal factor = column[r];
+            mreal *restrict target = &ab[(size_t)(j + r) * ldab];
+            for (int i = r; i <= below; i++) target[i - r] -= factor * column[i];
+        }
+    }
+    return 0;
+}
+
+/* Blocked banded Cholesky, the structure of ?pbtrf: nb columns at a time, the
+   diagonal block through _pbtf2 and the rest of the band beside it updated
+   by ?trsm, ?syrk and ?gemm, so for a wide band the O(n kd^2) work runs in
+   OpenBLAS's BLAS-3 kernels rather than in rank-one updates.
+
+   The BLAS calls read the band as an ordinary matrix. From column j, entry
+   (r, p) with p >= r, which is a(j + p, j + r), sits at
+   ab[j * ldab + r * (ldab - 1) + p]: a row-major matrix of leading
+   dimension ldab - 1 whose upper triangle holds a near the diagonal, and
+   whose factor there is U = L^T, a = U^T U. Only the upper triangle of that
+   window is band storage, so every call names it and the entries below it,
+   which belong to other columns, are never touched.
+
+   For the block of rows r < ib starting at column j:
+   - U11, ib x ib, is factored by _pbtf2 in place;
+   - U12, columns ib to kd - 1, is U11^-T A12 (?trsm) and A22 loses
+     U12^T U12 (?syrk);
+   - columns kd to kd + ib - 1 hold A13 only where r >= p - kd, a lower
+     triangle the band stores and the rest of the block it does not, so it
+     is copied into a zero-filled ib x ib work array, solved there (U11^-T
+     times a lower triangle stays a lower triangle, so nothing is lost), used
+     to update A23 (?gemm) and A33 (?syrk), and copied back.
+   That is ?pbtrf's own split into A12 and A13, transposed into row-major
+   upper form. nb must be at least 1 and at most kd and 64; the work array
+   is on the stack. Same contract and return value as _pbtf2. */
+static inline int _pbtrf_blocked(mreal *ab, int n, int kd, int ldab, int nb) {
+    assert(nb >= 1 && nb <= kd && nb <= 64);
+    mreal work[64 * 64];
+    int ld = ldab - 1;
+    for (int j = 0; j < n; j += nb) {
+        int ib = n - j < nb ? n - j : nb;
+        mreal *base = &ab[(size_t)j * ldab];
+        int info = _pbtf2(base, ib, kd, ldab);
+        if (info) return j + info;
+        if (j + ib >= n) break;
+
+        int i2 = kd - ib < n - j - ib ? kd - ib : n - j - ib;
+        int i3 = ib < n - j - kd ? ib : n - j - kd;
+        if (i2 > 0) {
+            MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasUpper, CblasTrans, CblasNonUnit,
+                        ib, i2, 1, base, ld, base + ib, ld);
+            MBLAS(syrk)(CblasRowMajor, CblasUpper, CblasTrans, i2, ib,
+                        -1, base + ib, ld, 1, base + (size_t)ib * ld + ib, ld);
+        }
+        if (i3 > 0) {
+            for (int r = 0; r < ib; r++)
+                for (int c = 0; c < i3; c++)
+                    work[r * i3 + c] = r >= c ? base[(size_t)r * ld + kd + c] : 0;
+            MBLAS(trsm)(CblasRowMajor, CblasLeft, CblasUpper, CblasTrans, CblasNonUnit,
+                        ib, i3, 1, base, ld, work, i3);
+            if (i2 > 0)
+                MBLAS(gemm)(CblasRowMajor, CblasTrans, CblasNoTrans, i2, i3, ib,
+                            -1, base + ib, ld, work, i3,
+                            1, base + (size_t)ib * ld + kd, ld);
+            MBLAS(syrk)(CblasRowMajor, CblasUpper, CblasTrans, i3, ib,
+                        -1, work, i3, 1, base + (size_t)kd * ld + kd, ld);
+            for (int r = 0; r < ib; r++)
+                for (int c = 0; c <= r && c < i3; c++)
+                    base[(size_t)r * ld + kd + c] = work[r * i3 + c];
+        }
+    }
+    return 0;
+}
+
+/* Block width for the banded Cholesky at bandwidth kd, 0 meaning unblocked.
+   Measured, not chosen: make bench-band_chol_block_threshold, float64, 16
+   threads, microseconds per factorization at n = 2000:
+
+     kd    unblocked   nb 8    nb 16   nb 32   nb 64
+     48        476      525     450    1533      -
+     64        766      715     609    2569    1413
+     96       1795     1203    2144    2568    2457
+     128      2971     1872    2597    3127    2752
+     144      3741     3667    2936    3378    2996
+     200      7083     5375    4218    4115    3764
+     400     33042    13709    8784    7553    5651
+
+   The rows at n = 20000 are ten times these and pick the same widths. Below
+   56 the trailing updates are too small for a BLAS call to pay for itself.
+   The fastest width does not grow smoothly with kd: from 80 to 128 nb 8
+   beats nb 16 by 1.4x to 1.8x, while at 64 and from 144 up it is the other
+   way round. That reproduced in both sweeps and in a second run, and is
+   most likely where OpenBLAS starts threading ?syrk and ?gemm. At 144 nb 16
+   and nb 64 are within 2 per cent of each other. */
+#define PBTRF_BLOCKED_MIN_KD 56
+static inline int _pbtrf_nb_for(int kd) {
+    if (kd < PBTRF_BLOCKED_MIN_KD) return 0;
+    if (kd < 80) return 16;
+    if (kd < 144) return 8;
+    return 64;
+}
+
+/* The banded Cholesky callers use: _pbtf2 below PBTRF_BLOCKED_MIN_KD,
+   _pbtrf_blocked above it. Same contract and return value as _pbtf2. */
+static inline int _pbtrf(mreal *ab, int n, int kd, int ldab) {
+    int nb = _pbtrf_nb_for(kd);
+    if (nb == 0 || n <= nb) return _pbtf2(ab, n, kd, ldab);
+    return _pbtrf_blocked(ab, n, kd, ldab, nb);
+}
+
+/* Solve a*x = b for one right-hand side over the factor _pbtrf left in ab:
+   L y = b forward, then L^T x = y backward. b is overwritten with x.
+
+   Written out rather than issued as two ?tbsv calls, which read the same
+   storage as CBLAS's row-major upper band. Measured by make
+   bench-band_chol_solve_threshold, float64, 16 threads, best of six
+   alternated measurements: this loop is faster at n = 100000 at every
+   bandwidth from 1 to 400, by 1.03x to 1.32x, and at n = 203 and 2000 up
+   to kd = 64, by up to 1.33x; ?tbsv is faster at n = 2000 from kd = 96 to
+   400, by 1.03x to 1.07x. No bandwidth separates the two, so there is no
+   dispatch. */
+static inline void _pbtrs(const mreal *ab, int n, int kd, int ldab, mreal *b) {
+    for (int j = 0; j < n; j++) {
+        const mreal *restrict column = &ab[(size_t)j * ldab];
+        b[j] /= column[0];
+        mreal head = b[j];
+        int below = n - 1 - j < kd ? n - 1 - j : kd;
+        for (int i = 1; i <= below; i++) b[j + i] -= head * column[i];
+    }
+    for (int j = n - 1; j >= 0; j--) {
+        const mreal *restrict column = &ab[(size_t)j * ldab];
+        int below = n - 1 - j < kd ? n - 1 - j : kd;
+        mreal total = b[j];
+        for (int i = 1; i <= below; i++) total -= column[i] * b[j + i];
+        b[j] = total / column[0];
+    }
+}
+
+/* The same two sweeps for nrhs right-hand sides, every row of B updated
+   across all its columns at once, as _gbtrs_rhs does for the banded LU. B is
+   n rows of nrhs, row-major with row stride ldb, overwritten with X. */
+static inline void _pbtrs_rhs(const mreal *ab, int n, int kd, int ldab,
+                              mreal *b, int ldb, int nrhs) {
+    for (int j = 0; j < n; j++) {
+        const mreal *restrict column = &ab[(size_t)j * ldab];
+        mreal *restrict current = b + (size_t)j * ldb;
+        mreal inverse = 1 / column[0];
+        for (int r = 0; r < nrhs; r++) current[r] *= inverse;
+        int below = n - 1 - j < kd ? n - 1 - j : kd;
+        for (int i = 1; i <= below; i++) {
+            mreal coefficient = column[i];
+            mreal *restrict target = b + (size_t)(j + i) * ldb;
+            for (int r = 0; r < nrhs; r++) target[r] -= current[r] * coefficient;
+        }
+    }
+    for (int j = n - 1; j >= 0; j--) {
+        const mreal *restrict column = &ab[(size_t)j * ldab];
+        mreal *restrict current = b + (size_t)j * ldb;
+        int below = n - 1 - j < kd ? n - 1 - j : kd;
+        for (int i = 1; i <= below; i++) {
+            mreal coefficient = column[i];
+            const mreal *restrict later = b + (size_t)(j + i) * ldb;
+            for (int r = 0; r < nrhs; r++) current[r] -= coefficient * later[r];
+        }
+        mreal inverse = 1 / column[0];
+        for (int r = 0; r < nrhs; r++) current[r] *= inverse;
+    }
+}
+
 /* sqrt(x^2 + y^2) without forming either square, which is what ?lapy2
    exists for. Squaring loses the answer at both ends of the range: two
    values around 1e-17 square to about 1e-34 each, and in float their sum

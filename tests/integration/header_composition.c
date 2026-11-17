@@ -67,6 +67,7 @@ the lot as unused.
 #include "../../solver/optimizer.h"
 #include "../../solver/adam.h"
 #include "../../solver/lbfgs.h"
+#include "../../solver/brent.h"
 #include "../../frame/frame.h"
 #include "../../frame/csv.h"
 #include "../../frame/txt.h"
@@ -175,6 +176,16 @@ static int touch_every_module(void) {
 
     LbfgsOptions lbfgs_options = lbfgs_default_options();
     if (lbfgs_options.max_iterations <= 0) problems++;
+
+    BrentOptions brent_options = brent_default_options();
+    if (brent_options.max_evaluations <= 0) problems++;
+    {
+        Mat band = mat_lit(2, 2, 4.0f, 2.0f, 5.0f, 0.0f);
+        Mat factor = mat_band_chol(band, NULL);
+        if (mat_band_chol_logdet(factor) <= 0) problems++;
+        mat_free(factor);
+        mat_free(band);
+    }
 
     DataFrame frame = df_new(2);
     df_add_numeric_col(&frame, "value", b);

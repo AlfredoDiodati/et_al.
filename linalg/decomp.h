@@ -231,6 +231,76 @@ static inline Mat mat_band_pack(Mat a, int kl, int ku) {
     return band;
 }
 
+/* Cholesky factor of a symmetric positive-definite banded matrix, in band
+   storage: the banded counterpart of mat_chol, and what
+   scipy.linalg.cholesky_banded(ab, lower=True) computes.
+
+   band is n x (kd + 1), the lower half of the storage vec_band_solve reads,
+   with kl = kd and ku = 0: row j holds column j of a from the diagonal
+   down, a(j + i, j) at AT(band, j, i). mat_band_pack(a, kd, 0) builds it
+   from a dense matrix. The entries of the last kd rows that fall past the
+   end of the matrix are not read. kd is band.c - 1, the number of
+   subdiagonals. The result is an n x (kd + 1) owner holding L in the same
+   layout, L(j + i, j) at AT(factor, j, i), with a == L * L^T and the unused
+   tail entries zeroed. band may be a strided view and is not modified.
+   Caller must mat_free().
+
+   a is rejected by the rule mat_chol applies: some pivot is not positive,
+   is not a number, or is numerically zero, L[k][k]^2 <=
+   mat_rank_tolerance(kd + 1) * a[k][k]. The length is kd + 1 rather than
+   n because a pivot accumulates the rounding of at most kd + 1 terms.
+
+   status NULL: a rejected a asserts. Otherwise *status is 0 on success, or
+   the 1-based index k of the first rejected pivot, in which case nothing is
+   allocated and the returned Mat is empty (d == NULL, which mat_free
+   accepts).
+
+   Cost O(n * kd^2) time and O(n * kd) memory, through factor.h's _pbtrf,
+   against O(n^3) and O(n^2) for mat_chol on the dense matrix. From
+   kd = PBTRF_BLOCKED_MIN_KD the work goes to BLAS-3 calls in blocks of
+   columns, as LAPACK's ?pbtrf does; below it one column at a time. */
+static inline Mat mat_band_chol(Mat band, int *status) {
+    assert(band.r >= 1 && band.c >= 1);
+    int n = band.r, kd = band.c - 1;
+    Mat l = mat_new(n, kd + 1);
+    for (int j = 0; j < n; j++) {
+        int below = n - 1 - j < kd ? n - 1 - j : kd;
+        for (int i = 0; i <= below; i++) AT(l, j, i) = AT(band, j, i);
+        for (int i = below + 1; i <= kd; i++) AT(l, j, i) = 0;
+    }
+    int info = _pbtrf(l.d, n, kd, l.stride);
+
+    /* Blocked or not, _pbtrf finishes each column before moving past it, so
+       every column before the one it stopped at holds its final factor and
+       can be inspected as it stands. */
+    int factored = info > 0 ? info - 1 : n;
+    double tolerance = mat_rank_tolerance(kd + 1);
+    for (int k = 0; k < factored; k++) {
+        double pivot = (double)AT(l, k, 0);
+        if (pivot * pivot <= tolerance * (double)AT(band, k, 0)) { info = k + 1; break; }
+    }
+    if (status) *status = info;
+    else assert(info == 0 && "mat_band_chol: a is not numerically positive-definite");
+    if (info != 0) {
+        mat_free(l);
+        return (Mat){0};
+    }
+    return l;
+}
+
+/* log det(a) from the factor mat_band_chol returned for it: twice the sum
+   of the logs of the diagonal of L, which every factor stores positive. The
+   sum is accumulated in double whatever mreal is, since it runs over n
+   terms. This is the quantity a Gaussian log-likelihood with a banded
+   covariance needs beside the solve, and it never overflows where det(a)
+   itself would. */
+static inline mreal mat_band_chol_logdet(Mat factor) {
+    assert(factor.r >= 1 && factor.c >= 1 && factor.d);
+    double total = 0;
+    for (int j = 0; j < factor.r; j++) total += log((double)AT(factor, j, 0));
+    return (mreal)(2 * total);
+}
+
 /* Eigendecomposition of symmetric a: a == v * diag(w) * v^T. Only the
    lower triangle of a is read. *eigvals_out receives a new n x 1 Vec
    (ascending order, LAPACK's convention); *eigvecs_out receives a new

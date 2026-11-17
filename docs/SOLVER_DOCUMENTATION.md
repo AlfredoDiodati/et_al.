@@ -20,6 +20,8 @@ Vec vec_chol_solve(Mat l, Vec b)
 Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char diag)
 Vec vec_band_solve(Mat band, int kl, int ku, Vec b)
 Mat mat_band_solve(Mat band, int kl, int ku, Mat b)
+Vec vec_band_chol_solve(Mat factor, Vec b)
+Mat mat_band_chol_solve(Mat factor, Mat b)
 Mat mat_lstsq(Mat a, Mat b, int *status)
 Mat mat_lstsq_rd(Mat a, Mat b, int *rank_out)
 ```
@@ -48,6 +50,14 @@ Solves `a*x = b` where `a` is banded with `kl` subdiagonals and `ku` superdiagon
 
 Not provided: a transposed solve, and a reusable factored form of the kind `mat_lu`/`vec_lu_solve` are for one another. Each is a small addition when a caller needs one; none has one today. See `docs/FACTOR_DOCUMENTATION.md`'s `_gbtf2` section for the kernel and
 `docs/BASIS_PERFORMANCE_DOCUMENTATION.md` for the caller it was written for.
+
+### `vec_band_chol_solve` / `mat_band_chol_solve`
+
+Solve `a*X = B` for symmetric positive-definite banded `a`, given the factor `mat_band_chol` returned for it (`docs/DECOMP_DOCUMENTATION.md`): the banded counterpart of `vec_chol_solve`, and what `scipy.linalg.cho_solve_banded((factor, True), b)` computes. `b` is `n x nrhs` and may be a strided view, and so may the factor, whose row stride the kernels take as their leading dimension. Returns an `n x nrhs` owner; neither argument is modified. The factor is trusted, as `vec_chol_solve` trusts its own.
+
+One column goes through `linalg/factor.h`'s `_pbtrs`, two sweeps over the band; several go through `_pbtrs_rhs`, which applies each step to a whole row of `b`, so many right-hand sides cost one pass over the band. The two agree to rounding, as `mat_band_solve`'s two paths do, and a NaN in one column reaches no other. The single-column sweep is written out rather than issued as two `?tbsv` calls, which read the same storage: `make bench-band_chol_solve_threshold` found no bandwidth on one side of which `?tbsv` always wins (see `docs/FACTOR_DOCUMENTATION.md`).
+
+Factor and solve together are `scipy.linalg.solveh_banded`: `mat_band_chol` followed by this.
 
 ### `vec_triangular_solve`
 
@@ -142,6 +152,30 @@ The speedup is real and substantial at every size tested (3x-34x), though its ex
 | 256 | 12.05 | 130 | 19.42 |
 
 The recovered rank is within 1 of the true rank at every size: float32 rounding on a randomly constructed low-rank input put a zero singular value close to the cutoff. These three rows were measured under the former fixed `10 * FLT_EPSILON` cutoff and have not been re-measured under the rank rule. Reproduce with `python tests/performance/bench_decomp.py`.
+
+### The banded Cholesky solve
+
+`tests/performance/bench_band_chol.py`, the setup stated in `docs/DECOMP_DOCUMENTATION.md`'s Benchmark results: float64, 16 threads, best of 5 batches of at least 20 ms, arms alternated. Microseconds per call, timed inside C. "solve" is `mat_band_chol_solve` against `scipy.linalg.cho_solve_banded` over a given factor; "factor + solve" is `mat_band_chol` then `mat_band_chol_solve` against `scipy.linalg.solveh_banded` and `numpy.linalg.solve` on the dense matrix.
+
+| case | solve | scipy | factor + solve | scipy `solveh_banded` | numpy `solve` |
+|---|---|---|---|---|---|
+| n = 203, kd = 2, 1 rhs | 3.6 | 14.4 | 7.2 | 24.1 | 465.1 |
+| n = 203, kd = 2, 100 rhs | 13.5 | 407.8 | 17.2 | 417.3 | 695.2 |
+| n = 2000, kd = 2, 1 rhs | 35.3 | 49.4 | 70.7 | 114.9 | 70024 |
+| n = 2000, kd = 2, 100 rhs | 157.3 | 3917 | 192.1 | 4020 | 161995 |
+| n = 100000, kd = 2, 1 rhs | 1782 | 1976 | 3818 | 5162 | - |
+| n = 100000, kd = 2, 100 rhs | 38362 | 250023 | 41099 | 253136 | - |
+| n = 1000000, kd = 2, 1 rhs | 18369 | 20047 | 40008 | 51271 | - |
+| n = 2000, kd = 20, 1 rhs | 46.4 | 71.2 | 188.7 | 470.4 | 70271 |
+| n = 2000, kd = 20, 100 rhs | 869.4 | 6217 | 1012 | 6585 | 162088 |
+| n = 100000, kd = 20, 1 rhs | 2720 | 3461 | 13397 | 24813 | - |
+| n = 100000, kd = 20, 100 rhs | 65842 | 388043 | 75710 | 407539 | - |
+| n = 2000, kd = 200, 1 rhs | 161.8 | 168.9 | 3944 | 6387 | 69157 |
+| n = 2000, kd = 200, 100 rhs | 10757 | 16815 | 16583 | 31249 | 159931 |
+| n = 20000, kd = 200, 1 rhs | 3990 | 4379 | 44302 | 65102 | - |
+| n = 20000, kd = 200, 100 rhs | 112360 | 431505 | 153893 | 508881 | - |
+
+Every row is faster than every reference. The thinnest margin is one right-hand side at `n = 2000, kd = 200`, 4 per cent, which is within the drift of this machine over a session. Many right-hand sides are where the margin is widest, 6x to 30x at `kd = 2`: scipy's `?pbtrs` walks the band once per column, `_pbtrs_rhs` once for all of them.
 
 ## Known limitations and future work
 

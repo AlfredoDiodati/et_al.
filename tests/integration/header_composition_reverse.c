@@ -24,6 +24,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../frame/txt.h"
 #include "../../frame/csv.h"
 #include "../../frame/frame.h"
+#include "../../solver/brent.h"
 #include "../../solver/lbfgs.h"
 #include "../../solver/adam.h"
 #include "../../solver/optimizer.h"

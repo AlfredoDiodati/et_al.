@@ -71,6 +71,7 @@ of the public surface.
 | `_gebd2`, `_labrd`, `_gebrd`, `_orgbr_p`, `_ormbr_p`, `_lartg`, `_rot2`, `_bdsqr`, `_lasd4`, `_bd_square`, `_bdsvd_small`, `_lasd0`, `_gesdd` | `LAPACKE_?gesdd` | `mat_svd`, and `mat_cond` and `mat_rank` through it |
 | `_gelsd` | `LAPACKE_?gelsd` | `mat_lstsq_rd` |
 | `_gbtf2`, `_gbtrs`, `_gbsv` | nothing — new, see below | `vec_band_solve` |
+| `_pbtf2`, `_pbtrf_blocked`, `_pbtrf`, `_pbtrs`, `_pbtrs_rhs` | nothing — new, see below | `mat_band_chol`, `mat_band_chol_solve` |
 | `_gebal`, `_lahr2`, `_gehrd`, `_gehd2`, `_lanv2`, `_laexc11`, `_trexc_up`, `_laqr3`, `_lahqr`, `_geev` | `LAPACKE_?geev` | `mat_eig` |
 
 The band row of that table is the one entry that did not replace anything.
@@ -1421,3 +1422,112 @@ multiple right-hand sides, and no reusable factored form of the kind
 at a bandwidth large enough for its block updates to reach BLAS-3, which is
 far above anything a spline produces; the other three have no caller. Each
 is a small addition to this group when one arrives.
+
+## `_pbtf2`, `_pbtrf_blocked`, `_pbtrf`, `_pbtrs`, `_pbtrs_rhs` — banded Cholesky and its solve
+
+The positive-definite counterpart of the banded LU above, and like it a
+new routine rather than a LAPACKE replacement: LAPACK's `?pbtf2`, `?pbtrf`
+and `?pbtrs`, which scipy reaches as `cholesky_banded` and
+`cho_solve_banded`, written against CBLAS. It exists for Gaussian
+likelihoods whose covariance is banded, where the factor gives both the
+solve and the log-determinant.
+
+### Storage
+
+The lower half of the banded LU's storage, `kl = kd` and `ku = 0`: column
+`j` of the matrix from the diagonal down is `kd + 1` consecutive entries,
+`a(j + i, j)` at `ab[j * ldab + i]`. That is LAPACK's lower band storage,
+and scipy's `ab` read transposed. There is no pivoting, hence no fill-in,
+and the factor overwrites the band in the same layout.
+
+### Unblocked: `_pbtf2`
+
+One column at a time, right-looking: square root of the pivot, scale the
+`kd` entries below it, subtract their outer product from the following
+`kd x kd` block. Each column of that block is again a contiguous run from
+its diagonal down, so the update is `kd` contiguous loops that vectorise.
+It is written out rather than issued as `?syr` for the reason `_gbtf2`
+gives: below the bandwidth where blocking pays (next section) a BLAS-2 call
+per column costs more than it saves. A pivot that is not positive or is a
+NaN stops it; the NaN test is a bit test, since under `-ffast-math` the
+comparison alone may wave a NaN through.
+
+### Blocked: `_pbtrf_blocked`, and where `_pbtrf` switches
+
+LAPACK's `?pbtrf` structure, transposed into row-major. From column `j`,
+the entries near the diagonal form a row-major matrix of leading dimension
+`ldab - 1` whose upper triangle is the band: entry `(r, p)`, `p >= r`, is
+`a(j + p, j + r)` at `ab[j * ldab + r * (ldab - 1) + p]`. Its factor there
+is `U = L^T`. For a block of `nb` columns, the diagonal block goes through
+`_pbtf2`; the columns up to `kd` beside it (`A12`) are solved by `?trsm`
+and update the block below by `?syrk`; the next `nb` columns (`A13`), of
+which the band stores only a lower triangle, are copied into a zero-filled
+work array, solved, used for `?gemm` and `?syrk` updates, and copied back.
+Every call names the upper triangle, so the entries below it in the window,
+which belong to other columns, are never touched.
+
+`make bench-band_chol_block_threshold` (`tests/performance/band_chol_block_threshold.c`)
+times `_pbtf2` against `_pbtrf_blocked` at `nb` 8, 16, 32 and 64, float64,
+16 threads, every arm alternated and the whole sweep repeated in reverse
+order, after checking each blocked factor against the unblocked one.
+Microseconds per factorization at `n = 2000`:
+
+| kd | unblocked | nb 8 | nb 16 | nb 32 | nb 64 |
+|---:|---:|---:|---:|---:|---:|
+| 32 | 258 | 371 | 319 | 1295 | - |
+| 48 | 476 | 525 | **450** | 1533 | - |
+| 56 | 611 | 604 | **528** | 1588 | - |
+| 64 | 766 | 715 | **609** | 2569 | 1413 |
+| 80 | 1276 | **929** | 1679 | 2831 | 2164 |
+| 96 | 1795 | **1203** | 2144 | 2568 | 2457 |
+| 128 | 2971 | **1872** | 2597 | 3127 | 2752 |
+| 144 | 3741 | 3667 | **2936** | 3378 | 2996 |
+| 160 | 4540 | 4078 | 3475 | 3818 | **3401** |
+| 200 | 7083 | 5375 | 4218 | 4115 | **3764** |
+| 256 | 12117 | 8411 | 5906 | 5334 | **4487** |
+| 400 | 33042 | 13709 | 8784 | 7553 | **5651** |
+| 800 | 118980 | 24004 | 16514 | 12704 | **10172** |
+
+The rows at `n = 20000` are about ten times these and pick the same widths,
+except at `kd = 48`, where one of the two sweeps had the unblocked kernel
+ahead; the switch is therefore at 56. `_pbtrf_nb_for` takes nb 16 from 56
+to 79, nb 8 from 80 to 143, and nb 64 from 144 on; at 144 nb 16 and nb 64
+are within 2 per cent. The width that wins does not grow smoothly with
+`kd`: from 80 to 128 nb 8 beats nb 16 by 1.4x to 1.8x, while at 64 and from
+144 up the order reverses. That reproduced in both sweeps of two separate
+runs. The likeliest cause is the size at which OpenBLAS starts threading
+`?syrk` and `?gemm`, which would also explain nb 32 at `kd = 32` taking
+5.0 times the unblocked time; it has not been measured directly. Above
+`kd = 400` the gain keeps growing, 11.7x at 800, since the unblocked
+kernel's update is a rank-one pass over `kd^2 / 2` entries per column.
+
+The thresholds were measured at float64 only; a float32 build uses the
+same ones.
+
+### Solve: `_pbtrs`, `_pbtrs_rhs`
+
+`L y = b` forward and `L^T x = y` backward. `_pbtrs` does one column.
+`_pbtrs_rhs` applies each step to a row of `B` across all its columns, as
+`_gbtrs_rhs` does, and has no BLAS counterpart, since BLAS has no banded
+triangular solve for several right-hand sides.
+
+For one column BLAS has `?tbsv`, which reads this storage as its row-major
+upper band. `make bench-band_chol_solve_threshold`
+(`tests/performance/band_chol_solve_threshold.c`) times the two, float64,
+16 threads, six alternated measurements per arm, after checking they agree.
+The written-out loop is faster at `n = 100000` for every `kd` from 1 to
+400 (1.03x to 1.32x) and at `n = 203` and 2000 up to `kd = 64` (up to
+1.33x at `kd = 1`); `?tbsv` is faster at `n = 2000` from `kd = 96` to 400
+(1.03x to 1.07x), and the two are within 2 per cent at `kd = 2`. No
+bandwidth separates them, so there is no dispatch and the loop is used
+throughout. This is an exception to design principle 3 made on a
+measurement, not a preference; a different machine or OpenBLAS build is
+reason to rerun it.
+
+### Verification
+
+`tests/correctness/band_chol_correctness.c` and
+`tests/correctness/band_chol_reference_agreement.py`, described in
+`docs/DECOMP_DOCUMENTATION.md`'s "Testing the banded Cholesky". The blocked
+path is reached through `mat_band_chol` at `kd` 56 and above, and the
+sixteen mutations listed there include eight of `_pbtrf_blocked` alone.

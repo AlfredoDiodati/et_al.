@@ -24,6 +24,7 @@ Every rank or singularity decision in the library uses one rule: a quantity is n
 |---|---|---|---|
 | `mat_lstsq` (and `ols`'s choice of path) | `|R[j][j]|` of `a == Q * R` | `||a_j||` | `m` |
 | `mat_chol` | `L[k][k]^2` | `a[k][k]` | `n` |
+| `mat_band_chol` | `L[k][k]^2` | `a[k][k]` | `kd + 1` |
 | `mat_rank`, `mat_lstsq_rd` (and `ols`'s pseudo-inverse) | each singular value | the largest | `max(m, n)` |
 | `ols_residuals_are_zero` | a residual norm | the larger of the response's norm and `sum_k ||x_k|| |b_k|` | `m` |
 | `sd/qvarma.h`, `sd/score_driven_location.h` standard errors | each Hessian eigenvalue | the largest in size | number of parameters |
@@ -157,6 +158,21 @@ Why measure rather than assert: a caller who *knows* the band from the construct
 
 Both are in this file rather than in `linalg/solver.h` for the same reason `mat_lu` is: they are a representation of the matrix, not a solve. See `vec_band_solve` in `docs/SOLVER_DOCUMENTATION.md` for what consumes them, and `docs/FACTOR_DOCUMENTATION.md`'s `_gbtf2` section for why the factorization needs `2*kl + ku + 1` rows where the packed form has `kl + ku + 1`.
 
+### `mat_band_chol` / `mat_band_chol_logdet`
+
+```c
+Mat   mat_band_chol(Mat band, int *status);
+mreal mat_band_chol_logdet(Mat factor);
+```
+
+The Cholesky factor of a symmetric positive-definite banded matrix, in band storage, and the log-determinant read off it. This is what `scipy.linalg.cholesky_banded(ab, lower=True)` computes; numpy has no banded Cholesky. `band` is `n x (kd + 1)`, the lower half of the storage `vec_band_solve` reads (`kl = kd`, `ku = 0`): row `j` holds column `j` of `a` from the diagonal down, `a(j + i, j)` at `AT(band, j, i)`, which is `mat_band_pack(a, kd, 0)`. It is scipy's lower form transposed, `ab[i, j] == AT(band, j, i)`. `kd` is read off as `band.c - 1`. The result holds `L` in the same layout, `L(j + i, j)` at `AT(factor, j, i)`, with the entries past the end of the matrix zeroed. `band` may be a strided view and is not modified.
+
+Rejection follows `mat_chol`'s rule and status contract: a pivot that is not positive, not a number, or numerically zero (`L[k][k]^2 <= mat_rank_tolerance(kd + 1) * a[k][k]`) sets `*status` to its 1-based index and returns an empty `Mat`, or asserts when `status` is `NULL`. The length is `kd + 1` rather than `n` because a pivot of a band accumulates at most `kd + 1` terms; a band with `kd = n - 1` is the dense matrix and gets `n`, as `mat_chol` does.
+
+`mat_band_chol_logdet` is `2 sum_j log L[j][j]`, summed in double whatever `mreal` is. It is what a Gaussian likelihood with a banded covariance needs beside the solve, and it never overflows where the determinant itself would.
+
+Cost `O(n kd^2)` time and `O(n kd)` memory, through `linalg/factor.h`'s `_pbtrf`: one column at a time below `kd = 56`, blocks of columns handed to `?trsm`, `?syrk` and `?gemm` from there, as LAPACK's `?pbtrf` does. Where the switch sits and why the block width changes with `kd` is in `docs/FACTOR_DOCUMENTATION.md`. `mat_band_chol_solve` in `linalg/solver.h` solves against the factor.
+
 ## Memory ownership
 
 Same rules as `linalg/mat.h`: every `Mat`/`Vec` returned from this header is an owner and must be freed with `mat_free`. The one exception is `mat_lu`'s `piv` out-param, which is a plain array freed with `free()`.
@@ -167,7 +183,32 @@ Same rules as `linalg/mat.h`: every `Mat`/`Vec` returned from this header is an 
 
 Every function is also exercised on a non-contiguous view (a principal submatrix taken with `mat_slice`) to cover the strided `mat_copy` path, and on a single-element matrix as the smallest boundary case. `STRESS=1` adds randomized runs at increasing sizes with a fixed seed - diagonally-dominant matrices for `mat_lu`/`mat_det`/`mat_inv` (guaranteed nonsingular by construction, so the random draw can never trip an `assert(info == 0)` contract), symmetrized random matrices (`B + B^T`) for `mat_eig_sym`, and unconstrained random rectangular/square matrices for `mat_qr`/`mat_svd`/`mat_eig` (whose invariants hold regardless of rank).
 
+## Testing the banded Cholesky
+
+`tests/correctness/band_chol_correctness.c`, in `make test` at both precisions, compares with a long double dense Cholesky written in the test: a 3 x 3 factor known by hand; the backward error `|L L^T - a|` entry by entry against Higham's `(kd + 2) u (|L| |L|^T)`; the factor, log-determinant and solution against the reference, within a bound set by the condition number; agreement with `mat_chol` on the dense matrix; `S a S` against `S` times the factor, `S` over twelve orders of magnitude at float64; `I + lambda D'D` at `lambda` 1600 and 129600; rejection at the index the definition gives, for a negative pivot, an exactly and a numerically singular matrix, a zero matrix and a NaN on and off the diagonal; strided views, `n = 1`, `kd = 0` and a band wider than the matrix; the blocked path at `kd` 55, 56, 79, 80, 143, 144 and 200 with sizes that end a block, overrun it and fall short of it, with a negative pivot placed in three different blocks; and 400 random bands (4000 under `STRESS=1`), a third of them ill-conditioned. Sixteen mutations of the kernels and wrappers, among them a dropped entry of the rank-one update, the `?gemm` of the blocked path skipped, one column of either off-diagonal block lost, a transposed `?trsm`, and the numerical-zero or NaN test removed, each fail it.
+
+`tests/correctness/band_chol_reference_agreement.py` (`make test-band-chol-python`, outside `make test` because it needs scipy) compares, in both precisions, with `scipy.linalg.cholesky_banded`, `cho_solve_banded` and `solveh_banded` and with `numpy.linalg.cholesky`, `slogdet` and `solve` on the dense matrix: 1362 comparisons over random bands with `n` up to 2000 and `kd` up to 200, the Hodrick-Prescott matrices, 1, 3 and 40 right-hand sides, a strided band, and indefinite bands that both must reject at the same index. The largest difference, as a fraction of the tolerance (twice the bound of the C test): 0.016 for the factor, 0.16 for the log-determinant against `slogdet`, 0.048 for the solve against `numpy.linalg.solve`.
+
 ## Benchmark results
+
+`tests/performance/bench_band_chol.py` (in `bench.sh`) times the banded Cholesky against scipy and numpy on the same problems. Setup: float64 bands `B B^T + I` from `default_rng(0)`, every library at its default thread count (16 threads here), best of 5 batches of at least 20 ms, the arms alternated within each row over four rounds with the order reversed every other round. numpy factors the dense matrix, so it stops at `n = 2000`. Microseconds per call, timed inside C; the factor rows (the solve rows are in `docs/SOLVER_DOCUMENTATION.md`):
+
+| case | `mat_band_chol` | scipy `cholesky_banded` | numpy `cholesky` |
+|---|---|---|---|
+| n = 203, kd = 2 | 3.6 | 14.2 | 384.8 |
+| n = 2000, kd = 2 | 35.4 | 69.9 | 51377 |
+| n = 100000, kd = 2 | 1898 | 3263 | - |
+| n = 1000000, kd = 2 | 21567 | 31414 | - |
+| n = 2000, kd = 20 | 136.1 | 391.7 | 51527 |
+| n = 100000, kd = 20 | 10364 | 21436 | - |
+| n = 2000, kd = 200 | 3627 | 5763 | 52866 |
+| n = 20000, kd = 200 | 39811 | 57433 | - |
+
+With the log-determinant (`mat_band_chol_logdet` against `2 sum log` of scipy's diagonal, and `numpy.linalg.slogdet`): 4.2 against 17.5 and 248 at `n = 203, kd = 2`; 41.2 against 81.2 and 68076 at `n = 2000, kd = 2`; 2188 against 3699 at `n = 100000, kd = 2`; 24636 against 36116 at `n = 1000000, kd = 2`; 145.3 against 412.2 and 67594 at `n = 2000, kd = 20`; 10965 against 22342 at `n = 100000, kd = 20`; 3704 against 5593 and 68078 at `n = 2000, kd = 200`; 39891 against 58627 at `n = 20000, kd = 200`.
+
+At `kd = 2` scipy's time over this library's falls from 3.9x at `n = 203` to 1.5x at a million, as the fixed cost of a Python call stops mattering and both become a pass over memory. At `kd = 200` the margin, 1.4x to 1.6x, is the blocked path. One column at a time is slower than scipy there: `make bench-band_chol_block_threshold` timed it at 79.7 ms at `n = 20000, kd = 200`, against 41.3 ms blocked, and scipy takes 57.4 ms in the table above.
+
+### The dense factorizations
 
 Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_qr` call the real library functions end to end, including their internal `mat_copy`, not a bypass straight to the factorization kernel - see `tests/performance/bench_decomp.c`):
 
@@ -194,6 +235,8 @@ Measured with `tests/performance/bench_decomp.py` (float32; `c_chol`/`c_lu`/`c_q
 
 ## Known limitations and future work
 
+- `mat_band_chol` stores the lower form only. scipy's default upper form is the same numbers transposed, `ab_upper[kd + i - j, j] == AT(band, i, j - i)`, and is not accepted directly
+- The blocked banded Cholesky's thresholds were measured at float64 on one machine with one OpenBLAS build (`make bench-band_chol_block_threshold`); the float32 build uses the same ones unmeasured
 - No pivoted/rank-revealing Cholesky - `mat_chol` assumes true positive-definiteness, not positive-semidefiniteness; a semidefinite matrix is reported through the status, not factored
 - `mat_qr` requires `m >= n`; there is no underdetermined (`m < n`) QR path
 - `mat_eig` computes eigenvalues only, never eigenvectors - a real non-symmetric matrix's eigenvectors are generally complex, and this library has no complex type. Adding one (and a complex-capable eigenvector routine) is a substantial undertaking deliberately out of scope here; if it's ever needed, it belongs in a new header, not bolted onto `Mat`

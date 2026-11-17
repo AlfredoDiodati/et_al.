@@ -1,10 +1,10 @@
-test run: di 10 nov 2026 10:12:26 CET
+test run: di 17 nov 2026 12:03:59 CET
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 97 suites
+make test and check.sh run the same 100 suites
 
 === paths_outside_repo: PASS ===
 no tracked source names a path outside the repository
@@ -14,29 +14,81 @@ cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas 
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_design_correctness.c -lm -lopenblas -o tests/correctness/spline_design_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_basis_correctness.c -lm -lopenblas -o tests/correctness/spline_basis_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_objects_correctness.c -lm -lopenblas -o tests/correctness/spline_objects_correctness
-make: 'tests/correctness/test_mat' is up to date.
-make: 'tests/correctness/test_tensor' is up to date.
-make: 'tests/correctness/test_tensor_serial' is up to date.
-make: 'tests/correctness/cumsum_correctness' is up to date.
-make: 'tests/correctness/rolling_mean_correctness' is up to date.
-make: 'tests/correctness/hp_filter_correctness' is up to date.
-make: 'tests/correctness/hp_filter_recovery' is up to date.
-make: 'tests/correctness/test_mat_special' is up to date.
-make: 'tests/correctness/test_decomp' is up to date.
-make: 'tests/correctness/test_solver' is up to date.
-make: 'tests/correctness/lstsq_rank_deficiency' is up to date.
-make: 'tests/correctness/chol_singularity' is up to date.
-make: 'tests/correctness/singularity_rule_comparison' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mat.c -lm -lopenblas -o tests/correctness/test_mat
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_tensor.c -lm -lopenblas -o tests/correctness/test_tensor
+tests/correctness/test_tensor.c: In function ‘test_elementwise’:
+tests/correctness/test_tensor.c:370:24: warning: ‘shape’ may be used uninitialized [-Wmaybe-uninitialized]
+  370 |             Tensor a = rand_tensor(ndim, shape);
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~~
+tests/correctness/test_tensor.c:57:15: note: by argument 2 of type ‘const int *’ to ‘rand_tensor’ declared here
+   57 | static Tensor rand_tensor(int ndim, const int *shape) {
+      |               ^~~~~~~~~~~
+tests/correctness/test_tensor.c:368:17: note: ‘shape’ declared here
+  368 |             int shape[TENSOR_MAX_NDIM];
+      |                 ^~~~~
+tests/correctness/test_tensor.c:371:24: warning: ‘shape’ may be used uninitialized [-Wmaybe-uninitialized]
+  371 |             Tensor b = rand_tensor(ndim, shape);
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~~
+tests/correctness/test_tensor.c:57:15: note: by argument 2 of type ‘const int *’ to ‘rand_tensor’ declared here
+   57 | static Tensor rand_tensor(int ndim, const int *shape) {
+      |               ^~~~~~~~~~~
+tests/correctness/test_tensor.c:368:17: note: ‘shape’ declared here
+  368 |             int shape[TENSOR_MAX_NDIM];
+      |                 ^~~~~
+cc -Wall -Wextra -O3 -march=native -ffast-math -I/usr/include/openblas -Wno-unknown-pragmas tests/correctness/test_tensor.c -lm -lopenblas -o tests/correctness/test_tensor_serial
+In file included from tests/correctness/../../linalg/tensor.h:2,
+                 from tests/correctness/test_tensor.c:1:
+tests/correctness/../../linalg/mat.h: In function ‘_mat_cumsum_kernel’:
+tests/correctness/../../linalg/mat.h:596:13: warning: unused variable ‘threaded’ [-Wunused-variable]
+  596 |         int threaded = outer > 1 && total >= MAT_CUMSUM_OMP_MIN_ROWS && total <= MAT_CUMSUM_OMP_MAX;
+      |             ^~~~~~~~
+tests/correctness/../../linalg/mat.h:612:9: warning: unused variable ‘threaded’ [-Wunused-variable]
+  612 |     int threaded = lanes > 1 && total >= MAT_CUMSUM_OMP_MIN_COLUMNS && total <= MAT_CUMSUM_OMP_MAX;
+      |         ^~~~~~~~
+tests/correctness/../../linalg/mat.h: In function ‘_mat_rolling_mean_kernel’:
+tests/correctness/../../linalg/mat.h:790:9: warning: unused variable ‘threaded’ [-Wunused-variable]
+  790 |     int threaded = units > 1 && total >= MAT_ROLLING_OMP_MIN && total <= MAT_ROLLING_OMP_MAX;
+      |         ^~~~~~~~
+tests/correctness/test_tensor.c: In function ‘test_elementwise’:
+tests/correctness/test_tensor.c:370:24: warning: ‘shape’ may be used uninitialized [-Wmaybe-uninitialized]
+  370 |             Tensor a = rand_tensor(ndim, shape);
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~~
+tests/correctness/test_tensor.c:57:15: note: by argument 2 of type ‘const int *’ to ‘rand_tensor’ declared here
+   57 | static Tensor rand_tensor(int ndim, const int *shape) {
+      |               ^~~~~~~~~~~
+tests/correctness/test_tensor.c:368:17: note: ‘shape’ declared here
+  368 |             int shape[TENSOR_MAX_NDIM];
+      |                 ^~~~~
+tests/correctness/test_tensor.c:371:24: warning: ‘shape’ may be used uninitialized [-Wmaybe-uninitialized]
+  371 |             Tensor b = rand_tensor(ndim, shape);
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~~
+tests/correctness/test_tensor.c:57:15: note: by argument 2 of type ‘const int *’ to ‘rand_tensor’ declared here
+   57 | static Tensor rand_tensor(int ndim, const int *shape) {
+      |               ^~~~~~~~~~~
+tests/correctness/test_tensor.c:368:17: note: ‘shape’ declared here
+  368 |             int shape[TENSOR_MAX_NDIM];
+      |                 ^~~~~
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/cumsum_correctness.c -lm -lopenblas -o tests/correctness/cumsum_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/rolling_mean_correctness.c -lm -lopenblas -o tests/correctness/rolling_mean_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/hp_filter_correctness.c -lm -lopenblas -o tests/correctness/hp_filter_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hp_filter_recovery.c -lm -lopenblas -o tests/correctness/hp_filter_recovery
+cc -Wall -Wextra -O1 -g -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mat_special.c -lm -lopenblas -o tests/correctness/test_mat_special
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_decomp.c -lm -lopenblas -o tests/correctness/test_decomp
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_solver.c -lm -lopenblas -o tests/correctness/test_solver
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/band_chol_correctness.c -lm -lopenblas -o tests/correctness/band_chol_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/lstsq_rank_deficiency.c -lm -lopenblas -o tests/correctness/lstsq_rank_deficiency
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/chol_singularity.c -lm -lopenblas -o tests/correctness/chol_singularity
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/singularity_rule_comparison.c -lm -lopenblas -o tests/correctness/singularity_rule_comparison
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/ols_pseudo_inverse_fallback.c -lm -lopenblas -o tests/correctness/ols_pseudo_inverse_fallback
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/hac_covariance_correctness.c -lm -lopenblas -o tests/correctness/hac_covariance_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/ols_covariance_correctness.c -lm -lopenblas -o tests/correctness/ols_covariance_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/ols_covariance_recovery.c -lm -lopenblas -o tests/correctness/ols_covariance_recovery
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/lag_matrix_layout.c -lm -lopenblas -o tests/correctness/lag_matrix_layout
-make: 'tests/correctness/rank_rule_consistency' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/rank_rule_consistency.c -lm -lopenblas -o tests/correctness/rank_rule_consistency
 make: 'tests/correctness/test_special' is up to date.
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_stats.c -lm -lopenblas -o tests/correctness/test_stats
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_random.c -lm -lopenblas -o tests/correctness/test_random
-make: 'tests/correctness/test_lhs' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_lhs.c -lm -lopenblas -o tests/correctness/test_lhs
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs.c -lm -lopenblas -o tests/correctness/test_mcs
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mcs_variance.c -lm -lopenblas -o tests/correctness/test_mcs_variance
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/mcs_primitives.c -lm -lopenblas -o tests/correctness/mcs_primitives
@@ -44,33 +96,33 @@ cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas 
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/fast_mcs_correctness.c -lm -lopenblas -o tests/correctness/fast_mcs_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/fast_mcs_size_and_power.c -lm -lopenblas -o tests/correctness/fast_mcs_size_and_power
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/seri_mcs_correctness.c -lm -lopenblas -o tests/correctness/seri_mcs_correctness
-make: 'tests/correctness/test_broadcast' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_broadcast.c -lm -lopenblas -o tests/correctness/test_broadcast
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_gauss.c -lm -lopenblas -o tests/correctness/test_gauss
-make: 'tests/correctness/chi_squared_tail_correctness' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/chi_squared_tail_correctness.c -lm -lopenblas -o tests/correctness/chi_squared_tail_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_student.c -lm -lopenblas -o tests/correctness/test_student
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mvgauss.c -lm -lopenblas -o tests/correctness/test_mvgauss
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mvstudent.c -lm -lopenblas -o tests/correctness/test_mvstudent
-make: 'tests/correctness/mvstudent_traced_agreement' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/mvstudent_traced_agreement.c -lm -lopenblas -o tests/correctness/mvstudent_traced_agreement
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_matgauss.c -lm -lopenblas -o tests/correctness/test_matgauss
-make: 'tests/correctness/test_matgauss_recovery' is up to date.
-make: 'tests/correctness/mv_density_dispatch' is up to date.
-make: 'tests/correctness/test_ad' is up to date.
-make: 'tests/correctness/ad_tensor_gradients' is up to date.
-make: 'tests/correctness/test_tape_reset' is up to date.
-make: 'tests/correctness/test_adam' is up to date.
-make: 'tests/correctness/test_optimizer' is up to date.
-make: 'tests/correctness/test_cluster' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_matgauss_recovery.c -lm -lopenblas -o tests/correctness/test_matgauss_recovery
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/mv_density_dispatch.c -lm -lopenblas -o tests/correctness/mv_density_dispatch
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_ad.c -lm -lopenblas -o tests/correctness/test_ad
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -ftrivial-auto-var-init=pattern tests/correctness/ad_tensor_gradients.c -lm -lopenblas -o tests/correctness/ad_tensor_gradients
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_tape_reset.c -lm -lopenblas -o tests/correctness/test_tape_reset
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_adam.c -lm -lopenblas -o tests/correctness/test_adam
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_optimizer.c -lm -lopenblas -o tests/correctness/test_optimizer
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_cluster.c -lm -lopenblas -o tests/correctness/test_cluster
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_mlp.c -lm -lopenblas -o tests/correctness/test_mlp
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_frame.c -lm -lopenblas -o tests/correctness/test_frame
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_csv.c -lm -lopenblas -o tests/correctness/test_csv
-make: 'tests/correctness/csv_missing_values' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/csv_missing_values.c -lm -lopenblas -o tests/correctness/csv_missing_values
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_txt.c -lm -lopenblas -o tests/correctness/test_txt
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_npy.c -lm -lopenblas -o tests/correctness/test_npy
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_npz.c -lm -lopenblas -o tests/correctness/test_npz
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -DMAT_DOUBLE tests/correctness/float32_file_widening.c -lm -lopenblas -o tests/correctness/float32_file_widening
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_json.c -lm -lopenblas -o tests/correctness/test_json
-make: 'tests/correctness/test_sql' is up to date.
-make: 'tests/correctness/test_join' is up to date.
+make: 'tests/correctness/test_json' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_sql.c -lm -lopenblas -o tests/correctness/test_sql
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_join.c -lm -lopenblas -o tests/correctness/test_join
 make: 'tests/correctness/gzip_inflate' is up to date.
 make: 'tests/correctness/gzip_deflate' is up to date.
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/rdata_array_read.c -lm -lopenblas -o tests/correctness/rdata_array_read
@@ -85,9 +137,11 @@ cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas 
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/johansen_correctness.c -lm -lopenblas -o tests/correctness/johansen_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/engle_granger_correctness.c -lm -lopenblas -o tests/correctness/engle_granger_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/maki_correctness.c -lm -lopenblas -o tests/correctness/maki_correctness
-make: 'tests/correctness/qlr_test_correctness' is up to date.
-make: 'tests/correctness/lbfgs_correctness' is up to date.
-make: 'tests/correctness/score_driven_location_correctness' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qlr_test_correctness.c -lm -lopenblas -o tests/correctness/qlr_test_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/kolmogorov_smirnov_correctness.c -lm -lopenblas -o tests/correctness/kolmogorov_smirnov_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/lbfgs_correctness.c -lm -lopenblas -o tests/correctness/lbfgs_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/brent_correctness.c -lm -lopenblas -o tests/correctness/brent_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/score_driven_location_correctness.c -lm -lopenblas -o tests/correctness/score_driven_location_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -lopenblas -o tests/correctness/qvarma_correctness
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_analytic_agreement.c -lm -lopenblas -o tests/correctness/qvarma_analytic_agreement
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_gaussian_limit.c -lm -lopenblas -o tests/correctness/qvarma_gaussian_limit
@@ -107,15 +161,16 @@ cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas 
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/lp_recovery.c -lm -lopenblas -o tests/correctness/lp_recovery
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/basis_to_regression.c -lm -lopenblas -o tests/integration/basis_to_regression
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -lopenblas -o tests/integration/frame_to_model
-make: 'tests/integration/frame_to_tensor' is up to date.
-make: 'tests/integration/tensor_to_optimizer' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_tensor.c -lm -lopenblas -o tests/integration/frame_to_tensor
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/tensor_to_optimizer.c -lm -lopenblas -o tests/integration/tensor_to_optimizer
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/join_missing_values.c -lm -lopenblas -o tests/integration/join_missing_values
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/distributed_simulation.c -lm -lopenblas -o tests/integration/distributed_simulation
-make: 'tests/integration/optimizer_swap' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. tests/integration/optimizer_swap.c -lm -lopenblas -o tests/integration/optimizer_swap
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/band_solve_example.c -lm -lopenblas -o examples/band_solve_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/basis_example.c -lm -lopenblas -o examples/basis_example
 In file included from examples/basis_example.c:4:
 ./basis/spline.h: In function ‘_periodic_spline.constprop’:
@@ -126,14 +181,22 @@ In file included from examples/basis_example.c:4:
   271 | static inline Mat _spline_design_raw(const mreal *knots, int nk, const mreal *x, int nx,
       |                   ^~~~~~~~~~~~~~~~~~
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/cluster_example.c -lm -lopenblas -o examples/cluster_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/csv_missing_values_example.c -lm -lopenblas -o examples/csv_missing_values_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/cumsum_rolling_mean_example.c -lm -lopenblas -o examples/cumsum_rolling_mean_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/encoder.c -lm -lopenblas -o examples/encoder
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/hp_filter_example.c -lm -lopenblas -o examples/hp_filter_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/join_example.c -lm -lopenblas -o examples/join_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/lhs_example.c -lm -lopenblas -o examples/lhs_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/lp_example.c -lm -lopenblas -o examples/lp_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/mat_example.c -lm -lopenblas -o examples/mat_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/mcs_example.c -lm -lopenblas -o examples/mcs_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/mlp_example.c -lm -lopenblas -o examples/mlp_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/ols_covariance_example.c -lm -lopenblas -o examples/ols_covariance_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_fixed_parameters_example.c -lm -lopenblas -o examples/qvarma_fixed_parameters_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/rdata_example.c -lm -lopenblas -o examples/rdata_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/singular_draws_example.c -lm -lopenblas -o examples/singular_draws_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/tensor_example.c -lm -lopenblas -o examples/tensor_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/unit_root_example.c -lm -lopenblas -o examples/unit_root_example
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/var_example.c -lm -lopenblas -o examples/var_example
 
@@ -322,6 +385,21 @@ mat_lstsq
 mat_lstsq_rd
 _trsv_lower_reciprocal
 test_solver: all passed
+
+=== band_chol_correctness: PASS ===
+band_chol_correctness: mat_band_chol, mat_band_chol_logdet, mat_band_chol_solve, float32 build
+
+a 3 x 3 tridiagonal matrix with a known factor
+n = 1, kd = 0, and a band wider than the matrix
+against mat_chol on the dense matrix
+the factor of S a S is S times the factor of a
+I + lambda D'D at lambda 1600 and 129600
+rejected matrices and the index reported
+strided views, many right-hand sides, a NaN in one
+the blocked factorization, kd from 55 to 200
+400 random bands, n up to 60, kd up to 8, well and badly conditioned
+
+PASSED, 0 failures
 
 === lstsq_rank_deficiency: PASS ===
 mat_lstsq: reporting a rank-deficient design, float32 build
@@ -980,7 +1058,7 @@ write with write_header=0: no header row, columns get generated names on reread
 test_csv: all passed
 
 === csv_missing_values: PASS ===
-frame/csv.h missing-value markers, float64 build
+frame/csv.h missing-value markers, float32 build
 
 known files, with and without markers
 the writer: na_rep, a quoted na_rep, and no na_rep
@@ -1378,6 +1456,22 @@ statistic, scaling, lookup and verdict together
 
 PASSED, 0 failures
 
+=== kolmogorov_smirnov_correctness: PASS ===
+statistic by hand, float64 build
+
+Kolmogorov distribution, float64 build
+
+size and power, one sample, float64 build
+
+chi-squared reference, float64 build
+
+two samples, float64 build
+
+strided view, float64 build
+
+
+PASSED, 0 failures
+
 === lbfgs_correctness: PASS ===
 lbfgs correctness, float64 build
 
@@ -1424,6 +1518,17 @@ objective stops being a number partway through
   infinity after 30 calls: 28 iterations, objective or gradient stopped being finite, value 0.364369
   not a number after 30 calls: 28 iterations, objective or gradient stopped being finite, value 0.364369
   ok
+
+PASSED, 0 failures
+
+=== brent_correctness: PASS ===
+brent_correctness: brent_bounded, float32 build
+
+the two examples in scipy's fminbound docstring
+minima known in closed form
+an interval of zero width, a constant, several minima
+the evaluation cap
+infinite and NaN values
 
 PASSED, 0 failures
 
@@ -1885,4 +1990,4 @@ PASSED, 0 failures
 
 
 === summary ===
-101 passed, 0 failed
+104 passed, 0 failed
