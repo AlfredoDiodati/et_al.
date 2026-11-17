@@ -8,9 +8,10 @@
    estimator the collapse, are built once before timing, as kalman_fit
    builds them once per fit; what is timed is one evaluation inside a fit.
    c_dfm_value makes one evaluation and returns its value and gradient, for
-   checking the two libraries computed the same number. c_time_dfm_fit runs
-   one whole fit and returns its wall time in seconds. */
-#include "../dynamic_factor.h"
+   checking the two libraries computed the same number. The systems timed
+   are ss/dynamic_factor.h's and generic ones; what is measured is
+   filter/kalman.h. */
+#include "../../ss/dynamic_factor.h"
 #include <omp.h>
 #include <time.h>
 
@@ -45,24 +46,24 @@ static DfmProblem dfm_problem(int collapsed, int p, int N, int n, const double *
     DynamicFactorSpec spec = { p, N };
     int shape[3] = { n, N, p + 1 };
     q.M = tensor_from(3, shape, M);
-    q.context = _context_new(spec, q.M);
+    q.context = _dynamic_factor_context_new(spec, q.M);
     q.context->collapsed = collapsed;
     Mat y = columns_of(y_rows, n, N);
-    q.data = collapsed ? _collapse(q.context, y) : y;
+    q.data = collapsed ? _dynamic_factor_collapse(q.context, y) : y;
     if (collapsed) mat_free(y);
-    KalmanModel model = _kalman_model(q.context, 1);
+    KalmanModel model = _dynamic_factor_kalman_model(q.context, 1);
     q.w = kalman_workspace_new(&model);
     q.a1 = mat_new(p, 1);
     q.P1 = mat_new(p, p);
     for (int i = 0; i < p; i++) AT(q.P1, i, i) = 10;
-    q.theta = matrix_of(theta, n_theta(spec), 1);
-    q.gradient = mat_new(n_theta(spec), 1);
+    q.theta = matrix_of(theta, dynamic_factor_n_theta(spec), 1);
+    q.gradient = mat_new(dynamic_factor_n_theta(spec), 1);
     return q;
 }
 
 static void dfm_problem_free(DfmProblem *q) {
     kalman_workspace_free(q->w);
-    _context_free(q->context);
+    _dynamic_factor_context_free(q->context);
     tensor_free(q->M);
     mat_free(q->data); mat_free(q->a1); mat_free(q->P1); mat_free(q->theta); mat_free(q->gradient);
 }
@@ -97,32 +98,6 @@ double c_time_dfm(int collapsed, int with_gradient, int p, int N, int n, const d
     }
     dfm_problem_free(&q);
     return 1e9 * best;
-}
-
-/* One fit from theta0, wall time in seconds; info: log-likelihood, niter,
-   is_converged. */
-double c_time_dfm_fit(int collapsed, int p, int N, int n, const double *y_rows, const double *M, const double *theta0,
-                      double *info) {
-    DynamicFactorSpec spec = { p, N };
-    int shape[3] = { n, N, p + 1 };
-    Tensor Mt = tensor_from(3, shape, M);
-    Mat y = columns_of(y_rows, n, N), a1 = mat_new(p, 1), P1 = mat_new(p, p);
-    for (int i = 0; i < p; i++) AT(P1, i, i) = 10;
-    Vec th0 = matrix_of(theta0, n_theta(spec), 1);
-    DynamicFactor guess = dynamic_factor_new(spec);
-    params_from_theta(th0, &guess);
-    KalmanInit init = { a1, P1 };
-    double start = now();
-    DynamicFactorFit result = collapsed ? fit_collapsed(y, Mt, &guess, init, kalman_default_fit_options())
-                                        : fit(y, Mt, &guess, init, kalman_default_fit_options());
-    double elapsed = now() - start;
-    info[0] = result.log_likelihood;
-    info[1] = result.niter;
-    info[2] = result.is_converged;
-    dynamic_factor_fit_free(&result);
-    dynamic_factor_free(&guess);
-    tensor_free(Mt); mat_free(y); mat_free(a1); mat_free(P1); mat_free(th0);
-    return elapsed;
 }
 
 /* A system given in full for every period, value only. */

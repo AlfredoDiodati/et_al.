@@ -40,7 +40,7 @@ PYTHON = os.environ.get("PYTHON", sys.executable)
 
 # Copied into each mutated tree: what the tests below include, and the
 # Makefile that builds them.
-TREE = ["linalg", "random", "solver", "filter", "tests/check.h", "tests/dynamic_factor.h", "Makefile",
+TREE = ["linalg", "random", "solver", "filter", "ss", "json.h", "tests/check.h", "Makefile",
         "tests/correctness/kalman_correctness.c",
         "tests/correctness/band_chol_correctness.c",
         "tests/correctness/brent_correctness.c",

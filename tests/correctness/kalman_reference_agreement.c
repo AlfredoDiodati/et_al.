@@ -1,13 +1,13 @@
 /*
 The C half of kalman_reference_agreement.py: filter/kalman.h and the dynamic
-factor model of tests/dynamic_factor.h behind plain-array entry points for
+factor model of ss/dynamic_factor.h behind plain-array entry points for
 ctypes. Every array is in numpy's C order with the period first, so the
 Python side passes its own arrays unchanged: y is n_periods x N, a path of
 vectors is n_periods x length, a path of matrices n_periods x rows x columns.
 Built at float64 (libkalman_agreement.so in the Makefile).
 */
 
-#include "../dynamic_factor.h"
+#include "../../ss/dynamic_factor.h"
 
 /* y as the N x n_periods Mat the library takes, from n_periods x N. */
 static Mat columns_of(const double *rows, int n_periods, int N) {
@@ -100,10 +100,10 @@ double c_dfm_log_likelihood(int collapsed, int p, int N, int n_periods, const do
     DynamicFactorSpec spec = { p, N };
     Mat y = columns_of(y_rows, n_periods, N), a1m = matrix_of(a1, p, 1), P1m = matrix_of(P1, p, p);
     Tensor Mt = covariates_of(M, n_periods, N, p);
-    Vec th = matrix_of(theta, n_theta(spec), 1);
-    Vec g = { n_theta(spec), 1, 1, gradient };
+    Vec th = matrix_of(theta, dynamic_factor_n_theta(spec), 1);
+    Vec g = { dynamic_factor_n_theta(spec), 1, 1, gradient };
     KalmanInit init = { a1m, P1m };
-    double value = log_likelihood_at(y, Mt, spec, th, init, collapsed, g);
+    double value = dynamic_factor_log_likelihood_at(y, Mt, spec, th, init, collapsed, g);
     mat_free(y); mat_free(a1m); mat_free(P1m); mat_free(th); tensor_free(Mt);
     return value;
 }
@@ -117,14 +117,14 @@ void c_dfm_fit(int collapsed, int p, int N, int n_periods, const double *y_rows,
     DynamicFactorSpec spec = { p, N };
     Mat y = columns_of(y_rows, n_periods, N), a1m = matrix_of(a1, p, 1), P1m = matrix_of(P1, p, p);
     Tensor Mt = covariates_of(M, n_periods, N, p);
-    Vec th0 = matrix_of(theta0, n_theta(spec), 1);
+    Vec th0 = matrix_of(theta0, dynamic_factor_n_theta(spec), 1);
     DynamicFactor guess = dynamic_factor_new(spec);
-    params_from_theta(th0, &guess);
+    dynamic_factor_params_from_theta(th0, &guess);
     KalmanInit init = { a1m, P1m };
     KalmanFitOptions options = kalman_default_fit_options();
     options.max_iterations = max_iterations;
-    DynamicFactorFit result = collapsed ? fit_collapsed(y, Mt, &guess, init, options) : fit(y, Mt, &guess, init, options);
-    memcpy(theta_out, result.theta.d, (size_t)n_theta(spec) * sizeof(double));
+    DynamicFactorFit result = collapsed ? dynamic_factor_fit_collapsed(y, Mt, &guess, init, options) : dynamic_factor_fit(y, Mt, &guess, init, options);
+    memcpy(theta_out, result.theta.d, (size_t)dynamic_factor_n_theta(spec) * sizeof(double));
     info[0] = result.log_likelihood;
     info[1] = result.niter;
     info[2] = result.is_converged;
@@ -144,8 +144,8 @@ static DynamicFactorFit fit_at(DynamicFactorSpec spec, const double *theta, cons
     DynamicFactorFit f;
     memset(&f, 0, sizeof(f));
     f.model = dynamic_factor_new(spec);
-    f.theta = matrix_of(theta, n_theta(spec), 1);
-    params_from_theta(f.theta, &f.model);
+    f.theta = matrix_of(theta, dynamic_factor_n_theta(spec), 1);
+    dynamic_factor_params_from_theta(f.theta, &f.model);
     f.paths.n_periods = 1;
     f.paths.n_state = spec.p;
     f.paths.att = matrix_of(att_T, spec.p, 1);
@@ -161,7 +161,7 @@ void c_dfm_forecast(int p, int N, int H, const double *theta, const double *att_
     DynamicFactorFit f = fit_at(spec, theta, att_T, Ptt_T);
     Tensor Mt = covariates_of(M, H, N, p);
     Mat y = columns_of(y_rows, H, N);
-    DynamicFactorForecast out = forecast(&f, Mt, y, q_alpha);
+    DynamicFactorForecast out = dynamic_factor_forecast(&f, Mt, y, q_alpha);
     for (int h = 0; h < H; h++) {
         for (int i = 0; i < N; i++) predictions[(size_t)h * N + i] = AT(out.predictions, i, h);
         P_means[h] = out.P_means.d[h];
@@ -178,7 +178,7 @@ void c_dfm_forecast_h(int p, int N, int H, const double *theta, const double *at
     DynamicFactorSpec spec = { p, N };
     DynamicFactorFit f = fit_at(spec, theta, att_T, Ptt_T);
     Tensor Mt = covariates_of(M, H, N, p);
-    DynamicFactorForecast out = forecast_h(&f, Mt, q_alpha);
+    DynamicFactorForecast out = dynamic_factor_forecast_h(&f, Mt, q_alpha);
     for (int h = 0; h < H; h++) {
         for (int i = 0; i < N; i++) predictions[(size_t)h * N + i] = AT(out.predictions, i, h);
         P_means[h] = out.P_means.d[h];
@@ -197,7 +197,7 @@ void c_dfm_forecast_rolling_h(int p, int N, int n_M, int T_half, const double *t
     DynamicFactorFit f = fit_at(spec, theta, att_T, Ptt_T);
     Tensor Mt = covariates_of(M, n_M, N, p);
     Mat y = columns_of(y_rows, T_half, N);
-    Tensor out = forecast_rolling_h(&f, Mt, y, horizons, n_horizons);
+    Tensor out = dynamic_factor_forecast_rolling_h(&f, Mt, y, horizons, n_horizons);
     memcpy(preds, out.d, (size_t)n_horizons * T_half * N * sizeof(double));
     tensor_free(out);
     dynamic_factor_fit_free(&f);
@@ -213,7 +213,7 @@ void c_dfm_simulation_from_shocks(int p, int N, int n_periods, const double *the
     DynamicFactorFit f = fit_at(spec, theta, att_T, Ptt_T);
     Tensor Mt = covariates_of(M, n_periods, N, p);
     Mat eta = columns_of(eta_rows, n_periods, p), eps = columns_of(eps_rows, n_periods, N);
-    Mat y = simulation_from_shocks(&f, Mt, eta, eps);
+    Mat y = dynamic_factor_simulation_from_shocks(&f, Mt, eta, eps);
     for (int t = 0; t < n_periods; t++)
         for (int i = 0; i < N; i++) y_rows[(size_t)t * N + i] = AT(y, i, t);
     mat_free(y); mat_free(eta); mat_free(eps);

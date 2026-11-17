@@ -52,6 +52,7 @@ the lot as unused.
 #include "../../basis/spline.h"
 #include "../../filter/hp.h"
 #include "../../filter/kalman.h"
+#include "../../ss/dynamic_factor.h"
 #include "../../inference/mcs.h"
 #include "../../inference/fast_mcs.h"
 #include "../../inference/unit_root.h"
@@ -264,6 +265,11 @@ static int touch_every_module(void) {
     kalman_predict(&kalman_system, kalman_a, kalman_P, kalman_a_next, kalman_P_next);
     if (MABS(AT(kalman_P_next, 0, 0) - 2.f) > 1e-6f) problems++;
     mat_free(kalman_unit); mat_free(kalman_a); mat_free(kalman_P); mat_free(kalman_a_next); mat_free(kalman_P_next);
+
+    DynamicFactorSpec dynamic_factor_spec = { 2, 3 };
+    DynamicFactor dynamic_factor_shape = dynamic_factor_new(dynamic_factor_spec);
+    if (dynamic_factor_n_theta(dynamic_factor_spec) != 7) problems++;
+    dynamic_factor_free(&dynamic_factor_shape);
 
     VarSpec var_spec = { 2, 1, VAR_SIGMA_ML };
     Mat var_nu = mat_new(2, 1), var_A = mat_new(2, 2), var_Sigma = mat_eye(2);

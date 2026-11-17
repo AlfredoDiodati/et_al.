@@ -2,13 +2,13 @@
 
 The Kalman filter for the linear Gaussian state space model: its exact log-likelihood and the gradient of that log-likelihood with respect to a caller's parameters, every filtered path, maximum likelihood over those parameters, the collapse of a long observation vector onto the state, and simulation.
 
-Tier: core. Nothing in it is a model; a model supplies its system matrices through a callback. The dynamic factor model that tests it lives in `tests/dynamic_factor.h` and is development tier.
+Tier: core. Nothing in it is a model; a model supplies its system matrices through a callback. The first model built on it is the dynamic factor model of `ss/dynamic_factor.h` (`docs/DYNAMIC_FACTOR_DOCUMENTATION.md`).
 
 ## Sources
 
 - Notation and the filter: J. Durbin and S. J. Koopman, *Time Series Analysis by State Space Methods*, 2nd edition, Oxford University Press, 2012. The univariate treatment of a multivariate series is the book's, chapter 6.
 - The collapse: B. Jungbacker and S. J. Koopman, "Likelihood-based dynamic factor analysis for measurement and forecasting", *The Econometrics Journal* 18(2), 2015, C1-C21.
-- The code translated: `models/_kalman.py` of [github.com/AlfredoDiodati/volatility_surface](https://github.com/AlfredoDiodati/volatility_surface) (author Alfredo Diodati), commit `9407a5f44dbc2d6533f942e556e89ce2b4c72467`, a JAX implementation. The dynamic factor model in `tests/dynamic_factor.h` translates `models/_ss_nobucket.py` of the same repository in the version its author supplied, which differs from that commit in one place: the commit adds `1e-8 * I` to `Z_t'Z_t` before inverting it in `fit_collapsed`, and the supplied version does not. Copies of the three Python files the tests run against are in `tests/correctness/kalman_reference/models/`, byte for byte.
+- The code translated: `models/_kalman.py` of [github.com/AlfredoDiodati/volatility_surface](https://github.com/AlfredoDiodati/volatility_surface) (author Alfredo Diodati), commit `9407a5f44dbc2d6533f942e556e89ce2b4c72467`, a JAX implementation. A byte-for-byte copy, with the two other files of that repository the tests run against, is in `tests/correctness/kalman_reference/models/`.
 
 ## The model
 
@@ -76,12 +76,8 @@ An optimizer probes points where a variance is not positive definite. Every entr
 ## What is not translated
 
 - The Python dynamics callback also receives y_t, a_t and P_t. Here the system depends on t and the parameters only: a system that depends on the state is no longer linear Gaussian, and its gradient is not the one computed here.
-- `_fit_collapsed`. Its objective equals the uncollapsed likelihood, and differentiating it needs the derivative of the collapse with respect to Z and H, which nothing here has needed. A model whose collapse does not depend on the parameters collapses once and fits through `kalman_fit` with the correction as its extra term; the dynamic factor model's `fit_collapsed` does that.
+- `_fit_collapsed`. Its objective equals the uncollapsed likelihood, and differentiating it needs the derivative of the collapse with respect to Z and H, which nothing here has needed. A model whose collapse does not depend on the parameters collapses once and fits through `kalman_fit` with the correction as its extra term; `dynamic_factor_fit_collapsed` in `ss/dynamic_factor.h` does that.
 - `_simulation`'s conventions. It starts from the last stored prediction of a fit and draws every shock from the H and Q of the last period; here the caller passes the starting state, and each period's shocks come from that period's H_t and Q_t, which is the same when they do not change.
-
-## The dynamic factor model in tests/
-
-`tests/dynamic_factor.h` is `_ss_nobucket.py` on this header: `y_t = Z_t beta_t + eps_t` with `eps_t ~ N(0, sigma2 I)`, `beta_{t+1} = B beta_t + ct + eta_t`, `Z_t = M[t, :, :p]`, `B = diag(tanh)`, `Q = diag(exp)`, `sigma2 = exp`, `ct = (I - B) bar_beta`, in the source's names (`H_param`, `Q_param`, `B`, `bar_beta`, `ct`). It has every function of the source: `fit` (`KALMAN_WOODBURY`), `fit_collapsed` (the collapse onto the p loadings once, then `KALMAN_DENSE` on `ystar` with variance `sigma2 Gamma_t` plus the correction), `forecast`, `forecast_h`, `forecast_rolling_h` and `simulation`, plus `simulation_from_shocks`. It follows `docs/IMPLEMENTING_A_MODEL.md`'s structure except for the cache functions, since it is a test rather than a model a script applies to data. Where the source passes zeros as data and `-ystar_t` as d_t, it passes `ystar_t` as data; the innovation is the same. Its unobserved rows of Z_t are set to zero where the source multiplies them by the mask, which is the same when M is finite.
 
 ## Building
 
@@ -89,56 +85,52 @@ The header compiles at both precisions (`tests/integration/header_composition_f3
 
 ## Testing
 
-`tests/correctness/kalman_correctness.c` (`make test`, 0.27 s; `STRESS=1` widens the random sweep from 20 systems to 200, 0.6 s). The reference is a filter written in the test in the plainest form: observed rows selected, F_t inverted by Gauss-Jordan in double, the gain multiplied out. It checks:
+`tests/correctness/kalman_correctness.c` (`make test`, 0.05 s; `STRESS=1` widens the random sweep from 20 systems to 200, 0.37 s). The reference is a filter written in the test in the plainest form: observed rows selected, F_t inverted by Gauss-Jordan in double, the gain multiplied out. It checks:
 
 - a local level model against its recursion worked by hand, to 1e-13;
 - all three methods against the reference on random time-varying systems (R not the identity, d and c nonzero, scattered and whole-period missing entries, N from 1 to 12 and to 30 under `STRESS=1`, m from 1 to 6), log-likelihood, and every period's log det F, quadratic form, att and Ptt, within 1e-10 relative to the larger of 1 and the reference value;
 - the three methods against each other on `H = sigma2 I`: likelihood within 1e-11, gradient within 1e-9, paths within 1e-10;
 - every gradient against a central difference at steps 1e-4 and 5e-5 combined to cancel the h^2 term, within 1e-6 relative, with each system block depending on its own coordinate. A single central difference at step 1e-6 is too small a step here: with it, the `STRESS=1` sweep fails on one system (univariate, N = 26, m = 6, T = 8, the Q coordinate) by 3e-5 relative, because the likelihood carries rounding noise of a few 1e-14 relative; at step 1e-4 the same quotient matches the analytic derivative to 3e-8;
 - the value with and without the gradient bit for bit, and the paths summing to the likelihood;
-- y as a strided view against a contiguous copy, bit for bit;
+- y as a strided view against a contiguous copy, bit for bit; Z as a strided view is read in every check of `tests/correctness/dynamic_factor_correctness.c`, whose Z_t is a slice of its covariate array;
 - every period unobserved (likelihood and gradient exactly zero), P_1 = 0, an H that is not positive definite (minus infinity, zero gradient, `failed_at` 0), and y, Z, d scaled by 1e5 with H by 1e10 (the likelihood shifts by exactly `-n log 1e5`);
 - the collapse plus its correction against the uncollapsed dense filter, within 1e-10;
 - `kalman_simulate`'s sample covariance of y against H + Q over 60000 periods, and replayed shocks against the recursion;
-- the dynamic factor model: its link and inverse link, its gradient through both estimators against central differences, the two estimators' likelihoods equal at any theta within 1e-10, both fits converging to the same maximum near the truth on 300 simulated periods, and every forecast against the recursion it is defined by.
 
 `make test-mutations` (`tests/correctness/mutation_detection.py`) injects six faults into the header one at a time, a term dropped from the Woodbury, univariate, dense and prediction derivatives and from the Woodbury and univariate values, and this suite catches each of them.
 
-`tests/correctness/kalman_reference_agreement.py` (`make test-kalman-python PYTHON=<python with jax and numpy>`, 20 s; outside `make test` because it needs jax) runs the copied Python files at float64 against the C on the same numbers, from numpy's `default_rng(2026)`. Measured with jax 0.7.2 and numpy 2.3.3, the largest relative gaps:
+`tests/correctness/kalman_reference_agreement.py` (`make test-kalman-python PYTHON=<python with jax and numpy>`, 20 s; outside `make test` because it needs jax) runs the copied Python files at float64 against the C on the same numbers, from numpy's `default_rng(2026)`, for this header and for `ss/dynamic_factor.h`; the model's rows are in `docs/DYNAMIC_FACTOR_DOCUMENTATION.md`. Measured with jax 0.7.2 and numpy 2.3.3, the largest relative gaps for this header:
 
 | comparison | largest gap |
 |---|---|
-| `_filter`, `_filter_chol`, `_filter_light_univariate`, `_filter_vec`, every path, 20 systems | 3.8e-13 |
-| `_collapse`, `_loglikelihood_correction` | 9.6e-16 |
-| dynamic factor log-likelihood and `jax.grad`, both estimators, 3 random theta | 8.3e-16 |
-| `forecast`, `forecast_h`, `forecast_rolling_h`, `simulation` with the source's draws replayed | 7.4e-16 |
-| `fit` and `fit_collapsed` maxima, from the same start | 5.9e-12 |
-| `fit` and `fit_collapsed` theta | 9.0e-06 |
+| `_filter`, `_filter_chol`, `_filter_light_univariate`, `_filter_vec`, every path, 20 systems with missing entries | 6.3e-14 |
+| `_filter_light_vec`, `_filter_light_chol` with one entry of a period missing | 0 |
+| `_collapse`, `_loglikelihood_correction` | 7.8e-16 |
 
-The fits agree to what two optimizers with different stopping rules leave (`_solver.lbfgs` stops when the squared gradient norm is below `1e-12 p`; `solver/lbfgs.h` when the largest component is below 1e-6 or a step's relative gain below 1e-12), not to rounding; the source's maximum was the higher, by 2e-10 for `fit` and 1.9e-9 for `fit_collapsed`.
+The same script checks that `_filter` still drops a period with one of six entries missing, where the C filter does not, which is the one documented difference.
 
 ## Performance
 
-`tests/performance/bench_kalman.py` with `bench_kalman.c`, against the jitted source. Setup: float64 on both sides; 16 hardware threads, OpenMP's default of 16 and XLA's own default on the CPU, nothing pinned; jax 0.7.2, numpy 2.3.3. Each time is the best of 5 batches of at least 20 ms, the clock read once per batch, the two arms alternating over four rounds with the order reversed every other round. The C time is one evaluation inside a fit: workspace and collapse built once beforehand. Data from the dynamic factor model's own equations, 15 percent of entries missing; the generic filters on a random time-varying system with no missing value. Every row checks the two values agree within 1e-9 relative and the gradients within 1e-7. Milliseconds per evaluation:
+`tests/performance/bench_kalman.py` with `bench_kalman.c`, against the jitted source. Setup: float64 on both sides; 16 hardware threads, OpenMP's default of 16 and XLA's own default on the CPU, nothing pinned; jax 0.7.2, numpy 2.3.3. Each time is the best of 5 batches of at least 20 ms, the clock read once per batch, the two arms alternating over four rounds with the order reversed every other round. The C time is one evaluation as a fit makes it: workspace and collapse built once beforehand. The systems are those of `ss/dynamic_factor.h`, on data from that model's own equations with 15 percent of entries missing, and random time-varying generic ones with no missing value; what is timed is this header's filter. Every row checks the two values agree within 1e-9 relative and the gradients within 1e-7. Milliseconds per evaluation:
 
 | evaluation | shape | et_al. | jax jit | jax / et_al. |
 |---|---|---:|---:|---:|
-| fit value | n=500 N=50 p=3 | 0.529 | 1.888 | 3.57 |
-| fit gradient | n=500 N=50 p=3 | 2.277 | 12.621 | 5.54 |
-| fit_collapsed gradient | n=500 N=50 p=3 | 3.029 | 10.998 | 3.63 |
-| fit value | n=2000 N=100 p=5 | 5.124 | 13.682 | 2.67 |
-| fit gradient | n=2000 N=100 p=5 | 25.664 | 56.424 | 2.20 |
-| fit_collapsed gradient | n=2000 N=100 p=5 | 37.790 | 48.836 | 1.29 |
-| fit value | n=2000 N=400 p=5 | 14.254 | 20.983 | 1.47 |
-| fit gradient | n=2000 N=400 p=5 | 35.143 | 95.248 | 2.71 |
-| fit_collapsed gradient | n=2000 N=400 p=5 | 37.806 | 38.180 | 1.01 |
-| dense filter value | n=500 N=10 m=4 r=4 | 0.917 | 3.107 | 3.39 |
-| univariate filter value | n=500 N=50 m=4 r=4 | 1.055 | 12.452 | 11.80 |
-| woodbury filter value | n=500 N=200 m=4 r=4 | 1.481 | 3.915 | 2.64 |
+| dynamic factor fit value | n=500 N=50 p=3 | 0.538 | 1.910 | 3.55 |
+| dynamic factor fit gradient | n=500 N=50 p=3 | 1.996 | 11.243 | 5.63 |
+| dynamic factor fit_collapsed gradient | n=500 N=50 p=3 | 2.516 | 12.342 | 4.91 |
+| dynamic factor fit value | n=2000 N=100 p=5 | 5.074 | 13.857 | 2.73 |
+| dynamic factor fit gradient | n=2000 N=100 p=5 | 23.358 | 59.778 | 2.56 |
+| dynamic factor fit_collapsed gradient | n=2000 N=100 p=5 | 34.321 | 47.088 | 1.37 |
+| dynamic factor fit value | n=2000 N=400 p=5 | 14.256 | 21.007 | 1.47 |
+| dynamic factor fit gradient | n=2000 N=400 p=5 | 32.742 | 91.735 | 2.80 |
+| dynamic factor fit_collapsed gradient | n=2000 N=400 p=5 | 34.888 | 42.452 | 1.22 |
+| dense filter value | n=500 N=10 m=4 r=4 | 0.908 | 3.156 | 3.48 |
+| univariate filter value | n=500 N=50 m=4 r=4 | 1.044 | 12.524 | 11.99 |
+| woodbury filter value | n=500 N=200 m=4 r=4 | 1.469 | 3.861 | 2.63 |
 
-A whole fit, n=500 N=50 p=3, one call each: `fit` 0.134 s and 50 iterations against the source's 3.201 s and 92; `fit_collapsed` 0.240 s and 67 against 2.703 s and 80. The source's time includes tracing and compiling, which every call to its `fit` pays since its criterion is a new closure each time, and the two run different optimizers, so this row compares configurations as much as implementations.
+An earlier run of the same script, the same day, gave 1.01 rather than 1.22 for the last collapsed row and 3.63 rather than 4.91 for the first, and moved the other ratios by at most 0.36; read them to about that precision. No whole fit is timed: the dynamic factor model is model tier, which the README's benchmarking policy compares only between versions of this package.
 
-The collapsed gradient is the closest row and the one place the collapse does not pay here: at N = 400, p = 5 the C collapsed gradient (37.8 ms) costs more than the uncollapsed one (35.1 ms). It runs the dense derivative on a 5 x 5 observation per period for 16 coordinates. Where that time goes has not been profiled.
+The collapsed gradient is the closest row and the one place collapsing does not pay here: at N = 400, p = 5 the C collapsed gradient (34.9 ms) costs more than the uncollapsed one (32.7 ms). It runs the dense derivative on a 5 x 5 observation per period for 16 coordinates. Where that time goes has not been profiled.
 
 ## Known limitations
 

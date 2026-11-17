@@ -1,4 +1,4 @@
-"""filter/kalman.h and the dynamic factor model of tests/dynamic_factor.h against the JAX code they translate.
+"""filter/kalman.h against the JAX code it translates, on the systems of ss/dynamic_factor.h and on generic ones.
 
     PYTHON=... python tests/performance/bench_kalman.py    (an interpreter with jax and numpy)
 
@@ -33,13 +33,12 @@ loadings, theta a fixed draw of 0.3 standard normals. Rows:
 - the generic filters on a random time-varying system (R not the identity, d
   and c nonzero, no missing value): KALMAN_DENSE against _filter_light,
   KALMAN_UNIVARIATE against _filter_light_univariate, KALMAN_WOODBURY against
-  _filter_light_vec, value only;
-- a whole fit and fit_collapsed from theta0 = (log 1, log 0.1, atanh 0.5,
-  0): wall time of one call, C against the source's fit and fit_collapsed,
-  with iterations. The source's time includes tracing and compiling, which
-  a call to its fit pays every time, since its criterion is a new closure
-  per call. The two run different optimizers with different stopping rules,
-  so this row compares configurations as much as implementations.
+  _filter_light_vec, value only.
+
+A whole fit of the dynamic factor model is not timed here: ss/ is model tier,
+which README.md's benchmarking policy compares only between versions of this
+package, since a fit's time against another package's is set by the two
+optimizers' settings as much as by either implementation.
 
 Every evaluation row checks that the two values agree within 1e-9 relative
 and, where there is one, the gradient within 1e-7.
@@ -73,8 +72,6 @@ lib.c_dfm_value.argtypes = [c_int] * 4 + [D] * 4
 lib.c_dfm_value.restype = ctypes.c_double
 lib.c_time_dfm.argtypes = [c_int] * 5 + [D] * 3
 lib.c_time_dfm.restype = ctypes.c_double
-lib.c_time_dfm_fit.argtypes = [c_int] * 4 + [D] * 4
-lib.c_time_dfm_fit.restype = ctypes.c_double
 lib.c_time_filter.argtypes = [c_int] * 5 + [D] * 11
 lib.c_time_filter.restype = ctypes.c_double
 
@@ -269,33 +266,11 @@ for method, fn, h_kind, (n, N, m, r) in (
     times = alternated(lambda: lib.c_time_filter(*args) / 1e6, lambda: best_ms(blocked(jitted)))
     rows.append((f"{method} filter value", f"n={n} N={N} m={m} r={r}", *times))
 
-fit_rows = []
-for collapsed in (0, 1):
-    n, N, p = 500, 50, 3
-    y, M = dfm_data(p, N, n, 0.15)
-    guess = {"H_param": jnp.eye(1), "Q_param": 0.1 * jnp.eye(p), "B": 0.5 * jnp.eye(p), "bar_beta": jnp.zeros(p)}
-    theta0 = np.concatenate([[0.0], np.log(0.1) * np.ones(p), np.arctanh(0.5) * np.ones(p), np.zeros(p)])
-    info = np.zeros(3)
-    c_seconds = min(lib.c_time_dfm_fit(collapsed, p, N, n, ptr(f64(y)), ptr(f64(M)), ptr(f64(theta0)), ptr(info))
-                    for _ in range(3))
-    source_fit = _ss_nobucket.fit_collapsed if collapsed else _ss_nobucket.fit
-    seconds = []
-    for _ in range(3):
-        start = time.perf_counter()
-        result = source_fit(jnp.asarray(y), jnp.asarray(M), guess, initialization(p, N, 1))
-        jax.block_until_ready(result["loglikelihood"])
-        seconds.append(time.perf_counter() - start)
-    fit_rows.append(("fit_collapsed" if collapsed else "fit", f"n={n} N={N} p={p}", c_seconds, int(info[1]), info[0],
-                     min(seconds), int(result["niter"]), float(result["loglikelihood"])))
-
 print(f"float64, jax {jax.__version__}, numpy {np.__version__}, {os.cpu_count()} hardware threads, "
       f"OpenMP max threads {lib.c_max_threads()}, jax devices {jax.devices()}")
 print(f"{'evaluation':24s} {'shape':24s} {'et_al. ms':>10} {'jax jit ms':>11} {'jax / et_al.':>13}")
 for name, shape, c_ms, jax_ms in rows:
     print(f"{name:24s} {shape:24s} {c_ms:10.3f} {jax_ms:11.3f} {jax_ms / c_ms:13.2f}")
-print(f"{'whole fit':24s} {'shape':24s} {'et_al. s':>10} {'iterations':>10} {'source s':>10} {'iterations':>10}  maxima")
-for name, shape, c_s, c_iter, c_ll, s_s, s_iter, s_ll in fit_rows:
-    print(f"{name:24s} {shape:24s} {c_s:10.3f} {c_iter:10d} {s_s:10.3f} {s_iter:10d}  {c_ll:.8f} {s_ll:.8f}")
 if problems:
     print(f"{len(problems)} rows disagree:")
     for line in problems:

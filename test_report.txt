@@ -1,40 +1,41 @@
-test run: di 17 nov 2026 14:00:41 CET
+test run: di 17 nov 2026 14:35:08 CET
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 101 suites
+make test and check.sh run the same 102 suites
 
 === paths_outside_repo: PASS ===
 no tracked source names a path outside the repository
 
 === build ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/poly_correctness.c -lm -lopenblas -o tests/correctness/poly_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_design_correctness.c -lm -lopenblas -o tests/correctness/spline_design_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_basis_correctness.c -lm -lopenblas -o tests/correctness/spline_basis_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/spline_objects_correctness.c -lm -lopenblas -o tests/correctness/spline_objects_correctness
+make: 'tests/correctness/poly_correctness' is up to date.
+make: 'tests/correctness/spline_design_correctness' is up to date.
+make: 'tests/correctness/spline_basis_correctness' is up to date.
+make: 'tests/correctness/spline_objects_correctness' is up to date.
 make: 'tests/correctness/test_mat' is up to date.
 make: 'tests/correctness/test_tensor' is up to date.
 make: 'tests/correctness/test_tensor_serial' is up to date.
 make: 'tests/correctness/cumsum_correctness' is up to date.
 make: 'tests/correctness/rolling_mean_correctness' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/hp_filter_correctness.c -lm -lopenblas -o tests/correctness/hp_filter_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/hp_filter_recovery.c -lm -lopenblas -o tests/correctness/hp_filter_recovery
+make: 'tests/correctness/hp_filter_correctness' is up to date.
+make: 'tests/correctness/hp_filter_recovery' is up to date.
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/kalman_correctness.c -lm -lopenblas -o tests/correctness/kalman_correctness
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/dynamic_factor_correctness.c -lm -lopenblas -o tests/correctness/dynamic_factor_correctness
 make: 'tests/correctness/test_mat_special' is up to date.
 make: 'tests/correctness/test_decomp' is up to date.
 make: 'tests/correctness/test_solver' is up to date.
 make: 'tests/correctness/band_chol_correctness' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/lstsq_rank_deficiency.c -lm -lopenblas -o tests/correctness/lstsq_rank_deficiency
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/chol_singularity.c -lm -lopenblas -o tests/correctness/chol_singularity
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/singularity_rule_comparison.c -lm -lopenblas -o tests/correctness/singularity_rule_comparison
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/ols_pseudo_inverse_fallback.c -lm -lopenblas -o tests/correctness/ols_pseudo_inverse_fallback
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/hac_covariance_correctness.c -lm -lopenblas -o tests/correctness/hac_covariance_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/ols_covariance_correctness.c -lm -lopenblas -o tests/correctness/ols_covariance_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/ols_covariance_recovery.c -lm -lopenblas -o tests/correctness/ols_covariance_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/lag_matrix_layout.c -lm -lopenblas -o tests/correctness/lag_matrix_layout
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/rank_rule_consistency.c -lm -lopenblas -o tests/correctness/rank_rule_consistency
+make: 'tests/correctness/lstsq_rank_deficiency' is up to date.
+make: 'tests/correctness/chol_singularity' is up to date.
+make: 'tests/correctness/singularity_rule_comparison' is up to date.
+make: 'tests/correctness/ols_pseudo_inverse_fallback' is up to date.
+make: 'tests/correctness/hac_covariance_correctness' is up to date.
+make: 'tests/correctness/ols_covariance_correctness' is up to date.
+make: 'tests/correctness/ols_covariance_recovery' is up to date.
+make: 'tests/correctness/lag_matrix_layout' is up to date.
+make: 'tests/correctness/rank_rule_consistency' is up to date.
 make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
@@ -52,10 +53,10 @@ make: 'tests/correctness/chi_squared_tail_correctness' is up to date.
 make: 'tests/correctness/test_student' is up to date.
 make: 'tests/correctness/test_mvgauss' is up to date.
 make: 'tests/correctness/test_mvstudent' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/mvstudent_traced_agreement.c -lm -lopenblas -o tests/correctness/mvstudent_traced_agreement
+make: 'tests/correctness/mvstudent_traced_agreement' is up to date.
 make: 'tests/correctness/test_matgauss' is up to date.
 make: 'tests/correctness/test_matgauss_recovery' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/mv_density_dispatch.c -lm -lopenblas -o tests/correctness/mv_density_dispatch
+make: 'tests/correctness/mv_density_dispatch' is up to date.
 make: 'tests/correctness/test_ad' is up to date.
 make: 'tests/correctness/ad_tensor_gradients' is up to date.
 make: 'tests/correctness/test_tape_reset' is up to date.
@@ -91,52 +92,28 @@ make: 'tests/correctness/qlr_test_correctness' is up to date.
 make: 'tests/correctness/kolmogorov_smirnov_correctness' is up to date.
 make: 'tests/correctness/lbfgs_correctness' is up to date.
 make: 'tests/correctness/brent_correctness' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/score_driven_location_correctness.c -lm -lopenblas -o tests/correctness/score_driven_location_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -lopenblas -o tests/correctness/qvarma_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_analytic_agreement.c -lm -lopenblas -o tests/correctness/qvarma_analytic_agreement
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_gaussian_limit.c -lm -lopenblas -o tests/correctness/qvarma_gaussian_limit
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp tests/correctness/qvarma_identification.c -lm -lopenblas -o tests/correctness/qvarma_identification
-tests/correctness/qvarma_identification.c: In function ‘curvature_at’:
-tests/correctness/qvarma_identification.c:57:5: warning: missing initializer for field ‘workspace’ of ‘QvarmaFitContext’ [-Wmissing-field-initializers]
-   57 |     QvarmaFitContext context = { y, shape };
-      |     ^~~~~~~~~~~~~~~~
-In file included from tests/correctness/qvarma_identification.c:38:
-tests/correctness/../../sd/qvarma.h:1582:21: note: ‘workspace’ declared here
- 1582 |     QvarmaAnalytic *workspace;
-      |                     ^~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/qvarma_fixed_parameter_fit.c -lm -lopenblas -o tests/correctness/qvarma_fixed_parameter_fit
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/var_correctness.c -lm -lopenblas -o tests/correctness/var_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/var_recovery.c -lm -lopenblas -o tests/correctness/var_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/lp_correctness.c -lm -lopenblas -o tests/correctness/lp_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE tests/correctness/lp_recovery.c -lm -lopenblas -o tests/correctness/lp_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/basis_to_regression.c -lm -lopenblas -o tests/integration/basis_to_regression
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -lopenblas -o tests/integration/frame_to_model
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/frame_to_tensor.c -lm -lopenblas -o tests/integration/frame_to_tensor
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/tensor_to_optimizer.c -lm -lopenblas -o tests/integration/tensor_to_optimizer
+make: 'tests/correctness/score_driven_location_correctness' is up to date.
+make: 'tests/correctness/qvarma_correctness' is up to date.
+make: 'tests/correctness/qvarma_analytic_agreement' is up to date.
+make: 'tests/correctness/qvarma_gaussian_limit' is up to date.
+make: 'tests/correctness/qvarma_identification' is up to date.
+make: 'tests/correctness/qvarma_fixed_parameter_fit' is up to date.
+make: 'tests/correctness/var_correctness' is up to date.
+make: 'tests/correctness/var_recovery' is up to date.
+make: 'tests/correctness/lp_correctness' is up to date.
+make: 'tests/correctness/lp_recovery' is up to date.
+make: 'tests/integration/basis_to_regression' is up to date.
+make: 'tests/integration/frame_to_model' is up to date.
+make: 'tests/integration/frame_to_tensor' is up to date.
+make: 'tests/integration/tensor_to_optimizer' is up to date.
 make: 'tests/integration/join_missing_values' is up to date.
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
-make: 'tests/integration/header_composition' is up to date.
-make: 'tests/integration/header_composition_f32' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/band_solve_example.c -lm -lopenblas -o examples/band_solve_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/basis_example.c -lm -lopenblas -o examples/basis_example
-In file included from examples/basis_example.c:4:
-./basis/spline.h: In function ‘_periodic_spline.constprop’:
-./basis/spline.h:1143:16: warning: ‘sites’ may be used uninitialized [-Wmaybe-uninitialized]
- 1143 |     Mat full = _spline_design_raw(knots, nk, sites, n, ord, &none, 1, 0);
-      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-./basis/spline.h:271:19: note: by argument 3 of type ‘const mreal *’ {aka ‘const double *’} to ‘_spline_design_raw.constprop’ declared here
-  271 | static inline Mat _spline_design_raw(const mreal *knots, int nk, const mreal *x, int nx,
-      |                   ^~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/hp_filter_example.c -lm -lopenblas -o examples/hp_filter_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/lp_example.c -lm -lopenblas -o examples/lp_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/ols_covariance_example.c -lm -lopenblas -o examples/ols_covariance_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_fixed_parameters_example.c -lm -lopenblas -o examples/qvarma_fixed_parameters_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/singular_draws_example.c -lm -lopenblas -o examples/singular_draws_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/var_example.c -lm -lopenblas -o examples/var_example
+make: 'tests/integration/pipeline_ownership' is up to date.
+make: 'tests/integration/npz_to_statistics' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
+make: Nothing to be done for 'examples'.
 
 === poly_correctness: PASS ===
 basis/poly.h correctness, float32 build
@@ -276,7 +253,13 @@ hp_filter_correctness: all passed
 hp_filter_recovery: all passed, 400 draws, report in out/hp_filter_recovery_report.txt
 
 === kalman_correctness: PASS ===
-kalman_correctness: filter/kalman.h and the dynamic factor model of tests/dynamic_factor.h, float64 build
+kalman_correctness: filter/kalman.h, float64 build
+
+
+PASSED, 0 failures
+
+=== dynamic_factor_correctness: PASS ===
+dynamic_factor_correctness: ss/dynamic_factor.h, float64 build
 
 
 PASSED, 0 failures
@@ -1934,4 +1917,4 @@ PASSED, 0 failures
 
 
 === summary ===
-105 passed, 0 failed
+106 passed, 0 failed

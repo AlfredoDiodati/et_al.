@@ -1,4 +1,4 @@
-"""Checks filter/kalman.h and the dynamic factor model of tests/dynamic_factor.h against the JAX code they translate.
+"""Checks filter/kalman.h and the dynamic factor model of ss/dynamic_factor.h against the JAX code they translate.
 
     make test-kalman-python     (PYTHON=... for an interpreter with jax and numpy)
 
@@ -419,4 +419,4 @@ if failures:
     for f in failures[:60]:
         print("  " + f)
     sys.exit(1)
-print("filter/kalman.h and tests/dynamic_factor.h agree with the source on every comparison")
+print("filter/kalman.h and ss/dynamic_factor.h agree with the source on every comparison")

@@ -94,8 +94,8 @@ _fit_collapsed is not translated: its objective equals the uncollapsed
 likelihood, and differentiating it needs the derivative of the collapse with
 respect to Z and H, which nothing here has needed. Collapsing for a model
 whose collapse does not depend on the parameters goes through kalman_fit with
-the correction as the extra term, which is what the Python dynamic factor
-model in tests/dynamic_factor.h does.
+the correction as the extra term, which is what
+dynamic_factor_fit_collapsed in ss/dynamic_factor.h does.
 
 Infeasible parameters. An optimizer probes points where a variance is not
 positive definite. Every entry point then returns minus infinity with a zero
