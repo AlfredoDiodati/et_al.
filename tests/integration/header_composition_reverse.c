@@ -37,6 +37,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../dist/gauss.h"
 #include "../../dist/broadcast.h"
 #include "../../inference/qlr_test.h"
+#include "../../filter/kalman.h"
 #include "../../filter/hp.h"
 #include "../../basis/spline.h"
 #include "../../basis/poly.h"

@@ -13,7 +13,10 @@ Subjects:
   tests/correctness/band_chol_correctness.c at float64 and at float32;
 - solver/brent.h, against tests/correctness/brent_correctness.c, and for one
   mutation against tests/correctness/brent_reference_agreement.py, whose build
-  without -ffast-math compares every point a search evaluates with scipy's.
+  without -ffast-math compares every point a search evaluates with scipy's;
+- filter/kalman.h, against tests/correctness/kalman_correctness.c: one term
+  dropped from each method's derivative recursion and from the prediction's,
+  and one from two of the value recursions.
 
 One mutation is expected to go undetected: removing the finiteness test on the
 parabola in brent_bounded. With GCC on x86-64 the comparisons after it already
@@ -37,7 +40,8 @@ PYTHON = os.environ.get("PYTHON", sys.executable)
 
 # Copied into each mutated tree: what the tests below include, and the
 # Makefile that builds them.
-TREE = ["linalg", "random", "solver", "tests/check.h", "Makefile",
+TREE = ["linalg", "random", "solver", "filter", "tests/check.h", "tests/dynamic_factor.h", "Makefile",
+        "tests/correctness/kalman_correctness.c",
         "tests/correctness/band_chol_correctness.c",
         "tests/correctness/brent_correctness.c",
         "tests/correctness/brent_reference_agreement.c",
@@ -46,6 +50,7 @@ TREE = ["linalg", "random", "solver", "tests/check.h", "Makefile",
 BAND_CHOL = [("band_chol_correctness", "1"), ("band_chol_correctness", "")]
 BRENT = [("brent_correctness", "1")]
 BRENT_PATH = [("brent_reference_agreement", None)]
+KALMAN = [("kalman_correctness", "1")]
 
 # name, file, original text, faulty text, checks, expected to be caught
 MUTATIONS = [
@@ -111,6 +116,21 @@ MUTATIONS = [
      "return v < 0 ? -1.0 : 1.0;", "return v <= 0 ? -1.0 : 1.0;", BRENT + BRENT_PATH, True),
     ("no finiteness test on the parabola", "solver/brent.h",
      "int finite = _brent_is_finite(p) && _brent_is_finite(q);", "int finite = 1;", BRENT + BRENT_PATH, False),
+    ("woodbury derivative: trace of S Inner^-1 dP dropped", "filter/kalman.h",
+     "dlogdet += (double)h * trace_GdP;", "dlogdet += 0;", KALMAN, True),
+    ("univariate derivative: curvature term dropped", "filter/kalman.h",
+     "+ Pz[b] * Pz[c] * curvature;", "+ 0;", KALMAN, True),
+    ("dense derivative: K dF K' dropped", "filter/kalman.h",
+     "- w->mm_a[(size_t)b * m + a] + w->mm_b[(size_t)a * m + b];", "- w->mm_a[(size_t)b * m + a];", KALMAN, True),
+    ("prediction derivative: transpose of dT Ptt T' dropped", "filter/kalman.h",
+     "dP[(size_t)a * m + b] += w->mm_b[(size_t)a * m + b] + w->mm_b[(size_t)b * m + a];",
+     "dP[(size_t)a * m + b] += w->mm_b[(size_t)a * m + b];", KALMAN, True),
+    ("woodbury value: log det Inner dropped", "filter/kalman.h",
+     "*logdet_out = (double)n * log((double)sigma2) + logdet_inner;",
+     "*logdet_out = (double)n * log((double)sigma2);", KALMAN, True),
+    ("univariate value: gain not divided by F", "filter/kalman.h",
+     "for (int b = 0; b < m; b++) a[b] += Pz[b] * F_reciprocal * v;",
+     "for (int b = 0; b < m; b++) a[b] += Pz[b] * v;", KALMAN, True),
 ]
 
 

@@ -51,6 +51,7 @@ the lot as unused.
 #include "../../basis/poly.h"
 #include "../../basis/spline.h"
 #include "../../filter/hp.h"
+#include "../../filter/kalman.h"
 #include "../../inference/mcs.h"
 #include "../../inference/fast_mcs.h"
 #include "../../inference/unit_root.h"
@@ -252,6 +253,17 @@ static int touch_every_module(void) {
     Mat hp_line = mat_hp_trend(hp_series, 1600, 0);
     if (MABS(AT(hp_line, 3, 0) - 4.f) > 1e-2f) problems++;
     mat_free(hp_line); mat_free(hp_series);
+
+    /* a random walk with unit variance: P_next = T P T' + Q = 2 */
+    Mat kalman_unit = mat_eye(1), kalman_a = mat_new(1, 1), kalman_P = mat_eye(1);
+    Mat kalman_a_next = mat_new(1, 1), kalman_P_next = mat_new(1, 1);
+    KalmanSystem kalman_system;
+    memset(&kalman_system, 0, sizeof kalman_system);
+    kalman_system.T = kalman_unit;
+    kalman_system.Q = kalman_unit;
+    kalman_predict(&kalman_system, kalman_a, kalman_P, kalman_a_next, kalman_P_next);
+    if (MABS(AT(kalman_P_next, 0, 0) - 2.f) > 1e-6f) problems++;
+    mat_free(kalman_unit); mat_free(kalman_a); mat_free(kalman_P); mat_free(kalman_a_next); mat_free(kalman_P_next);
 
     VarSpec var_spec = { 2, 1, VAR_SIGMA_ML };
     Mat var_nu = mat_new(2, 1), var_A = mat_new(2, 2), var_Sigma = mat_eye(2);
