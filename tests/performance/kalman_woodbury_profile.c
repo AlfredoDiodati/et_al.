@@ -23,7 +23,7 @@ Z_o'Z_o and Z_o'v, is also replayed on its own on the same inputs right
 before each update and timed separately, as "prelude, replayed"; the replay
 is not part of the loop's total, and it leaves the rows in cache for the
 update, which therefore reads somewhat low. "Reduced once" is the filter on
-the reduction kalman_prepare_observations makes, which is what
+the reduction _kalman_prepare_observations makes, which is what
 ss/dynamic_factor.h's filtered estimator now runs.
 
 The sum of the stages is checked against kalman_log_likelihood timed
@@ -104,7 +104,7 @@ static double profiled(KalmanWorkspace *w, Mat y, KalmanInit init, int with_tang
         _kalman_update_woodbury(w, s, n, with_tangents, &logdet, &quad, reduced ? t : -1);
         unsigned long long t4 = __rdtsc();
         total += logdet + quad;
-        _kalman_rqr(w, s);
+        _kalman_rqr(s, w->m, w->r, w->RQ, w->RQR);
         _kalman_predict_step(w, s, with_tangents);
         unsigned long long t5 = __rdtsc();
         stages[STAGE_SYSTEM] += t1 - t0;
@@ -171,7 +171,7 @@ static void profile_shape(FILE *out, int n_periods, int N, int p, double ns) {
     read_model.observation_is_fixed = 0;
     KalmanWorkspace *workspaces[2] = { kalman_workspace_new(&read_model), kalman_workspace_new(&model) };
     model.link(theta, c);
-    kalman_prepare_observations(workspaces[1], y);
+    _kalman_prepare_observations(workspaces[1], y);
 
     fprintf(out, "n=%d N=%d p=%d, %d coordinates\n", n_periods, N, p, k);
     for (int run = 0; run < 4; run++) {

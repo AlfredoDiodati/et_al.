@@ -171,7 +171,7 @@ typedef struct {
        to a workspace is not modified while that workspace lives. The
        Woodbury method then reduces each period's observations once per y,
        and an evaluation no longer reads them; see
-       kalman_prepare_observations. 0 for anything else, and the default of
+       _kalman_prepare_observations. 0 for anything else, and the default of
        an initializer that leaves the field out. */
     int observation_is_fixed;
 } KalmanModel;
@@ -249,7 +249,7 @@ typedef struct {
     /* simulation */
     mreal *draw, *shock, *shock_factor;
 
-    /* kalman_prepare_observations: per period t, the observed count n_t,
+    /* _kalman_prepare_observations: per period t, the observed count n_t,
        k_t = min(n_t, m) rows of A_t (m x m storage), u_t (m), e_t and
        S_t = Z_o'Z_o (m x m), for the y it was built from */
     int prepared_periods;
@@ -406,16 +406,15 @@ static inline void _kalman_check_system(const KalmanWorkspace *w, const KalmanSy
 
 static inline mreal _kalman_entry(Vec v, int i) { return v.d ? v.d[(size_t)i * v.stride] : 0; }
 
-/* R Q R' into w->RQR, from the system of this period. */
-static inline void _kalman_rqr(KalmanWorkspace *w, const KalmanSystem *s) {
-    int m = w->m, r = w->r;
+/* R Q R' into RQR, m x m, with R Q left in RQ, m x r. */
+static inline void _kalman_rqr(const KalmanSystem *s, int m, int r, mreal *RQ, mreal *RQR) {
     if (!s->R.d) {
         for (int i = 0; i < m; i++)
-            for (int j = 0; j < m; j++) w->RQR[(size_t)i * m + j] = AT(s->Q, i, j);
+            for (int j = 0; j < m; j++) RQR[(size_t)i * m + j] = AT(s->Q, i, j);
         return;
     }
-    mat_gemm(0, 0, m, r, r, 1, s->R.d, s->R.stride, s->Q.d, s->Q.stride, 0, w->RQ, r);
-    mat_gemm(0, 1, m, m, r, 1, w->RQ, r, s->R.d, s->R.stride, 0, w->RQR, m);
+    mat_gemm(0, 0, m, r, r, 1, s->R.d, s->R.stride, s->Q.d, s->Q.stride, 0, RQ, r);
+    mat_gemm(0, 1, m, m, r, 1, RQ, r, s->R.d, s->R.stride, 0, RQR, m);
 }
 
 /* The derivative of R Q R' for one tangent, into w->dRQR. Returns 0 when it
@@ -454,39 +453,50 @@ static inline int _kalman_is_diagonal(Mat A, int m) {
 }
 
 /*
+a = T att + c and P = T Ptt T' + RQR, with T Ptt left in TP. T is checked for
+being diagonal, at m^2 comparisons, and a diagonal T is applied entry by
+entry, which turns each product with it from m^3 into m^2 work.
+*/
+static inline void _kalman_predict_state(const KalmanSystem *s, int m, const mreal *att, const mreal *Ptt,
+                                         const mreal *RQR, mreal *TP, mreal *a, mreal *P) {
+    size_t mm = (size_t)m * m;
+    const mreal *T = s->T.d;
+    size_t T_diagonal_step = (size_t)s->T.stride + 1;
+    if (_kalman_is_diagonal(s->T, m)) {
+        for (int i = 0; i < m; i++) {
+            mreal T_i = T[(size_t)i * T_diagonal_step];
+            a[i] = T_i * att[i] + _kalman_entry(s->c, i);
+            for (int j = 0; j < m; j++) {
+                size_t ij = (size_t)i * m + j;
+                TP[ij] = T_i * Ptt[ij];
+                P[ij] = RQR[ij] + TP[ij] * T[(size_t)j * T_diagonal_step];
+            }
+        }
+    } else {
+        mat_gemm(0, 0, m, 1, m, 1, T, s->T.stride, att, 1, 0, a, 1);
+        for (int i = 0; i < m; i++) a[i] += _kalman_entry(s->c, i);
+        mat_gemm(0, 0, m, m, m, 1, T, s->T.stride, Ptt, m, 0, TP, m);
+        for (size_t i = 0; i < mm; i++) P[i] = RQR[i];
+        mat_gemm(0, 1, m, m, m, 1, TP, m, T, s->T.stride, 1, P, m);
+    }
+    _kalman_symmetrize(P, m);
+}
+
+/*
 a_{t+1} = T_t a_{t|t} + c_t and P_{t+1} = T_t P_{t|t} T_t' + R_t Q_t R_t',
 from w->att, w->Ptt into w->a, w->P, and the same for every tangent when
-with_tangents is set. w->RQR must already hold this period's R Q R'.
-
-T_t is checked for being diagonal every period, at m^2 comparisons, and a
-diagonal T_t is applied entry by entry, which turns each product with it from
-m^3 into m^2 work; the same holds for each tangent's dT_t.
+with_tangents is set. w->RQR must already hold this period's R Q R'. A
+diagonal T_t, and each tangent's diagonal dT_t, is applied entry by entry.
 */
 static inline void _kalman_predict_step(KalmanWorkspace *w, const KalmanSystem *s, int with_tangents) {
     int m = w->m;
     size_t mm = (size_t)m * m;
+    _kalman_predict_state(s, m, w->att, w->Ptt, w->RQR, w->TP, w->a, w->P);
+    if (!with_tangents) return;
+
     const mreal *T = s->T.d;
     size_t T_diagonal_step = (size_t)s->T.stride + 1;
     int T_is_diagonal = _kalman_is_diagonal(s->T, m);
-    if (T_is_diagonal) {
-        for (int a = 0; a < m; a++) {
-            mreal T_a = T[(size_t)a * T_diagonal_step];
-            w->a[a] = T_a * w->att[a] + _kalman_entry(s->c, a);
-            for (int b = 0; b < m; b++) {
-                size_t ab = (size_t)a * m + b;
-                w->TP[ab] = T_a * w->Ptt[ab];
-                w->P[ab] = w->RQR[ab] + w->TP[ab] * T[(size_t)b * T_diagonal_step];
-            }
-        }
-    } else {
-        mat_gemm(0, 0, m, 1, m, 1, T, s->T.stride, w->att, 1, 0, w->a, 1);
-        for (int i = 0; i < m; i++) w->a[i] += _kalman_entry(s->c, i);
-        mat_gemm(0, 0, m, m, m, 1, T, s->T.stride, w->Ptt, m, 0, w->TP, m);
-        for (size_t i = 0; i < mm; i++) w->P[i] = w->RQR[i];
-        mat_gemm(0, 1, m, m, m, 1, w->TP, m, T, s->T.stride, 1, w->P, m);
-    }
-    _kalman_symmetrize(w->P, m);
-    if (!with_tangents) return;
 
     int k = w->k;
     if (T_is_diagonal) {
@@ -802,9 +812,9 @@ Computed once per y: kalman_log_likelihood calls this itself the first time it
 sees a y, for a model with observation_is_fixed set and the Woodbury method.
 The system callback is run for every period to read Z_t and d_t.
 */
-static inline void kalman_prepare_observations(KalmanWorkspace *w, Mat y) {
+static inline void _kalman_prepare_observations(KalmanWorkspace *w, Mat y) {
     assert(w->model.observation_is_fixed && w->model.method == KALMAN_WOODBURY
-           && "kalman_prepare_observations: for a Woodbury model whose Z_t and d_t are fixed");
+           && "_kalman_prepare_observations: for a Woodbury model whose Z_t and d_t are fixed");
     assert(y.r == w->N);
     int m = w->m, n_periods = y.c;
     size_t mm = (size_t)m * m;
@@ -884,7 +894,7 @@ costs m x m work only. Returns 0, or 1 when s is not positive or Inner is
 singular.
 
 prepared is the period index when the workspace holds this period's
-reduction (kalman_prepare_observations), -1 otherwise.
+reduction (_kalman_prepare_observations), -1 otherwise.
 */
 static inline int _kalman_update_woodbury(KalmanWorkspace *w, const KalmanSystem *s, int n,
                                           int with_tangents, double *logdet_out, double *quad_out, int prepared) {
@@ -1144,7 +1154,7 @@ static inline int _kalman_run(KalmanWorkspace *w, Mat y, KalmanInit init, int wi
         if (paths) _kalman_store_update(w, s, paths, t, n, logdet, quad);
         total += logdet + quad;
 
-        _kalman_rqr(w, s);
+        _kalman_rqr(s, w->m, w->r, w->RQ, w->RQR);
         _kalman_predict_step(w, s, with_tangents);
     }
     *log_likelihood = -0.5 * total;
@@ -1172,7 +1182,7 @@ static inline mreal kalman_log_likelihood(KalmanWorkspace *w, Vec theta, Mat y, 
         w->model.link(theta, w->model.context);
     }
     int use_prepared = w->model.observation_is_fixed && w->model.method == KALMAN_WOODBURY;
-    if (use_prepared && !_kalman_is_prepared_for(w, y)) kalman_prepare_observations(w, y);
+    if (use_prepared && !_kalman_is_prepared_for(w, y)) _kalman_prepare_observations(w, y);
     double value;
     int failed_at = _kalman_run(w, y, init, with_tangents, NULL, &value, use_prepared);
     if (failed_at < 0 && w->model.extra_log_likelihood) {
@@ -1218,29 +1228,15 @@ static inline KalmanPaths kalman_filter(KalmanWorkspace *w, Vec theta, Mat y, Ka
 static inline void kalman_predict(const KalmanSystem *system, Vec a, Mat P, Vec a_next, Mat P_next) {
     int m = a.r, r = system->Q.r;
     assert(a.c == 1 && P.r == m && P.c == m && a_next.r == m && P_next.r == m && P_next.c == m);
-    KalmanModel shape = { 1, m, r, 0, KALMAN_WOODBURY, NULL, NULL, NULL, NULL, 0 };
-    KalmanWorkspace w;
-    memset(&w, 0, sizeof(w));
-    w.model = shape;
-    w.m = m; w.r = r;
-    size_t mm = (size_t)m * m;
-    w.att = (mreal*)calloc((size_t)m, sizeof(mreal));
-    w.Ptt = (mreal*)calloc(mm, sizeof(mreal));
-    w.a = (mreal*)calloc((size_t)m, sizeof(mreal));
-    w.P = (mreal*)calloc(mm, sizeof(mreal));
-    w.RQR = (mreal*)calloc(mm, sizeof(mreal));
-    w.RQ = (mreal*)calloc((size_t)m * r, sizeof(mreal));
-    w.TP = (mreal*)calloc(mm, sizeof(mreal));
-    assert(w.att && w.Ptt && w.a && w.P && w.RQR && w.RQ && w.TP);
-    for (int i = 0; i < m; i++) w.att[i] = AT(a, i, 0);
+    Mat a_in = mat_copy(a), P_in = mat_copy(P), a_out = mat_new(m, 1), P_out = mat_new(m, m);
+    Mat RQ = mat_new(m, r), RQR = mat_new(m, m), TP = mat_new(m, m);
+    _kalman_rqr(system, m, r, RQ.d, RQR.d);
+    _kalman_predict_state(system, m, a_in.d, P_in.d, RQR.d, TP.d, a_out.d, P_out.d);
+    for (int i = 0; i < m; i++) AT(a_next, i, 0) = a_out.d[i];
     for (int i = 0; i < m; i++)
-        for (int j = 0; j < m; j++) w.Ptt[(size_t)i * m + j] = AT(P, i, j);
-    _kalman_rqr(&w, system);
-    _kalman_predict_step(&w, system, 0);
-    for (int i = 0; i < m; i++) AT(a_next, i, 0) = w.a[i];
-    for (int i = 0; i < m; i++)
-        for (int j = 0; j < m; j++) AT(P_next, i, j) = w.P[(size_t)i * m + j];
-    free(w.att); free(w.Ptt); free(w.a); free(w.P); free(w.RQR); free(w.RQ); free(w.TP);
+        for (int j = 0; j < m; j++) AT(P_next, i, j) = AT(P_out, i, j);
+    mat_free(a_in); mat_free(P_in); mat_free(a_out); mat_free(P_out);
+    mat_free(RQ); mat_free(RQR); mat_free(TP);
 }
 
 /* Maximum likelihood. Procedural choices only; what the solver needs and
@@ -1293,7 +1289,7 @@ typedef struct {
 } _KalmanFitContext;
 
 /* What the solver minimises: the negative log-likelihood and its gradient. */
-static inline mreal kalman_negative_log_likelihood(Vec theta, Vec gradient, void *context) {
+static inline mreal _kalman_negative_log_likelihood(Vec theta, Vec gradient, void *context) {
     _KalmanFitContext *fit = (_KalmanFitContext*)context;
     mreal value = kalman_log_likelihood(fit->workspace, theta, fit->y, fit->init, gradient);
     if (gradient.d)
@@ -1318,7 +1314,7 @@ static inline KalmanFitResult kalman_fit(Mat y, Vec theta0, const KalmanModel *m
     solver.memory = options.memory;
     solver.initial_step = options.initial_step;
     solver.log_stream = options.trace;
-    LbfgsResult solved = lbfgs(kalman_negative_log_likelihood, &context, theta0, solver);
+    LbfgsResult solved = lbfgs(_kalman_negative_log_likelihood, &context, theta0, solver);
 
     KalmanFitResult result;
     result.theta = solved.theta;

@@ -110,15 +110,15 @@ static const struct {
     { "bar_beta", DYNAMIC_FACTOR_TRANSFORM_IDENTITY },
 };
 
-static inline int dynamic_factor_block_length(DynamicFactorSpec spec, int block) { return block == DYNAMIC_FACTOR_BLOCK_H_PARAM ? 1 : spec.p; }
+static inline int _dynamic_factor_block_length(DynamicFactorSpec spec, int block) { return block == DYNAMIC_FACTOR_BLOCK_H_PARAM ? 1 : spec.p; }
 
-static inline int dynamic_factor_block_offset(DynamicFactorSpec spec, int block) {
+static inline int _dynamic_factor_block_offset(DynamicFactorSpec spec, int block) {
     int offset = 0;
-    for (int b = 0; b < block; b++) offset += dynamic_factor_block_length(spec, b);
+    for (int b = 0; b < block; b++) offset += _dynamic_factor_block_length(spec, b);
     return offset;
 }
 
-static inline int dynamic_factor_n_theta(DynamicFactorSpec spec) { return dynamic_factor_block_offset(spec, DYNAMIC_FACTOR_N_BLOCKS); }
+static inline int dynamic_factor_n_theta(DynamicFactorSpec spec) { return _dynamic_factor_block_offset(spec, DYNAMIC_FACTOR_N_BLOCKS); }
 
 static inline mreal _dynamic_factor_transform(DynamicFactorTransform kind, mreal x) {
     if (kind == DYNAMIC_FACTOR_TRANSFORM_EXP) return MEXP(x);
@@ -142,8 +142,8 @@ static inline mreal _dynamic_factor_transform_derivative(DynamicFactorTransform 
 /* The block and the index inside it of coordinate i. */
 static inline void _dynamic_factor_coordinate(DynamicFactorSpec spec, int i, int *block, int *index) {
     for (int b = 0; b < DYNAMIC_FACTOR_N_BLOCKS; b++) {
-        int offset = dynamic_factor_block_offset(spec, b);
-        if (i < offset + dynamic_factor_block_length(spec, b)) { *block = b; *index = i - offset; return; }
+        int offset = _dynamic_factor_block_offset(spec, b);
+        if (i < offset + _dynamic_factor_block_length(spec, b)) { *block = b; *index = i - offset; return; }
     }
     assert(0 && "coordinate out of range");
 }
@@ -190,7 +190,6 @@ collapsed observation variance, which is sigma2 Gamma_t and is written per
 period.
 */
 typedef struct {
-    DynamicFactorSpec spec;
     DynamicFactor model;
     Tensor M;
     KalmanSystem *tangent;
@@ -200,7 +199,7 @@ typedef struct {
 
     int collapsed;
     Tensor Gamma;
-    Mat identity, H_collapsed;
+    Mat ystar, identity, H_collapsed;
     double n_half_ph_minus_p, sum_logdet_Gamma, sum_resid_sq;
 } DynamicFactorContext;
 
@@ -210,7 +209,6 @@ static inline DynamicFactorContext *_dynamic_factor_context_new(DynamicFactorSpe
     DynamicFactorContext *c = (DynamicFactorContext*)calloc(1, sizeof(DynamicFactorContext));
     assert(c);
     int p = spec.p, k = dynamic_factor_n_theta(spec);
-    c->spec = spec;
     c->model = dynamic_factor_new(spec);
     c->M = M;
     c->tangent = (KalmanSystem*)calloc((size_t)k, sizeof(KalmanSystem));
@@ -227,11 +225,12 @@ static inline DynamicFactorContext *_dynamic_factor_context_new(DynamicFactorSpe
 }
 
 static inline void _dynamic_factor_context_free(DynamicFactorContext *c) {
-    int k = dynamic_factor_n_theta(c->spec);
+    int k = dynamic_factor_n_theta(c->model.spec);
     for (int i = 0; i < k; i++) { mat_free(c->dT_or_dQ[i]); mat_free(c->dc[i]); }
     free(c->dT_or_dQ); free(c->dc); free(c->tangent);
     mat_free(c->dH_param); mat_free(c->identity); mat_free(c->H_collapsed);
     if (c->Gamma.d) tensor_free(c->Gamma);
+    mat_free(c->ystar);
     dynamic_factor_free(&c->model);
     free(c);
 }
@@ -239,7 +238,7 @@ static inline void _dynamic_factor_context_free(DynamicFactorContext *c) {
 /* The derivative of each system block with respect to each coordinate,
    from the constrained values the link just wrote. */
 static inline void _dynamic_factor_tangents(DynamicFactorContext *c) {
-    DynamicFactorSpec spec = c->spec;
+    DynamicFactorSpec spec = c->model.spec;
     int p = spec.p, k = dynamic_factor_n_theta(spec);
     for (int i = 0; i < k; i++) {
         int b, j;
@@ -282,7 +281,7 @@ static inline void _dynamic_factor_kalman_link(Vec theta, void *context) {
 }
 
 static inline Mat _dynamic_factor_Z(const DynamicFactorContext *c, int t) {
-    int N = c->spec.max_n, p = c->spec.p;
+    int N = c->model.spec.max_n, p = c->model.spec.p;
     assert(t >= 0 && t < c->M.shape[0] && "M has fewer periods than the data");
     Mat Z = { N, p, p + 1, c->M.d + (size_t)t * N * (p + 1) };
     return Z;
@@ -297,7 +296,7 @@ static inline void _dynamic_factor_dynamics(int t, void *context, KalmanSystem *
     s->Q = c->model.Q_param;
     s->c = c->model.ct;
     if (tangents)
-        for (int i = 0; i < dynamic_factor_n_theta(c->spec); i++) tangents[i] = c->tangent[i];
+        for (int i = 0; i < dynamic_factor_n_theta(c->model.spec); i++) tangents[i] = c->tangent[i];
 }
 
 /* The source's _dynamics_collapsed: Z = I, T = B, H = sigma2 Gamma_t, R = I, Q, c = ct.
@@ -305,7 +304,7 @@ static inline void _dynamic_factor_dynamics(int t, void *context, KalmanSystem *
    at the same matrix. */
 static inline void _dynamic_factor_dynamics_collapsed(int t, void *context, KalmanSystem *s, KalmanSystem *tangents) {
     DynamicFactorContext *c = (DynamicFactorContext*)context;
-    int p = c->spec.p;
+    int p = c->model.spec.p;
     mreal sigma2 = AT(c->model.H_param, 0, 0);
     for (int i = 0; i < p; i++)
         for (int j = 0; j < p; j++) AT(c->H_collapsed, i, j) = sigma2 * TAT3(c->Gamma, t, i, j);
@@ -315,7 +314,7 @@ static inline void _dynamic_factor_dynamics_collapsed(int t, void *context, Kalm
     s->Q = c->model.Q_param;
     s->c = c->model.ct;
     if (tangents)
-        for (int i = 0; i < dynamic_factor_n_theta(c->spec); i++) tangents[i] = c->tangent[i];
+        for (int i = 0; i < dynamic_factor_n_theta(c->model.spec); i++) tangents[i] = c->tangent[i];
 }
 
 /* The source's _collapsed_correction, and its derivative, which only H_param has. */
@@ -324,7 +323,7 @@ static inline mreal _dynamic_factor_collapsed_correction(void *context, Vec grad
     double sigma2 = (double)AT(c->model.H_param, 0, 0);
     if (gradient.d) {
         for (int i = 0; i < gradient.r; i++) gradient.d[i] = 0;
-        gradient.d[dynamic_factor_block_offset(c->spec, DYNAMIC_FACTOR_BLOCK_H_PARAM)] =
+        gradient.d[_dynamic_factor_block_offset(c->model.spec, DYNAMIC_FACTOR_BLOCK_H_PARAM)] =
             (mreal)(c->n_half_ph_minus_p + 0.5 / sigma2 * c->sum_resid_sq);
     }
     return (mreal)(c->n_half_ph_minus_p * log(sigma2) + 0.5 * c->sum_logdet_Gamma - 0.5 / sigma2 * c->sum_resid_sq);
@@ -332,10 +331,10 @@ static inline mreal _dynamic_factor_collapsed_correction(void *context, Vec grad
 
 static inline KalmanModel _dynamic_factor_kalman_model(DynamicFactorContext *c, int with_theta) {
     KalmanModel model;
-    model.n_obs = c->collapsed ? c->spec.p : c->spec.max_n;
-    model.n_state = c->spec.p;
-    model.n_disturbance = c->spec.p;
-    model.n_theta = with_theta ? dynamic_factor_n_theta(c->spec) : 0;
+    model.n_obs = c->collapsed ? c->model.spec.p : c->model.spec.max_n;
+    model.n_state = c->model.spec.p;
+    model.n_disturbance = c->model.spec.p;
+    model.n_theta = with_theta ? dynamic_factor_n_theta(c->model.spec) : 0;
     model.method = c->collapsed ? KALMAN_DENSE : KALMAN_WOODBURY;
     model.system = c->collapsed ? _dynamic_factor_dynamics_collapsed : _dynamic_factor_dynamics;
     model.link = with_theta ? _dynamic_factor_kalman_link : NULL;
@@ -353,7 +352,7 @@ Asserts when a period has fewer than p observed entries, since Z_t'Z_t is then
 singular and the collapse does not exist.
 */
 static inline Mat _dynamic_factor_collapse(DynamicFactorContext *c, Mat y) {
-    int N = c->spec.max_n, p = c->spec.p, n_periods = y.c;
+    int N = c->model.spec.max_n, p = c->model.spec.p, n_periods = y.c;
     assert(y.r == N);
     int shape[3] = { n_periods, p, p };
     c->Gamma = tensor_new(3, shape);
@@ -409,8 +408,7 @@ the filtered estimator, of ystar for the collapsed one.
 niter counts the iterations of the latest run. A fit resumed from a cached one
 that stopped at its iteration cap is a chain of runs: total_niter is the sum
 over the chain, nruns its length, and run_status why each run stopped, oldest
-first, with status the last. status_is_known is 0 only for a cache that did
-not record the reasons, where status and run_status must not be read.
+first, with status the last.
 */
 typedef struct {
     DynamicFactor model;
@@ -423,7 +421,6 @@ typedef struct {
     int nruns;
     int is_converged;
     LbfgsStatus status;
-    int status_is_known;
     LbfgsStatus *run_status;
     KalmanPaths paths;
 } DynamicFactorFit;
@@ -456,28 +453,28 @@ static inline LbfgsStatus *_dynamic_factor_run_status_extend(const LbfgsStatus *
     return history;
 }
 
-/* The context and the data an estimator filters: y itself, or ystar after
-   the collapse. *data must be mat_free'd when it is not y. */
+/* The context of an estimator, which for the collapsed one holds ystar. */
 static inline DynamicFactorContext *_dynamic_factor_estimator(DynamicFactorSpec spec, Mat y, Tensor M,
-                                                              DynamicFactorEstimator estimator, Mat *data) {
+                                                              DynamicFactorEstimator estimator) {
     DynamicFactorContext *c = _dynamic_factor_context_new(spec, M);
     c->collapsed = estimator == DYNAMIC_FACTOR_COLLAPSED;
-    *data = c->collapsed ? _dynamic_factor_collapse(c, y) : y;
+    if (c->collapsed) c->ystar = _dynamic_factor_collapse(c, y);
     return c;
 }
+
+/* What the estimator's filter reads: y itself, or ystar. */
+static inline Mat _dynamic_factor_data(const DynamicFactorContext *c, Mat y) { return c->collapsed ? c->ystar : y; }
 
 static inline DynamicFactorFit _dynamic_factor_fit(Mat y, Tensor M, const DynamicFactor *initial_guess,
                                                    KalmanInit initialization, KalmanFitOptions options,
                                                    DynamicFactorEstimator estimator) {
     DynamicFactorSpec spec = initial_guess->spec;
-    Mat data;
-    DynamicFactorContext *c = _dynamic_factor_estimator(spec, y, M, estimator, &data);
+    DynamicFactorContext *c = _dynamic_factor_estimator(spec, y, M, estimator);
     Vec theta0 = mat_new(dynamic_factor_n_theta(spec), 1);
     _dynamic_factor_unlink(initial_guess, theta0);
     KalmanModel model = _dynamic_factor_kalman_model(c, 1);
-    KalmanFitResult solved = kalman_fit(data, theta0, &model, initialization, options);
+    KalmanFitResult solved = kalman_fit(_dynamic_factor_data(c, y), theta0, &model, initialization, options);
     mat_free(theta0);
-    if (data.d != y.d) mat_free(data);
     _dynamic_factor_context_free(c);
 
     DynamicFactorFit result;
@@ -493,7 +490,6 @@ static inline DynamicFactorFit _dynamic_factor_fit(Mat y, Tensor M, const Dynami
     result.nruns = 1;
     result.is_converged = solved.is_converged;
     result.status = solved.status;
-    result.status_is_known = 1;
     result.run_status = _dynamic_factor_run_status_extend(NULL, 0, solved.status);
     result.paths = solved.paths;
     return result;
@@ -517,13 +513,11 @@ static inline DynamicFactorFit dynamic_factor_fit_collapsed(Mat y, Tensor M, con
 static inline mreal dynamic_factor_log_likelihood_at(Mat y, Tensor M, DynamicFactorSpec spec, Vec theta,
                                                      KalmanInit initialization, DynamicFactorEstimator estimator,
                                                      Vec gradient) {
-    Mat data;
-    DynamicFactorContext *c = _dynamic_factor_estimator(spec, y, M, estimator, &data);
+    DynamicFactorContext *c = _dynamic_factor_estimator(spec, y, M, estimator);
     KalmanModel model = _dynamic_factor_kalman_model(c, 1);
     KalmanWorkspace *w = kalman_workspace_new(&model);
-    mreal value = kalman_log_likelihood(w, theta, data, initialization, gradient);
+    mreal value = kalman_log_likelihood(w, theta, _dynamic_factor_data(c, y), initialization, gradient);
     kalman_workspace_free(w);
-    if (data.d != y.d) mat_free(data);
     _dynamic_factor_context_free(c);
     return value;
 }
@@ -532,13 +526,11 @@ static inline mreal dynamic_factor_log_likelihood_at(Mat y, Tensor M, DynamicFac
    a cache recomputes rather than stores: one pass of the filter. */
 static inline KalmanPaths _dynamic_factor_paths_at(Mat y, Tensor M, DynamicFactorSpec spec, Vec theta,
                                                    KalmanInit initialization, DynamicFactorEstimator estimator) {
-    Mat data;
-    DynamicFactorContext *c = _dynamic_factor_estimator(spec, y, M, estimator, &data);
+    DynamicFactorContext *c = _dynamic_factor_estimator(spec, y, M, estimator);
     KalmanModel model = _dynamic_factor_kalman_model(c, 1);
     KalmanWorkspace *w = kalman_workspace_new(&model);
-    KalmanPaths paths = kalman_filter(w, theta, data, initialization);
+    KalmanPaths paths = kalman_filter(w, theta, _dynamic_factor_data(c, y), initialization);
     kalman_workspace_free(w);
-    if (data.d != y.d) mat_free(data);
     _dynamic_factor_context_free(c);
     return paths;
 }
@@ -633,13 +625,10 @@ static inline void dynamic_factor_save_fit(const DynamicFactorFit *fit, Mat y, T
     json_object_set(diagnostics, "total_niter", json_number(fit->total_niter));
     json_object_set(diagnostics, "nruns", json_number(fit->nruns));
     json_object_set(diagnostics, "is_converged", json_number(fit->is_converged));
-    /* One entry per run, oldest first; a fit whose reasons are not known
-       writes no array, which is how a reader tells the two apart. */
-    if (fit->status_is_known) {
-        JsonValue *reasons = json_array();
-        for (int i = 0; i < fit->nruns; i++) json_array_push(reasons, json_number(fit->run_status[i]));
-        json_object_set(diagnostics, "run_status", reasons);
-    }
+    /* why each run stopped, oldest first */
+    JsonValue *reasons = json_array();
+    for (int i = 0; i < fit->nruns; i++) json_array_push(reasons, json_number(fit->run_status[i]));
+    json_object_set(diagnostics, "run_status", reasons);
     json_object_set(diagnostics, "data_fingerprint", json_number(dynamic_factor_data_fingerprint(y, M, initialization)));
     json_object_set(root, "fit", diagnostics);
     json_write_file(root, path);
@@ -648,12 +637,12 @@ static inline void dynamic_factor_save_fit(const DynamicFactorFit *fit, Mat y, T
 
 /*
 Returns 0 without touching result when the file is missing, its shape or
-estimator disagrees, a diagnostic is missing, or it was fit on other data or
-from another a_1 and P_1. The diagnostics are read before the parameters, so a
-refusal leaves result alone. A run_status that is absent, of a length other
-than nruns, or carrying a value that is not one of the solver's outcomes reads
-as not recorded, status_is_known 0. result comes from
-dynamic_factor_fit_result_new; its paths are recomputed at the loaded theta.
+estimator disagrees, a diagnostic is missing or malformed (a run_status not
+of length nruns, or holding a value that is not one of the solver's
+outcomes), or it was fit on other data or from another a_1 and P_1. The
+diagnostics are read before the parameters, so a refusal leaves result alone.
+result comes from dynamic_factor_fit_result_new; its paths are recomputed at
+the loaded theta.
 */
 static inline int dynamic_factor_load_fit(DynamicFactorFit *result, Mat y, Tensor M, KalmanInit initialization,
                                           DynamicFactorEstimator estimator, const char *path) {
@@ -666,43 +655,33 @@ static inline int dynamic_factor_load_fit(DynamicFactorFit *result, Mat y, Tenso
         if (root) json_free(root);
         return 0;
     }
-    double stored_estimator, log_likelihood, gradient_norm, niter, is_converged, fingerprint;
+    double stored_estimator, log_likelihood, gradient_norm, niter, total_niter, nruns, is_converged, fingerprint;
     int complete = _dynamic_factor_number(diagnostics, "estimator", &stored_estimator)
                 && _dynamic_factor_number(diagnostics, "log_likelihood", &log_likelihood)
                 && _dynamic_factor_number(diagnostics, "gradient_norm", &gradient_norm)
                 && _dynamic_factor_number(diagnostics, "niter", &niter)
+                && _dynamic_factor_number(diagnostics, "total_niter", &total_niter)
+                && _dynamic_factor_number(diagnostics, "nruns", &nruns)
                 && _dynamic_factor_number(diagnostics, "is_converged", &is_converged)
-                && _dynamic_factor_number(diagnostics, "data_fingerprint", &fingerprint);
+                && _dynamic_factor_number(diagnostics, "data_fingerprint", &fingerprint)
+                && nruns >= 1;
+    JsonValue *reasons = complete ? json_object_get(diagnostics, "run_status") : NULL;
+    complete = complete && reasons && reasons->type == JSON_ARRAY && json_array_len(reasons) == (int)nruns;
+    for (int i = 0; complete && i < (int)nruns; i++) {
+        JsonValue *entry = json_array_get(reasons, i);
+        double value = entry && entry->type == JSON_NUMBER ? json_as_number(entry) : -1;
+        complete = value >= LBFGS_MAX_ITERATIONS && value <= LBFGS_NOT_FINITE && value == (double)(int)value;
+    }
     if (!complete || (int)stored_estimator != (int)estimator
-        || fingerprint != dynamic_factor_data_fingerprint(y, M, initialization)) {
+        || fingerprint != dynamic_factor_data_fingerprint(y, M, initialization)
+        || !_dynamic_factor_read_theta(root, result->model.spec, result->theta)) {
         json_free(root);
         return 0;
     }
-    double total_niter, nruns;
-    if (!_dynamic_factor_number(diagnostics, "total_niter", &total_niter)) total_niter = niter;
-    if (!_dynamic_factor_number(diagnostics, "nruns", &nruns)) nruns = 1;
-    JsonValue *reasons = json_object_get(diagnostics, "run_status");
-    LbfgsStatus *history = NULL;
-    if (reasons && reasons->type == JSON_ARRAY && nruns >= 1 && json_array_len(reasons) == (int)nruns) {
-        history = (LbfgsStatus*)malloc((size_t)nruns * sizeof(LbfgsStatus));
-        assert(history);
-        for (int i = 0; i < (int)nruns; i++) {
-            JsonValue *entry = json_array_get(reasons, i);
-            double value = entry && entry->type == JSON_NUMBER ? json_as_number(entry) : -1;
-            if (!(value >= LBFGS_MAX_ITERATIONS && value <= LBFGS_NOT_FINITE && value == (double)(int)value)) {
-                free(history);
-                history = NULL;
-                break;
-            }
-            history[i] = (LbfgsStatus)(int)value;
-        }
-    }
-    int has_theta = _dynamic_factor_read_theta(root, result->model.spec, result->theta);
+    LbfgsStatus *history = (LbfgsStatus*)malloc((size_t)nruns * sizeof(LbfgsStatus));
+    assert(history);
+    for (int i = 0; i < (int)nruns; i++) history[i] = (LbfgsStatus)(int)json_as_number(json_array_get(reasons, i));
     json_free(root);
-    if (!has_theta) {
-        free(history);
-        return 0;
-    }
     /* the solver's theta, as stored, so the reloaded fit is the saved one bit
        for bit; the constrained model is derived from it */
     dynamic_factor_params_from_theta(result->theta, &result->model);
@@ -715,8 +694,7 @@ static inline int dynamic_factor_load_fit(DynamicFactorFit *result, Mat y, Tenso
     result->is_converged = (int)is_converged;
     free(result->run_status);
     result->run_status = history;
-    result->status_is_known = history != NULL;
-    result->status = history ? history[(int)nruns - 1] : LBFGS_MAX_ITERATIONS;
+    result->status = history[(int)nruns - 1];
     kalman_paths_free(&result->paths);
     result->paths = _dynamic_factor_paths_at(y, M, result->model.spec, result->theta, initialization, estimator);
     return 1;
@@ -727,9 +705,8 @@ What a script calls. A cached fit the solver finished with is returned as it
 stands, with no optimizer run. One that stopped at its iteration cap is
 resumed from its parameters, the chain fields extended, and the result
 written back; one that stalled or went non-finite is returned as it stands,
-since the same search from the same point arrives back where it was, and so
-is one whose reasons were not recorded. force_refit discards the cache and
-starts from initial_guess.
+since the same search from the same point arrives back where it was.
+force_refit discards the cache and starts from initial_guess.
 */
 static inline DynamicFactorFit _dynamic_factor_fit_cached(Mat y, Tensor M, const DynamicFactor *initial_guess,
                                                           KalmanInit initialization, KalmanFitOptions options,
@@ -738,7 +715,7 @@ static inline DynamicFactorFit _dynamic_factor_fit_cached(Mat y, Tensor M, const
     if (!force_refit) {
         DynamicFactorFit cached = dynamic_factor_fit_result_new(initial_guess->spec);
         if (dynamic_factor_load_fit(&cached, y, M, initialization, estimator, cache_path)) {
-            if (!cached.status_is_known || cached.status != LBFGS_MAX_ITERATIONS) return cached;
+            if (cached.status != LBFGS_MAX_ITERATIONS) return cached;
             DynamicFactorFit resumed = _dynamic_factor_fit(y, M, &cached.model, initialization, options, estimator);
             resumed.total_niter = cached.total_niter + resumed.niter;
             resumed.nruns = cached.nruns + 1;
@@ -770,12 +747,27 @@ static inline DynamicFactorFit dynamic_factor_fit_collapsed_cached(Mat y, Tensor
 }
 
 /* The filtered state at the end of the fit, att_T and Ptt_T, which every
-   forecast starts from. */
-static inline void _dynamic_factor_last_update(const DynamicFactorFit *fit, Vec a0, Mat P0) {
+   forecast and simulation starts from. Caller frees. */
+static inline Vec _dynamic_factor_last_att(const DynamicFactorFit *fit) {
     int p = fit->model.spec.p, T = fit->paths.n_periods;
-    for (int i = 0; i < p; i++) a0.d[i] = AT(fit->paths.att, i, T - 1);
+    Vec att = mat_new(p, 1);
+    for (int i = 0; i < p; i++) att.d[i] = AT(fit->paths.att, i, T - 1);
+    return att;
+}
+
+static inline Mat _dynamic_factor_last_Ptt(const DynamicFactorFit *fit) {
+    int p = fit->model.spec.p, T = fit->paths.n_periods;
+    Mat Ptt = mat_new(p, p);
     for (int i = 0; i < p; i++)
-        for (int j = 0; j < p; j++) AT(P0, i, j) = TAT3(fit->paths.Ptt, T - 1, i, j);
+        for (int j = 0; j < p; j++) AT(Ptt, i, j) = TAT3(fit->paths.Ptt, T - 1, i, j);
+    return Ptt;
+}
+
+/* A context holding the fitted model, for forecasting and simulation. */
+static inline DynamicFactorContext *_dynamic_factor_context_of_fit(const DynamicFactorFit *fit, Tensor M) {
+    DynamicFactorContext *c = _dynamic_factor_context_new(fit->model.spec, M);
+    dynamic_factor_copy(&fit->model, &c->model);
+    return c;
 }
 
 static inline KalmanSystem _dynamic_factor_transition(const DynamicFactor *model) {
@@ -791,7 +783,7 @@ static inline KalmanSystem _dynamic_factor_transition(const DynamicFactor *model
    n_h observed entries P_mean, VaR = P_mean + q_alpha / n_h sqrt(F_sum) with
    F_sum = n_h sigma2 + z_sum' P_h z_sum, and the out-of-sample log density of
    y_h, after which y_h updates the state. Each is one column or entry per
-   test period. */
+   test period. forecast_h has no test data, so its log_liks.d is NULL. */
 typedef struct {
     Mat predictions;  /* N x H */
     Vec P_means, VaR, log_liks;
@@ -805,9 +797,8 @@ static inline void dynamic_factor_forecast_free(DynamicFactorForecast *f) {
    the fit's last update, as the source's scan starts from att[-1]. */
 static inline KalmanPaths _dynamic_factor_filter_test_period(const DynamicFactorFit *fit, DynamicFactorContext *c, Mat y_test) {
     int p = fit->model.spec.p;
-    Vec a0 = mat_new(p, 1), a1 = mat_new(p, 1);
-    Mat P0 = mat_new(p, p), P1 = mat_new(p, p);
-    _dynamic_factor_last_update(fit, a0, P0);
+    Vec a0 = _dynamic_factor_last_att(fit), a1 = mat_new(p, 1);
+    Mat P0 = _dynamic_factor_last_Ptt(fit), P1 = mat_new(p, p);
     KalmanSystem transition = _dynamic_factor_transition(&c->model);
     kalman_predict(&transition, a0, P0, a1, P1);
     KalmanModel model = _dynamic_factor_kalman_model(c, 0);
@@ -824,7 +815,7 @@ static inline KalmanPaths _dynamic_factor_filter_test_period(const DynamicFactor
    computes them: y_hat and z_sum run over every row of Z_h. */
 static inline void _dynamic_factor_mean_and_var(const DynamicFactorContext *c, int h, const mreal *a, const mreal *P, double n_h,
                                  mreal q_alpha, mreal *y_hat, mreal *P_mean, mreal *VaR) {
-    int N = c->spec.max_n, p = c->spec.p;
+    int N = c->model.spec.max_n, p = c->model.spec.p;
     Mat Z = _dynamic_factor_Z(c, h);
     double total = 0;
     mreal z_sum[p > 0 ? p : 1];
@@ -847,8 +838,7 @@ static inline DynamicFactorForecast dynamic_factor_forecast(const DynamicFactorF
     DynamicFactorSpec spec = fit->model.spec;
     int N = spec.max_n, H = y_test.c;
     assert(y_test.r == N);
-    DynamicFactorContext *c = _dynamic_factor_context_new(spec, M);
-    dynamic_factor_copy(&fit->model, &c->model);
+    DynamicFactorContext *c = _dynamic_factor_context_of_fit(fit, M);
     KalmanPaths paths = _dynamic_factor_filter_test_period(fit, c, y_test);
     assert(paths.failed_at < 0);
 
@@ -876,22 +866,20 @@ static inline DynamicFactorForecast dynamic_factor_forecast(const DynamicFactorF
 }
 
 /* forecast_h: H steps ahead with no update, from the fit's last update.
-   n_h is N, every row of M. log_liks is not computed and is left zero. */
+   n_h is N, every row of M. */
 static inline DynamicFactorForecast dynamic_factor_forecast_h(const DynamicFactorFit *fit, Tensor M, mreal q_alpha) {
     DynamicFactorSpec spec = fit->model.spec;
     int N = spec.max_n, p = spec.p, H = M.shape[0];
-    DynamicFactorContext *c = _dynamic_factor_context_new(spec, M);
-    dynamic_factor_copy(&fit->model, &c->model);
-    Vec a = mat_new(p, 1), a_next = mat_new(p, 1);
-    Mat P = mat_new(p, p), P_next = mat_new(p, p);
-    _dynamic_factor_last_update(fit, a, P);
+    DynamicFactorContext *c = _dynamic_factor_context_of_fit(fit, M);
+    Vec a = _dynamic_factor_last_att(fit), a_next = mat_new(p, 1);
+    Mat P = _dynamic_factor_last_Ptt(fit), P_next = mat_new(p, p);
     KalmanSystem transition = _dynamic_factor_transition(&c->model);
 
     DynamicFactorForecast out;
     out.predictions = mat_new(N, H);
     out.P_means = mat_new(H, 1);
     out.VaR = mat_new(H, 1);
-    out.log_liks = mat_new(H, 1);
+    out.log_liks = (Vec){ 0, 0, 0, NULL };
     mreal *y_hat = (mreal*)malloc((size_t)N * sizeof(mreal));
     assert(y_hat);
     for (int h = 0; h < H; h++) {
@@ -929,8 +917,7 @@ static inline Tensor dynamic_factor_forecast_rolling_h(const DynamicFactorFit *f
         if (eval_horizons[i] > max_h) max_h = eval_horizons[i];
     }
     assert(M.shape[0] >= T_half + max_h - 1 && "forecast_rolling_h: M must reach T_half + max(h) - 1 periods");
-    DynamicFactorContext *c = _dynamic_factor_context_new(spec, M);
-    dynamic_factor_copy(&fit->model, &c->model);
+    DynamicFactorContext *c = _dynamic_factor_context_of_fit(fit, M);
     KalmanPaths paths = _dynamic_factor_filter_test_period(fit, c, y_test);
     assert(paths.failed_at < 0);
 
@@ -938,9 +925,7 @@ static inline Tensor dynamic_factor_forecast_rolling_h(const DynamicFactorFit *f
     for (int j = 0; j < p; j++) mu[j] = c->model.ct.d[j] / (1 - AT(c->model.B, j, j));
     int shape[3] = { n_horizons, T_half, N };
     Tensor preds = tensor_new(3, shape);
-    Vec a0 = mat_new(p, 1);
-    Mat P0 = mat_new(p, p);
-    _dynamic_factor_last_update(fit, a0, P0);
+    Vec a0 = _dynamic_factor_last_att(fit);
     for (int t = 0; t < T_half; t++) {
         for (int j = 0; j < p; j++) a_t[j] = t == 0 ? a0.d[j] : AT(paths.att, j, t - 1);
         for (int hi = 0; hi < n_horizons; hi++) {
@@ -958,7 +943,7 @@ static inline Tensor dynamic_factor_forecast_rolling_h(const DynamicFactorFit *f
             }
         }
     }
-    mat_free(a0); mat_free(P0);
+    mat_free(a0);
     kalman_paths_free(&paths);
     _dynamic_factor_context_free(c);
     return preds;
@@ -970,14 +955,11 @@ static inline Tensor dynamic_factor_forecast_rolling_h(const DynamicFactorFit *f
    Returns n x n_periods x N. */
 static inline Tensor dynamic_factor_simulation(const DynamicFactorFit *fit, Tensor M, int n, Rng *rng) {
     DynamicFactorSpec spec = fit->model.spec;
-    int N = spec.max_n, p = spec.p, n_periods = M.shape[0];
-    DynamicFactorContext *c = _dynamic_factor_context_new(spec, M);
-    dynamic_factor_copy(&fit->model, &c->model);
+    int N = spec.max_n, n_periods = M.shape[0];
+    DynamicFactorContext *c = _dynamic_factor_context_of_fit(fit, M);
     KalmanModel model = _dynamic_factor_kalman_model(c, 0);
     KalmanWorkspace *w = kalman_workspace_new(&model);
-    Vec a0 = mat_new(p, 1);
-    Mat P0 = mat_new(p, p);
-    _dynamic_factor_last_update(fit, a0, P0);
+    Vec a0 = _dynamic_factor_last_att(fit);
     int shape[3] = { n, n_periods, N };
     Tensor out = tensor_new(3, shape);
     Vec no_theta = { 0, 0, 0, NULL };
@@ -987,7 +969,7 @@ static inline Tensor dynamic_factor_simulation(const DynamicFactorFit *fit, Tens
             for (int i = 0; i < N; i++) TAT3(out, path, t, i) = AT(y, i, t);
         mat_free(y);
     }
-    mat_free(a0); mat_free(P0);
+    mat_free(a0);
     kalman_workspace_free(w);
     _dynamic_factor_context_free(c);
     return out;
@@ -996,18 +978,13 @@ static inline Tensor dynamic_factor_simulation(const DynamicFactorFit *fit, Tens
 /* One path of simulation driven by given shocks, eta p x n_periods and eps
    N x n_periods, for replaying the source's draws. Returns N x n_periods. */
 static inline Mat dynamic_factor_simulation_from_shocks(const DynamicFactorFit *fit, Tensor M, Mat eta, Mat eps) {
-    DynamicFactorSpec spec = fit->model.spec;
-    int p = spec.p;
-    DynamicFactorContext *c = _dynamic_factor_context_new(spec, M);
-    dynamic_factor_copy(&fit->model, &c->model);
+    DynamicFactorContext *c = _dynamic_factor_context_of_fit(fit, M);
     KalmanModel model = _dynamic_factor_kalman_model(c, 0);
     KalmanWorkspace *w = kalman_workspace_new(&model);
-    Vec a0 = mat_new(p, 1);
-    Mat P0 = mat_new(p, p);
-    _dynamic_factor_last_update(fit, a0, P0);
+    Vec a0 = _dynamic_factor_last_att(fit);
     Vec no_theta = { 0, 0, 0, NULL };
     Mat y = kalman_simulate_from_shocks(w, no_theta, a0, eta, eps);
-    mat_free(a0); mat_free(P0);
+    mat_free(a0);
     kalman_workspace_free(w);
     _dynamic_factor_context_free(c);
     return y;

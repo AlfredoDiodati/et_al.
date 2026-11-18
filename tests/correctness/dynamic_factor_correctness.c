@@ -351,13 +351,13 @@ static void test_dynamic_factor_cache(void) {
 
     /* a converged fit comes back from the file as it was, with no new run */
     DynamicFactorFit first = dynamic_factor_fit_cached(data.y, data.M, &guess, init, options, path, 1);
-    CHECK(first.is_converged && first.nruns == 1 && first.status_is_known, "the first fit did not converge");
+    CHECK(first.is_converged && first.nruns == 1, "the first fit did not converge");
     DynamicFactorFit loaded = dynamic_factor_fit_cached(data.y, data.M, &guess, init, options, path, 0);
     CHECK(theta_equal(loaded.theta, first.theta), "the reloaded theta differs from the fitted one");
     CHECK(loaded.log_likelihood == first.log_likelihood && loaded.gradient_norm == first.gradient_norm,
           "the reloaded diagnostics differ: %.17g against %.17g", loaded.log_likelihood, first.log_likelihood);
     CHECK(loaded.niter == first.niter && loaded.nruns == 1 && loaded.total_niter == first.niter
-          && loaded.status == first.status && loaded.status_is_known, "the reloaded chain differs or a run was added");
+          && loaded.status == first.status, "the reloaded chain differs or a run was added");
     double gap = 0;
     int T = first.paths.n_periods;
     for (int t = 0; t < T; t++)
@@ -387,6 +387,19 @@ static void test_dynamic_factor_cache(void) {
     fwrite(buffer, 1, length / 2, out);
     fclose(in); fclose(out);
     CHECK(!dynamic_factor_load_fit(&other, data.y, data.M, init, DYNAMIC_FACTOR_FILTERED, truncated), "loaded a truncated file");
+    /* the same file with its run_status field renamed, so the reasons the
+       runs stopped are missing */
+    buffer[length < sizeof buffer ? length : sizeof buffer - 1] = 0;
+    char *field = strstr(buffer, "\"run_status\"");
+    CHECK(field != NULL, "the cache file has no run_status field");
+    if (field) {
+        field[1] = 'x';
+        out = fopen(truncated, "w");
+        fwrite(buffer, 1, length, out);
+        fclose(out);
+        CHECK(!dynamic_factor_load_fit(&other, data.y, data.M, init, DYNAMIC_FACTOR_FILTERED, truncated),
+              "loaded a file without run_status");
+    }
     double untouched = 0;
     for (int i = 0; i < other.theta.r; i++) untouched = fmax(untouched, fabs(other.theta.d[i]));
     CHECK(untouched == 0 && other.paths.n_periods == 0, "a refused load wrote into the result");
@@ -399,7 +412,7 @@ static void test_dynamic_factor_cache(void) {
     CHECK(!short_run.is_converged && short_run.status == LBFGS_MAX_ITERATIONS && short_run.niter == 3,
           "the capped run: status %d, %d iterations", short_run.status, short_run.niter);
     DynamicFactorFit resumed = dynamic_factor_fit_cached(data.y, data.M, &guess, init, options, path, 0);
-    CHECK(resumed.nruns == 2 && resumed.total_niter == 3 + resumed.niter && resumed.status_is_known
+    CHECK(resumed.nruns == 2 && resumed.total_niter == 3 + resumed.niter
           && resumed.run_status[0] == LBFGS_MAX_ITERATIONS && resumed.run_status[1] == resumed.status,
           "the resumed chain: %d runs, %d total iterations", resumed.nruns, resumed.total_niter);
     CHECK(resumed.is_converged && relative_gap(resumed.log_likelihood, first.log_likelihood) < 1e-9,

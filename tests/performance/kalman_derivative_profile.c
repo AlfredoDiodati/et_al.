@@ -365,7 +365,7 @@ static void evaluate(KalmanWorkspace *w, Mat y, KalmanInit init, int with_tangen
             replay_update(w, s, t, x, pieces);
             alternatives_update(w, s, t, x, alternative_ticks, alternative_gaps);
         }
-        _kalman_rqr(w, s);
+        _kalman_rqr(s, w->m, w->r, w->RQ, w->RQR);
         if (replay) {
             replay_predict(w, s, x, pieces);
             alternatives_predict(w, s, x, alternative_ticks, alternative_gaps);
@@ -431,7 +431,7 @@ static void profile_shape(FILE *out, int n_periods, int N, int p, double ns) {
     KalmanModel model = _dynamic_factor_kalman_model(c, 1);
     KalmanWorkspace *w = kalman_workspace_new(&model);
     model.link(theta, c);
-    kalman_prepare_observations(w, y);
+    _kalman_prepare_observations(w, y);
     Scratch x = scratch_new(k, p);
 
     /* production with and without the gradient, then the replay */
