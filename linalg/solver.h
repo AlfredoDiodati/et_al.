@@ -124,6 +124,21 @@ static inline Vec vec_band_chol_solve(Mat factor, Vec b) {
     return mat_band_chol_solve(factor, b);
 }
 
+/* L^-1 b for the factor L that mat_band_chol returned for a, the forward half
+   of vec_band_chol_solve: the quadratic form of a Gaussian likelihood with
+   covariance a is b'a^-1 b = |L^-1 b|^2, which this gives as a sum of
+   squares, at half the cost of the full solve and without the cancellation
+   of the dot product b'(a^-1 b), whose terms take both signs. b is a column,
+   which may be a strided view; the result is an n x 1 owner, and neither
+   argument is modified. */
+static inline Vec vec_band_chol_forward_solve(Mat factor, Vec b) {
+    assert(factor.d && factor.r >= 1 && factor.c >= 1);
+    assert(b.r == factor.r && b.c == 1);
+    Vec x = mat_copy(b);
+    _pbtrs_forward(factor.d, factor.r, factor.c - 1, factor.stride, x.d);
+    return x;
+}
+
 /* Solve a*x = b for x via symmetric indefinite factorization
    (Bunch-Kaufman), for symmetric a that is not necessarily positive-definite -
    e.g. a sample covariance matrix perturbed to indefiniteness by

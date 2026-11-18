@@ -19,7 +19,23 @@ Subjects:
   and one from two of the value recursions; in the Woodbury value on reduced
   observations, the residual e dropped and the stored Z_o'Z_o left unused; in
   the derivatives batched over the coordinates, the transpose in T dP T'
-  skipped and the last coordinate left out of the stacked dP S P product.
+  skipped and the last coordinate left out of the stacked dP S P product;
+  in the exact initial filter, a term dropped from the update of P_* and of
+  its derivative, P_infinity left unreduced by an entry or unpredicted, the
+  diffuse likelihood term taken from F_* instead of F_infinity, the
+  diffuse periods never ending or their count starting one short of the
+  rank of P_infinity, a term dropped from the derivatives of the likelihood
+  and of P_infinity, and the Woodbury method's reduced observations read in
+  a diffuse period;
+- filter/hp.h's causal filter, against
+  tests/correctness/hp_filter_causal_correctness.c at float64: lambda in place
+  of 1 / lambda as the trend's variance, one of the two state elements not
+  diffuse, and the trend read from the wrong state element;
+- hp_estimate and hp_log_likelihood, against
+  tests/correctness/hp_filter_lambda_estimation.c: a wrong second
+  difference, a wrong diagonal in M, sigma2_c divided by n instead of n - 2,
+  log det M dropped, and the full banded solve in place of its forward half,
+  which tests/correctness/band_chol_correctness.c checks too.
 
 One mutation is expected to go undetected: removing the finiteness test on the
 parabola in brent_bounded. With GCC on x86-64 the comparisons after it already
@@ -43,8 +59,10 @@ PYTHON = os.environ.get("PYTHON", sys.executable)
 
 # Copied into each mutated tree: what the tests below include, and the
 # Makefile that builds them.
-TREE = ["linalg", "random", "solver", "filter", "ss", "json.h", "tests/check.h", "Makefile",
+TREE = ["linalg", "random", "solver", "filter", "ss", "frame", "json.h", "tests/check.h", "Makefile",
         "tests/correctness/kalman_correctness.c",
+        "tests/correctness/hp_filter_causal_correctness.c",
+        "tests/correctness/hp_filter_lambda_estimation.c",
         "tests/correctness/band_chol_correctness.c",
         "tests/correctness/brent_correctness.c",
         "tests/correctness/brent_reference_agreement.c",
@@ -54,6 +72,8 @@ BAND_CHOL = [("band_chol_correctness", "1"), ("band_chol_correctness", "")]
 BRENT = [("brent_correctness", "1")]
 BRENT_PATH = [("brent_reference_agreement", None)]
 KALMAN = [("kalman_correctness", "1")]
+HP_CAUSAL = [("hp_filter_causal_correctness", "1")]
+HP_ESTIMATE = [("hp_filter_lambda_estimation", "1")]
 
 # name, file, original text, faulty text, checks, expected to be caught
 MUTATIONS = [
@@ -157,6 +177,50 @@ MUTATIONS = [
      "+ ds->T.d[(size_t)b * dT_diagonal_step] * w->TP[(size_t)a * m + b];", ";", KALMAN, True),
     ("diagonal dT derivative: dT a_{t|t} dropped", "filter/kalman.h",
      "da[a] += ds->T.d[(size_t)a * dT_diagonal_step] * w->att[a];", "(void)0;", KALMAN, True),
+    ("diffuse update: K0 K0' F_* dropped from P_*", "filter/kalman.h",
+     "P[(size_t)b * m + c] += K0_b * K0_c * Fstar - K0_b * Mstar[c] - Mstar[b] * K0_c;",
+     "P[(size_t)b * m + c] += -K0_b * Mstar[c] - Mstar[b] * K0_c;", KALMAN, True),
+    ("diffuse update: P_infinity not reduced by the entry", "filter/kalman.h",
+     "Pinf[(size_t)b * m + c] -= K0_b * Minf[c];", "(void)0;", KALMAN, True),
+    ("diffuse likelihood: log F_* in place of log F_infinity", "filter/kalman.h",
+     "logdet += log((double)Finf);", "logdet += log((double)Fstar);", KALMAN, True),
+    ("diffuse periods never end", "filter/kalman.h",
+     "            if (paths) paths->diffuse_periods = t + 1;\n            diffuse = diffuse_remaining > 0;",
+     "            if (paths) paths->diffuse_periods = t + 1;\n            diffuse = 1;", KALMAN, True),
+    ("diffuse count starts one short of the rank", "filter/kalman.h",
+     "diffuse_remaining = w->Pinf_rank;", "diffuse_remaining = w->Pinf_rank - 1;", KALMAN, True),
+    ("diffuse prediction: P_infinity not predicted", "filter/kalman.h",
+     "            _kalman_predict_diffuse(w, s, with_tangents);\n", "", KALMAN, True),
+    ("diffuse derivative: d log F_infinity dropped", "filter/kalman.h",
+     "w->dl[p] += -0.5 * (double)dFinf * F_reciprocal;", "(void)0;", KALMAN, True),
+    ("diffuse derivative: K0 K0' dF_* dropped from dP_*", "filter/kalman.h",
+     "(dK0_b * K0_c + K0_b * dK0_c) * Fstar + K0_b * K0_c * dFstar", "(dK0_b * K0_c + K0_b * dK0_c) * Fstar", KALMAN, True),
+    ("diffuse derivative: dP_infinity not reduced by the entry", "filter/kalman.h",
+     "dPinf[(size_t)b * m + c] -= dK0_b * Minf[c] + K0_b * dMinf[c];", "(void)0;", KALMAN, True),
+    ("diffuse prediction derivative: transpose of dT P_infinity T' dropped", "filter/kalman.h",
+     "dPinf[(size_t)a * m + b] += w->mm_b[(size_t)a * m + b] + w->mm_b[(size_t)b * m + a];",
+     "dPinf[(size_t)a * m + b] += w->mm_b[(size_t)a * m + b];", KALMAN, True),
+    ("diffuse period reads the reduced observations", "filter/kalman.h",
+     "int n = use_prepared && !diffuse ? w->prepared_n[t] : _kalman_gather_observed(w, y, t);",
+     "int n = use_prepared ? w->prepared_n[t] : _kalman_gather_observed(w, y, t);", KALMAN, True),
+    ("causal HP: lambda in place of 1 / lambda as the trend's variance", "filter/hp.h",
+     "AT(system.Q, 0, 0) = (mreal)(1 / lambda);", "AT(system.Q, 0, 0) = (mreal)(lambda);", HP_CAUSAL, True),
+    ("causal HP: tau_0 not diffuse", "filter/hp.h",
+     "AT(P1_infinity, 0, 0) = 1; AT(P1_infinity, 1, 1) = 1;", "AT(P1_infinity, 0, 0) = 1;", HP_CAUSAL, True),
+    ("causal HP: trend read from tau_{t-1}", "filter/hp.h",
+     "? AT(paths.att, 0, t) : (mreal)NAN;", "? AT(paths.att, 1, t) : (mreal)NAN;", HP_CAUSAL, True),
+    ("HP estimate: first difference in place of the second", "filter/hp.h",
+     "z.d[t] = y2 - 2 * y1 + y0;", "z.d[t] = y2 - y1;", HP_ESTIMATE, True),
+    ("HP estimate: 6 + 2 q on the diagonal of M", "filter/hp.h",
+     "AT(band, j, 0) = (mreal)(6 + q);", "AT(band, j, 0) = (mreal)(6 + 2 * q);", HP_ESTIMATE, True),
+    ("HP estimate: sigma2_c divided by n instead of n - 2", "filter/hp.h",
+     "*sigma2_out = squares / m;", "*sigma2_out = squares / (m + 2);", HP_ESTIMATE, True),
+    ("HP estimate: log det M dropped", "filter/hp.h",
+     "return -0.5 * (m * (log(2 * M_PI * sigma2) + 1) + logdet);",
+     "return -0.5 * (m * (log(2 * M_PI * sigma2) + 1) + 0 * logdet);", HP_ESTIMATE, True),
+    ("forward banded solve runs the full solve", "linalg/solver.h",
+     "_pbtrs_forward(factor.d, factor.r, factor.c - 1, factor.stride, x.d);",
+     "_pbtrs(factor.d, factor.r, factor.c - 1, factor.stride, x.d);", BAND_CHOL + HP_ESTIMATE, True),
 ]
 
 

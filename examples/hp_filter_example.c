@@ -13,7 +13,12 @@
    here, and passes the rest to the trend, so the report compares the
    cycle with h(w) times the known one. Part 2 filters 200 such series in
    one call, each a row of a tensor, and averages away the noise. Part 3
-   filters every numeric column of a frame.
+   filters every numeric column of a frame. Part 4 estimates lambda from the
+   series of part 1 by maximum likelihood, under the model behind the
+   filter, whose cycle is white noise (here it is not, so the estimate is
+   what that model prefers, not a recovery of a true value), and runs the
+   causal filter with it beside the two-sided one: at each t the causal
+   trend uses y_1..y_t only, and at the last quarter the two coincide.
 
    Results go to examples/out/, never to the terminal. */
 
@@ -67,9 +72,20 @@ int main(void) {
         fprintf(out, "   %-7s trend %.3f, cycle %.3f\n", df.columns[j].name, (double)AT(trends.numeric, QUARTERS - 1, j),
                 (double)AT(cycles_df.numeric, QUARTERS - 1, j));
 
+    /* 4. lambda estimated from the series, then the causal filter with it. */
+    HpEstimate estimate = hp_estimate(y, hp_estimate_default_options());
+    fprintf(out, "\n4. lambda estimated from the series of part 1: %.1f (q = %.3g), converged %d, at a bound %d, %d evaluations\n\n",
+            estimate.lambda, estimate.q, estimate.is_converged, estimate.at_bound, estimate.nfev);
+    Mat causal = mat_hp_trend_causal(y, estimate.lambda, 0), two_sided = mat_hp_trend(y, estimate.lambda, 0);
+    fprintf(out, "   t        y   causal trend   two-sided trend\n");
+    for (int t = 0; t < QUARTERS; t += 20)
+        fprintf(out, "%4d %8.3f %14.3f %17.3f\n", t, (double)y.d[t], (double)causal.d[t], (double)two_sided.d[t]);
+    fprintf(out, "%4d %8.3f %14.3f %17.3f   the last quarter, where both use the same data\n", QUARTERS - 1,
+            (double)y.d[QUARTERS - 1], (double)causal.d[QUARTERS - 1], (double)two_sided.d[QUARTERS - 1]);
+
     fclose(out);
     df_free(&df); df_free(&trends); df_free(&cycles_df);
     tensor_free(many); tensor_free(cycles);
-    mat_free(y); mat_free(trend); mat_free(cycle); mat_free(other);
+    mat_free(y); mat_free(trend); mat_free(cycle); mat_free(other); mat_free(causal); mat_free(two_sided);
     return 0;
 }

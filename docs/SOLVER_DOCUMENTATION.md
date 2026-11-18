@@ -22,6 +22,7 @@ Vec vec_band_solve(Mat band, int kl, int ku, Vec b)
 Mat mat_band_solve(Mat band, int kl, int ku, Mat b)
 Vec vec_band_chol_solve(Mat factor, Vec b)
 Mat mat_band_chol_solve(Mat factor, Mat b)
+Vec vec_band_chol_forward_solve(Mat factor, Vec b)
 Mat mat_lstsq(Mat a, Mat b, int *status)
 Mat mat_lstsq_rd(Mat a, Mat b, int *rank_out)
 ```
@@ -58,6 +59,10 @@ Solve `a*X = B` for symmetric positive-definite banded `a`, given the factor `ma
 One column goes through `linalg/factor.h`'s `_pbtrs`, two sweeps over the band; several go through `_pbtrs_rhs`, which applies each step to a whole row of `b`, so many right-hand sides cost one pass over the band. The two agree to rounding, as `mat_band_solve`'s two paths do, and a NaN in one column reaches no other. The single-column sweep is written out rather than issued as two `?tbsv` calls, which read the same storage: `make bench-band_chol_solve_threshold` found no bandwidth on one side of which `?tbsv` always wins (see `docs/FACTOR_DOCUMENTATION.md`).
 
 Factor and solve together are `scipy.linalg.solveh_banded`: `mat_band_chol` followed by this.
+
+### `vec_band_chol_forward_solve`
+
+`L^-1 b` for the factor `L` that `mat_band_chol` returned for `a`: the forward half of `vec_band_chol_solve`, `linalg/factor.h`'s `_pbtrs_forward`, which `_pbtrs` itself runs first. A Gaussian likelihood with banded covariance `a` needs `b'a^-1 b`, which is `|L^-1 b|^2`: a sum of squares at half the cost of the full solve, without the cancellation of `b'(a^-1 b)`, whose terms take both signs. `b` is one column and may be a strided view; the result is an `n x 1` owner, and neither argument is modified. `filter/hp.h`'s likelihood of `q` is the first caller. `tests/correctness/band_chol_correctness.c` checks `L h = b` row by row against `|L| |h|` and `|h|^2` against `b'a^-1 b` from its long double solve, in every factorization it checks.
 
 ### `vec_triangular_solve`
 

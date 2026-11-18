@@ -1063,20 +1063,29 @@ static inline int _pbtrf(mreal *ab, int n, int kd, int ldab) {
    to kd = 64, by up to 1.33x; ?tbsv is faster at n = 2000 from kd = 96 to
    400, by 1.03x to 1.07x. No bandwidth separates the two, so there is no
    dispatch. */
+static inline void _pbtrs_forward(const mreal *ab, int n, int kd, int ldab, mreal *b);
+
 static inline void _pbtrs(const mreal *ab, int n, int kd, int ldab, mreal *b) {
-    for (int j = 0; j < n; j++) {
-        const mreal *restrict column = &ab[(size_t)j * ldab];
-        b[j] /= column[0];
-        mreal head = b[j];
-        int below = n - 1 - j < kd ? n - 1 - j : kd;
-        for (int i = 1; i <= below; i++) b[j + i] -= head * column[i];
-    }
+    _pbtrs_forward(ab, n, kd, ldab, b);
     for (int j = n - 1; j >= 0; j--) {
         const mreal *restrict column = &ab[(size_t)j * ldab];
         int below = n - 1 - j < kd ? n - 1 - j : kd;
         mreal total = b[j];
         for (int i = 1; i <= below; i++) total -= column[i] * b[j + i];
         b[j] = total / column[0];
+    }
+}
+
+/* The forward sweep alone, L y = b, b overwritten with y: what a Gaussian
+   likelihood with a banded covariance a = L L' needs for its quadratic form,
+   b'a^-1 b = |L^-1 b|^2. */
+static inline void _pbtrs_forward(const mreal *ab, int n, int kd, int ldab, mreal *b) {
+    for (int j = 0; j < n; j++) {
+        const mreal *restrict column = &ab[(size_t)j * ldab];
+        b[j] /= column[0];
+        mreal head = b[j];
+        int below = n - 1 - j < kd ? n - 1 - j : kd;
+        for (int i = 1; i <= below; i++) b[j + i] -= head * column[i];
     }
 }
 

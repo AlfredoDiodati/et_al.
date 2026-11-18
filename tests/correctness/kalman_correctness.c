@@ -236,32 +236,34 @@ static Mat simulate_observations(Rng *rng, LinearSystem *s, double missing, int 
     return y;
 }
 
-/* The reference filter. Everything in double, F_t inverted in full. */
+/* The reference filter. Everything in long double, F_t inverted in full. */
+typedef long double wide;
+
 typedef struct {
     double log_likelihood;
     double *logdetF, *quad, *att, *Ptt;
 } Reference;
 
-static void invert(double *a, int n, double *inverse, double *logdet) {
-    double *work = (double*)malloc((size_t)n * 2 * n * sizeof(double));
+static void invert(wide *a, int n, wide *inverse, wide *logdet) {
+    wide *work = (wide*)malloc((size_t)n * 2 * n * sizeof(wide));
     for (int i = 0; i < n; i++)
         for (int j = 0; j < 2 * n; j++) work[i * 2 * n + j] = j < n ? a[i * n + j] : (j - n == i);
     *logdet = 0;
     for (int col = 0; col < n; col++) {
         int pivot = col;
         for (int i = col + 1; i < n; i++)
-            if (fabs(work[i * 2 * n + col]) > fabs(work[pivot * 2 * n + col])) pivot = i;
+            if (fabsl(work[i * 2 * n + col]) > fabsl(work[pivot * 2 * n + col])) pivot = i;
         for (int j = 0; j < 2 * n; j++) {
-            double tmp = work[col * 2 * n + j];
+            wide tmp = work[col * 2 * n + j];
             work[col * 2 * n + j] = work[pivot * 2 * n + j];
             work[pivot * 2 * n + j] = tmp;
         }
-        double diagonal = work[col * 2 * n + col];
-        *logdet += log(fabs(diagonal));
+        wide diagonal = work[col * 2 * n + col];
+        *logdet += logl(fabsl(diagonal));
         for (int j = 0; j < 2 * n; j++) work[col * 2 * n + j] /= diagonal;
         for (int i = 0; i < n; i++) {
             if (i == col) continue;
-            double factor = work[i * 2 * n + col];
+            wide factor = work[i * 2 * n + col];
             for (int j = 0; j < 2 * n; j++) work[i * 2 * n + j] -= factor * work[col * 2 * n + j];
         }
     }
@@ -277,15 +279,15 @@ static Reference reference_filter(LinearSystem *s, Mat y, Mat a1, Mat P1) {
     out.quad = (double*)calloc((size_t)n_periods, sizeof(double));
     out.att = (double*)calloc((size_t)n_periods * m, sizeof(double));
     out.Ptt = (double*)calloc((size_t)n_periods * m * m, sizeof(double));
-    double *a = (double*)calloc((size_t)m, sizeof(double)), *P = (double*)calloc((size_t)m * m, sizeof(double));
-    double *at = (double*)calloc((size_t)m, sizeof(double)), *Pt = (double*)calloc((size_t)m * m, sizeof(double));
-    double *F = (double*)calloc((size_t)N * N, sizeof(double)), *Finv = (double*)calloc((size_t)N * N, sizeof(double));
-    double *K = (double*)calloc((size_t)m * N, sizeof(double)), *v = (double*)calloc((size_t)N, sizeof(double));
-    double *H = (double*)calloc((size_t)N * N, sizeof(double)), *RQR = (double*)calloc((size_t)m * m, sizeof(double));
+    wide *a = (wide*)calloc((size_t)m, sizeof(wide)), *P = (wide*)calloc((size_t)m * m, sizeof(wide));
+    wide *at = (wide*)calloc((size_t)m, sizeof(wide)), *Pt = (wide*)calloc((size_t)m * m, sizeof(wide));
+    wide *F = (wide*)calloc((size_t)N * N, sizeof(wide)), *Finv = (wide*)calloc((size_t)N * N, sizeof(wide));
+    wide *K = (wide*)calloc((size_t)m * N, sizeof(wide)), *v = (wide*)calloc((size_t)N, sizeof(wide));
+    wide *H = (wide*)calloc((size_t)N * N, sizeof(wide)), *RQR = (wide*)calloc((size_t)m * m, sizeof(wide));
     int *o = (int*)calloc((size_t)N, sizeof(int));
     for (int i = 0; i < m; i++) a[i] = AT(a1, i, 0);
     for (int i = 0; i < m * m; i++) P[i] = P1.d[(i / m) * P1.stride + i % m];
-    double total = 0;
+    wide total = 0;
     KalmanSystem sys;
     for (int t = 0; t < n_periods; t++) {
         memset(&sys, 0, sizeof(sys));
@@ -299,64 +301,64 @@ static Reference reference_filter(LinearSystem *s, Mat y, Mat a1, Mat P1) {
         int n = 0;
         for (int i = 0; i < N; i++) if (!MISNAN(AT(y, i, t))) o[n++] = i;
         for (int i = 0; i < n; i++) {
-            double value = AT(y, o[i], t) - AT(sys.d, o[i], 0);
+            wide value = AT(y, o[i], t) - AT(sys.d, o[i], 0);
             for (int j = 0; j < m; j++) value -= AT(sys.Z, o[i], j) * a[j];
             v[i] = value;
         }
         for (int i = 0; i < n; i++)
             for (int j = 0; j < n; j++) {
-                double value = H[o[i] * N + o[j]];
+                wide value = H[o[i] * N + o[j]];
                 for (int p = 0; p < m; p++)
                     for (int q = 0; q < m; q++) value += AT(sys.Z, o[i], p) * P[p * m + q] * AT(sys.Z, o[j], q);
                 F[i * n + j] = value;
             }
-        double logdet = 0, quad = 0;
+        wide logdet = 0, quad = 0;
         if (n > 0) invert(F, n, Finv, &logdet);
         for (int i = 0; i < n; i++)
             for (int j = 0; j < n; j++) quad += v[i] * Finv[i * n + j] * v[j];
         for (int p = 0; p < m; p++)
             for (int j = 0; j < n; j++) {
-                double value = 0;
+                wide value = 0;
                 for (int q = 0; q < m; q++)
                     for (int l = 0; l < n; l++) value += P[p * m + q] * AT(sys.Z, o[l], q) * Finv[l * n + j];
                 K[p * n + j] = value;
             }
         for (int p = 0; p < m; p++) {
-            double value = a[p];
+            wide value = a[p];
             for (int j = 0; j < n; j++) value += K[p * n + j] * v[j];
             at[p] = value;
         }
         for (int p = 0; p < m; p++)
             for (int q = 0; q < m; q++) {
-                double value = P[p * m + q];
+                wide value = P[p * m + q];
                 for (int j = 0; j < n; j++)
                     for (int l = 0; l < m; l++) value -= K[p * n + j] * AT(sys.Z, o[j], l) * P[l * m + q];
                 Pt[p * m + q] = value;
             }
-        out.logdetF[t] = logdet;
-        out.quad[t] = quad;
-        memcpy(out.att + (size_t)t * m, at, (size_t)m * sizeof(double));
-        memcpy(out.Ptt + (size_t)t * m * m, Pt, (size_t)m * m * sizeof(double));
+        out.logdetF[t] = (double)logdet;
+        out.quad[t] = (double)quad;
+        for (int p = 0; p < m; p++) out.att[(size_t)t * m + p] = (double)at[p];
+        for (int p = 0; p < m * m; p++) out.Ptt[(size_t)t * m * m + p] = (double)Pt[p];
         total += logdet + quad;
         for (int p = 0; p < m; p++)
             for (int q = 0; q < m; q++) {
-                double value = 0;
+                wide value = 0;
                 for (int u = 0; u < r; u++)
                     for (int w = 0; w < r; w++) {
-                        double Rpu = s->R_is_identity ? (p == u) : AT(sys.R, p, u);
-                        double Rqw = s->R_is_identity ? (q == w) : AT(sys.R, q, w);
+                        wide Rpu = s->R_is_identity ? (p == u) : AT(sys.R, p, u);
+                        wide Rqw = s->R_is_identity ? (q == w) : AT(sys.R, q, w);
                         value += Rpu * AT(sys.Q, u, w) * Rqw;
                     }
                 RQR[p * m + q] = value;
             }
         for (int p = 0; p < m; p++) {
-            double value = AT(sys.c, p, 0);
+            wide value = AT(sys.c, p, 0);
             for (int q = 0; q < m; q++) value += AT(sys.T, p, q) * at[q];
             a[p] = value;
         }
         for (int p = 0; p < m; p++)
             for (int q = 0; q < m; q++) {
-                double value = RQR[p * m + q];
+                wide value = RQR[p * m + q];
                 for (int u = 0; u < m; u++)
                     for (int w = 0; w < m; w++) value += AT(sys.T, p, u) * Pt[u * m + w] * AT(sys.T, q, w);
                 P[p * m + q] = value;
@@ -379,7 +381,7 @@ static KalmanInit diffuse_init(int m, Mat *a1, Mat *P1, double variance) {
     *a1 = mat_new(m, 1);
     *P1 = mat_new(m, m);
     for (int i = 0; i < m; i++) AT(*P1, i, i) = (mreal)variance;
-    KalmanInit init = { *a1, *P1 };
+    KalmanInit init = { .a1 = *a1, .P1 = *P1 };
     return init;
 }
 
@@ -581,9 +583,13 @@ static void test_against_reference(void) {
     }
 }
 
+static Mat low_rank_spd(Rng *rng, int m, int rank);
+
 /* H = sigma2 I through all three shapes of H: one likelihood, one gradient,
-   the same paths. */
-static void test_methods_agree(void) {
+   the same paths; from an ordinary start, and with diffuse_start from a
+   P_infinity of rank 2, which all three run through the same exact initial
+   update and then hand to their own. */
+static void test_methods_agree(int diffuse_start) {
     Rng rng = rng_new(77, 2);
     int N = 12, m = 3, n_periods = 40;
     LinearSystem *s[3];
@@ -627,6 +633,9 @@ static void test_methods_agree(void) {
     Mat y = simulate_observations(&rng, s[0], 0.2, 1);
     Mat a1, P1;
     KalmanInit init = diffuse_init(m, &a1, &P1, 5);
+    Rng diffuse_rng = rng_new(77, 3);
+    Mat Pinf = diffuse_start ? low_rank_spd(&diffuse_rng, m, 2) : (Mat){ 0 };
+    init.P1_infinity = Pinf;
     double value[3];
     mreal gradients[3][7];
     KalmanPaths paths[3];
@@ -664,8 +673,12 @@ static void test_methods_agree(void) {
     }
     CHECK(paths[KALMAN_DENSE].F.d && !paths[KALMAN_WOODBURY].F.d && !paths[KALMAN_UNIVARIATE].K.d,
           "F and K are stored by the dense method only");
+    for (int method = 0; method < 3; method++)
+        CHECK(paths[method].diffuse_periods == (diffuse_start ? paths[0].diffuse_periods : 0) && (!diffuse_start || paths[0].diffuse_periods > 0),
+              "%s: %d diffuse periods, dense %d", kalman_method_name((KalmanMethod)method),
+              paths[method].diffuse_periods, paths[0].diffuse_periods);
     for (int method = 0; method < 3; method++) { kalman_paths_free(&paths[method]); linear_system_free(s[method]); }
-    mat_free(y); mat_free(a1); mat_free(P1);
+    mat_free(y); mat_free(a1); mat_free(P1); mat_free(Pinf);
 }
 
 static void test_strided_views(void) {
@@ -724,7 +737,7 @@ static void test_adversarial(void) {
         /* P_1 = 0: the first state is known */
         Mat y = simulate_observations(&rng, s, 0.1, 0);
         Mat zero_P = mat_new(2, 2);
-        KalmanInit known = { a1, zero_P };
+        KalmanInit known = { .a1 = a1, .P1 = zero_P };
         Reference exact = reference_filter(s, y, a1, zero_P);
         value = kalman_log_likelihood(w, theta, y, known, none);
         CHECK(relative_gap(value, exact.log_likelihood) < 1e-10, "%s: P_1 = 0 gives %.15g, reference %.15g", name, value, exact.log_likelihood);
@@ -945,6 +958,10 @@ static void test_fixed_observation(void) {
             for (int i = 1; i < N; i++) AT(y, i, t) = nan;
         Mat a1, P1;
         KalmanInit init = diffuse_init(m, &a1, &P1, 2);
+        /* every other system starts diffuse, and its diffuse periods read y
+           whatever observation_is_fixed says */
+        Mat Pinf = sweep % 2 ? low_rank_spd(&rng, m, 1 + (int)rng_below(&rng, (uint64_t)m)) : (Mat){ 0 };
+        init.P1_infinity = Pinf;
         KalmanModel model = linear_model(s), fixed = model;
         fixed.observation_is_fixed = 1;
         KalmanWorkspace *w_read = kalman_workspace_new(&model), *w_fixed = kalman_workspace_new(&fixed);
@@ -964,7 +981,7 @@ static void test_fixed_observation(void) {
         }
         kalman_workspace_free(w_read); kalman_workspace_free(w_fixed);
         mat_free(theta); mat_free(g_read); mat_free(g_fixed); mat_free(y); mat_free(other);
-        mat_free(a1); mat_free(P1);
+        mat_free(a1); mat_free(P1); mat_free(Pinf);
         linear_system_free(s);
     }
     CHECK(worst_value < 1e-12, "fixed observation: likelihoods differ by %.3g relative", worst_value);
@@ -987,13 +1004,334 @@ static void test_fixed_observation(void) {
     linear_system_free(s);
 }
 
+/* The exact initial filter on a local level model worked by hand: H = 2,
+   Q = 0.5, a_1 = 0, P_* = 0, P_infinity = 1, y = (1, 3, -1). The first entry
+   resolves the diffuse state: F_inf = 1, att = y_1 = 1, P_* = H = 2, and the
+   period contributes log F_inf = 0. From there the ordinary filter from
+   a_2 = 1, P_2 = 2.5: F = 4.5, v = 2, att = 19/9, Ptt = 10/9, then
+   P_3 = 29/18, F = 65/18, v = -28/9. With y_1 missing the first period is a
+   pure prediction, P_* = 0.5 and P_infinity still 1, and the second period
+   resolves it with the same att = y_2 and P_* = H. With H = -3 the diffuse
+   entry is accepted, since F_* need not be positive there, and the next one,
+   F = 0.5 - 3 + 0.5, fails. */
+static void test_diffuse_local_level(void) {
+    double expected = -0.5 * (log(4.5) + 4.0 / 4.5 + log(65.0 / 18.0) + (28.0 / 9.0) * (28.0 / 9.0) / (65.0 / 18.0));
+    for (int method = 0; method < 3; method++) {
+        Rng rng = rng_new(1, 0);
+        LinearSystem *s = linear_system_new(&rng, (KalmanMethod)method, 1, 1, 1, 3, 1);
+        for (int t = 0; t < 3; t++) { s->Z[t] = 1; s->T[t] = 1; s->H[t] = 2; s->Q[t] = 0.5; s->d[t] = 0; s->c[t] = 0; }
+        for (int i = 0; i < s->k; i++) s->theta[i] = 0;
+        Mat y = mat_new(1, 3);
+        y.d[0] = 1; y.d[1] = 3; y.d[2] = -1;
+        Mat a1 = mat_new(1, 1), P1 = mat_new(1, 1), Pinf = mat_new(1, 1);
+        a1.d[0] = 0; P1.d[0] = 0; Pinf.d[0] = 1;
+        KalmanInit init = { .a1 = a1, .P1 = P1, .P1_infinity = Pinf };
+        KalmanModel model = linear_model(s);
+        KalmanWorkspace *w = kalman_workspace_new(&model);
+        Vec no = { 0, 0, 0, NULL };
+        const char *name = kalman_method_name((KalmanMethod)method);
+
+        KalmanPaths paths = kalman_filter(w, no, y, init);
+        CHECK(paths.diffuse_periods == 1, "%s: diffuse local level ran %d diffuse periods", name, paths.diffuse_periods);
+        CHECK_NEAR(paths.log_likelihood, expected, 1e-13, "diffuse local level log-likelihood");
+        CHECK_NEAR(AT(paths.att, 0, 0), 1.0, 1e-14, "diffuse local level att at t = 1");
+        CHECK_NEAR(TAT3(paths.Ptt, 0, 0, 0), 2.0, 1e-14, "diffuse local level P_* at t = 1");
+        CHECK_NEAR(paths.logdetF.d[0], 0.0, 1e-14, "diffuse local level log F_inf at t = 1");
+        CHECK_NEAR(paths.quad.d[0], 0.0, 0, "diffuse local level quadratic form at t = 1");
+        CHECK_NEAR(AT(paths.att, 0, 1), 19.0 / 9.0, 1e-13, "diffuse local level att at t = 2");
+        CHECK_NEAR(TAT3(paths.Ptt, 0 + 1, 0, 0), 10.0 / 9.0, 1e-13, "diffuse local level Ptt at t = 2");
+        CHECK_NEAR(TAT3(paths.P, 2, 0, 0), 29.0 / 18.0, 1e-13, "diffuse local level P at t = 3");
+        CHECK_NEAR(AT(paths.v, 0, 2), -28.0 / 9.0, 1e-13, "diffuse local level v at t = 3");
+        kalman_paths_free(&paths);
+
+        y.d[0] = check_non_finite(0);
+        y.d[1] = 1;
+        paths = kalman_filter(w, no, y, init);
+        CHECK(paths.diffuse_periods == 2, "%s: diffuse start after a missing period ran %d diffuse periods",
+              name, paths.diffuse_periods);
+        CHECK_NEAR(TAT3(paths.P, 1, 0, 0), 0.5, 1e-14, "P_* after a missing diffuse period");
+        CHECK_NEAR(AT(paths.att, 0, 1), 1.0, 1e-14, "att resolving the diffuse state at t = 2");
+        CHECK_NEAR(TAT3(paths.Ptt, 1, 0, 0), 2.0, 1e-14, "P_* resolving the diffuse state at t = 2");
+        kalman_paths_free(&paths);
+
+        y.d[0] = 1;
+        for (int t = 0; t < 3; t++) s->H[t] = -3;
+        mreal value = kalman_log_likelihood(w, no, y, init, no);
+        CHECK(MISINF(value) && value < 0, "%s: an innovation variance that is not positive after the diffuse period gives %g",
+              name, (double)value);
+
+        kalman_workspace_free(w);
+        mat_free(y); mat_free(a1); mat_free(P1); mat_free(Pinf);
+        linear_system_free(s);
+    }
+}
+
+/* The Hodrick-Prescott smooth trend model, state (tau_t, tau_{t-1}),
+   Z = (1, 0), T = ((2, -1), (1, 0)), R = (1, 0)', H = 1, Q = q, with both
+   elements diffuse. Two entries resolve the start, and in closed form they
+   leave a_{2|2} = (y_2, y_1) and P_{2|2} = I, whatever q is: the first takes
+   tau_1 to y_1 and leaves P_* = e_1 e_1', P_inf = e_2 e_2'; the prediction
+   gives P_* = ((4 + q, 2), (2, 1)) and P_inf = e_1 e_1'; the second, with
+   F_* = 5 + q, cancels everything in P_* but the identity. */
+static void test_diffuse_smooth_trend(void) {
+    int n_periods = 12;
+    for (int method = 0; method < 3; method++) {
+        Rng rng = rng_new(3, 0);
+        LinearSystem *s = linear_system_new(&rng, (KalmanMethod)method, 1, 2, 1, n_periods, 0);
+        double q = 1.0 / 1600;
+        for (int t = 0; t < n_periods; t++) {
+            mreal *Z = s->Z + (size_t)t * 2, *T = s->T + (size_t)t * 4, *R = s->R + (size_t)t * 2;
+            Z[0] = 1; Z[1] = 0;
+            T[0] = 2; T[1] = -1; T[2] = 1; T[3] = 0;
+            R[0] = 1; R[1] = 0;
+            s->H[t] = 1; s->Q[t] = (mreal)q; s->d[t] = 0; s->c[(size_t)t * 2] = 0; s->c[(size_t)t * 2 + 1] = 0;
+        }
+        for (int i = 0; i < s->k; i++) s->theta[i] = 0;
+        Mat y = mat_new(1, n_periods);
+        for (int t = 0; t < n_periods; t++) y.d[t] = (mreal)(10 + 0.5 * t + rng_normal(&rng));
+        Mat a1 = mat_new(2, 1), P1 = mat_new(2, 2), Pinf = mat_new(2, 2);
+        memset(a1.d, 0, 2 * sizeof(mreal)); memset(P1.d, 0, 4 * sizeof(mreal)); memset(Pinf.d, 0, 4 * sizeof(mreal));
+        AT(Pinf, 0, 0) = 1; AT(Pinf, 1, 1) = 1;
+        KalmanInit init = { .a1 = a1, .P1 = P1, .P1_infinity = Pinf };
+        KalmanModel model = linear_model(s);
+        KalmanWorkspace *w = kalman_workspace_new(&model);
+        Vec no = { 0, 0, 0, NULL };
+        KalmanPaths paths = kalman_filter(w, no, y, init);
+        const char *name = kalman_method_name((KalmanMethod)method);
+        CHECK(paths.diffuse_periods == 2, "%s: smooth trend ran %d diffuse periods", name, paths.diffuse_periods);
+        CHECK_NEAR(AT(paths.att, 0, 1), y.d[1], 1e-12, "smooth trend a_{2|2} first element");
+        CHECK_NEAR(AT(paths.att, 1, 1), y.d[0], 1e-12, "smooth trend a_{2|2} second element");
+        for (int i = 0; i < 2; i++)
+            for (int j = 0; j < 2; j++) CHECK_NEAR(TAT3(paths.Ptt, 1, i, j), i == j, 1e-12, "smooth trend P_{2|2}");
+        for (int t = 0; t < 2; t++) CHECK_NEAR(paths.logdetF.d[t], 0, 1e-14, "smooth trend log F_inf");
+        kalman_paths_free(&paths);
+        kalman_workspace_free(w);
+        mat_free(y); mat_free(a1); mat_free(P1); mat_free(Pinf);
+        linear_system_free(s);
+    }
+}
+
+/* x at kappa = infinity from x at kappa, 2 kappa and 4 kappa, x = x_inf +
+   c1 / kappa + c2 / kappa^2 + ...: two Richardson steps, the first removing
+   c1, the second c2. */
+static double extrapolate(double at_kappa, double at_2kappa, double at_4kappa) {
+    double first = 2 * at_2kappa - at_kappa, second = 2 * at_4kappa - at_2kappa;
+    return (4 * second - first) / 3;
+}
+
+/* B B' with B m x rank, standard normal. */
+static Mat low_rank_spd(Rng *rng, int m, int rank) {
+    Mat B = mat_new(m, rank), out = mat_new(m, m);
+    fill_normal(rng, B.d, (size_t)m * rank, 1);
+    for (int i = 0; i < m; i++)
+        for (int j = 0; j < m; j++) {
+            double total = 0;
+            for (int l = 0; l < rank; l++) total += (double)AT(B, i, l) * AT(B, j, l);
+            AT(out, i, j) = (mreal)total;
+        }
+    mat_free(B);
+    return out;
+}
+
+/*
+The exact initial filter against the limit it takes: the reference filter with
+P_1 = P_* + kappa P_infinity at kappa, 2 kappa and 4 kappa, every quantity
+extrapolated to kappa = infinity by two Richardson steps, which cancel its
+1/kappa and 1/kappa^2 terms. Each of the q diffuse directions, q the rank of
+P_infinity, adds log kappa to that filter's log det F, so the reference
+log-likelihood is shifted by q/2 log kappa first. The reference runs in long
+double and kappa stays at 1e4 and 1e5, because it loses about kappa^2 times
+its unit roundoff to cancellation, P_t and K_t Z_t P_t both being of size
+kappa and F_t of condition number kappa.
+
+A diffuse direction the data observe only weakly has a small F_inf, and then
+the expansion in 1/kappa converges too slowly for any kappa the reference can
+afford; on a failure the test prints the reference at kappa from 1e3 to 1e8
+beside the exact filter, which shows that case. So the limit is
+taken from kappa = 1e4 and from kappa = 1e5, and the filter is compared only
+where the two agree within 1e-6; elsewhere the reference cannot decide, and
+the system is counted. The test fails when more than a fifth of the systems
+are such; the default run compares 17 of its 18 and STRESS=1 78 of its 90.
+Compared: the log-likelihood, a_{t|t} in every period, and P_{t|t} from the
+first period after the diffuse ones, where it is finite, within 1e-6 relative
+plus twice the gap between the two limits.
+
+Random time-varying systems from linear_system_new, all three methods, the
+dense one with H_t and its direction made diagonal; missing entries; P_* zero
+or positive definite. Every system, compared or not, checks the gradient
+against central differences, the value with and without the gradient, and
+P1_infinity = 0 against no diffuse start, bit for bit.
+*/
+typedef struct { double log_likelihood; double *att, *Ptt; } DiffuseLimit;
+
+static DiffuseLimit diffuse_limit(LinearSystem *s, Mat y, Mat a1, Mat Pstar, Mat Pinf, int rank, double kappa) {
+    int m = s->m, n_periods = y.c;
+    size_t n_att = (size_t)n_periods * m, n_Ptt = n_att * m;
+    DiffuseLimit out;
+    out.att = (double*)calloc(n_att, sizeof(double));
+    out.Ptt = (double*)calloc(n_Ptt, sizeof(double));
+    Reference ref[3];
+    double shifted[3];
+    Mat P1 = mat_new(m, m);
+    for (int k = 0; k < 3; k++) {
+        double at_kappa = kappa * (1 << k);
+        for (int i = 0; i < m * m; i++) P1.d[i] = (mreal)((double)Pstar.d[i] + at_kappa * (double)Pinf.d[i]);
+        ref[k] = reference_filter(s, y, a1, P1);
+        shifted[k] = ref[k].log_likelihood + 0.5 * rank * log(at_kappa);
+    }
+    out.log_likelihood = extrapolate(shifted[0], shifted[1], shifted[2]);
+    for (size_t i = 0; i < n_att; i++) out.att[i] = extrapolate(ref[0].att[i], ref[1].att[i], ref[2].att[i]);
+    for (size_t i = 0; i < n_Ptt; i++) out.Ptt[i] = extrapolate(ref[0].Ptt[i], ref[1].Ptt[i], ref[2].Ptt[i]);
+    for (int k = 0; k < 3; k++) reference_free(&ref[k]);
+    mat_free(P1);
+    return out;
+}
+
+static void diffuse_limit_free(DiffuseLimit *d) { free(d->att); free(d->Ptt); }
+
+/* The largest relative gap between two limits, or, when exact is not NULL,
+   between the filter's paths and the limit b, over the log-likelihood, a_{t|t}
+   in every period and P_{t|t} from the first period after the diffuse ones.
+   paths gives that period in both cases. */
+static double diffuse_limit_gap(const KalmanPaths *paths, const DiffuseLimit *a, const DiffuseLimit *b,
+                                int m, int n_periods, const KalmanPaths *exact) {
+    double worst = relative_gap(exact ? exact->log_likelihood : a->log_likelihood, b->log_likelihood);
+    for (int t = 0; t < n_periods; t++)
+        for (int i = 0; i < m; i++) {
+            size_t at = (size_t)t * m + i;
+            worst = fmax(worst, relative_gap(exact ? AT(exact->att, i, t) : a->att[at], b->att[at]));
+            if (t < paths->diffuse_periods) continue;
+            for (int j = 0; j < m; j++) {
+                size_t pt = ((size_t)t * m + i) * m + j;
+                worst = fmax(worst, relative_gap(exact ? TAT3(exact->Ptt, t, i, j) : a->Ptt[pt], b->Ptt[pt]));
+            }
+        }
+    return worst;
+}
+static void test_diffuse_against_large_kappa(void) {
+    Rng rng = rng_new(2026, 7);
+    int sweeps = stress ? 90 : 18;
+    int compared = 0, unconverged = 0;
+    for (int sweep = 0; sweep < sweeps; sweep++) {
+        KalmanMethod method = (KalmanMethod)(sweep % 3);
+        int N = 1 + (int)rng_below(&rng, 6), m = 1 + (int)rng_below(&rng, 4), r = 1 + (int)rng_below(&rng, 3);
+        int n_periods = 12 + (int)rng_below(&rng, 20);
+        int rank = 1 + (int)rng_below(&rng, (uint64_t)m);
+        LinearSystem *s = linear_system_new(&rng, method, N, m, r, n_periods, (int)rng_below(&rng, 2));
+        if (method == KALMAN_DENSE) {
+            for (int t = 0; t < n_periods; t++) zero_off_diagonal(s->H + (size_t)t * N * N, N);
+            for (int i = 0; i < s->k; i++) zero_off_diagonal(s->dH + (size_t)i * N * N, N);
+        }
+        /* T_t near the identity, a random walk perturbed, as the nonstationary
+           models a diffuse start is for: a T_t of small entries shrinks a
+           diffuse direction before it is observed, and the reference's
+           expansion in 1/kappa then converges too slowly for kappa = 1e5 */
+        for (int t = 0; t < n_periods; t++) {
+            mreal *T = s->T + (size_t)t * m * m;
+            for (int i = 0; i < m * m; i++) T[i] = (mreal)(0.15 * rng_normal(&rng) / sqrt((double)m));
+            for (int i = 0; i < m; i++) T[(size_t)i * m + i] += 1;
+        }
+        Mat y = simulate_observations(&rng, s, 0.1, 0);
+        Mat a1 = mat_new(m, 1), Pstar = mat_new(m, m);
+        for (int i = 0; i < m; i++) AT(a1, i, 0) = (mreal)(0.3 * i);
+        if (rng_below(&rng, 2)) fill_spd(&rng, Pstar.d, m, 0.2);
+        else memset(Pstar.d, 0, (size_t)m * m * sizeof(mreal));
+        Mat Pinf = low_rank_spd(&rng, m, rank);
+        KalmanInit init = { .a1 = a1, .P1 = Pstar, .P1_infinity = Pinf };
+        KalmanModel model = linear_model(s);
+        KalmanWorkspace *w = kalman_workspace_new(&model);
+        Vec theta = theta_of(s);
+        char label[160];
+        snprintf(label, sizeof label, "diffuse %s N=%d m=%d r=%d rank=%d T=%d", kalman_method_name(method),
+                 N, m, s->r, rank, n_periods);
+
+        KalmanPaths paths = kalman_filter(w, theta, y, init);
+        CHECK(paths.failed_at < 0, "%s: failed at %d", label, paths.failed_at);
+        CHECK(paths.diffuse_periods > 0 && paths.diffuse_periods < n_periods, "%s: %d diffuse periods",
+              label, paths.diffuse_periods);
+
+        DiffuseLimit coarse = diffuse_limit(s, y, a1, Pstar, Pinf, rank, 1e4);
+        DiffuseLimit fine = diffuse_limit(s, y, a1, Pstar, Pinf, rank, 1e5);
+        double spread = diffuse_limit_gap(&paths, &coarse, &fine, m, n_periods, NULL);
+        if (spread > 1e-6) {
+            unconverged++;
+        } else {
+            compared++;
+            double gap = diffuse_limit_gap(&paths, &fine, &fine, m, n_periods, &paths);
+            CHECK(gap < 1e-6 + 2 * spread, "%s: log-likelihood, att or Ptt off the large-kappa limit by %.3g relative", label, gap);
+            if (gap >= 1e-6 + 2 * spread) {
+                /* the reference at growing kappa beside the exact filter, so a
+                   failure shows whether the reference is still converging or
+                   has converged somewhere else */
+                Mat P1 = mat_new(m, m);
+                printf("    exact: log-likelihood %.10g, a_{t|t} at the last diffuse period", paths.log_likelihood);
+                for (int i = 0; i < m; i++) printf(" %.8g", AT(paths.att, i, paths.diffuse_periods - 1));
+                printf(", %d diffuse periods\n", paths.diffuse_periods);
+                for (double kappa = 1e3; kappa <= 1e8; kappa *= 10) {
+                    for (int i = 0; i < m * m; i++) P1.d[i] = (mreal)((double)Pstar.d[i] + kappa * (double)Pinf.d[i]);
+                    Reference probe = reference_filter(s, y, a1, P1);
+                    printf("    kappa %.0e: log-likelihood + rank/2 log kappa %.10g, a_{t|t}", kappa,
+                           probe.log_likelihood + 0.5 * rank * log(kappa));
+                    for (int i = 0; i < m; i++) printf(" %.8g", probe.att[(size_t)(paths.diffuse_periods - 1) * m + i]);
+                    printf("\n");
+                    reference_free(&probe);
+                }
+                mat_free(P1);
+            }
+        }
+        diffuse_limit_free(&coarse);
+        diffuse_limit_free(&fine);
+
+        Vec gradient = mat_new(s->k, 1), shifted = mat_copy(theta);
+        Vec none = { 0, 0, 0, NULL };
+        mreal with = kalman_log_likelihood(w, theta, y, init, gradient);
+        mreal without = kalman_log_likelihood(w, theta, y, init, none);
+        CHECK(with == without, "%s: value with gradient %.17g, without %.17g", label, with, without);
+        CHECK(relative_gap(with, paths.log_likelihood) < 1e-12, "%s: kalman_log_likelihood %.15g, kalman_filter %.15g",
+              label, with, paths.log_likelihood);
+        double path_sum = 0;
+        for (int t = 0; t < n_periods; t++) path_sum += paths.logdetF.d[t] + paths.quad.d[t];
+        CHECK(relative_gap(-0.5 * path_sum, paths.log_likelihood) < 1e-12, "%s: paths do not sum to the likelihood", label);
+        for (int i = 0; i < s->k; i++) {
+            double central = linear_central_difference(w, theta, shifted, i, y, init);
+            double scale = fabs(central) > 1 ? fabs(central) : 1;
+            CHECK(fabs(gradient.d[i] - central) < 1e-6 * scale,
+                  "%s: d/dtheta_%d (block bit %u) %.10g against central difference %.10g",
+                  label, i, s->bits[i], gradient.d[i], central);
+        }
+
+        /* P1_infinity = 0 is the ordinary filter from P_*, bit for bit */
+        memset(Pinf.d, 0, (size_t)m * m * sizeof(mreal));
+        KalmanInit plain = { .a1 = a1, .P1 = Pstar };
+        Vec gradient_zero = mat_new(s->k, 1), gradient_plain = mat_new(s->k, 1);
+        mreal zero_value = kalman_log_likelihood(w, theta, y, init, gradient_zero);
+        mreal plain_value = kalman_log_likelihood(w, theta, y, plain, gradient_plain);
+        int same = zero_value == plain_value || (MISINF(zero_value) && MISINF(plain_value));
+        for (int i = 0; i < s->k; i++) same = same && gradient_zero.d[i] == gradient_plain.d[i];
+        CHECK(same, "%s: P1_infinity = 0 differs from no diffuse start", label);
+
+        kalman_paths_free(&paths);
+        kalman_workspace_free(w);
+        mat_free(theta); mat_free(gradient); mat_free(shifted); mat_free(gradient_zero); mat_free(gradient_plain);
+        mat_free(y); mat_free(a1); mat_free(Pstar); mat_free(Pinf);
+        linear_system_free(s);
+    }
+    printf("    %d of %d diffuse systems compared with the large-kappa limit; on %d the reference had not converged\n",
+           compared, sweeps, unconverged);
+    CHECK(5 * unconverged <= sweeps, "the reference had not converged on %d of %d diffuse systems", unconverged, sweeps);
+}
+
 int main(void) {
     stress = getenv("STRESS") != NULL;
     check_banner("kalman_correctness: filter/kalman.h");
     test_local_level();
+    test_diffuse_local_level();
+    test_diffuse_smooth_trend();
+    test_diffuse_against_large_kappa();
     test_against_reference();
     test_diagonal_transition();
-    test_methods_agree();
+    test_methods_agree(0);
+    test_methods_agree(1);
     test_strided_views();
     test_adversarial();
     test_collapse();

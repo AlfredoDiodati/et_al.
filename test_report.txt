@@ -1,10 +1,10 @@
-test run: wo 18 nov 2026 11:26:48 CET
+test run: wo 18 nov 2026 14:34:47 CET
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 102 suites
+make test and check.sh run the same 104 suites
 
 === paths_outside_repo: PASS ===
 no tracked source names a path outside the repository
@@ -21,6 +21,8 @@ make: 'tests/correctness/cumsum_correctness' is up to date.
 make: 'tests/correctness/rolling_mean_correctness' is up to date.
 make: 'tests/correctness/hp_filter_correctness' is up to date.
 make: 'tests/correctness/hp_filter_recovery' is up to date.
+make: 'tests/correctness/hp_filter_causal_correctness' is up to date.
+make: 'tests/correctness/hp_filter_lambda_estimation' is up to date.
 make: 'tests/correctness/kalman_correctness' is up to date.
 make: 'tests/correctness/dynamic_factor_correctness' is up to date.
 make: 'tests/correctness/test_mat_special' is up to date.
@@ -111,9 +113,28 @@ make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
 make: 'tests/integration/pipeline_ownership' is up to date.
 make: 'tests/integration/npz_to_statistics' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
-make: Nothing to be done for 'examples'.
+make: 'tests/integration/header_composition' is up to date.
+make: 'tests/integration/header_composition_f32' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/band_solve_example.c -lm -lopenblas -o examples/band_solve_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/basis_example.c -lm -lopenblas -o examples/basis_example
+In file included from examples/basis_example.c:4:
+./basis/spline.h: In function ‘_periodic_spline.constprop’:
+./basis/spline.h:1143:16: warning: ‘sites’ may be used uninitialized [-Wmaybe-uninitialized]
+ 1143 |     Mat full = _spline_design_raw(knots, nk, sites, n, ord, &none, 1, 0);
+      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+./basis/spline.h:271:19: note: by argument 3 of type ‘const mreal *’ {aka ‘const double *’} to ‘_spline_design_raw.constprop’ declared here
+  271 | static inline Mat _spline_design_raw(const mreal *knots, int nk, const mreal *x, int nx,
+      |                   ^~~~~~~~~~~~~~~~~~
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/dynamic_factor_example.c -lm -lopenblas -o examples/dynamic_factor_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/encoder.c -lm -lopenblas -o examples/encoder
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/lp_example.c -lm -lopenblas -o examples/lp_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/mlp_example.c -lm -lopenblas -o examples/mlp_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/ols_covariance_example.c -lm -lopenblas -o examples/ols_covariance_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_fixed_parameters_example.c -lm -lopenblas -o examples/qvarma_fixed_parameters_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/singular_draws_example.c -lm -lopenblas -o examples/singular_draws_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/unit_root_example.c -lm -lopenblas -o examples/unit_root_example
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/var_example.c -lm -lopenblas -o examples/var_example
 
 === poly_correctness: PASS ===
 basis/poly.h correctness, float32 build
@@ -252,9 +273,32 @@ hp_filter_correctness: all passed
 === hp_filter_recovery: PASS ===
 hp_filter_recovery: all passed, 400 draws, report in out/hp_filter_recovery_report.txt
 
+=== hp_filter_causal_correctness: PASS ===
+hp_filter_causal_correctness: filter/hp.h's causal filter, float32 build
+
+the causal trend at t against the two-sided trend of y_1..y_t at t
+lambda = 0, one and two observations
+the trend at t ignores every observation after t
+matrices, views, tensors and frames against single series
+a NaN is unobserved, an infinity spoils its own series from its period on
+
+PASSED, 0 failures
+
+=== hp_filter_lambda_estimation: PASS ===
+hp_filter_lambda_estimation: hp_estimate and hp_log_likelihood, float64 build
+
+hp_log_likelihood against a dense long double reference and against the Kalman filter
+the estimate is a maximum, and its fields agree with each other
+a y + b + c t
+q = 0 and q = infinity end at the ends of the interval
+recovery, 60 draws of T = 500 per q
+
+PASSED, 0 failures
+
 === kalman_correctness: PASS ===
 kalman_correctness: filter/kalman.h, float64 build
 
+    17 of 18 diffuse systems compared with the large-kappa limit; on 1 the reference had not converged
 
 PASSED, 0 failures
 
@@ -1553,7 +1597,7 @@ impulse responses against the recursions, every shape
 impulse response confidence bands
   601 of 4000 rotations satisfied the sign restrictions
   ok
-averaged score Jacobian against a naive reference
+per-period and averaged score Jacobian against a naive reference
   ok
 impulse response file layout
   ok
@@ -1917,4 +1961,4 @@ PASSED, 0 failures
 
 
 === summary ===
-106 passed, 0 failed
+108 passed, 0 failed

@@ -226,6 +226,30 @@ static void check_factorization(Mat band, double condition, const char *label) {
             CHECK_NEAR(AT(x, i, 0), (double)xr[i], 16 * (kd + 2) * U * condition * (double)xmax, label);
     }
 
+    /* The forward half: L h = b row by row against |L| |h|, and |h|^2 against
+       b'a^-1 b from the long double solve. */
+    Vec half = vec_band_chol_forward_solve(l, b);
+    double worst_half = 0;
+    for (int i = 0; i < n; i++) {
+        long double total = -(long double)AT(b, i, 0), scale = fabsl((long double)AT(b, i, 0));
+        for (int k = (i - kd > 0 ? i - kd : 0); k <= i; k++) {
+            long double term = (long double)AT(l, k, i - k) * AT(half, k, 0);
+            total += term;
+            scale += fabsl(term);
+        }
+        if (scale > 0 && (double)(fabsl(total) / scale) > worst_half) worst_half = (double)(fabsl(total) / scale);
+    }
+    CHECK(worst_half <= 8 * (kd + 2) * U, "%s: forward solve residual %.3g", label, worst_half);
+    if (forward) {
+        long double squares = 0, quadratic = 0;
+        for (int i = 0; i < n; i++) {
+            squares += (long double)AT(half, i, 0) * AT(half, i, 0);
+            quadratic += (long double)AT(b, i, 0) * xr[i];
+        }
+        CHECK_NEAR(squares, quadratic, 16 * (kd + 2) * U * condition * (double)fabsl(quadratic), label);
+    }
+    mat_free(half);
+
     /* Normwise residual against |a| |x| + |b|. */
     double worst_residual = 0;
     for (int i = 0; i < n; i++) {

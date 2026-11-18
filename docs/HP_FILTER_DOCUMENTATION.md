@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy). It transforms a series and estimates nothing, the `statsmodels.tsa.filters` of this library rather than a model.
+**Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy). It transforms a series, the `statsmodels.tsa.filters` of this library rather than a model. The one thing it estimates is the smoothing parameter, through `hp_estimate`, a statistic of the series in the way `inference/`'s tests fit a regression internally, with no fitted model coming back.
 
 The Hodrick-Prescott filter splits a series into a smooth trend and a cycle. The trend `tau` of `y_1..y_T` minimises
 
@@ -28,6 +28,28 @@ A series of one or two observations has no second difference, and its trend is i
 
 **Conditioning.** The condition number of `I + lambda D'D` is at most `1 + 16 lambda`, since the eigenvalues of `D'D` lie in `[0, 16)`. That is about 25600 at `lambda = 1600` and 2.1e6 at 129600. Banded LU is backward stable, so the trend is within about `(1 + 16 lambda) u` times the size of the series, with `u` the unit roundoff. In float64 that is far below anything a caller could notice. In float32 at `lambda = 1600` it is a few parts in ten thousand: a straight line 1..5, which is its own trend in exact arithmetic, came back as 0.99982 to 5.00032. That is the conditioning of the problem, not the method, and a float64 build is the one to use for this filter.
 
+## The model behind the filter
+
+The trend is the posterior mean of `tau` in
+
+    y_t = tau_t + c_t, c_t ~ N(0, sigma2_c),
+    tau_{t+1} = 2 tau_t - tau_{t-1} + eta_t, eta_t ~ N(0, sigma2_eta),
+
+with `c` and `eta` independent and an uninformative start for `tau_1` and `tau_0`, and `lambda = sigma2_c / sigma2_eta = 1 / q`, `q` the signal-to-noise ratio: up to a constant and the factor `1 / sigma2_c`, `-2 log p(tau | y)` is the objective above. Reference: A. C. Harvey and A. Jaeger, "Detrending, Stylized Facts and the Business Cycle", *Journal of Applied Econometrics* 8(3), 1993, 231-247. Two things follow from the model, and both are in this header.
+
+**The causal filter.** The trend at `t` from `y_1..y_t` alone, the filtered rather than the smoothed state, for a cycle that uses no information from after `t`. It equals the last value of the two-sided trend of `y_1..y_t`, at every `t`: with the uninformative start, the log-density of `tau_1..tau_t` given `y_1..y_t` is the HP objective on that sample, and the filter's mean is its minimiser. `mat_hp_trend_causal` runs `filter/kalman.h` on the model with the state `(tau_t, tau_{t-1})`, `Z = (1, 0)`, `T = ((2, -1), (1, 0))`, `R = (1, 0)'`, `H = 1`, `Q = 1 / lambda`, and the state started diffuse, `KalmanInit.P1_infinity = I` (see `docs/KALMAN_DOCUMENTATION.md`'s Diffuse initialisation). The diffuse start is what makes the equality exact: a finite start variance, however large, adds a penalty on `tau_1` and `tau_0` to the objective. The first two trend values are `y_1` and `y_2`. Each series is one filter pass, `O(T)`, through one workspace shared by all of them; unlike the two-sided filter, the series are not solved together.
+
+A NaN in the causal filter is an unobserved entry, not a value that spreads: the trend there is the prediction from the entries before it, the cycle there is NaN, and later entries are filtered as usual. An infinity spoils its series' trend from its period on and leaves the periods before it as they were.
+
+**The estimate of lambda.** By maximum likelihood, rather than by convention. The second differences `z_t = y_{t+2} - 2 y_{t+1} + y_t` are `eta_{t+1}` plus the second difference of `c`, so `z ~ N(0, sigma2_c M)` with `M = D D' + q I`, a band of width 2 with `6 + q` on the diagonal, `-4` and `1` off it. Their likelihood is the model's diffuse likelihood: the likelihood of `y_3..y_T` given `y_1, y_2` from an uninformative start, the transformation to `z` having determinant 1. With `sigma2_c` solved out in closed form,
+
+    sigma2_c = z'M^-1 z / (T - 2),
+    log L(q) = -1/2 ((T - 2)(log(2 pi sigma2_c) + 1) + log det M).
+
+One banded Cholesky factor of `M` (`mat_band_chol`) gives both terms: `log det M` from its diagonal, and `z'M^-1 z` as the sum of squares of the forward half of the solve (`vec_band_chol_forward_solve`), which has no cancellation. `hp_estimate` maximises `log L` over `log q` with `solver/brent.h`'s `brent_bounded`, over `[-20, 10]` by default, `q` from `2e-9` to `2.2e4`. The estimated `lambda = 1 / q` then goes to the two-sided or the causal filter like any other `lambda`. Nothing in the estimate needs the Kalman filter; the test below checks that it is the filter's likelihood all the same.
+
+The maximum found is a local one. `at_bound` says the search ended within `1e-3` of either end of the interval in `log q`, where the likelihood was still rising: `q` is then 0 in the limit, a straight-line trend, or infinite, a trend that is the series.
+
 ## API reference
 
 ```c
@@ -37,9 +59,32 @@ Tensor tensor_hp_trend(Tensor y, double lambda, int axis);   // axis counted fro
 Tensor tensor_hp_cycle(Tensor y, double lambda, int axis);
 DataFrame df_hp_trend(const DataFrame *df, double lambda);    // every numeric column, down the rows
 DataFrame df_hp_cycle(const DataFrame *df, double lambda);
+
+Mat mat_hp_trend_causal(Mat y, double lambda, int axis); // the same shapes, from y_1..y_t at each t
+Mat mat_hp_cycle_causal(Mat y, double lambda, int axis);
+Tensor tensor_hp_trend_causal(Tensor y, double lambda, int axis);
+Tensor tensor_hp_cycle_causal(Tensor y, double lambda, int axis);
+DataFrame df_hp_trend_causal(const DataFrame *df, double lambda);
+DataFrame df_hp_cycle_causal(const DataFrame *df, double lambda);
+
+double hp_log_likelihood(Mat y, double q); // log L(q) above, 2 pi included
+
+typedef struct { double log_q_lower, log_q_upper; double xatol; int max_evaluations; } HpEstimateOptions;
+HpEstimateOptions hp_estimate_default_options(void); // -20, 10, 1e-6, 500
+
+typedef struct {
+    double q, lambda; // lambda = 1 / q
+    double sigma2_cycle, sigma2_trend; // sigma2_c, and sigma2_eta = q sigma2_c
+    double log_likelihood; // log L(q) at the estimate
+    int at_bound;
+    int nfev;
+    int is_converged;
+    BrentStatus status;
+} HpEstimate;
+HpEstimate hp_estimate(Mat y, HpEstimateOptions options);
 ```
 
-Each returns an owner of the input's shape. The input may be a strided `Mat` or a tensor view; a view whose axes cannot be addressed as outer x axis x inner is copied to contiguous first. A frame's string columns, column names and row names are copied unchanged, as `df_cumsum` copies them. `lambda` must be at least 0, which is asserted.
+Each filter returns an owner of the input's shape. The input may be a strided `Mat` or a tensor view; a view whose axes cannot be addressed as outer x axis x inner is copied to contiguous first. A frame's string columns, column names and row names are copied unchanged, as `df_cumsum` copies them. `lambda` must be at least 0, which is asserted; `lambda = 0` returns the series in both filters. `hp_estimate` and `hp_log_likelihood` take one series as one row or one column, which may be a strided view, of at least 4 observations and without NaN or infinity, all asserted; `q` must be positive. `hp_log_likelihood` is minus infinity where `M` is not numerically positive definite, which only rounding at an extreme `q` can cause.
 
 ## Discrepancies with the reference code
 
@@ -124,6 +169,40 @@ All agree within twice the bound above. The largest differences measured in floa
 
 The three implementations differ from one another by the same amount, which grows with `lambda` as the conditioning does. None of them is more accurate than the others.
 
+`tests/correctness/hp_filter_causal_correctness.c`, in `make test` in both precisions, checks the causal filter against its definition:
+
+- at every `t`, the causal trend against the last value of the two-sided trend of `y_1..y_t`: by a dense long double reference written in the test, `(I + lambda D'D) tau = y` solved by Gaussian elimination, for random walks of 3, 17 and 60 observations, and by `mat_hp_trend` for 200 (600 under `STRESS=1`), at `lambda` of 6.25, 1600 and 129600, within twice the bound above;
+- `lambda = 0` returning the series bit for bit, and series of one and two observations their own trend;
+- the trend at `t` unchanged, bit for bit, when every observation after `t` changes, and changed at every period after it;
+- matrices along both axes, a strided view, a tensor on every axis, a permuted tensor view and a frame, against the same series one at a time, bit for bit, and the cycle `y` less the trend;
+- a NaN: the trend before it unchanged, finite everywhere, the cycle NaN at that period only, the other series unchanged; an infinity: its series' trend unchanged before it and not finite from it on.
+
+`tests/correctness/hp_filter_lambda_estimation.c`, in `make test` at float64, checks the estimate:
+
+- `hp_log_likelihood` against the same function computed densely in long double, `M` formed in full and factored, at `q` of `1e-6`, `6.25e-4`, `1e-2`, 1 and 100 on random walks of 4, 40 and 203 observations, within `1e-10` relative;
+- the same against `filter/kalman.h`'s diffuse likelihood of the model, `sigma2_c` solved out of the filter's paths, within `1e-9` relative: the closed form and the Kalman filter compute one function;
+- the estimate a maximum on six series, random walks and series simulated from the model: its log-likelihood `hp_log_likelihood`'s there and lower at `q exp(+-1e-2)`, `sigma2_cycle` the filter's at that `q`;
+- `a y + b + c t` leaving `log q-hat` unchanged within `1e-5` and moving the log-likelihood by `-(T - 2) log |a|`;
+- a straight line plus white noise ending at the lower end of the interval and a twice-summed white noise at the upper end, both with `at_bound` set;
+- recovery on series simulated from the model, `sigma2_c = 1`, `T = 500`, 60 draws per `q` (300 under `STRESS=1`) from `rng_new(2026, 1000 k + r)`, `k` 1 for `q = 0.05` and 2 for `q = 1`: the mean of `log q-hat` within 4 standard errors of `log q`, every search converged and none at a bound. Written to `out/hp_filter_lambda_estimation_report.txt`; the default run gave
+
+| `q` | `log q` | mean `log q-hat` | sd | standard error of the mean |
+|---|---|---|---|---|
+| 0.05 | -2.99573 | -3.05278 | 0.21674 | 0.02798 |
+| 1 | 0 | -0.00542 | 0.17411 | 0.02248 |
+
+  and `STRESS=1` means of -3.02431 (standard error 0.01158) and -0.00125 (0.01037).
+
+`make test-mutations` injects three faults into the causal filter and five into the estimate, listed in `tests/correctness/mutation_detection.py`; these two files catch each of them.
+
+`tests/correctness/hp_filter_state_space_agreement.py` (`make test-hp-state-space-python`, outside `make test` because it needs statsmodels) makes 132 comparisons against statsmodels 0.14.6's `UnobservedComponents(level="smooth trend", use_exact_diffuse=True)`, the same model with its own exact diffuse start, on log US real GDP 1959Q1 to 2009Q3, random walks of 3, 20, 203 and 1000 observations and series simulated from the model at `q` of 0.01 and 0.5:
+
+- the causal trend against its filtered level and the two-sided trend against its smoothed level, at `lambda` of 6.25, 1600 and 129600, in both precisions, within twice the bound above;
+- `hp_log_likelihood` against the same function written densely with numpy, within `1e-10` relative, and against statsmodels' log-likelihood at the same variances, their difference the same at `q` from `1e-5` to 10 within `1e-8` relative;
+- `hp_estimate` against statsmodels' maximum likelihood fit of both variances: its log-likelihood at our estimate at most `1e-6` below its own maximum, and `log q` within `1e-3`.
+
+The largest gaps, as a fraction of each tolerance: 1.8e-4 for the causal trend, 1.4e-3 for the two-sided trend, 7.7e-4 for the spread of the log-likelihood difference, 4.8e-2 for `log q`; statsmodels' maximum was at most 1.4e-12 above its log-likelihood at our estimate. The script sets statsmodels' `ssm.tolerance` to 0. At its default, `1e-19`, statsmodels stops updating the filter's variances once they change by less than that absolute amount, and on log real GDP, whose variances are of order `1e-5` and `1e-10`, that happens before they have converged: with the default the script fails, the levels up to 9 times the bound off and the log-likelihood difference varying with `q` by 0.011.
+
 ## Speed
 
 `tests/performance/bench_hp_filter.py` (in `bench.sh`). Setup:
@@ -148,7 +227,9 @@ The filter runs on one thread. With serial times 10 to 300 times below the refer
 
 ## Known limitations and future work
 
-- **Two-sided.** The trend at `t` depends on the whole sample, the future included, as the filter is defined. A regime indicator built on the cycle therefore uses information from after `t`.
-- **Endpoints.** The first and last few trend values rest on data from one side only, and move when observations are added.
-- **No one-sided variant.** No one-sided (real-time) HP filter, and no other trend-cycle filters yet.
+- **Two-sided by definition.** `mat_hp_trend`'s trend at `t` depends on the whole sample, the future included; a regime indicator built on its cycle uses information from after `t`. `mat_hp_trend_causal` is the one that does not.
+- **Endpoints.** The first and last few two-sided trend values rest on data from one side only, and move when observations are added.
+- **The causal filter is one Kalman pass per series.** The series share a workspace but are not filtered together, and its speed has not been measured against anything: no library this one is compared with has a causal HP filter.
+- **The estimate is per series and a local maximum,** and it is the estimate under the model above, whose cycle is white noise. Where the cycle of the data is autocorrelated, as macroeconomic cycles usually are, `hp_estimate` reports what that model's likelihood prefers, not a lambda tuned to any particular frequency band.
+- **No other trend-cycle filters yet.**
 - **float32 is limited by the conditioning,** as quantified above.

@@ -138,7 +138,7 @@ int main(void) {
     /* a_1 = 0 and P_1 = 10 I, the filter's starting state. */
     Mat a1 = mat_new(p, 1), P1 = mat_new(p, p);
     for (int j = 0; j < p; j++) AT(P1, j, j) = 10;
-    KalmanInit init = { a1, P1 };
+    KalmanInit init = { .a1 = a1, .P1 = P1 };
 
     fprintf(out, "dynamic factor model, N = %d, p = %d, %d training and %d test periods, %d coordinates in theta\n\n",
             N, p, n_train, n_test, n_theta);

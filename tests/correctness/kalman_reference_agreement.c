@@ -51,7 +51,7 @@ int c_filter(int method, int N, int m, int r, int n_periods,
     KalmanModel model = { N, m, r, 0, (KalmanMethod)method, given_system, NULL, NULL, &g, 0 };
     KalmanWorkspace *w = kalman_workspace_new(&model);
     Mat y = columns_of(y_rows, n_periods, N), a1m = matrix_of(a1, m, 1), P1m = matrix_of(P1, m, m);
-    KalmanInit init = { a1m, P1m };
+    KalmanInit init = { .a1 = a1m, .P1 = P1m };
     Vec none = { 0, 0, 0, NULL };
     KalmanPaths paths = kalman_filter(w, none, y, init);
     out[0] = paths.log_likelihood;
@@ -102,7 +102,7 @@ double c_dfm_log_likelihood(int collapsed, int p, int N, int n_periods, const do
     Tensor Mt = covariates_of(M, n_periods, N, p);
     Vec th = matrix_of(theta, dynamic_factor_n_theta(spec), 1);
     Vec g = { dynamic_factor_n_theta(spec), 1, 1, gradient };
-    KalmanInit init = { a1m, P1m };
+    KalmanInit init = { .a1 = a1m, .P1 = P1m };
     double value = dynamic_factor_log_likelihood_at(y, Mt, spec, th, init, collapsed, g);
     mat_free(y); mat_free(a1m); mat_free(P1m); mat_free(th); tensor_free(Mt);
     return value;
@@ -120,7 +120,7 @@ void c_dfm_fit(int collapsed, int p, int N, int n_periods, const double *y_rows,
     Vec th0 = matrix_of(theta0, dynamic_factor_n_theta(spec), 1);
     DynamicFactor guess = dynamic_factor_new(spec);
     dynamic_factor_params_from_theta(th0, &guess);
-    KalmanInit init = { a1m, P1m };
+    KalmanInit init = { .a1 = a1m, .P1 = P1m };
     KalmanFitOptions options = kalman_default_fit_options();
     options.max_iterations = max_iterations;
     DynamicFactorFit result = collapsed ? dynamic_factor_fit_collapsed(y, Mt, &guess, init, options) : dynamic_factor_fit(y, Mt, &guess, init, options);

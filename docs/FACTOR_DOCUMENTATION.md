@@ -71,7 +71,7 @@ of the public surface.
 | `_gebd2`, `_labrd`, `_gebrd`, `_orgbr_p`, `_ormbr_p`, `_lartg`, `_rot2`, `_bdsqr`, `_lasd4`, `_bd_square`, `_bdsvd_small`, `_lasd0`, `_gesdd` | `LAPACKE_?gesdd` | `mat_svd`, and `mat_cond` and `mat_rank` through it |
 | `_gelsd` | `LAPACKE_?gelsd` | `mat_lstsq_rd` |
 | `_gbtf2`, `_gbtrs`, `_gbsv` | nothing — new, see below | `vec_band_solve` |
-| `_pbtf2`, `_pbtrf_blocked`, `_pbtrf`, `_pbtrs`, `_pbtrs_rhs` | nothing — new, see below | `mat_band_chol`, `mat_band_chol_solve` |
+| `_pbtf2`, `_pbtrf_blocked`, `_pbtrf`, `_pbtrs`, `_pbtrs_forward`, `_pbtrs_rhs` | nothing, new, see below | `mat_band_chol`, `mat_band_chol_solve`, `vec_band_chol_forward_solve` |
 | `_gebal`, `_lahr2`, `_gehrd`, `_gehd2`, `_lanv2`, `_laexc11`, `_trexc_up`, `_laqr3`, `_lahqr`, `_geev` | `LAPACKE_?geev` | `mat_eig` |
 
 The band row of that table is the one entry that did not replace anything.
@@ -1505,9 +1505,11 @@ kernel's update is a rank-one pass over `kd^2 / 2` entries per column.
 The thresholds were measured at float64 only; a float32 build uses the
 same ones.
 
-### Solve: `_pbtrs`, `_pbtrs_rhs`
+### Solve: `_pbtrs`, `_pbtrs_forward`, `_pbtrs_rhs`
 
-`L y = b` forward and `L^T x = y` backward. `_pbtrs` does one column.
+`L y = b` forward and `L^T x = y` backward. `_pbtrs` does one column,
+running `_pbtrs_forward` for its first sweep; `_pbtrs_forward` alone is
+what `vec_band_chol_forward_solve` runs, for a likelihood's quadratic form.
 `_pbtrs_rhs` applies each step to a row of `B` across all its columns, as
 `_gbtrs_rhs` does, and has no BLAS counterpart, since BLAS has no banded
 triangular solve for several right-hand sides.

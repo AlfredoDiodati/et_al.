@@ -425,7 +425,7 @@ static void profile_shape(FILE *out, int n_periods, int N, int p, double ns) {
     for (int i = 0; i < k; i++) theta.d[i] = (mreal)(0.3 * rng_normal(&rng));
     Mat a1 = mat_new(p, 1), P1 = mat_new(p, p);
     for (int i = 0; i < p; i++) AT(P1, i, i) = 10;
-    KalmanInit init = { a1, P1 };
+    KalmanInit init = { .a1 = a1, .P1 = P1 };
 
     DynamicFactorContext *c = _dynamic_factor_context_new(spec, M);
     KalmanModel model = _dynamic_factor_kalman_model(c, 1);

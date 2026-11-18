@@ -43,7 +43,7 @@ static KalmanInit diffuse_init(int m, Mat *a1, Mat *P1, double variance) {
     *a1 = mat_new(m, 1);
     *P1 = mat_new(m, m);
     for (int i = 0; i < m; i++) AT(*P1, i, i) = (mreal)variance;
-    KalmanInit init = { *a1, *P1 };
+    KalmanInit init = { .a1 = *a1, .P1 = *P1 };
     return init;
 }
 
@@ -382,7 +382,7 @@ static void test_dynamic_factor_cache(void) {
     CHECK(!dynamic_factor_load_fit(&other, changed, data.M, init, DYNAMIC_FACTOR_FILTERED, path), "loaded on other data");
     Mat P1_other = mat_copy(P1);
     AT(P1_other, 0, 0) = 5;
-    KalmanInit init_other = { a1, P1_other };
+    KalmanInit init_other = { .a1 = a1, .P1 = P1_other };
     CHECK(!dynamic_factor_load_fit(&other, data.y, data.M, init_other, DYNAMIC_FACTOR_FILTERED, path), "loaded from another P_1");
     CHECK(!dynamic_factor_load_fit(&other, data.y, data.M, init, DYNAMIC_FACTOR_FILTERED, "out/dynamic_factor_correctness_absent.json"),
           "loaded a file that does not exist");

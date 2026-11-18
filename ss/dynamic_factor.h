@@ -811,7 +811,7 @@ static inline KalmanPaths _dynamic_factor_filter_test_period(const DynamicFactor
     KalmanModel model = _dynamic_factor_kalman_model(c, 0);
     KalmanWorkspace *w = kalman_workspace_new(&model);
     Vec no_theta = { 0, 0, 0, NULL };
-    KalmanInit init = { a1, P1 };
+    KalmanInit init = { .a1 = a1, .P1 = P1 };
     KalmanPaths paths = kalman_filter(w, no_theta, y_test, init);
     kalman_workspace_free(w);
     mat_free(a1); mat_free(P0); mat_free(P1);

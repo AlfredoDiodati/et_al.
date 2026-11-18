@@ -61,7 +61,7 @@ static void arm_problem_free(void *problem) {
 static double arm_evaluate(void *problem, const double *theta, double *gradient) {
     ArmProblem *q = (ArmProblem*)problem;
     memcpy(q->theta.d, theta, (size_t)q->theta.r * sizeof(double));
-    KalmanInit init = { q->a1, q->P1 };
+    KalmanInit init = { .a1 = q->a1, .P1 = q->P1 };
     Vec none = { 0, 0, 0, NULL };
     double value = kalman_log_likelihood(q->w, q->theta, q->y, init, gradient ? q->gradient : none);
     if (gradient) memcpy(gradient, q->gradient.d, (size_t)q->gradient.r * sizeof(double));
@@ -94,7 +94,7 @@ static void arm_fit(int p, int N, int n, const double *y_rows, const double *M, 
     Vec th0 = arm_matrix(theta0, dynamic_factor_n_theta(spec), 1);
     DynamicFactor guess = dynamic_factor_new(spec);
     dynamic_factor_params_from_theta(th0, &guess);
-    KalmanInit init = { a1m, P1m };
+    KalmanInit init = { .a1 = a1m, .P1 = P1m };
     double start = arm_now();
     DynamicFactorFit result = dynamic_factor_fit(y, Mt, &guess, init, kalman_default_fit_options());
     info[3] = arm_now() - start;

@@ -101,6 +101,15 @@ Infeasible parameters. An optimizer probes points where a variance is not
 positive definite. Every entry point then returns minus infinity with a zero
 gradient rather than aborting; a shape mismatch is programmer error and
 asserts.
+
+Diffuse initialisation. A nonstationary element of the state, a random walk
+level or the trend of the Hodrick-Prescott model, has no unconditional
+distribution to start from. KalmanInit's P1_infinity gives the book's diffuse
+start for those elements (chapter 5), and the filter is then the exact
+initial Kalman filter until they are resolved, with the diffuse
+log-likelihood (see _kalman_update_diffuse); from there each method runs as
+it does from an ordinary start. A model without a nonstationary element
+leaves the field out and runs the ordinary filter.
 */
 
 typedef enum { KALMAN_DENSE = 0, KALMAN_UNIVARIATE, KALMAN_WOODBURY } KalmanMethod;
@@ -176,10 +185,28 @@ typedef struct {
     int observation_is_fixed;
 } KalmanModel;
 
-/* a_1 and P_1. Not owned. */
+/*
+a_1 and P_1, and optionally the diffuse part of P_1. Not owned.
+
+P1_infinity.d == NULL, which is what an initializer that leaves the field out
+gives, is the ordinary filter: alpha_1 ~ N(a1, P1). Otherwise the start is
+Durbin and Koopman's diffuse initialisation (chapter 5),
+
+    P_1 = P_* + kappa P_infinity, kappa -> infinity,
+
+with P1 as P_* and P1_infinity as P_infinity, both m x m and positive
+semi-definite, and the filter is the exact initial Kalman filter, which takes
+the limit analytically (see _kalman_update_diffuse). P_infinity is for the
+elements of the state that have no unconditional distribution, the
+nonstationary ones: a random walk level or slope, the trend of the
+Hodrick-Prescott model. A stationary element starts from its unconditional
+variance in P1 and has zero rows and columns in P1_infinity. A model with no
+nonstationary element leaves the field out.
+*/
 typedef struct {
     Vec a1;
     Mat P1;
+    Mat P1_infinity;
 } KalmanInit;
 
 /*
@@ -192,11 +219,19 @@ their d is NULL for the other two methods.
 failed_at is -1 when every period could be evaluated, otherwise the first
 period whose innovation variance was not positive definite, in which case
 log_likelihood is minus infinity and the periods from failed_at on are zero.
+
+diffuse_periods is how many periods, from the first, the exact initial filter
+ran before P_infinity reached zero: 0 without a diffuse start, and n_periods
+when it never did. In those periods P and Ptt hold P_*, logdetF the sum over
+the period's entries of log F_infinity or, for an entry the diffuse part did
+not take, log F_*, quad the v^2 / F_* of the latter alone, and the dense
+method's F and K are zero.
 */
 typedef struct {
     int n_obs, n_state, n_periods;
     double log_likelihood;
     int failed_at;
+    int diffuse_periods;
     Vec logdetF, quad;
     Mat a, att, v;
     Tensor P, Ptt, F, K;
@@ -248,6 +283,13 @@ typedef struct {
     mreal *Pz, *dPz;
     /* simulation */
     mreal *draw, *shock, *shock_factor;
+    /* the exact initial filter: P_infinity and its k derivatives, P_infinity z
+       and P_* z for one entry and their derivatives, and T P_infinity; and
+       the last P1_infinity seen with its rank, so that the rank, which needs
+       an SVD, is computed once per matrix rather than once per evaluation */
+    mreal *Pinf, *dPinf, *Minf, *dMinf, *Mstar, *dMstar, *TPinf;
+    mreal *Pinf_ranked;
+    int Pinf_rank, Pinf_rank_known;
 
     /* _kalman_prepare_observations: per period t, the observed count n_t,
        k_t = min(n_t, m) rows of A_t (m x m storage), u_t (m), e_t and
@@ -307,6 +349,14 @@ static inline KalmanWorkspace *kalman_workspace_new(const KalmanModel *model) {
     w->draw = _KALMAN_REALS(w, N > r ? N : r);
     w->shock = _KALMAN_REALS(w, r);
     w->shock_factor = _KALMAN_REALS(w, (size_t)(N > r ? N : r) * (N > r ? N : r));
+    w->Pinf = _KALMAN_REALS(w, mm);
+    w->dPinf = _KALMAN_REALS(w, (size_t)k * mm);
+    w->Minf = _KALMAN_REALS(w, m);
+    w->dMinf = _KALMAN_REALS(w, (size_t)k * m);
+    w->Mstar = _KALMAN_REALS(w, m);
+    w->dMstar = _KALMAN_REALS(w, (size_t)k * m);
+    w->TPinf = _KALMAN_REALS(w, mm);
+    w->Pinf_ranked = _KALMAN_REALS(w, mm);
 
     if (model->method != KALMAN_UNIVARIATE) {
         w->Zo = _KALMAN_REALS(w, (size_t)N * m);
@@ -788,6 +838,221 @@ static inline int _kalman_update_univariate(KalmanWorkspace *w, const KalmanSyst
 }
 
 /*
+The exact initial Kalman filter, Durbin and Koopman, section 5.2, in the
+univariate form of S. J. Koopman and J. Durbin, "Fast filtering and smoothing
+for multivariate state space models", Journal of Time Series Analysis 21(3),
+2000, 281-296. It runs from the first period while P_infinity is not zero,
+whatever the model's method: the observed entries of a period enter one at a
+time, which needs each to have its own variance h, so the dense method's
+observed block of H_t must be diagonal in these periods. With z the entry's
+row of Z_t,
+
+    M_inf = P_inf z,  F_inf = z'M_inf,  M_* = P_* z,  F_* = z'M_* + h,
+    v = y_i - z'a - d_i.
+
+When F_inf is positive, the entry resolves part of the diffuse state:
+
+    K0 = M_inf / F_inf
+    a <- a + K0 v
+    P_* <- P_* + K0 K0' F_* - K0 M_*' - M_* K0'
+    P_inf <- P_inf - K0 M_inf'
+
+and contributes log F_inf alone to -2 log L, the book's diffuse
+log-likelihood, from which the terms in log kappa are dropped. When F_inf is
+zero, the entry is an ordinary update of P_*, as in _kalman_update_univariate,
+contributing log F_* + v^2 / F_*. The prediction takes P_inf to T P_inf T'.
+
+Per tangent, with F_inf positive, before the update,
+
+    dM_inf = dP_inf z + P_inf dz
+    dF_inf = z'dM_inf + dz'M_inf
+    dM_* = dP_* z + P_* dz
+    dF_* = z'dM_* + dz'M_* + dh
+    dv = -dz'a - z'da - dd_i
+    dK0 = (dM_inf - K0 dF_inf) / F_inf
+    da <- da + dK0 v + K0 dv
+    dP_* <- dP_* + (dK0 K0' + K0 dK0') F_* + K0 K0' dF_*
+                 - dK0 M_*' - K0 dM_*' - dM_* K0' - M_* dK0'
+    dP_inf <- dP_inf - dK0 M_inf' - K0 dM_inf'
+    dl += -1/2 dF_inf / F_inf
+
+and with F_inf zero the univariate update's derivatives on P_*.
+
+When the diffuse part ends is decided by counting, not by testing P_inf for
+zero: each entry taken by the diffuse part lowers the rank of P_inf by one, so
+after rank(P1_infinity) of them P_inf is zero in exact arithmetic, and what
+rounding leaves of it is no longer read: every later entry is an ordinary
+update and the filter's own method takes over from the next period. Testing
+P_inf instead fails on a weakly observed diffuse direction, whose small F_inf
+leaves rounding in P_inf far above MEPS times its size. Before that count is
+reached, an entry is taken by the diffuse part when F_inf exceeds
+KALMAN_DIFFUSE_TOLERANCE times z'z times the largest entry P_inf has had, and
+is otherwise an ordinary update.
+Returns 0, or 1 when some F_* that has to be positive is not, or a variance
+is not a number.
+*/
+#define KALMAN_DIFFUSE_TOLERANCE (1e4 * (double)MEPS)
+
+static inline mreal _kalman_entry_variance(const KalmanWorkspace *w, Mat H, int i) {
+    if (w->model.method == KALMAN_DENSE) return AT(H, i, i);
+    if (w->model.method == KALMAN_UNIVARIATE) return H.d[(size_t)i * H.stride];
+    return H.d[0];
+}
+
+static inline int _kalman_update_diffuse(KalmanWorkspace *w, const KalmanSystem *s, int n, int with_tangents,
+                                         double Pinf_scale, int *diffuse_remaining,
+                                         double *logdet_out, double *quad_out) {
+    int m = w->m;
+    size_t mm = (size_t)m * m;
+    _kalman_copy_state(w, with_tangents);
+    if (w->model.method == KALMAN_DENSE)
+        for (int a = 0; a < n; a++)
+            for (int b = 0; b < n; b++)
+                assert((a == b || AT(s->H, w->observed[a], w->observed[b]) == 0)
+                       && "kalman: a diffuse start needs the observed block of H_t diagonal while P_infinity is not zero");
+    mreal *a = w->att, *P = w->Ptt, *Pinf = w->Pinf, *Minf = w->Minf, *Mstar = w->Mstar;
+    double logdet = 0, quad = 0;
+    for (int j = 0; j < n; j++) {
+        int i = w->observed[j];
+        const mreal *z = s->Z.d + (size_t)i * s->Z.stride;
+        mreal h = _kalman_entry_variance(w, s->H, i);
+        mat_gemm(0, 0, m, 1, m, 1, Pinf, m, z, 1, 0, Minf, 1);
+        mat_gemm(0, 0, m, 1, m, 1, P, m, z, 1, 0, Mstar, 1);
+        mreal Finf = _kalman_dot(m, z, Minf);
+        mreal Fstar = _kalman_dot(m, z, Mstar) + h;
+        mreal v = w->y_observed[j] - _kalman_dot(m, z, a) - _kalman_entry(s->d, i);
+        if (MISNAN(Finf) || MISINF(Finf) || MISNAN(Fstar) || MISINF(Fstar)) return 1;
+        int diffuse = *diffuse_remaining > 0
+                      && (double)Finf > KALMAN_DIFFUSE_TOLERANCE * (double)_kalman_dot(m, z, z) * Pinf_scale;
+        if (!diffuse && !(Fstar > 0)) return 1;
+        mreal F = diffuse ? Finf : Fstar;
+        mreal F_reciprocal = 1 / F;
+        mreal *M = diffuse ? Minf : Mstar;
+
+        if (with_tangents) {
+            for (int p = 0; p < w->k; p++) {
+                const KalmanSystem *ds = &w->tangents[p];
+                mreal *da = w->datt + (size_t)p * m, *dP = w->dPtt + (size_t)p * mm;
+                mreal *dPinf = w->dPinf + (size_t)p * mm;
+                mreal *dMinf = w->dMinf + (size_t)p * m, *dMstar = w->dMstar + (size_t)p * m;
+                const mreal *dz = (ds->nonzero & KALMAN_Z) ? ds->Z.d + (size_t)i * ds->Z.stride : NULL;
+                mat_gemm(0, 0, m, 1, m, 1, dP, m, z, 1, 0, dMstar, 1);
+                if (dz) mat_gemm(0, 0, m, 1, m, 1, P, m, dz, 1, 1, dMstar, 1);
+                mreal dFstar = _kalman_dot(m, z, dMstar);
+                mreal dv = -_kalman_dot(m, z, da);
+                if (dz) {
+                    dFstar += _kalman_dot(m, dz, Mstar);
+                    dv -= _kalman_dot(m, dz, a);
+                }
+                if (ds->nonzero & KALMAN_H) dFstar += _kalman_entry_variance(w, ds->H, i);
+                if (ds->nonzero & KALMAN_D) dv -= ds->d.d[(size_t)i * ds->d.stride];
+
+                if (!diffuse) {
+                    w->dl[p] += -0.5 * ((double)dFstar * F_reciprocal + 2.0 * v * dv * F_reciprocal
+                                        - (double)v * v * dFstar * F_reciprocal * F_reciprocal);
+                    for (int b = 0; b < m; b++) {
+                        mreal K_b = Mstar[b] * F_reciprocal;
+                        mreal dK_b = (dMstar[b] - K_b * dFstar) * F_reciprocal;
+                        da[b] += dK_b * v + K_b * dv;
+                    }
+                    mreal curvature = dFstar * F_reciprocal * F_reciprocal;
+                    for (int b = 0; b < m; b++)
+                        for (int c = 0; c < m; c++)
+                            dP[(size_t)b * m + c] += -(dMstar[b] * Mstar[c] + Mstar[b] * dMstar[c]) * F_reciprocal
+                                                     + Mstar[b] * Mstar[c] * curvature;
+                    continue;
+                }
+
+                mat_gemm(0, 0, m, 1, m, 1, dPinf, m, z, 1, 0, dMinf, 1);
+                if (dz) mat_gemm(0, 0, m, 1, m, 1, Pinf, m, dz, 1, 1, dMinf, 1);
+                mreal dFinf = _kalman_dot(m, z, dMinf);
+                if (dz) dFinf += _kalman_dot(m, dz, Minf);
+                w->dl[p] += -0.5 * (double)dFinf * F_reciprocal;
+                for (int b = 0; b < m; b++) {
+                    mreal K0_b = Minf[b] * F_reciprocal;
+                    mreal dK0_b = (dMinf[b] - K0_b * dFinf) * F_reciprocal;
+                    da[b] += dK0_b * v + K0_b * dv;
+                }
+                for (int b = 0; b < m; b++)
+                    for (int c = 0; c < m; c++) {
+                        mreal K0_b = Minf[b] * F_reciprocal, K0_c = Minf[c] * F_reciprocal;
+                        mreal dK0_b = (dMinf[b] - K0_b * dFinf) * F_reciprocal;
+                        mreal dK0_c = (dMinf[c] - K0_c * dFinf) * F_reciprocal;
+                        dP[(size_t)b * m + c] += (dK0_b * K0_c + K0_b * dK0_c) * Fstar + K0_b * K0_c * dFstar
+                                                 - dK0_b * Mstar[c] - K0_b * dMstar[c]
+                                                 - dMstar[b] * K0_c - Mstar[b] * dK0_c;
+                        dPinf[(size_t)b * m + c] -= dK0_b * Minf[c] + K0_b * dMinf[c];
+                    }
+            }
+        }
+
+        for (int b = 0; b < m; b++) a[b] += M[b] * F_reciprocal * v;
+        if (diffuse) {
+            for (int b = 0; b < m; b++)
+                for (int c = 0; c < m; c++) {
+                    mreal K0_b = Minf[b] * F_reciprocal, K0_c = Minf[c] * F_reciprocal;
+                    P[(size_t)b * m + c] += K0_b * K0_c * Fstar - K0_b * Mstar[c] - Mstar[b] * K0_c;
+                    Pinf[(size_t)b * m + c] -= K0_b * Minf[c];
+                }
+            logdet += log((double)Finf);
+            --*diffuse_remaining;
+        } else {
+            for (int b = 0; b < m; b++)
+                for (int c = 0; c < m; c++) P[(size_t)b * m + c] -= Mstar[b] * Mstar[c] * F_reciprocal;
+            logdet += log((double)Fstar);
+            quad += (double)v * v * F_reciprocal;
+        }
+    }
+    _kalman_symmetrize(P, m);
+    _kalman_symmetrize(Pinf, m);
+    if (with_tangents)
+        for (int p = 0; p < w->k; p++) {
+            _kalman_symmetrize(w->dPtt + (size_t)p * mm, m);
+            _kalman_symmetrize(w->dPinf + (size_t)p * mm, m);
+        }
+    *logdet_out = logdet;
+    *quad_out = quad;
+    return 0;
+}
+
+/* P_inf <- T P_inf T', and per tangent dP_inf <- T dP_inf T' + dT P_inf T'
+   + T P_inf dT', with P_inf and dP_inf the values after the period's update. */
+static inline void _kalman_predict_diffuse(KalmanWorkspace *w, const KalmanSystem *s, int with_tangents) {
+    int m = w->m;
+    size_t mm = (size_t)m * m;
+    const mreal *T = s->T.d;
+    int ldT = s->T.stride;
+    if (with_tangents)
+        for (int p = 0; p < w->k; p++) {
+            const KalmanSystem *ds = &w->tangents[p];
+            mreal *dPinf = w->dPinf + (size_t)p * mm;
+            mat_gemm(0, 0, m, m, m, 1, T, ldT, dPinf, m, 0, w->mm_a, m);
+            mat_gemm(0, 1, m, m, m, 1, w->mm_a, m, T, ldT, 0, dPinf, m);
+            if (ds->nonzero & KALMAN_T) {
+                /* dT (P_inf T') and its transpose */
+                mat_gemm(0, 1, m, m, m, 1, w->Pinf, m, T, ldT, 0, w->mm_a, m);
+                mat_gemm(0, 0, m, m, m, 1, ds->T.d, ds->T.stride, w->mm_a, m, 0, w->mm_b, m);
+                for (int a = 0; a < m; a++)
+                    for (int b = 0; b < m; b++)
+                        dPinf[(size_t)a * m + b] += w->mm_b[(size_t)a * m + b] + w->mm_b[(size_t)b * m + a];
+            }
+            _kalman_symmetrize(dPinf, m);
+        }
+    mat_gemm(0, 0, m, m, m, 1, T, ldT, w->Pinf, m, 0, w->TPinf, m);
+    mat_gemm(0, 1, m, m, m, 1, w->TPinf, m, T, ldT, 0, w->Pinf, m);
+    _kalman_symmetrize(w->Pinf, m);
+}
+
+static inline double _kalman_max_abs(const mreal *x, size_t n) {
+    double largest = 0;
+    for (size_t i = 0; i < n; i++) {
+        double value = fabs((double)x[i]);
+        if (value > largest) largest = value;
+    }
+    return largest;
+}
+
+/*
 The observations of every period reduced once, for a model whose Z_t and d_t
 do not depend on theta. With r = y_o - d_o, the n observed entries of period
 t, and Z_o their rows of Z_t, every evaluation of the Woodbury update needs
@@ -1053,11 +1318,12 @@ static inline Tensor _kalman_stack(int n, int rows, int columns) {
 }
 
 static inline KalmanPaths _kalman_paths_new(const KalmanWorkspace *w, int n_periods) {
-    KalmanPaths paths;
+    KalmanPaths paths = { 0 };
     int N = w->N, m = w->m;
     paths.n_obs = N; paths.n_state = m; paths.n_periods = n_periods;
     paths.log_likelihood = 0;
     paths.failed_at = -1;
+    paths.diffuse_periods = 0;
     paths.logdetF = mat_new(n_periods, 1);
     paths.quad = mat_new(n_periods, 1);
     paths.a = mat_new(m, n_periods);
@@ -1083,7 +1349,7 @@ static inline void _kalman_store_prediction(const KalmanWorkspace *w, KalmanPath
 }
 
 static inline void _kalman_store_update(const KalmanWorkspace *w, const KalmanSystem *s, KalmanPaths *paths,
-                                        int t, int n, double logdet, double quad) {
+                                        int t, int n, double logdet, double quad, int diffuse) {
     int N = w->N, m = w->m;
     for (int i = 0; i < m; i++) AT(paths->att, i, t) = w->att[i];
     memcpy(&TAT3(paths->Ptt, t, 0, 0), w->Ptt, (size_t)m * m * sizeof(mreal));
@@ -1091,6 +1357,11 @@ static inline void _kalman_store_update(const KalmanWorkspace *w, const KalmanSy
     paths->logdetF.d[t] = (mreal)logdet;
     paths->quad.d[t] = (mreal)quad;
     if (w->model.method != KALMAN_DENSE) return;
+    if (diffuse) {
+        memset(&TAT3(paths->F, t, 0, 0), 0, (size_t)N * N * sizeof(mreal));
+        memset(&TAT3(paths->K, t, 0, 0), 0, (size_t)m * N * sizeof(mreal));
+        return;
+    }
     /* F with the unobserved rows of Z taken as zero: H everywhere, plus
        Z_o P Z_o' on the observed block, which w->F holds. K is zero in the
        unobserved columns. */
@@ -1128,6 +1399,30 @@ static inline int _kalman_run(KalmanWorkspace *w, Mat y, KalmanInit init, int wi
         for (int i = 0; i < w->k; i++) w->dl[i] = 0;
     }
 
+    /* The exact initial filter runs while P_infinity is not zero; its
+       derivative starts at zero, as P_1's does. Pinf_scale is the largest entry
+       P_infinity has had, which the zero tests are relative to. */
+    int diffuse = 0, diffuse_remaining = 0;
+    double Pinf_scale = 0;
+    if (init.P1_infinity.d) {
+        assert(init.P1_infinity.r == m && init.P1_infinity.c == m);
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < m; j++) w->Pinf[(size_t)i * m + j] = AT(init.P1_infinity, i, j);
+        if (with_tangents) memset(w->dPinf, 0, (size_t)w->k * mm * sizeof(mreal));
+        Pinf_scale = _kalman_max_abs(w->Pinf, mm);
+        if (Pinf_scale > 0) {
+            if (!w->Pinf_rank_known || memcmp(w->Pinf_ranked, w->Pinf, mm * sizeof(mreal)) != 0) {
+                Mat copy = { m, m, m, w->Pinf };
+                w->Pinf_rank = mat_rank(copy);
+                memcpy(w->Pinf_ranked, w->Pinf, mm * sizeof(mreal));
+                w->Pinf_rank_known = 1;
+            }
+            diffuse_remaining = w->Pinf_rank;
+            diffuse = diffuse_remaining > 0;
+        }
+    }
+    if (paths) paths->diffuse_periods = 0;
+
     double total = 0;
     for (int t = 0; t < n_periods; t++) {
         KalmanSystem *s = &w->system;
@@ -1137,25 +1432,38 @@ static inline int _kalman_run(KalmanWorkspace *w, Mat y, KalmanInit init, int wi
         w->model.system(t, w->model.context, s, with_tangents ? w->tangents : NULL);
         _kalman_check_system(w, s);
 
-        int n = use_prepared ? w->prepared_n[t] : _kalman_gather_observed(w, y, t);
+        /* the diffuse periods read each entry of y, so they gather the
+           observations whatever use_prepared says */
+        int n = use_prepared && !diffuse ? w->prepared_n[t] : _kalman_gather_observed(w, y, t);
         if (paths) {
             _kalman_store_prediction(w, paths, t);
             _kalman_full_innovation(w, s, n);
         }
         double logdet = 0, quad = 0;
         int failed;
-        if (w->model.method == KALMAN_DENSE) failed = _kalman_update_dense(w, s, n, with_tangents, &logdet, &quad);
+        int diffuse_period = diffuse;
+        if (diffuse) failed = _kalman_update_diffuse(w, s, n, with_tangents, Pinf_scale, &diffuse_remaining, &logdet, &quad);
+        else if (w->model.method == KALMAN_DENSE) failed = _kalman_update_dense(w, s, n, with_tangents, &logdet, &quad);
         else if (w->model.method == KALMAN_UNIVARIATE) failed = _kalman_update_univariate(w, s, n, with_tangents, &logdet, &quad);
         else failed = _kalman_update_woodbury(w, s, n, with_tangents, &logdet, &quad, use_prepared ? t : -1);
         if (failed) {
             *log_likelihood = -INFINITY;
             return t;
         }
-        if (paths) _kalman_store_update(w, s, paths, t, n, logdet, quad);
+        if (paths) _kalman_store_update(w, s, paths, t, n, logdet, quad, diffuse_period);
         total += logdet + quad;
 
+        if (diffuse) {
+            if (paths) paths->diffuse_periods = t + 1;
+            diffuse = diffuse_remaining > 0;
+        }
         _kalman_rqr(s, w->m, w->r, w->RQ, w->RQR);
         _kalman_predict_step(w, s, with_tangents);
+        if (diffuse) {
+            _kalman_predict_diffuse(w, s, with_tangents);
+            double largest = _kalman_max_abs(w->Pinf, mm);
+            if (largest > Pinf_scale) Pinf_scale = largest;
+        }
     }
     *log_likelihood = -0.5 * total;
     return -1;
