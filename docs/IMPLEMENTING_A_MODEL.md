@@ -32,6 +32,15 @@ A lower-level entry point that does take an explicit optimizer may exist next to
 
 - Whatever post-estimation object the model exists to produce, such as impulse responses, forecasts or decompositions.
 
+Designing the public functions. Each public function takes as arguments what it actually uses, not a larger object it would have to dig them out of. A simulation needs the parameters, any covariates and a starting state, so those are its arguments. If it took a fit result instead, it could not generate data from chosen parameters, for a Monte Carlo study or an example, before any fit exists. When a function is usually called after a fit, whatever it needs from the fit is a field of the fit result, ready to pass. The call from a fit and the call from chosen values are then the same line:
+
+    simulate(&fit.model, covariates, fit.last_state, n_paths, &rng);
+    simulate(&truth, covariates, chosen_start, n_paths, &rng);
+
+A caller never allocates a buffer, copies part of one result into the shape another function expects, or reads a result's internal fields to connect two public functions. If a script has to do any of that, the API is missing an argument or a field, and the fix belongs in the model file, not in every script that uses it.
+
+The example shows whether this holds. An example calls only public functions. If writing it requires reimplementing something the model already does, such as writing out the model's equations to generate its data, then a function is missing or takes the wrong arguments, and the API changes rather than the example working around it. A correctness test is different: it may write the equations out on purpose, as a check that does not depend on the code it tests.
+
 Refitting. A fit is expensive, so the models do not recompute one they already have, and never trust a stored one they cannot verify. The functions that do this are the same in both, and a new model provides them under the same names:
 
 - `save_fit` writes the parameters, every diagnostic the fit produced, and a fingerprint of the data it was fitted on, to a JSON file. `data_fingerprint` hashes the data element by element, so a strided view hashes the same as a copy, masked to 48 bits so the value survives a round trip through a JSON number. Storing the diagnostics is what lets a load report them instead of recomputing or inventing them.
