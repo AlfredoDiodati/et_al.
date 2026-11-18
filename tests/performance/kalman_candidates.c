@@ -7,7 +7,11 @@ builds on it, against the shipped headers: agreement first, then time.
 With no KALMAN_ARM_CANDIDATE both arms are the shipped headers, which is the
 harness checking itself: they must then agree bit for bit and time within
 noise. The two arms are tests/performance/kalman_arm.c compiled twice and
-linked into this one binary, so they alternate inside one process.
+linked into one binary, so they alternate inside one process. The Makefile
+links them twice: kalman_candidates with production first, and
+kalman_candidates_swapped with the candidate first, which also allocates the
+candidate's data and workspace first. The first binary runs the second with
+--timings and reads its times; the second prints nothing else.
 
 Data: the dynamic factor model's equations, from random/random.h's Rng with
 seed 2026 and the stream given per data set: a column of ones and standard
@@ -29,15 +33,23 @@ Time: milliseconds per evaluation, each arm's figure the best of 5 batches of
 at least 20 ms after one evaluation not counted, which is one evaluation
 inside a fit. The two arms alternate over 4 rounds, the order reversed every
 other round, each keeping its best; then the whole batch runs again starting
-from the other arm. A speedup whose direction differs between the two
-batches, or within 5 percent of 1 in both, is reported as no difference:
-with both arms the shipped headers, this harness measured the same code up
-to 3 percent apart in a consistent direction. Every hardware thread is
+from the other arm. Both binaries do this, which gives four speedups,
+production time over candidate time, per shape and evaluation. A difference
+is reported only when all four are on the same side of 1 and their geometric
+mean is more than COMBINED_MARGIN from 1; anything else is no difference.
+
+Why both binaries: with both arms the shipped headers and one binary only,
+the same code measured 3 to 4 percent apart at n = 2000, N = 100, p = 5 on
+the likelihood alone, in the same direction in both batches. Linking the
+other arm first, or allocating its buffers first, reversed the direction, so
+the gap follows where each arm's code and buffers sit, not the code. With
+the two binaries and both arms the shipped headers, two runs gave geometric
+means from 0.990 to 1.021, hence a margin of 0.03. Every hardware thread is
 available.
 
 Fits: dynamic_factor_fit from theta = (log 1, log 0.1 (p), atanh 0.5 (p),
-0 (p)), three runs per arm alternating, the best wall time kept; the maxima
-and the estimates compared.
+0 (p)), three runs per arm alternating, the best wall time kept, in both
+binaries; the maxima and the estimates compared in the first.
 
 Writes out/kalman_candidates_report.txt and prints it.
 */
@@ -102,14 +114,115 @@ static double relative(double got, double want, double scale) {
     return fabs(got - want) / s;
 }
 
+static const Shape shapes[] = { { 500, 50, 3, "15%" }, { 2000, 100, 5, "15%" }, { 2000, 400, 5, "15%" },
+                                { 300, 20, 5, "sparse" }, { 200, 8, 2, "none" } };
+enum { N_TIMED_SHAPES = 3, N_FITTED_SHAPES = 2 };
+#define COMBINED_MARGIN 0.03
 
-int main(void) {
+/* What one link order measures: best[shape][with_gradient][batch][arm] in ms
+   per evaluation, fit_seconds[shape][arm] the best wall time of a whole fit,
+   and each arm's last fit, theta and info as arm.fit writes them. */
+typedef struct {
+    double best[N_TIMED_SHAPES][2][2][2];
+    double fit_seconds[N_FITTED_SHAPES][2];
+    double fit_theta[N_FITTED_SHAPES][2][16];
+    double fit_info[N_FITTED_SHAPES][2][4];
+} Timings;
+
+/* Arm first's data and workspace are allocated before the other arm's. Each
+   build allocates first the arm it links first, so the build linking the
+   candidate first also gives it the first buffers. */
+static void time_evaluations(const KalmanArm *arms, int first, Timings *timings) {
+    for (int si = 0; si < N_TIMED_SHAPES; si++) {
+        Shape s = shapes[si];
+        int k = 1 + 3 * s.p;
+        double *y, *M;
+        simulate(s, 0, &y, &M);
+        double a1[5] = { 0 }, P1[25] = { 0 }, theta[16];
+        for (int j = 0; j < s.p; j++) P1[j * s.p + j] = 10;
+        Rng rng = rng_new(8, 0);
+        for (int i = 0; i < k; i++) theta[i] = 0.3 * rng_normal(&rng);
+        void *problem[2];
+        problem[first] = arms[first].problem_new(s.p, s.N, s.n, y, M, a1, P1);
+        problem[1 - first] = arms[1 - first].problem_new(s.p, s.N, s.n, y, M, a1, P1);
+        for (int with_gradient = 0; with_gradient < 2; with_gradient++) {
+            double (*best)[2] = timings->best[si][with_gradient];
+            for (int batch = 0; batch < 2; batch++)
+                for (int a = 0; a < 2; a++) best[batch][a] = 1e300;
+            for (int batch = 0; batch < 2; batch++)
+                for (int round = 0; round < 4; round++)
+                    for (int step = 0; step < 2; step++) {
+                        int a = ((round + batch) % 2 == 0) ? step : 1 - step;
+                        double t = arms[a].time_ms(problem[a], theta, with_gradient);
+                        if (t < best[batch][a]) best[batch][a] = t;
+                    }
+        }
+        for (int a = 0; a < 2; a++) arms[a].problem_free(problem[a]);
+        free(y); free(M);
+    }
+}
+
+static void time_fits(const KalmanArm *arms, Timings *timings) {
+    for (int si = 0; si < N_FITTED_SHAPES; si++) {
+        Shape s = shapes[si];
+        double *y, *M;
+        simulate(s, 0, &y, &M);
+        double a1[5] = { 0 }, P1[25] = { 0 }, theta0[16];
+        for (int j = 0; j < s.p; j++) P1[j * s.p + j] = 10;
+        theta0[0] = 0;
+        for (int j = 0; j < s.p; j++) { theta0[1 + j] = log(0.1); theta0[1 + s.p + j] = atanh(0.5); theta0[1 + 2 * s.p + j] = 0; }
+        for (int a = 0; a < 2; a++) timings->fit_seconds[si][a] = 1e300;
+        for (int run = 0; run < 3; run++)
+            for (int step = 0; step < 2; step++) {
+                int a = run % 2 == 0 ? step : 1 - step;
+                arms[a].fit(s.p, s.N, s.n, y, M, a1, P1, theta0, timings->fit_theta[si][a], timings->fit_info[si][a]);
+                if (timings->fit_info[si][a][3] < timings->fit_seconds[si][a]) timings->fit_seconds[si][a] = timings->fit_info[si][a][3];
+            }
+        free(y); free(M);
+    }
+}
+
+/* The build linked in the other order, run with --timings, prints its best
+   times and fit seconds one per line, in Timings' order; nothing else is read
+   from it. */
+static void print_timings(const Timings *timings) {
+    const double *best = &timings->best[0][0][0][0];
+    for (size_t i = 0; i < sizeof timings->best / sizeof(double); i++) printf("%.17g\n", best[i]);
+    const double *seconds = &timings->fit_seconds[0][0];
+    for (size_t i = 0; i < sizeof timings->fit_seconds / sizeof(double); i++) printf("%.17g\n", seconds[i]);
+}
+
+static int read_timings(const char *swapped_binary, Timings *timings) {
+    char command[1024];
+    snprintf(command, sizeof command, "%s --timings", swapped_binary);
+    FILE *pipe = popen(command, "r");
+    if (!pipe) return 0;
+    size_t n_best = sizeof timings->best / sizeof(double), n_seconds = sizeof timings->fit_seconds / sizeof(double);
+    size_t read = 0;
+    double *best = &timings->best[0][0][0][0];
+    for (size_t i = 0; i < n_best; i++) read += fscanf(pipe, "%lf", &best[i]) == 1;
+    double *seconds = &timings->fit_seconds[0][0];
+    for (size_t i = 0; i < n_seconds; i++) read += fscanf(pipe, "%lf", &seconds[i]) == 1;
+    int status = pclose(pipe);
+    return status == 0 && read == n_best + n_seconds;
+}
+
+int main(int argc, char **argv) {
+    KalmanArm arms[2] = { kalman_arm_production(), kalman_arm_candidate() };
+    if (argc == 2 && strcmp(argv[1], "--timings") == 0) {
+        Timings timings;
+        time_evaluations(arms, 1, &timings);
+        time_fits(arms, &timings);
+        print_timings(&timings);
+        return 0;
+    }
+    if (argc != 2) {
+        fprintf(stderr, "usage: %s <the same two arms linked in the other order>\n", argv[0]);
+        return 2;
+    }
     mkdir("out", 0777);
     const char *path = "out/kalman_candidates_report.txt";
     FILE *out = fopen(path, "w");
-    KalmanArm arms[2] = { kalman_arm_production(), kalman_arm_candidate() };
-    Shape shapes[] = { { 500, 50, 3, "15%" }, { 2000, 100, 5, "15%" }, { 2000, 400, 5, "15%" },
-                       { 300, 20, 5, "sparse" }, { 200, 8, 2, "none" } };
     int n_shapes = (int)(sizeof shapes / sizeof shapes[0]);
     fprintf(out, "kalman_candidates: candidate %s against the shipped headers, float64, %d OpenMP threads available\n\n",
             KALMAN_ARM_CANDIDATE_NAME, omp_get_max_threads());
@@ -160,67 +273,60 @@ int main(void) {
         return 1;
     }
 
-    fprintf(out, "\nms per evaluation, best of each arm; two batches, the second starting from the other arm\n");
-    fprintf(out, "  %-28s %-10s %12s %12s %9s %12s %12s %9s  verdict\n", "shape", "evaluation",
-            "prod (1)", "cand (1)", "speedup", "prod (2)", "cand (2)", "speedup");
-    for (int si = 0; si < 3; si++) {
-        Shape s = shapes[si];
-        int k = 1 + 3 * s.p;
-        double *y, *M;
-        simulate(s, 0, &y, &M);
-        double a1[5] = { 0 }, P1[25] = { 0 }, theta[16];
-        for (int j = 0; j < s.p; j++) P1[j * s.p + j] = 10;
-        Rng rng = rng_new(8, 0);
-        for (int i = 0; i < k; i++) theta[i] = 0.3 * rng_normal(&rng);
-        void *problem[2] = { arms[0].problem_new(s.p, s.N, s.n, y, M, a1, P1),
-                             arms[1].problem_new(s.p, s.N, s.n, y, M, a1, P1) };
-        for (int with_gradient = 0; with_gradient < 2; with_gradient++) {
-            double best[2][2] = { { 1e300, 1e300 }, { 1e300, 1e300 } };
-            for (int batch = 0; batch < 2; batch++)
-                for (int round = 0; round < 4; round++)
-                    for (int step = 0; step < 2; step++) {
-                        int a = ((round + batch) % 2 == 0) ? step : 1 - step;
-                        double t = arms[a].time_ms(problem[a], theta, with_gradient);
-                        if (t < best[batch][a]) best[batch][a] = t;
-                    }
-            double first = best[0][0] / best[0][1], second = best[1][0] / best[1][1];
-            /* two identical arms measured up to 3 percent apart, in the same
-               direction in both batches, so a ratio within 5 percent of 1 is
-               not read as a difference */
-            int within = fabs(first - 1) < 0.05 && fabs(second - 1) < 0.05;
-            const char *verdict = within || (first > 1) != (second > 1) ? "no difference" : first > 1 ? "candidate faster" : "candidate slower";
-            char label[64];
-            snprintf(label, sizeof label, "n=%d N=%d p=%d", s.n, s.N, s.p);
-            fprintf(out, "  %-28s %-10s %12.3f %12.3f %8.2fx %12.3f %12.3f %8.2fx  %s\n", label,
-                    with_gradient ? "gradient" : "value", best[0][0], best[0][1], first, best[1][0], best[1][1], second, verdict);
-        }
-        for (int a = 0; a < 2; a++) arms[a].problem_free(problem[a]);
-        free(y); free(M);
+    Timings order[2];
+    time_evaluations(arms, 0, &order[0]);
+    time_fits(arms, &order[0]);
+    if (!read_timings(argv[1], &order[1])) {
+        fprintf(out, "\ncould not read the timings of %s\n", argv[1]);
+        fclose(out);
+        fprintf(stderr, "could not read the timings of %s\n", argv[1]);
+        return 1;
     }
 
-    fprintf(out, "\nwhole fits, best wall time of 3 per arm, alternating\n");
-    for (int si = 0; si < 2; si++) {
+    fprintf(out, "\nms per evaluation, best of each arm in the build linking production first. speedup is production time\n"
+                 "over candidate time, per batch (the second batch starting from the other arm), in the build linking\n"
+                 "production first and in the one linking the candidate first; combined is the geometric mean of the four\n");
+    fprintf(out, "  %-18s %-10s %8s %8s   %-15s   %-15s  %8s  verdict\n", "shape", "evaluation",
+            "prod", "cand", "prod first", "cand first", "combined");
+    for (int si = 0; si < N_TIMED_SHAPES; si++) {
+        Shape s = shapes[si];
+        for (int with_gradient = 0; with_gradient < 2; with_gradient++) {
+            double ratio[2][2], log_sum = 0;
+            int above = 0;
+            for (int o = 0; o < 2; o++)
+                for (int batch = 0; batch < 2; batch++) {
+                    const double *best = order[o].best[si][with_gradient][batch];
+                    ratio[o][batch] = best[0] / best[1];
+                    log_sum += log(ratio[o][batch]);
+                    above += ratio[o][batch] > 1;
+                }
+            double combined = exp(log_sum / 4);
+            int agree = above == 0 || above == 4;
+            const char *verdict = !agree || fabs(combined - 1) < COMBINED_MARGIN ? "no difference"
+                                : combined > 1 ? "candidate faster" : "candidate slower";
+            const double (*best)[2] = order[0].best[si][with_gradient];
+            char label[64];
+            snprintf(label, sizeof label, "n=%d N=%d p=%d", s.n, s.N, s.p);
+            fprintf(out, "  %-18s %-10s %8.3f %8.3f   %6.3fx %6.3fx   %6.3fx %6.3fx  %7.3fx  %s\n", label,
+                    with_gradient ? "gradient" : "value", fmin(best[0][0], best[1][0]), fmin(best[0][1], best[1][1]),
+                    ratio[0][0], ratio[0][1], ratio[1][0], ratio[1][1], combined, verdict);
+        }
+    }
+
+    fprintf(out, "\nwhole fits, best wall time of 3 per arm, alternating, in the build linking production first;\n"
+                 "speedup in both builds\n");
+    for (int si = 0; si < N_FITTED_SHAPES; si++) {
         Shape s = shapes[si];
         int k = 1 + 3 * s.p;
-        double *y, *M;
-        simulate(s, 0, &y, &M);
-        double a1[5] = { 0 }, P1[25] = { 0 }, theta0[16], theta[2][16], info[2][4], best[2] = { 1e300, 1e300 };
-        for (int j = 0; j < s.p; j++) P1[j * s.p + j] = 10;
-        theta0[0] = 0;
-        for (int j = 0; j < s.p; j++) { theta0[1 + j] = log(0.1); theta0[1 + s.p + j] = atanh(0.5); theta0[1 + 2 * s.p + j] = 0; }
-        for (int run = 0; run < 3; run++)
-            for (int step = 0; step < 2; step++) {
-                int a = run % 2 == 0 ? step : 1 - step;
-                arms[a].fit(s.p, s.N, s.n, y, M, a1, P1, theta0, theta[a], info[a]);
-                if (info[a][3] < best[a]) best[a] = info[a][3];
-            }
+        const double (*info)[4] = order[0].fit_info[si];
+        const double (*theta)[16] = order[0].fit_theta[si];
+        const double *seconds = order[0].fit_seconds[si], *seconds_swapped = order[1].fit_seconds[si];
         double theta_gap = 0;
         for (int i = 0; i < k; i++) theta_gap = fmax(theta_gap, fabs(theta[1][i] - theta[0][i]));
         fprintf(out, "  n=%d N=%d p=%d: production %.3f s, %d iterations, converged %d; candidate %.3f s, %d iterations, "
-                "converged %d; %.2fx; maxima %.12f and %.12f; largest theta gap %.2e\n",
-                s.n, s.N, s.p, best[0], (int)info[0][1], (int)info[0][2], best[1], (int)info[1][1], (int)info[1][2],
-                best[0] / best[1], info[0][0], info[1][0], theta_gap);
-        free(y); free(M);
+                "converged %d; %.2fx production first, %.2fx candidate first; maxima %.12f and %.12f; largest theta gap %.2e\n",
+                s.n, s.N, s.p, seconds[0], (int)info[0][1], (int)info[0][2], seconds[1], (int)info[1][1], (int)info[1][2],
+                seconds[0] / seconds[1], seconds_swapped[0] / seconds_swapped[1], info[0][0], info[1][0], theta_gap);
     }
     fclose(out);
     FILE *in = fopen(path, "r");

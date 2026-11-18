@@ -1590,9 +1590,12 @@ test-kalman-candidate:
 # includes against the shipped headers, agreement first and time second;
 # see tests/performance/kalman_candidates.c. With no KALMAN_ARM_CANDIDATE
 # both arms are the shipped headers, the harness checking itself. Always
-# rebuilt, since the candidate is a command-line variable. Exits nonzero when
-# the arms disagree. Writes out/kalman_candidates_report.txt. Not part of
-# `test` or bench.sh:
+# rebuilt, since the candidate is a command-line variable. The two arms are
+# linked twice, production first and candidate first, because where each
+# arm's code lands in the binary moves its time by a few percent; the first
+# binary runs the second for its timings. Exits nonzero when the arms
+# disagree. Writes out/kalman_candidates_report.txt. Not part of `test` or
+# bench.sh:
 #
 #   make bench-kalman_candidates KALMAN_ARM_CANDIDATE=ss/dynamic_factor_new.h
 KALMAN_ARM_CANDIDATE ?= ss/dynamic_factor.h
@@ -1600,8 +1603,9 @@ bench-kalman_candidates: tests/performance/kalman_candidates.c tests/performance
 	$(CC) $(STAT_CFLAGS) -I. -DKALMAN_ARM_HEADER='"ss/dynamic_factor.h"' -DKALMAN_ARM_ENTRY=kalman_arm_production -c tests/performance/kalman_arm.c -o tests/performance/kalman_arm_production.o
 	$(CC) $(STAT_CFLAGS) -I. -DKALMAN_ARM_HEADER='"$(KALMAN_ARM_CANDIDATE)"' -DKALMAN_ARM_ENTRY=kalman_arm_candidate -c tests/performance/kalman_arm.c -o tests/performance/kalman_arm_candidate.o
 	$(CC) $(STAT_CFLAGS) -DKALMAN_ARM_CANDIDATE_NAME='"$(KALMAN_ARM_CANDIDATE)"' tests/performance/kalman_candidates.c tests/performance/kalman_arm_production.o tests/performance/kalman_arm_candidate.o $(LDLIBS) -o tests/performance/kalman_candidates
+	$(CC) $(STAT_CFLAGS) -DKALMAN_ARM_CANDIDATE_NAME='"$(KALMAN_ARM_CANDIDATE)"' tests/performance/kalman_candidates.c tests/performance/kalman_arm_candidate.o tests/performance/kalman_arm_production.o $(LDLIBS) -o tests/performance/kalman_candidates_swapped
 	rm -f tests/performance/kalman_arm_production.o tests/performance/kalman_arm_candidate.o
-	./tests/performance/kalman_candidates
+	./tests/performance/kalman_candidates ./tests/performance/kalman_candidates_swapped
 
 # What the gradient part of one Woodbury Kalman evaluation is made of, piece
 # by piece, on ss/dynamic_factor.h's systems; see the file's header. Writes
