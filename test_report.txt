@@ -1,10 +1,10 @@
-test run: wo 18 nov 2026 14:34:47 CET
+test run: wo 18 nov 2026 18:20:03 CET
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 104 suites
+make test and check.sh run the same 106 suites
 
 === paths_outside_repo: PASS ===
 no tracked source names a path outside the repository
@@ -104,6 +104,8 @@ make: 'tests/correctness/var_correctness' is up to date.
 make: 'tests/correctness/var_recovery' is up to date.
 make: 'tests/correctness/lp_correctness' is up to date.
 make: 'tests/correctness/lp_recovery' is up to date.
+make: 'tests/correctness/lp_nl_correctness' is up to date.
+make: 'tests/correctness/lp_nl_recovery' is up to date.
 make: 'tests/integration/basis_to_regression' is up to date.
 make: 'tests/integration/frame_to_model' is up to date.
 make: 'tests/integration/frame_to_tensor' is up to date.
@@ -115,26 +117,7 @@ make: 'tests/integration/pipeline_ownership' is up to date.
 make: 'tests/integration/npz_to_statistics' is up to date.
 make: 'tests/integration/header_composition' is up to date.
 make: 'tests/integration/header_composition_f32' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/band_solve_example.c -lm -lopenblas -o examples/band_solve_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/basis_example.c -lm -lopenblas -o examples/basis_example
-In file included from examples/basis_example.c:4:
-./basis/spline.h: In function ‘_periodic_spline.constprop’:
-./basis/spline.h:1143:16: warning: ‘sites’ may be used uninitialized [-Wmaybe-uninitialized]
- 1143 |     Mat full = _spline_design_raw(knots, nk, sites, n, ord, &none, 1, 0);
-      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-./basis/spline.h:271:19: note: by argument 3 of type ‘const mreal *’ {aka ‘const double *’} to ‘_spline_design_raw.constprop’ declared here
-  271 | static inline Mat _spline_design_raw(const mreal *knots, int nk, const mreal *x, int nx,
-      |                   ^~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/dynamic_factor_example.c -lm -lopenblas -o examples/dynamic_factor_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/encoder.c -lm -lopenblas -o examples/encoder
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/lp_example.c -lm -lopenblas -o examples/lp_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/mlp_example.c -lm -lopenblas -o examples/mlp_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/ols_covariance_example.c -lm -lopenblas -o examples/ols_covariance_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -lopenblas -o examples/qvarma_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/qvarma_fixed_parameters_example.c -lm -lopenblas -o examples/qvarma_fixed_parameters_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/singular_draws_example.c -lm -lopenblas -o examples/singular_draws_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/unit_root_example.c -lm -lopenblas -o examples/unit_root_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. examples/var_example.c -lm -lopenblas -o examples/var_example
+make: Nothing to be done for 'examples'.
 
 === poly_correctness: PASS ===
 basis/poly.h correctness, float32 build
@@ -1801,25 +1784,42 @@ var_recovery: all passed, 400 replications per sample size, report in out/var_re
 === lp_correctness: PASS ===
 lpirfs test-lp_lin.R, Jorda (2005): output gap to its own shock one period after impact
 horizon 0 is d, horizon 1 is the VAR's A_1 d
-every horizon against long double normal equations, linear and state dependent
-fz against its definition: HP cycle, n - 1 standardisation, logistic, lag; raw and unlagged variants
-a weight of 0.5 everywhere: rank deficient, and both states equal the linear responses
-NaN in y or the switching series, tied shocks, and a strided y
+every horizon against long double normal equations
+NaN in y, tied shocks, and a strided y
 var_impulse_responses: A^h d for a VAR(1), companion powers for a VAR(2)
 residuals_are_zero: y_2 at t is y_1 at t - 3, so it is fitted exactly at horizons 2 and 3 only
 cache: bit-for-bit round trip, refusals leave the fit untouched, cached loads, force_refit, no file without d
 bands: against the long double reference, the identities they satisfy, NaN where undefined, the cache
-lp_lin_and_nl: the linear fit bit for bit, the state-dependent one to rounding, the VAR fitted once
 300 random configurations against the long double reference, d computed independently
-  4050 horizons compared, 0 of them at a bound of one or more and skipped; 70 configurations at the shortest sample, 7 of them with a singular Sigma_u; largest gap 0.0109 of its bound
+  1287 horizons compared, 0 of them at a bound of one or more and skipped; 77 configurations at the shortest sample, 23 of them with a singular Sigma_u; largest gap 0.00774 of its bound
 near-exact fit: every horizon within 2 u (kappa + kappa^2 rho) of the reference, the accuracy of a QR solve
-  largest gap 0.00146 of the bound; u kappa^2 at least 1.08e+04 times the bound; reference error at most 0.000248 of it
-invariances: rescaled variables, shifted variables, an affine switching series, weights w and 1 - w
+  largest gap 0.00054 of the bound; u kappa^2 at least 1.52e+04 times the bound; reference error at most 0.000248 of it
+invariances: rescaled variables, shifted variables
 the shortest sample allowed: the last horizon has as many rows as regressors and fits exactly
 lp_correctness: all passed
 
 === lp_recovery: PASS ===
 lp_recovery: all passed, 400 draws per case, report in out/lp_recovery_report.txt
+
+=== lp_nl_correctness: PASS ===
+every horizon against long double normal equations
+fz against its definition: HP cycle, n - 1 standardisation, logistic, lag; raw and unlagged variants
+a weight of 0.5 everywhere: rank deficient, and both states equal the linear responses
+an infinity in the switching series
+residuals_are_zero: y_2 at t is y_1 at t - 3, so it is fitted exactly at horizons 2 and 3 only
+cache: bit-for-bit round trip, refusals leave the fit untouched, cached loads, force_refit, no file without d
+bands: against the long double reference, NaN at a rank-deficient horizon, the cache
+lp_lin_and_nl: both fits to rounding, the linear notes exactly, the VAR fitted once
+300 random configurations against the long double reference, d computed independently
+  2700 horizons compared, 0 of them at a bound of one or more and skipped; 70 configurations at the shortest sample, 7 of them with a singular Sigma_u; largest gap 0.0109 of its bound
+near-exact fit: every horizon within 2 u (kappa + kappa^2 rho) of the reference, the accuracy of a QR solve
+  largest gap 0.00146 of the bound; u kappa^2 at least 1.08e+04 times the bound; reference error at most 0.000248 of it
+invariances: rescaled variables, an affine switching series, weights w and 1 - w
+the shortest sample allowed: the last horizon has as many rows as regressors and fits exactly
+lp_nl_correctness: all passed
+
+=== lp_nl_recovery: PASS ===
+lp_nl_recovery: all passed, 400 draws per case, report in out/lp_nl_recovery_report.txt
 
 === integration ===
 === basis_to_regression: PASS ===
@@ -1961,4 +1961,4 @@ PASSED, 0 failures
 
 
 === summary ===
-108 passed, 0 failed
+110 passed, 0 failed

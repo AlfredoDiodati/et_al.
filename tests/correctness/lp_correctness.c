@@ -1,6 +1,8 @@
 /*
-Does lp/lp.h compute lpirfs' local projections, on inputs where the answer
-is known.
+Does lp/lp.h compute lpirfs' linear local projections, on inputs where the
+answer is known. The reference implementations are in
+lp_long_double_reference.h, shared with lp_nl_correctness.c, which checks
+the state-dependent model of lp/lp_nl.h.
 
 Ported test (lpirfs 0.2.5, tests/testthat/test-lp_lin.R, "Test whether
 results from lp_lin are in region of results from Jorda (2005)"): the
@@ -21,62 +23,53 @@ Own checks:
 - horizon 0 is d, and horizon 1 is the VAR's own response A_1 d
   (var_impulse_responses), since the two regressions are the same;
 - every horizon against a reference written here: each regression solved
-  from its normal equations in long double, for the linear model and for
-  the state-dependent one with a logistic weight;
-- the weight fz against its definition: the HP cycle of the switching
-  series, standardised with n - 1, through the logistic, lagged once, and
-  the unlagged and raw variants;
-- a weight of 0.5 everywhere makes the two state blocks the same column
-  scaled by the same number, so the design is rank deficient at the first
-  column of state 2 and the minimum-norm solution splits every coefficient
-  evenly: both states' responses must equal the linear model's;
-- a NaN in y or in the switching series, a strided y against its copy,
-  shocks tied so that the VAR's residual covariance is singular;
+  from its normal equations in long double;
+- a NaN in y, a strided y against its copy, shocks tied so that the VAR's
+  residual covariance is singular;
 - var_impulse_responses against A^h d for a VAR(1) and against the
   companion matrix's powers for a VAR(2);
 - the fit notes' residuals_are_zero: with y_2 at t equal to y_1 at t - 3
   and 2 lags, y_2 is fitted exactly at horizons 2 and 3, where the lag it
-  equals is a regressor, and nowhere else, in both models; with y_2 at t
-  equal to y_1 at t - 1 and 1 lag, a full-rank design, it is fitted exactly
-  at horizon 1 and in the VAR, and both are flagged;
+  equals is a regressor, and nowhere else; with y_2 at t equal to y_1 at
+  t - 1 and 1 lag, a full-rank design, it is fitted exactly at horizon 1 and
+  in the VAR, and both are flagged;
 - accuracy (float64): on a nearly exact fit, two smooth periodic series
-  around 300 and 150 with shocks of 1e-6, every horizon of both models
-  within 2 u (kappa + kappa^2 rho) of the long double reference, the
-  accuracy of a QR solve, with kappa = kappa(X) and rho the relative size of
-  the residuals. QR at every horizon measured 0.0057 u (kappa + kappa^2 rho)
-  here and the shared factor without its correction step 8.8; the test
-  checks that the reference's own error is under a hundredth of the bound;
+  around 300 and 150 with shocks of 1e-6, every horizon within
+  2 u (kappa + kappa^2 rho) of the long double reference, the accuracy of a
+  QR solve, with kappa = kappa(X) and rho the relative size of the
+  residuals. Measured on data of this shape over lp_lin and both states of
+  lp_nl: QR at every horizon 0.0057 u (kappa + kappa^2 rho), and the shared
+  factor without its correction step 8.8; the test checks that the
+  reference's own error is under a hundredth of the bound;
 - 300 random configurations (3000 under STRESS=1), configuration c from
-  rng_new(2026, c): K from 1 to 4, lags_endog_lin and lags_endog_nl each
-  from 1 to 4, hor from 1 to 8, lag_switching on or off, both shock types,
-  both estimators of Sigma_u, and the weight from the HP cycle of a random
-  walk, from the logistic of an AR(1), or given directly; T the shortest
-  sample allowed in a quarter of them and up to 50 periods longer in the
-  rest. A VAR with fewer residual degrees of freedom than variables has a
-  singular Sigma_u, and there the check is that its Cholesky factor is
-  rejected and neither model has d. Every horizon of both models against the long double reference,
-  with d computed independently from a long double VAR and Cholesky factor,
-  within 32 (cond(x'x) of the horizon + cond(x'x) of the VAR) u times the
-  largest response; a horizon whose bound is one or more is skipped and
-  counted, and at most a tenth may be;
+  rng_new(2026, c): K from 1 to 4, lags_endog_lin from 1 to 4, hor from 1 to
+  8, both shock types and both estimators of Sigma_u; T the shortest sample
+  allowed in a quarter of them and up to 50 periods longer in the rest. A
+  VAR with fewer residual degrees of freedom than variables has a singular
+  Sigma_u, and there the check is that its Cholesky factor is rejected and
+  there is no d. Every horizon against the long double reference, with d
+  computed independently from a long double VAR and Cholesky factor, within
+  32 (cond(x'x) of the horizon + cond(x'x) of the VAR) u times the largest
+  response; a horizon whose bound is one or more is skipped and counted, and
+  at most a tenth may be;
 - invariances: variables rescaled by 2.5, 1e-3 and 40 rescale unit-shock
-  responses by c_i / c_j and one-standard-deviation responses by c_i, in both
-  models; shifted variables leave lp_lin unchanged; a switching series
-  replaced by 7 + 3 s leaves fz and both states unchanged and 7 - 3 s swaps
-  the states, through the HP filter; weights 1 - w given directly swap the
-  states of weights w;
+  responses by c_i / c_j and one-standard-deviation responses by c_i;
+  shifted variables leave the responses unchanged;
 - the shortest sample allowed, for K and lags from 1 to 3: the last horizon
   has as many rows as regressors, fits exactly, and says so in
   residuals_are_zero, and the horizon before does not;
-- the cache: a saved fit loads back bit for bit, NaN entries of fz
-  included; a file for other data, another switching series or another
-  specification, or a damaged one, is refused and leaves the caller's fit
-  untouched; the cached call loads rather than recomputes, force_refit
-  recomputes, and a fit without d writes nothing. Files go to
+- bands: four settings against the long double reference, d at horizon 0,
+  the midpoint equal to the response, the width linear in confint and
+  scaled by sqrt(m / (m - n)) with adjust_se, NaN where the estimator is not
+  defined, and the cache holding them bit for bit;
+- the cache: a saved fit loads back bit for bit; a file for other data or
+  another specification, or a damaged one, is refused and leaves the
+  caller's fit untouched; the cached call loads rather than recomputes,
+  force_refit recomputes, and a fit without d writes nothing. Files go to
   out/lp_correctness_cache*.json.
 */
 #include "../../lp/lp.h"
-#include "../check.h"
+#include "lp_long_double_reference.h"
 #include <stdio.h>
 #include <sys/stat.h>
 
@@ -279,8 +272,6 @@ static const double interest_rules_var_data[193][3] = {
     { -1.416445026, 2.25810435, 1.25 },
 };
 
-static const double unit_roundoff = sizeof(mreal) == sizeof(double) ? 1.1102230246251565e-16 : 5.9604644775390625e-08;
-
 static Mat jorda_data(void) {
     Mat y = mat_new(3, 193);
     for (int t = 0; t < 193; t++)
@@ -302,15 +293,6 @@ static void test_jorda(void) {
         CHECK_CLOSE(as_lpirfs, 0.87582396676794572, 1e-9, "against lpirfs 0.2.5 run on this machine");
     lp_lin_fit_free(&fit);
     mat_free(y);
-}
-
-static Mat random_walks(Rng *rng, int K, int T) {
-    Mat y = mat_new(K, T);
-    for (int k = 0; k < K; k++) {
-        double level = 0;
-        for (int t = 0; t < T; t++) { level = 0.7 * level + rng_normal(rng); AT(y, k, t) = (mreal)level; }
-    }
-    return y;
 }
 
 static void test_identities(void) {
@@ -335,214 +317,11 @@ static void test_identities(void) {
     mat_free(y);
 }
 
-/* Solves the normal equations of design (rows x n) against response
-   (rows x K) in long double by Gaussian elimination; coefficients is n x K. */
-static void normal_equations_solve(const long double *design, const long double *response, int rows, int n, int K, long double *coefficients) {
-    long double *a = calloc((size_t)n * n, sizeof(long double));
-    for (int i = 0; i < n; i++)
-        for (int j = 0; j < n; j++)
-            for (int r = 0; r < rows; r++) a[(size_t)i * n + j] += design[(size_t)r * n + i] * design[(size_t)r * n + j];
-    for (int i = 0; i < n; i++)
-        for (int k = 0; k < K; k++) {
-            long double s = 0;
-            for (int r = 0; r < rows; r++) s += design[(size_t)r * n + i] * response[(size_t)r * K + k];
-            coefficients[(size_t)i * K + k] = s;
-        }
-    for (int c = 0; c < n; c++) {
-        int pivot = c;
-        for (int r = c + 1; r < n; r++) if (fabsl(a[(size_t)r * n + c]) > fabsl(a[(size_t)pivot * n + c])) pivot = r;
-        for (int j = 0; j < n; j++) { long double s = a[(size_t)c * n + j]; a[(size_t)c * n + j] = a[(size_t)pivot * n + j]; a[(size_t)pivot * n + j] = s; }
-        for (int k = 0; k < K; k++) { long double s = coefficients[(size_t)c * K + k]; coefficients[(size_t)c * K + k] = coefficients[(size_t)pivot * K + k]; coefficients[(size_t)pivot * K + k] = s; }
-        for (int r = c + 1; r < n; r++) {
-            long double f = a[(size_t)r * n + c] / a[(size_t)c * n + c];
-            for (int j = c; j < n; j++) a[(size_t)r * n + j] -= f * a[(size_t)c * n + j];
-            for (int k = 0; k < K; k++) coefficients[(size_t)r * K + k] -= f * coefficients[(size_t)c * K + k];
-        }
-    }
-    for (int c = n - 1; c >= 0; c--)
-        for (int k = 0; k < K; k++) {
-            long double s = coefficients[(size_t)c * K + k];
-            for (int j = c + 1; j < n; j++) s -= a[(size_t)c * n + j] * coefficients[(size_t)j * K + k];
-            coefficients[(size_t)c * K + k] = s / a[(size_t)c * n + c];
-        }
-    free(a);
-}
-
-/* The normal equations solved as above, then corrected twice with the
-   residuals in long double: b += solve(X'X, X' r). Each step shrinks the
-   error by about kappa(X)^2 times the long double unit roundoff, so what is
-   left is of order kappa(X) times it. */
-static void reference_ols(const long double *design, const long double *response, int rows, int n, int K, long double *coefficients) {
-    normal_equations_solve(design, response, rows, n, K, coefficients);
-    long double *residual = malloc((size_t)rows * K * sizeof(long double)), *correction = malloc((size_t)n * K * sizeof(long double));
-    for (int step = 0; step < 2; step++) {
-        for (int r = 0; r < rows; r++)
-            for (int k = 0; k < K; k++) {
-                long double e = response[(size_t)r * K + k];
-                for (int c = 0; c < n; c++) e -= design[(size_t)r * n + c] * coefficients[(size_t)c * K + k];
-                residual[(size_t)r * K + k] = e;
-            }
-        normal_equations_solve(design, residual, rows, n, K, correction);
-        for (int i = 0; i < n * K; i++) coefficients[i] += correction[i];
-    }
-    free(residual); free(correction);
-}
-
-/* The condition number of x'x for the first `rows` rows of the row-major
-   rows x n design, from its eigenvalues by cyclic Jacobi rotations in long
-   double. Infinite when the smallest eigenvalue is not positive. */
-static double normal_matrix_condition(const long double *design, int rows, int n) {
-    long double *a = calloc((size_t)n * n, sizeof(long double));
-    for (int i = 0; i < n; i++)
-        for (int j = 0; j < n; j++)
-            for (int r = 0; r < rows; r++) a[(size_t)i * n + j] += design[(size_t)r * n + i] * design[(size_t)r * n + j];
-    for (int sweep = 0; sweep < 100; sweep++) {
-        long double off = 0, total = 0;
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j < n; j++) {
-                total += a[(size_t)i * n + j] * a[(size_t)i * n + j];
-                if (i != j) off += a[(size_t)i * n + j] * a[(size_t)i * n + j];
-            }
-        if (off <= 1e-36L * total) break;
-        for (int p = 0; p < n; p++)
-            for (int q = p + 1; q < n; q++) {
-                long double apq = a[(size_t)p * n + q];
-                if (apq == 0) continue;
-                long double theta = (a[(size_t)q * n + q] - a[(size_t)p * n + p]) / (2 * apq);
-                long double t = (theta >= 0 ? 1 : -1) / (fabsl(theta) + sqrtl(theta * theta + 1));
-                long double c = 1 / sqrtl(t * t + 1), sn = t * c;
-                for (int k = 0; k < n; k++) {
-                    long double akp = a[(size_t)k * n + p], akq = a[(size_t)k * n + q];
-                    a[(size_t)k * n + p] = c * akp - sn * akq;
-                    a[(size_t)k * n + q] = sn * akp + c * akq;
-                }
-                for (int k = 0; k < n; k++) {
-                    long double apk = a[(size_t)p * n + k], aqk = a[(size_t)q * n + k];
-                    a[(size_t)p * n + k] = c * apk - sn * aqk;
-                    a[(size_t)q * n + k] = sn * apk + c * aqk;
-                }
-            }
-    }
-    long double largest = 0, smallest = INFINITY;
-    for (int i = 0; i < n; i++) {
-        long double value = a[(size_t)i * n + i];
-        if (value > largest) largest = value;
-        if (value < smallest) smallest = value;
-    }
-    free(a);
-    return smallest > 0 ? (double)(largest / smallest) : INFINITY;
-}
-
-/* The design of the periods t = first, first + 1, ..., T - 1: an intercept
-   and p lags of every variable, or with a weight the lags times 1 - weight[t]
-   and times weight[t]; and the responses y_t. Both row-major, allocated. */
-static void reference_design(Mat y, int first, int p, const mreal *weight, long double **design, long double **response, int *n) {
-    int K = y.r, rows = y.c - first;
-    *n = weight ? 1 + 2 * K * p : 1 + K * p;
-    *design = calloc((size_t)rows * *n, sizeof(long double));
-    *response = calloc((size_t)rows * K, sizeof(long double));
-    for (int r = 0; r < rows; r++) {
-        int t = first + r;
-        long double *row = *design + (size_t)r * *n;
-        row[0] = 1;
-        for (int lag = 1; lag <= p; lag++)
-            for (int j = 0; j < K; j++) {
-                long double v = AT(y, j, t - lag);
-                int column = (lag - 1) * K + j;
-                if (weight) {
-                    row[1 + column] = v * (1 - (long double)weight[t]);
-                    row[1 + K * p + column] = v * (long double)weight[t];
-                } else row[1 + column] = v;
-            }
-        for (int k = 0; k < K; k++) (*response)[(size_t)r * K + k] = AT(y, k, t);
-    }
-}
-
-/* The shock matrix of R/get_mat_chol.R computed independently of the code
-   under test: the VAR(p) by long double normal equations, its residual
-   covariance with the estimator's divisor, the Cholesky factor, each column
-   over its diagonal, times the residual standard deviation for shock_type 0.
-   d is K x K row-major; returns the condition number of the VAR's x'x. */
-static double reference_shock_matrix(Mat y, int p, VarSigmaEstimator estimator, LpShockType shock_type, long double *d) {
-    int K = y.r, rows = y.c - p, n;
-    long double *design, *response;
-    reference_design(y, p, p, NULL, &design, &response, &n);
-    long double *b = malloc((size_t)n * K * sizeof(long double)), *sigma = calloc((size_t)K * K, sizeof(long double));
-    reference_ols(design, response, rows, n, K, b);
-    for (int r = 0; r < rows; r++)
-        for (int i = 0; i < K; i++)
-            for (int j = 0; j < K; j++) {
-                long double ui = response[(size_t)r * K + i], uj = response[(size_t)r * K + j];
-                for (int c = 0; c < n; c++) {
-                    ui -= design[(size_t)r * n + c] * b[(size_t)c * K + i];
-                    uj -= design[(size_t)r * n + c] * b[(size_t)c * K + j];
-                }
-                sigma[(size_t)i * K + j] += ui * uj;
-            }
-    long double divisor = estimator == VAR_SIGMA_ML ? rows : rows - n;
-    for (int i = 0; i < K * K; i++) sigma[i] /= divisor;
-    long double *P = calloc((size_t)K * K, sizeof(long double));
-    for (int j = 0; j < K; j++) {
-        long double s = sigma[(size_t)j * K + j];
-        for (int l = 0; l < j; l++) s -= P[(size_t)j * K + l] * P[(size_t)j * K + l];
-        P[(size_t)j * K + j] = sqrtl(s);
-        for (int i = j + 1; i < K; i++) {
-            long double t = sigma[(size_t)i * K + j];
-            for (int l = 0; l < j; l++) t -= P[(size_t)i * K + l] * P[(size_t)j * K + l];
-            P[(size_t)i * K + j] = t / P[(size_t)j * K + j];
-        }
-    }
-    for (int j = 0; j < K; j++) {
-        long double scale = shock_type == LP_SHOCK_STANDARD_DEVIATION ? sqrtl(sigma[(size_t)j * K + j]) : 1;
-        for (int i = 0; i < K; i++) d[(size_t)i * K + j] = P[(size_t)i * K + j] / P[(size_t)j * K + j] * scale;
-    }
-    double condition = normal_matrix_condition(design, rows, n);
-    free(design); free(response); free(b); free(sigma); free(P);
-    return condition;
-}
-
-/* The responses of the regressions of y h - 1 periods ahead on the design of
-   the periods t = first, first + 1, ...; the first-lag blocks times d (K x K
-   row-major) go into s1 and, with a weight, s2. condition, when not NULL,
-   receives the condition number of x'x at every horizon, entry h - 1. */
-static void reference_responses(Mat y, int first, int p, const mreal *weight, int hor, const long double *d, Tensor *s1,
-                                Tensor *s2, double *condition) {
-    int K = y.r, rows = y.c - first, n;
-    long double *design, *response;
-    reference_design(y, first, p, weight, &design, &response, &n);
-    long double *coefficients = malloc((size_t)n * K * sizeof(long double));
-    for (int h = 1; h <= hor; h++) {
-        int used = rows - h + 1;
-        reference_ols(design, response + (size_t)(h - 1) * K, used, n, K, coefficients);
-        if (condition) condition[h - 1] = normal_matrix_condition(design, used, n);
-        for (int block = 0; block < (weight ? 2 : 1); block++) {
-            Tensor *out = block == 0 ? s1 : s2;
-            int start = 1 + block * K * p;
-            for (int k = 0; k < K; k++)
-                for (int j = 0; j < K; j++) {
-                    long double sum = 0;
-                    for (int l = 0; l < K; l++) sum += coefficients[(size_t)(start + l) * K + k] * d[(size_t)l * K + j];
-                    TAT3(*out, k, h, j) = (mreal)sum;
-                }
-        }
-    }
-    free(coefficients); free(design); free(response);
-}
-
-static long double *long_double_copy(Mat m) {
-    long double *copy = malloc((size_t)m.r * m.c * sizeof(long double));
-    for (int i = 0; i < m.r; i++)
-        for (int j = 0; j < m.c; j++) copy[(size_t)i * m.c + j] = AT(m, i, j);
-    return copy;
-}
-
 static void test_against_reference(void) {
-    puts("every horizon against long double normal equations, linear and state dependent");
+    puts("every horizon against long double normal equations");
     Rng rng = rng_new(2019, 0);
     int K = 2, p = 2, T = 60, hor = 5;
     Mat y = random_walks(&rng, K, T);
-    Mat switching = mat_new(T, 1);
-    for (int t = 0; t < T; t++) switching.d[t] = (mreal)(sin(t / 4.0) + 0.3 * rng_normal(&rng));
     double tolerance = sizeof(mreal) == sizeof(double) ? 1e-10 : 2e-3;
 
     LpSpec spec = { K, p, hor, LP_SHOCK_UNIT, VAR_SIGMA_ML };
@@ -553,50 +332,10 @@ static void test_against_reference(void) {
     for (int h = 1; h <= hor; h++)
         for (int k = 0; k < K; k++)
             for (int j = 0; j < K; j++) CHECK_CLOSE(TAT3(lin.irf_lin_mean, k, h, j), TAT3(want, k, h, j), tolerance, "linear");
-
-    LpNlSpec nl_spec = { spec, 2, 1, 1, 1600, 2, 1 };
-    LpNlFit nl = lp_nl(y, switching, nl_spec);
-    CHECK(nl.notes.var_ols_status == 0, "state dependent notes");
-    Tensor want_s1 = tensor_zeros(K, hor + 1, K), want_s2 = tensor_zeros(K, hor + 1, K);
-    long double *nl_d = long_double_copy(nl.d);
-    reference_responses(y, 2, 2, nl.fz.d, hor, nl_d, &want_s1, &want_s2, NULL);
-    for (int h = 1; h <= hor; h++)
-        for (int k = 0; k < K; k++)
-            for (int j = 0; j < K; j++) {
-                CHECK_CLOSE(TAT3(nl.irf_s1_mean, k, h, j), TAT3(want_s1, k, h, j), tolerance, "state 1");
-                CHECK_CLOSE(TAT3(nl.irf_s2_mean, k, h, j), TAT3(want_s2, k, h, j), tolerance, "state 2");
-            }
-    tensor_free(want); tensor_free(want_s1); tensor_free(want_s2);
-    free(lin_d); free(nl_d);
-    lp_lin_fit_free(&lin); lp_nl_fit_free(&nl);
-    mat_free(y); mat_free(switching);
-}
-
-/* The largest gap seen by compare_horizons as a share of its bound. */
-static double worst_share_of_bound = 0;
-
-/* Compares got with want at every horizon 1..hor, entry by entry, within
-   32 (condition of that horizon's x'x + condition of the VAR's x'x) u times
-   the largest reference response at that horizon. Returns the number of
-   horizons whose bound was one or more and so were not compared. */
-static int compare_horizons(Tensor got, Tensor want, int hor, const double *condition, double var_condition, const char *label,
-                            int configuration) {
-    int K = got.shape[0], skipped = 0;
-    for (int h = 1; h <= hor; h++) {
-        double scale = 1;
-        for (int k = 0; k < K; k++)
-            for (int j = 0; j < K; j++) if (fabs((double)TAT3(want, k, h, j)) > scale) scale = fabs((double)TAT3(want, k, h, j));
-        double bound = 32 * (condition[h - 1] + var_condition) * unit_roundoff;
-        if (!(bound < 1)) { skipped++; continue; }
-        for (int k = 0; k < K; k++)
-            for (int j = 0; j < K; j++) {
-                double gap = fabs((double)TAT3(got, k, h, j) - (double)TAT3(want, k, h, j));
-                if (gap / (bound * scale) > worst_share_of_bound) worst_share_of_bound = gap / (bound * scale);
-                CHECK(gap <= bound * scale, "configuration %d, %s, horizon %d, [%d][%d]: got %.10g, want %.10g, bound %.3g",
-                      configuration, label, h, k, j, (double)TAT3(got, k, h, j), (double)TAT3(want, k, h, j), bound * scale);
-            }
-    }
-    return skipped;
+    tensor_free(want);
+    free(lin_d);
+    lp_lin_fit_free(&lin);
+    mat_free(y);
 }
 
 static void test_random_configurations(void) {
@@ -605,29 +344,20 @@ static void test_random_configurations(void) {
     int skipped = 0, compared = 0, at_minimum = 0, singular_samples = 0;
     for (int configuration = 0; configuration < R; configuration++) {
         Rng rng = rng_new(2026, configuration);
-        int K = 1 + (int)rng_below(&rng, 4), p = 1 + (int)rng_below(&rng, 4), q = 1 + (int)rng_below(&rng, 4);
-        int hor = 1 + (int)rng_below(&rng, 8), lag_switching = (int)rng_below(&rng, 2), mode = (int)rng_below(&rng, 3);
+        int K = 1 + (int)rng_below(&rng, 4), p = 1 + (int)rng_below(&rng, 4), hor = 1 + (int)rng_below(&rng, 8);
         LpShockType shock_type = (LpShockType)rng_below(&rng, 2);
         VarSigmaEstimator estimator = rng_below(&rng, 2) ? VAR_SIGMA_LS : VAR_SIGMA_ML;
-        int first = q > lag_switching ? q : lag_switching;
         int T = hor + p * (K + 1);
         if (T < p * (K + 1) + 2) T = p * (K + 1) + 2;
-        if (T < first + hor + 2 * K * q) T = first + hor + 2 * K * q;
         int extra = rng_below(&rng, 4) == 0 ? 0 : 1 + (int)rng_below(&rng, 50);
         if (extra == 0) at_minimum++;
         T += extra;
 
-        Mat y = mat_new(K, T), switching = mat_new(T, 1);
-        double level = 100, ar = 0;
-        for (int t = 0; t < T; t++) {
+        Mat y = mat_new(K, T);
+        for (int t = 0; t < T; t++)
             for (int k = 0; k < K; k++)
                 AT(y, k, t) = (mreal)((t > 0 ? 0.5 * (double)AT(y, k, t - 1) : 0) + (k + 1) * rng_normal(&rng));
-            level += rng_normal(&rng);
-            ar = 0.8 * ar + 0.6 * rng_normal(&rng);
-            switching.d[t] = (mreal)(mode == 0 ? level : mode == 1 ? ar : rng_uniform(&rng));
-        }
         LpSpec spec = { K, p, hor, shock_type, estimator };
-        LpNlSpec nl_spec = { spec, q, mode != 2, mode == 0, 1600, 2, lag_switching };
 
         long double *d = malloc((size_t)K * K * sizeof(long double));
         double var_condition = reference_shock_matrix(y, p, estimator, shock_type, d);
@@ -656,23 +386,11 @@ static void test_random_configurations(void) {
             compared += hor;
             tensor_free(want);
         }
-
-        LpNlFit nl = lp_nl(y, switching, nl_spec);
-        if (nl.d.d) {
-            Tensor want_s1 = tensor_zeros(K, hor + 1, K), want_s2 = tensor_zeros(K, hor + 1, K);
-            reference_responses(y, first, q, nl.fz.d, hor, d, &want_s1, &want_s2, condition);
-            skipped += compare_horizons(nl.irf_s1_mean, want_s1, hor, condition, var_condition, "lp_nl state 1", configuration);
-            skipped += compare_horizons(nl.irf_s2_mean, want_s2, hor, condition, var_condition, "lp_nl state 2", configuration);
-            compared += 2 * hor;
-            tensor_free(want_s1); tensor_free(want_s2);
-        }
-        CHECK((nl.d.d != NULL) == !singular, "configuration %d: lp_nl's d does not match lp_lin's", configuration);
-        for (int h = 0; h < hor && nl.d.d; h++)
-            CHECK(nl.notes.ols_status[h] == 0 && lin.notes.ols_status[h] == 0,
-                  "configuration %d, horizon %d: status %d and %d", configuration, h + 1, lin.notes.ols_status[h], nl.notes.ols_status[h]);
-        lp_lin_fit_free(&lin); lp_nl_fit_free(&nl);
+        for (int h = 0; h < hor && lin.d.d; h++)
+            CHECK(lin.notes.ols_status[h] == 0, "configuration %d, horizon %d: status %d", configuration, h + 1, lin.notes.ols_status[h]);
+        lp_lin_fit_free(&lin);
         free(d); free(condition);
-        mat_free(y); mat_free(switching);
+        mat_free(y);
     }
     printf("  %d horizons compared, %d of them at a bound of one or more and skipped; %d configurations at the shortest sample,"
            " %d of them with a singular Sigma_u; largest gap %.3g of its bound\n", compared, skipped, at_minimum, singular_samples,
@@ -680,30 +398,16 @@ static void test_random_configurations(void) {
     CHECK(skipped * 10 <= compared, "more than a tenth of the horizons were too badly conditioned to compare");
 }
 
-/* Largest |a - b| over two response tensors, relative to max(1, max|b|). */
-static double relative_gap(Tensor a, Tensor b) {
-    double gap = 0, scale = 1;
-    for (size_t i = 0; i < tensor_size(b); i++) if (fabs((double)b.d[i]) > scale) scale = fabs((double)b.d[i]);
-    for (size_t i = 0; i < tensor_size(b); i++) {
-        double g = fabs((double)a.d[i] - (double)b.d[i]);
-        if (g > gap) gap = g;
-    }
-    return gap / scale;
-}
-
 static void test_invariances(void) {
-    puts("invariances: rescaled variables, shifted variables, an affine switching series, weights w and 1 - w");
+    puts("invariances: rescaled variables, shifted variables");
     Rng rng = rng_new(77, 0);
     int K = 3, p = 2, T = 150, hor = 6;
     Mat y = random_walks(&rng, K, T);
-    Mat switching = mat_new(T, 1);
-    for (int t = 0; t < T; t++) switching.d[t] = (mreal)(50 + 0.1 * t + 2 * sin(t / 5.0) + rng_normal(&rng));
     double tolerance = 1e4 * unit_roundoff;
     double c[3] = { 2.5, 1e-3, 40 };
 
     for (int shock = 0; shock < 2; shock++) {
         LpSpec spec = { K, p, hor, (LpShockType)shock, VAR_SIGMA_ML };
-        LpNlSpec nl_spec = { spec, p, 1, 1, 1600, 2, 1 };
         Mat scaled = mat_copy(y), shifted = mat_copy(y);
         for (int k = 0; k < K; k++)
             for (int t = 0; t < T; t++) {
@@ -711,71 +415,29 @@ static void test_invariances(void) {
                 AT(shifted, k, t) += (mreal)(10 * (k + 1));
             }
         LpLinFit lin = lp_lin(y, spec), lin_scaled = lp_lin(scaled, spec), lin_shifted = lp_lin(shifted, spec);
-        LpNlFit nl = lp_nl(y, switching, nl_spec), nl_scaled = lp_nl(scaled, switching, nl_spec);
         /* a unit shock to j is a unit of variable j, so the response of i
            scales by c_i / c_j; a one standard deviation shock scales with the
            data, so the response of i scales by c_i */
-        Tensor expected = tensor_zeros(K, hor + 1, K), expected_s1 = tensor_zeros(K, hor + 1, K), expected_s2 = tensor_zeros(K, hor + 1, K);
+        Tensor expected = tensor_zeros(K, hor + 1, K);
         for (int i = 0; i < K; i++)
             for (int h = 0; h <= hor; h++)
                 for (int j = 0; j < K; j++) {
                     double factor = shock == LP_SHOCK_UNIT ? c[i] / c[j] : c[i];
                     TAT3(expected, i, h, j) = (mreal)(factor * TAT3(lin.irf_lin_mean, i, h, j));
-                    TAT3(expected_s1, i, h, j) = (mreal)(factor * TAT3(nl.irf_s1_mean, i, h, j));
-                    TAT3(expected_s2, i, h, j) = (mreal)(factor * TAT3(nl.irf_s2_mean, i, h, j));
                 }
         /* entries of different sizes: compare each relative to its own row's scale */
         for (int i = 0; i < K; i++)
             for (int h = 0; h <= hor; h++)
-                for (int j = 0; j < K; j++) {
+                for (int j = 0; j < K; j++)
                     CHECK_CLOSE(TAT3(lin_scaled.irf_lin_mean, i, h, j) / (c[i] / c[j]), TAT3(expected, i, h, j) / (c[i] / c[j]), tolerance,
                                 "lp_lin with rescaled variables");
-                    CHECK_CLOSE(TAT3(nl_scaled.irf_s1_mean, i, h, j) / (c[i] / c[j]), TAT3(expected_s1, i, h, j) / (c[i] / c[j]), tolerance,
-                                "lp_nl state 1 with rescaled variables");
-                    CHECK_CLOSE(TAT3(nl_scaled.irf_s2_mean, i, h, j) / (c[i] / c[j]), TAT3(expected_s2, i, h, j) / (c[i] / c[j]), tolerance,
-                                "lp_nl state 2 with rescaled variables");
-                }
         CHECK(relative_gap(lin_shifted.irf_lin_mean, lin.irf_lin_mean) <= tolerance,
               "lp_lin moved when variables were shifted: %.3g", relative_gap(lin_shifted.irf_lin_mean, lin.irf_lin_mean));
-        tensor_free(expected); tensor_free(expected_s1); tensor_free(expected_s2);
+        tensor_free(expected);
         lp_lin_fit_free(&lin); lp_lin_fit_free(&lin_scaled); lp_lin_fit_free(&lin_shifted);
-        lp_nl_fit_free(&nl); lp_nl_fit_free(&nl_scaled);
         mat_free(scaled); mat_free(shifted);
     }
-
-    /* The HP cycle is linear and passes constants and straight lines, and z
-       is standardised, so a + b s gives the same z for b > 0 and -z for
-       b < 0; F(-z) = 1 - F(z), which swaps the states. */
-    LpSpec spec = { K, p, hor, LP_SHOCK_UNIT, VAR_SIGMA_ML };
-    LpNlSpec nl_spec = { spec, p, 1, 1, 1600, 2, 1 };
-    LpNlFit nl = lp_nl(y, switching, nl_spec);
-    double hp_tolerance = 64 * (1 + 16 * 1600) * unit_roundoff * 400;
-    for (int sign = -1; sign <= 1; sign += 2) {
-        Mat moved = mat_new(T, 1);
-        for (int t = 0; t < T; t++) moved.d[t] = (mreal)(7 + sign * 3 * (double)switching.d[t]);
-        LpNlFit other = lp_nl(y, moved, nl_spec);
-        for (int t = 1; t < T; t++) {
-            double want = sign > 0 ? (double)nl.fz.d[t] : 1 - (double)nl.fz.d[t];
-            CHECK_NEAR(other.fz.d[t], want, hp_tolerance, "fz under an affine switching series");
-        }
-        Tensor s1 = sign > 0 ? nl.irf_s1_mean : nl.irf_s2_mean, s2 = sign > 0 ? nl.irf_s2_mean : nl.irf_s1_mean;
-        CHECK(relative_gap(other.irf_s1_mean, s1) <= 1e3 * hp_tolerance && relative_gap(other.irf_s2_mean, s2) <= 1e3 * hp_tolerance,
-              "b %s 0: states %s: gaps %.3g %.3g", sign > 0 ? ">" : "<", sign > 0 ? "unchanged" : "swapped",
-              relative_gap(other.irf_s1_mean, s1), relative_gap(other.irf_s2_mean, s2));
-        lp_nl_fit_free(&other); mat_free(moved);
-    }
-
-    /* weights w and 1 - w given directly: the states swap, up to rounding in
-       1 - w */
-    Mat w = mat_new(T, 1), complement = mat_new(T, 1);
-    for (int t = 0; t < T; t++) { w.d[t] = (mreal)rng_uniform(&rng); complement.d[t] = 1 - w.d[t]; }
-    LpNlSpec direct = { spec, p, 0, 0, 0, 1, 0 };
-    LpNlFit a = lp_nl(y, w, direct), b = lp_nl(y, complement, direct);
-    CHECK(relative_gap(a.irf_s1_mean, b.irf_s2_mean) <= tolerance && relative_gap(a.irf_s2_mean, b.irf_s1_mean) <= tolerance,
-          "weights 1 - w did not swap the states: %.3g %.3g", relative_gap(a.irf_s1_mean, b.irf_s2_mean),
-          relative_gap(a.irf_s2_mean, b.irf_s1_mean));
-    lp_nl_fit_free(&a); lp_nl_fit_free(&b); lp_nl_fit_free(&nl);
-    mat_free(w); mat_free(complement); mat_free(switching); mat_free(y);
+    mat_free(y);
 }
 
 static void test_minimal_length(void) {
@@ -786,8 +448,8 @@ static void test_minimal_length(void) {
             /* hor = K + 1 leaves the VAR K residual degrees of freedom, so
                Sigma_u is not singular */
             int hor = K + 1;
-            int T_lin = hor + p * (K + 1);
-            Mat y = random_walks(&rng, K, T_lin);
+            int T = hor + p * (K + 1);
+            Mat y = random_walks(&rng, K, T);
             LpSpec spec = { K, p, hor, LP_SHOCK_UNIT, VAR_SIGMA_ML };
             LpLinFit lin = lp_lin(y, spec);
             CHECK(lin.d.d != NULL, "K %d p %d: lp_lin has d", K, p);
@@ -797,103 +459,21 @@ static void test_minimal_length(void) {
                 CHECK(hor == 1 || lin.notes.residuals_are_zero[(hor - 2) * K + k] == 0, "K %d p %d: the one before does not", K, p);
             }
             lp_lin_fit_free(&lin); mat_free(y);
-
-            int T_nl = p + hor + 2 * K * p;
-            y = random_walks(&rng, K, T_nl);
-            Mat switching = mat_new(T_nl, 1);
-            for (int t = 0; t < T_nl; t++) switching.d[t] = (mreal)rng_uniform(&rng);
-            LpNlSpec nl_spec = { spec, p, 0, 0, 0, 1, 1 };
-            LpNlFit nl = lp_nl(y, switching, nl_spec);
-            CHECK(nl.d.d != NULL, "K %d p %d: lp_nl has d", K, p);
-            for (int k = 0; nl.d.d && k < K; k++)
-                CHECK(nl.notes.residuals_are_zero[(hor - 1) * K + k] == 1, "K %d p %d: lp_nl's last horizon fits exactly", K, p);
-            lp_nl_fit_free(&nl); mat_free(switching); mat_free(y);
         }
-}
-
-static void test_weights(void) {
-    puts("fz against its definition: HP cycle, n - 1 standardisation, logistic, lag; raw and unlagged variants");
-    Rng rng = rng_new(4, 0);
-    int K = 2, T = 80;
-    Mat y = random_walks(&rng, K, T);
-    Mat switching = mat_new(T, 1);
-    for (int t = 0; t < T; t++) switching.d[t] = (mreal)(100 + 0.2 * t + 3 * sin(t / 6.0) + rng_normal(&rng));
-    LpSpec spec = { K, 2, 3, LP_SHOCK_UNIT, VAR_SIGMA_ML };
-    for (int variant = 0; variant < 4; variant++) {
-        int use_logistic = variant != 3, use_hp = variant < 2, lagged = variant != 1;
-        LpNlSpec nl_spec = { spec, 2, use_logistic, use_hp, 1600, 2, lagged };
-        LpNlFit fit = lp_nl(y, switching, nl_spec);
-        Mat cycle = mat_hp_cycle(switching, 1600, 0);
-        double mean = 0, square = 0;
-        for (int t = 0; t < T; t++) mean += (double)cycle.d[t];
-        mean /= T;
-        for (int t = 0; t < T; t++) square += ((double)cycle.d[t] - mean) * ((double)cycle.d[t] - mean);
-        double sd = sqrt(square / (T - 1));
-        for (int t = 0; t < T; t++) {
-            int source = lagged ? t - 1 : t;
-            if (source < 0) { CHECK(check_stored_non_finite(&fit.fz.d[t], 0), "the first lagged weight is NaN"); continue; }
-            double z = use_hp ? ((double)cycle.d[source] - mean) / sd : (double)switching.d[source];
-            double want = use_logistic ? exp(-2 * z) / (1 + exp(-2 * z)) : (double)switching.d[source];
-            CHECK_CLOSE(fit.fz.d[t], want, 64 * unit_roundoff * 1600, "weight against its definition");
-        }
-        CHECK(fit.switching_is_constant == 0, "a moving series is not constant");
-        mat_free(cycle); lp_nl_fit_free(&fit);
-    }
-    /* a constant switching series: its cycle is rounding noise */
-    Mat constant = mat_new(T, 1);
-    for (int t = 0; t < T; t++) constant.d[t] = (mreal)1.25;
-    LpNlSpec nl_spec = { spec, 2, 1, 1, 1600, 2, 1 };
-    LpNlFit fit = lp_nl(y, constant, nl_spec);
-    CHECK(fit.switching_is_constant == 1, "a constant switching series is flagged");
-    lp_nl_fit_free(&fit);
-    mat_free(constant); mat_free(switching); mat_free(y);
-}
-
-static void test_half_weight(void) {
-    puts("a weight of 0.5 everywhere: rank deficient, and both states equal the linear responses");
-    Rng rng = rng_new(5, 0);
-    int K = 2, p = 2, T = 120, hor = 4;
-    Mat y = random_walks(&rng, K, T);
-    Mat half = mat_new(T, 1);
-    for (int t = 0; t < T; t++) half.d[t] = (mreal)0.5;
-    LpSpec spec = { K, p, hor, LP_SHOCK_UNIT, VAR_SIGMA_ML };
-    LpNlSpec nl_spec = { spec, p, 0, 0, 0, 1, 1 };
-    LpNlFit nl = lp_nl(y, half, nl_spec);
-    LpLinFit lin = lp_lin(y, spec);
-    for (int h = 1; h <= hor; h++) {
-        CHECK(nl.notes.ols_status[h - 1] == 2 + K * p && nl.notes.rank[h - 1] == 1 + K * p,
-              "horizon %d: status %d rank %d", h, nl.notes.ols_status[h - 1], nl.notes.rank[h - 1]);
-        for (int k = 0; k < K; k++)
-            for (int j = 0; j < K; j++) {
-                double tolerance = sizeof(mreal) == sizeof(double) ? 1e-9 : 1e-2;
-                CHECK_CLOSE(TAT3(nl.irf_s1_mean, k, h, j), TAT3(lin.irf_lin_mean, k, h, j), tolerance, "state 1 is linear");
-                CHECK_CLOSE(TAT3(nl.irf_s2_mean, k, h, j), TAT3(lin.irf_lin_mean, k, h, j), tolerance, "state 2 is linear");
-            }
-    }
-    lp_nl_fit_free(&nl); lp_lin_fit_free(&lin);
-    mat_free(half); mat_free(y);
 }
 
 static void test_failures_and_views(void) {
-    puts("NaN in y or the switching series, tied shocks, and a strided y");
+    puts("NaN in y, tied shocks, and a strided y");
     Rng rng = rng_new(6, 0);
     int K = 3, p = 1, T = 100;
     LpSpec spec = { K, p, 3, LP_SHOCK_UNIT, VAR_SIGMA_ML };
     Mat y = random_walks(&rng, K, T);
-    Mat switching = mat_new(T, 1);
-    for (int t = 0; t < T; t++) switching.d[t] = (mreal)rng_normal(&rng);
 
     Mat bad = mat_copy(y);
     AT(bad, 1, 50) = check_non_finite(0);
     LpLinFit lin = lp_lin(bad, spec);
     CHECK(lin.notes.var_ols_status == -1 && lin.irf_lin_mean.d == NULL && lin.d.d == NULL, "NaN in y: nothing computed");
     lp_lin_fit_free(&lin);
-    Mat bad_switching = mat_copy(switching);
-    bad_switching.d[30] = check_non_finite(1);
-    LpNlSpec nl_spec = { spec, 1, 1, 1, 1600, 2, 1 };
-    LpNlFit nl = lp_nl(y, bad_switching, nl_spec);
-    CHECK(nl.notes.var_ols_status == -1 && nl.irf_s1_mean.d == NULL, "infinity in the switching series: nothing computed");
-    lp_nl_fit_free(&nl);
 
     Mat tied = mat_new(K, T);
     for (int t = 1; t < T; t++) {
@@ -915,7 +495,7 @@ static void test_failures_and_views(void) {
     CHECK(memcmp(from_view.irf_lin_mean.d, from_copy.irf_lin_mean.d, tensor_size(from_copy.irf_lin_mean) * sizeof(mreal)) == 0,
           "strided y and its copy differ");
     lp_lin_fit_free(&from_view); lp_lin_fit_free(&from_copy);
-    mat_free(parent); mat_free(tied); mat_free(bad); mat_free(bad_switching); mat_free(switching); mat_free(y);
+    mat_free(parent); mat_free(tied); mat_free(bad); mat_free(y);
 }
 
 static void test_var_impulse_responses(void) {
@@ -969,25 +549,17 @@ static void test_residual_flags(void) {
         AT(y, 1, t) = t >= 3 ? AT(y, 0, t - 3) : (mreal)rng_normal(&rng);
     }
     LpSpec spec = { K, p, hor, LP_SHOCK_UNIT, VAR_SIGMA_ML };
-    Mat switching = mat_new(T, 1);
-    for (int t = 0; t < T; t++) switching.d[t] = (mreal)rng_normal(&rng);
-    LpNlSpec nl_spec = { spec, p, 1, 0, 0, 1, 1 };
     LpLinFit lin = lp_lin(y, spec);
-    LpNlFit nl = lp_nl(y, switching, nl_spec);
-    LpNotes *notes[2] = { &lin.notes, &nl.notes };
-    for (int model = 0; model < 2; model++) {
-        CHECK(notes[model]->var_chol_status == 0, "model %d: the VAR has a Cholesky factor", model);
-        for (int k = 0; k < K; k++) CHECK(notes[model]->var_residuals_are_zero[k] == 0, "model %d: VAR equation %d", model, k);
-        for (int h = 1; h <= hor; h++)
-            for (int k = 0; k < K; k++) {
-                int expected = k == 1 && (h == 2 || h == 3);
-                CHECK(notes[model]->residuals_are_zero[(h - 1) * K + k] == expected,
-                      "model %d, horizon %d, variable %d: flag %d, expected %d", model, h, k,
-                      notes[model]->residuals_are_zero[(h - 1) * K + k], expected);
-            }
-    }
-    lp_lin_fit_free(&lin); lp_nl_fit_free(&nl);
-    mat_free(switching); mat_free(y);
+    CHECK(lin.notes.var_chol_status == 0, "the VAR has a Cholesky factor");
+    for (int k = 0; k < K; k++) CHECK(lin.notes.var_residuals_are_zero[k] == 0, "VAR equation %d", k);
+    for (int h = 1; h <= hor; h++)
+        for (int k = 0; k < K; k++) {
+            int expected = k == 1 && (h == 2 || h == 3);
+            CHECK(lin.notes.residuals_are_zero[(h - 1) * K + k] == expected, "horizon %d, variable %d: flag %d, expected %d", h, k,
+                  lin.notes.residuals_are_zero[(h - 1) * K + k], expected);
+        }
+    lp_lin_fit_free(&lin);
+    mat_free(y);
 
     /* With 1 lag, y_2 at t equal to y_1 at t - 1 fits exactly at horizon 1,
        and so does the VAR's second equation: both flags set, and none at
@@ -1013,196 +585,86 @@ static void test_residual_flags(void) {
     mat_free(y);
 }
 
-/* kappa(X) and rho = max_k ||r_k|| / (||X|| ||b_k||) for the regression at
-   horizon h of the design reference_design builds, from the long double
-   normal equations; ||X|| is bounded below by ||X||_F / sqrt(n), so rho is
-   bounded above. */
-static void horizon_conditioning(Mat y, int first, int p, const mreal *weight, int h, double *kappa, double *rho) {
-    int K = y.r, rows = y.c - first, n, m = rows - h + 1;
-    long double *design, *response;
-    reference_design(y, first, p, weight, &design, &response, &n);
-    long double *b = malloc((size_t)n * K * sizeof(long double));
-    reference_ols(design, response + (size_t)(h - 1) * K, m, n, K, b);
-    *kappa = sqrt(normal_matrix_condition(design, m, n));
-    double frobenius = 0;
-    for (int i = 0; i < m * n; i++) frobenius += (double)(design[i] * design[i]);
-    *rho = 0;
-    for (int k = 0; k < K; k++) {
-        long double residual_sq = 0, coefficient_sq = 0;
-        for (int r = 0; r < m; r++) {
-            long double e = response[(size_t)(r + h - 1) * K + k];
-            for (int c = 0; c < n; c++) e -= design[(size_t)r * n + c] * b[(size_t)c * K + k];
-            residual_sq += e * e;
-        }
-        for (int c = 0; c < n; c++) coefficient_sq += b[(size_t)c * K + k] * b[(size_t)c * K + k];
-        double value = sqrt((double)residual_sq) * sqrt((double)n) / (sqrt(frobenius) * sqrt((double)coefficient_sq));
-        if (value > *rho) *rho = value;
-    }
-    free(design); free(response); free(b);
-}
-
 /* A least squares solution as accurate as a QR solve is within a small
    multiple of u (kappa + kappa^2 rho) of the exact one, kappa = kappa(X) and
    rho the relative size of the residuals; the normal equations can be off by
    up to u kappa^2. On a nearly exact fit, two smooth periodic series around
    300 and 150 with shocks of 1e-6, the second is much the larger. Every
-   horizon of lp_lin and lp_nl (uniform weights given directly) is checked
-   against the long double reference within 2 u (kappa + kappa^2 rho) times
-   the largest response. Here QR at every horizon measured
+   horizon is checked against the long double reference within
+   2 u (kappa + kappa^2 rho) times the largest response. On data of this
+   shape, over lp_lin and both states of lp_nl, QR at every horizon measured
    0.0057 u (kappa + kappa^2 rho), and the shared factor without its
-   correction step 8.8. The test checks its premises at every horizon: u
-   kappa^2 is at least 100 times the bound, and the reference's own error,
+   correction step 8.8. The test checks its premises at every horizon:
+   u kappa^2 is at least 100 times the bound, and the reference's own error,
    of order kappa times the long double unit roundoff after its correction
-   steps, is under a hundredth of it. Each model's responses are built from
-   its own d. float64 only: in float32 the same data leave u kappa^2 and the
-   bound too close. */
+   steps, is under a hundredth of it. The reference is built from lp_lin's own
+   d. float64 only: in float32 the same data leave u kappa^2 and the bound too
+   close. */
 static void test_accuracy_of_a_near_exact_fit(void) {
     if (sizeof(mreal) != sizeof(double)) return;
     puts("near-exact fit: every horizon within 2 u (kappa + kappa^2 rho) of the reference, the accuracy of a QR solve");
     Rng rng = rng_new(8, 0);
     int K = 2, p = 2, T = 150, hor = 6;
-    Mat y = mat_new(K, T), w = mat_new(T, 1);
+    Mat y = mat_new(K, T);
     for (int t = 0; t < T; t++) {
         AT(y, 0, t) = (mreal)(300 + 10 * sin(0.15 * t) + 1e-6 * rng_normal(&rng));
         AT(y, 1, t) = (mreal)(150 + 5 * cos(0.255 * t) + 1e-6 * rng_normal(&rng));
-        w.d[t] = (mreal)rng_uniform(&rng);
     }
     LpSpec spec = { K, p, hor, LP_SHOCK_UNIT, VAR_SIGMA_ML };
-    LpNlSpec nl_spec = { spec, p, 0, 0, 0, 1, 0 };
     LpLinFit lin = lp_lin(y, spec);
-    LpNlFit nl = lp_nl(y, w, nl_spec);
-    CHECK(lin.d.d && nl.d.d, "near-exact fit: both models have d");
-    if (lin.d.d && nl.d.d) {
-        /* Each model's own d: Sigma_u of residuals of 1e-6 on levels of 300 is
+    CHECK(lin.d.d != NULL, "near-exact fit: lp_lin has d");
+    if (lin.d.d) {
+        /* lp_lin's own d: Sigma_u of residuals of 1e-6 on levels of 300 is
            only accurate to about u 300 / 1e-6 relative however it is
            computed, so d is not what this test is about. */
-        long double *d = long_double_copy(lin.d), *nl_d = long_double_copy(nl.d);
+        long double *d = long_double_copy(lin.d);
         double worst = 0, least_margin = INFINITY, largest_reference_share = 0;
-        Tensor want = tensor_zeros(K, hor + 1, K), want1 = tensor_zeros(K, hor + 1, K), want2 = tensor_zeros(K, hor + 1, K);
+        Tensor want = tensor_zeros(K, hor + 1, K);
         reference_responses(y, p, p, NULL, hor, d, &want, NULL, NULL);
-        reference_responses(y, p, p, nl.fz.d, hor, nl_d, &want1, &want2, NULL);
-        Tensor got[3] = { lin.irf_lin_mean, nl.irf_s1_mean, nl.irf_s2_mean }, ref[3] = { want, want1, want2 };
-        for (int which = 0; which < 3; which++)
-            for (int h = 1; h <= hor; h++) {
-                double kappa, rho;
-                horizon_conditioning(y, p, p, which ? nl.fz.d : NULL, h, &kappa, &rho);
-                double bound = 2 * unit_roundoff * (kappa + kappa * kappa * rho);
-                double margin = unit_roundoff * kappa * kappa / bound, reference_share = 5.5e-20 * kappa / bound;
-                if (margin < least_margin) least_margin = margin;
-                if (reference_share > largest_reference_share) largest_reference_share = reference_share;
-                double scale = 1;
-                for (int k = 0; k < K; k++)
-                    for (int j = 0; j < K; j++) if (fabs((double)TAT3(ref[which], k, h, j)) > scale) scale = fabs((double)TAT3(ref[which], k, h, j));
-                for (int k = 0; k < K; k++)
-                    for (int j = 0; j < K; j++) {
-                        double share = fabs((double)TAT3(got[which], k, h, j) - (double)TAT3(ref[which], k, h, j)) / (bound * scale);
-                        if (share > worst) worst = share;
-                        CHECK(share <= 1, "near-exact fit, model %d, horizon %d: %.3g of the bound, kappa %.3g, rho %.3g", which, h, share, kappa, rho);
-                    }
-            }
+        for (int h = 1; h <= hor; h++) {
+            double kappa, rho;
+            horizon_conditioning(y, p, p, NULL, h, &kappa, &rho);
+            double bound = 2 * unit_roundoff * (kappa + kappa * kappa * rho);
+            double margin = unit_roundoff * kappa * kappa / bound, reference_share = 5.5e-20 * kappa / bound;
+            if (margin < least_margin) least_margin = margin;
+            if (reference_share > largest_reference_share) largest_reference_share = reference_share;
+            double scale = 1;
+            for (int k = 0; k < K; k++)
+                for (int j = 0; j < K; j++) if (fabs((double)TAT3(want, k, h, j)) > scale) scale = fabs((double)TAT3(want, k, h, j));
+            for (int k = 0; k < K; k++)
+                for (int j = 0; j < K; j++) {
+                    double share = fabs((double)TAT3(lin.irf_lin_mean, k, h, j) - (double)TAT3(want, k, h, j)) / (bound * scale);
+                    if (share > worst) worst = share;
+                    CHECK(share <= 1, "near-exact fit, horizon %d: %.3g of the bound, kappa %.3g, rho %.3g", h, share, kappa, rho);
+                }
+        }
         printf("  largest gap %.3g of the bound; u kappa^2 at least %.3g times the bound; reference error at most %.3g of it\n",
                worst, least_margin, largest_reference_share);
         CHECK(least_margin >= 100, "the normal equations' error is only %.3g times the bound, too close to tell them apart", least_margin);
         CHECK(largest_reference_share <= 0.01, "the reference's own error is %.3g of the bound", largest_reference_share);
-        free(d); free(nl_d);
-        tensor_free(want); tensor_free(want1); tensor_free(want2);
+        free(d);
+        tensor_free(want);
     }
-    lp_lin_fit_free(&lin); lp_nl_fit_free(&nl);
-    mat_free(y); mat_free(w);
-}
-
-/* Standard errors of the first-lag coefficients at horizon h, from the
-   design and responses reference_design builds, in long double: bread
-   (x^T x)^-1 by Gauss-Jordan elimination, and either the classical
-   s^2 (x^T x)^-1 or lpirfs' Newey-West sandwich with uncentered scores
-   (src/newey_west.cpp), times confint, times sqrt(m / (m - n)) with
-   adjust_se. se is count x K x K, [block][coefficient l][response k]. */
-static void reference_band_se(Mat y, int first, int p, const mreal *weight, int h, LpBands bands, int count, const int *blocks,
-                              long double *se) {
-    int K = y.r, rows = y.c - first, n, m = rows - h + 1;
-    long double *design, *response;
-    reference_design(y, first, p, weight, &design, &response, &n);
-    long double *aug = calloc((size_t)n * 2 * n, sizeof(long double)), *b = malloc((size_t)n * K * sizeof(long double));
-    for (int i = 0; i < n; i++) {
-        for (int j = 0; j < n; j++)
-            for (int r = 0; r < m; r++) aug[(size_t)i * 2 * n + j] += design[(size_t)r * n + i] * design[(size_t)r * n + j];
-        aug[(size_t)i * 2 * n + n + i] = 1;
-    }
-    for (int c = 0; c < n; c++) {
-        int pivot = c;
-        for (int r = c + 1; r < n; r++) if (fabsl(aug[(size_t)r * 2 * n + c]) > fabsl(aug[(size_t)pivot * 2 * n + c])) pivot = r;
-        for (int j = 0; j < 2 * n; j++) { long double t = aug[(size_t)c * 2 * n + j]; aug[(size_t)c * 2 * n + j] = aug[(size_t)pivot * 2 * n + j]; aug[(size_t)pivot * 2 * n + j] = t; }
-        long double pv = aug[(size_t)c * 2 * n + c];
-        for (int j = 0; j < 2 * n; j++) aug[(size_t)c * 2 * n + j] /= pv;
-        for (int r = 0; r < n; r++) {
-            if (r == c) continue;
-            long double f = aug[(size_t)r * 2 * n + c];
-            for (int j = 0; j < 2 * n; j++) aug[(size_t)r * 2 * n + j] -= f * aug[(size_t)c * 2 * n + j];
-        }
-    }
-    #define BREAD(i, j) aug[(size_t)(i) * 2 * n + n + (j)]
-    reference_ols(design, response + (size_t)(h - 1) * K, m, n, K, b);
-    int lag = bands.nw_lag < 0 ? h : bands.nw_lag;
-    long double adjust = bands.adjust_se ? (long double)m / (m - n) : 1;
-    long double *u = malloc((size_t)m * sizeof(long double)), *g = malloc((size_t)n * n * sizeof(long double));
-    for (int k = 0; k < K; k++) {
-        long double ssr = 0;
-        for (int r = 0; r < m; r++) {
-            u[r] = response[(size_t)(r + h - 1) * K + k];
-            for (int c = 0; c < n; c++) u[r] -= design[(size_t)r * n + c] * b[(size_t)c * K + k];
-            ssr += u[r] * u[r];
-        }
-        if (bands.use_nw) {
-            for (int i = 0; i < n * n; i++) g[i] = 0;
-            for (int a = 0; a <= lag; a++) {
-                long double w = 1 - (long double)a / (lag + 1);
-                for (int i = 0; i < n; i++)
-                    for (int j = 0; j < n; j++) {
-                        long double za = 0, zt = 0;
-                        for (int t = a; t < m; t++) {
-                            za += design[(size_t)t * n + i] * u[t] * design[(size_t)(t - a) * n + j] * u[t - a];
-                            zt += design[(size_t)t * n + j] * u[t] * design[(size_t)(t - a) * n + i] * u[t - a];
-                        }
-                        g[(size_t)i * n + j] += a == 0 ? za : w * (za + zt);
-                    }
-            }
-        }
-        for (int c = 0; c < count; c++)
-            for (int l = 0; l < K; l++) {
-                int j = blocks[c] + l;
-                long double variance = 0;
-                if (bands.use_nw) {
-                    for (int a = 0; a < n; a++)
-                        for (int bb = 0; bb < n; bb++) variance += BREAD(j, a) * g[(size_t)a * n + bb] * BREAD(bb, j);
-                } else variance = ssr / (m - n) * BREAD(j, j);
-                se[((size_t)c * K + l) * K + k] = bands.confint * sqrtl(adjust * variance);
-            }
-    }
-    #undef BREAD
-    free(aug); free(b); free(u); free(g); free(design); free(response);
+    lp_lin_fit_free(&lin);
+    mat_free(y);
 }
 
 static void test_bands(void) {
     puts("bands: against the long double reference, the identities they satisfy, NaN where undefined, the cache");
     Rng rng = rng_new(61, 0);
     int K = 3, p = 2, T = 90, hor = 5;
-    Mat y = random_walks(&rng, K, T), w = mat_new(T, 1);
-    for (int t = 0; t < T; t++) w.d[t] = (mreal)rng_uniform(&rng);
+    Mat y = random_walks(&rng, K, T);
     LpSpec spec = { K, p, hor, LP_SHOCK_STANDARD_DEVIATION, VAR_SIGMA_ML };
-    LpNlSpec nl_spec = { spec, p, 0, 0, 0, 1, 1 };
     double tolerance = sizeof(mreal) == sizeof(double) ? 1e-9 : 1e-2;
     LpBands settings[4] = { { 1.96, 1, -1, 0 }, { 1.96, 0, -1, 0 }, { 1.0, 1, 3, 1 }, { 1.67, 0, -1, 1 } };
     for (int which = 0; which < 4; which++) {
         LpBands bands = settings[which];
         LpLinFit lin = lp_lin_with_bands(y, spec, bands);
-        LpNlFit nl = lp_nl_with_bands(y, w, nl_spec, bands);
-        CHECK(lin.irf_lin_low.d && lin.irf_lin_up.d && nl.irf_s1_low.d && nl.irf_s2_up.d, "setting %d: bands allocated", which);
-        long double se[2 * 9];
-        int lin_blocks[1] = { 1 }, nl_blocks[2] = { 1, 1 + K * p };
+        CHECK(lin.irf_lin_low.d && lin.irf_lin_up.d, "setting %d: bands allocated", which);
+        long double se[9];
+        int lin_blocks[1] = { 1 };
         for (int h = 0; h <= hor; h++) {
-            if (h > 0) {
-                reference_band_se(y, p, p, NULL, h, bands, 1, lin_blocks, se);
-            }
+            if (h > 0) reference_band_se(y, p, p, NULL, h, bands, 1, lin_blocks, se);
             for (int k = 0; k < K; k++)
                 for (int j = 0; j < K; j++) {
                     double mean = (double)TAT3(lin.irf_lin_mean, k, h, j), low_want = mean, up_want = mean;
@@ -1215,19 +677,8 @@ static void test_bands(void) {
                     CHECK_CLOSE(TAT3(lin.irf_lin_low, k, h, j), low_want, tolerance, "lp_lin low band");
                     CHECK_CLOSE(TAT3(lin.irf_lin_up, k, h, j), up_want, tolerance, "lp_lin up band");
                 }
-            if (h > 0) reference_band_se(y, p, p, nl.fz.d, h, bands, 2, nl_blocks, se);
-            Tensor means[2] = { nl.irf_s1_mean, nl.irf_s2_mean }, lows[2] = { nl.irf_s1_low, nl.irf_s2_low }, ups[2] = { nl.irf_s1_up, nl.irf_s2_up };
-            for (int c = 0; c < 2; c++)
-                for (int k = 0; k < K; k++)
-                    for (int j = 0; j < K; j++) {
-                        double mean = (double)TAT3(means[c], k, h, j), width = 0;
-                        if (h > 0)
-                            for (int l = 0; l < K; l++) width += (double)(se[((size_t)c * K + l) * K + k] * (long double)AT(nl.d, l, j));
-                        CHECK_CLOSE(TAT3(lows[c], k, h, j), mean - width, tolerance, "lp_nl low band");
-                        CHECK_CLOSE(TAT3(ups[c], k, h, j), mean + width, tolerance, "lp_nl up band");
-                    }
         }
-        lp_lin_fit_free(&lin); lp_nl_fit_free(&nl);
+        lp_lin_fit_free(&lin);
     }
 
     /* the width is linear in confint, and adjust_se multiplies it by
@@ -1250,12 +701,6 @@ static void test_bands(void) {
     lp_lin_fit_free(&a); lp_lin_fit_free(&b2); lp_lin_fit_free(&c);
 
     /* NaN where the estimator is not defined */
-    Mat half = mat_new(T, 1);
-    for (int t = 0; t < T; t++) half.d[t] = (mreal)0.5;
-    LpNlFit rank_deficient = lp_nl_with_bands(y, half, nl_spec, settings[0]);
-    CHECK(check_stored_non_finite(&TAT3(rank_deficient.irf_s1_low, 0, 1, 0), 0) && check_stored_non_finite(&TAT3(rank_deficient.irf_s2_up, 1, 2, 2), 0),
-          "a rank-deficient horizon has NaN bands");
-    lp_nl_fit_free(&rank_deficient);
     int hor_short = K + 1, T_short = hor_short + p * (K + 1);
     Mat short_y = random_walks(&rng, K, T_short);
     LpSpec short_spec = { K, p, hor_short, LP_SHOCK_UNIT, VAR_SIGMA_ML };
@@ -1268,6 +713,7 @@ static void test_bands(void) {
     lp_lin_fit_free(&classical_short); lp_lin_fit_free(&long_lag);
 
     /* the cache holds the bands and refuses other settings */
+    mkdir("out", 0777);
     remove(CACHE);
     LpLinFit fitted = lp_lin_fit_cached(y, spec, settings[0], CACHE, 0), loaded = {0};
     CHECK(lp_lin_load_fit(&loaded, y, spec, settings[0], CACHE) == 1, "a fit with bands loads");
@@ -1276,50 +722,14 @@ static void test_bands(void) {
           "the bands load bit for bit");
     CHECK(lp_lin_load_fit(&loaded, y, spec, settings[1], CACHE) == 0, "other band settings are refused");
     CHECK(lp_lin_load_fit(&loaded, y, spec, (LpBands){0}, CACHE) == 0, "no bands against a file with bands is refused");
-    remove(CACHE);
-    LpNlFit nl_fitted = lp_nl_fit_cached(y, w, nl_spec, settings[2], CACHE, 0), nl_loaded = {0};
-    CHECK(lp_nl_load_fit(&nl_loaded, y, w, nl_spec, settings[2], CACHE) == 1
-          && memcmp(nl_loaded.irf_s2_low.d, nl_fitted.irf_s2_low.d, tensor_size(nl_fitted.irf_s2_low) * sizeof(mreal)) == 0,
-          "lp_nl's bands load bit for bit");
-    lp_lin_fit_free(&fitted); lp_lin_fit_free(&loaded); lp_nl_fit_free(&nl_fitted); lp_nl_fit_free(&nl_loaded);
-    mat_free(half); mat_free(short_y); mat_free(w); mat_free(y);
+    lp_lin_fit_free(&fitted); lp_lin_fit_free(&loaded);
+    mat_free(short_y); mat_free(y);
 }
-
-static int same_notes(const LpNotes *a, const LpNotes *b, int K, int hor) {
-    return a->var_ols_status == b->var_ols_status && a->var_rank == b->var_rank && a->var_chol_status == b->var_chol_status
-        && memcmp(a->var_residuals_are_zero, b->var_residuals_are_zero, (size_t)K * sizeof(int)) == 0
-        && memcmp(a->ols_status, b->ols_status, (size_t)hor * sizeof(int)) == 0
-        && memcmp(a->rank, b->rank, (size_t)hor * sizeof(int)) == 0
-        && memcmp(a->residuals_are_zero, b->residuals_are_zero, (size_t)hor * K * sizeof(int)) == 0;
-}
-
-static int same_values(const mreal *a, const mreal *b, size_t count) { return memcmp(a, b, count * sizeof(mreal)) == 0; }
 
 static int same_lin_fit(const LpLinFit *a, const LpLinFit *b) {
     int K = a->spec.K;
     return same_notes(&a->notes, &b->notes, K, a->spec.hor) && same_values(a->d.d, b->d.d, (size_t)K * K)
         && same_values(a->irf_lin_mean.d, b->irf_lin_mean.d, tensor_size(a->irf_lin_mean));
-}
-
-/* fz is compared as values with NaN matching NaN, since a NaN written as
-   null reads back as (mreal)NAN, whose bits need not be the ones stored. */
-static int same_nl_fit(const LpNlFit *a, const LpNlFit *b) {
-    int K = a->spec.lin.K;
-    if (a->fz.r != b->fz.r) return 0;
-    for (int t = 0; t < a->fz.r; t++) {
-        int a_nan = MISNAN(a->fz.d[t]), b_nan = MISNAN(b->fz.d[t]);
-        if (a_nan != b_nan || (!a_nan && a->fz.d[t] != b->fz.d[t])) return 0;
-    }
-    return same_notes(&a->notes, &b->notes, K, a->spec.lin.hor) && same_values(a->d.d, b->d.d, (size_t)K * K)
-        && a->switching_is_constant == b->switching_is_constant
-        && same_values(a->irf_s1_mean.d, b->irf_s1_mean.d, tensor_size(a->irf_s1_mean))
-        && same_values(a->irf_s2_mean.d, b->irf_s2_mean.d, tensor_size(a->irf_s2_mean));
-}
-
-static int file_exists(const char *path) {
-    FILE *probe = fopen(path, "r");
-    if (probe) fclose(probe);
-    return probe != NULL;
 }
 
 static void test_cache(void) {
@@ -1329,10 +739,7 @@ static void test_cache(void) {
     Rng rng = rng_new(19, 0);
     int K = 3, p = 2, T = 100, hor = 5;
     Mat y = random_walks(&rng, K, T);
-    Mat switching = mat_new(T, 1);
-    for (int t = 0; t < T; t++) switching.d[t] = (mreal)(100 + 0.1 * t + rng_normal(&rng));
     LpSpec spec = { K, p, hor, LP_SHOCK_STANDARD_DEVIATION, VAR_SIGMA_LS };
-    LpNlSpec nl_spec = { spec, p, 1, 1, 1600, 2, 1 };
 
     LpLinFit lin = lp_lin(y, spec);
     lp_lin_save_fit(&lin, y, CACHE);
@@ -1377,39 +784,6 @@ static void test_cache(void) {
     LpLinFit third = lp_lin_fit_cached(y, spec, none, CACHE, 0);
     CHECK(same_lin_fit(&third, &lin), "lp_lin: force_refit rewrote the cache");
 
-    LpNlFit nl = lp_nl(y, switching, nl_spec);
-    CHECK(MISNAN(nl.fz.d[0]), "the lagged weight starts with a NaN");
-    lp_nl_save_fit(&nl, y, switching, CACHE);
-    LpNlFit nl_loaded = {0};
-    CHECK(lp_nl_load_fit(&nl_loaded, y, switching, nl_spec, none, CACHE) == 1, "lp_nl: load");
-    CHECK(same_nl_fit(&nl, &nl_loaded), "lp_nl: the loaded fit differs from the fitted one");
-    Mat other_switching = mat_copy(switching);
-    other_switching.d[10] += (mreal)1e-3;
-    LpNlSpec other_lambda = nl_spec;
-    other_lambda.lambda = 129600;
-    LpNlSpec other_lags = nl_spec;
-    other_lags.lags_endog_nl = 1;
-    CHECK(lp_nl_load_fit(&nl_loaded, changed, switching, nl_spec, none, CACHE) == 0, "lp_nl: different data");
-    CHECK(lp_nl_load_fit(&nl_loaded, y, other_switching, nl_spec, none, CACHE) == 0, "lp_nl: different switching series");
-    CHECK(lp_nl_load_fit(&nl_loaded, y, switching, other_lambda, none, CACHE) == 0, "lp_nl: different lambda");
-    CHECK(lp_nl_load_fit(&nl_loaded, y, switching, other_lags, none, CACHE) == 0, "lp_nl: different lags_endog_nl");
-    replace_in_file(CACHE, "\"irf_s2_mean\"", "\"irf_s2_renamed\"");
-    CHECK(lp_nl_load_fit(&nl_loaded, y, switching, nl_spec, none, CACHE) == 0, "lp_nl: missing field");
-    lp_nl_save_fit(&nl, y, switching, CACHE);
-    replace_in_file(CACHE, "\"switching_is_constant\":0", "\"switching_is_constant\":2");
-    CHECK(lp_nl_load_fit(&nl_loaded, y, switching, nl_spec, none, CACHE) == 0, "lp_nl: a flag out of range");
-    lp_nl_save_fit(&nl, y, switching, CACHE);
-    truncate_file(CACHE);
-    CHECK(lp_nl_load_fit(&nl_loaded, y, switching, nl_spec, none, CACHE) == 0, "lp_nl: truncated file");
-    CHECK(same_nl_fit(&nl, &nl_loaded), "lp_nl: a refusal changed the caller's fit");
-
-    remove(CACHE);
-    LpNlFit nl_first = lp_nl_fit_cached(y, switching, nl_spec, none, CACHE, 0);
-    LpNlFit nl_second = lp_nl_fit_cached(y, switching, nl_spec, none, CACHE, 0);
-    LpNlFit nl_forced = lp_nl_fit_cached(y, switching, nl_spec, none, CACHE, 1);
-    CHECK(same_nl_fit(&nl_first, &nl) && same_nl_fit(&nl_second, &nl) && same_nl_fit(&nl_forced, &nl),
-          "lp_nl: computed, loaded and recomputed fits agree");
-
     /* shocks tied so that the VAR's residual covariance is singular: no d,
        nothing written */
     remove(CACHE);
@@ -1422,94 +796,21 @@ static void test_cache(void) {
     }
     LpLinFit no_d = lp_lin_fit_cached(tied, spec, none, CACHE, 0);
     CHECK(no_d.d.d == NULL && !file_exists(CACHE), "lp_lin: a fit without d was written");
-    LpNlFit nl_no_d = lp_nl_fit_cached(tied, switching, nl_spec, none, CACHE, 0);
-    CHECK(nl_no_d.d.d == NULL && !file_exists(CACHE), "lp_nl: a fit without d was written");
 
     lp_lin_fit_free(&lin); lp_lin_fit_free(&lin_loaded); lp_lin_fit_free(&first); lp_lin_fit_free(&second);
     lp_lin_fit_free(&forced); lp_lin_fit_free(&third); lp_lin_fit_free(&no_d);
-    lp_nl_fit_free(&nl); lp_nl_fit_free(&nl_loaded); lp_nl_fit_free(&nl_first); lp_nl_fit_free(&nl_second);
-    lp_nl_fit_free(&nl_forced); lp_nl_fit_free(&nl_no_d);
-    mat_free(y); mat_free(switching); mat_free(changed); mat_free(other_switching); mat_free(tied);
-}
-
-static int same_tensor(Tensor a, Tensor b) {
-    if (!a.d || !b.d) return !a.d && !b.d;
-    return tensor_size(a) == tensor_size(b) && memcmp(a.d, b.d, tensor_size(a) * sizeof(mreal)) == 0;
-}
-
-/* Largest |a - b| / max(1, max |b|) over two tensors of one shape. */
-static double tensor_gap(Tensor a, Tensor b) {
-    double gap = 0, scale = 1;
-    for (size_t i = 0; i < tensor_size(b); i++) if (fabs((double)b.d[i]) > scale) scale = fabs((double)b.d[i]);
-    for (size_t i = 0; i < tensor_size(b); i++) if (fabs((double)a.d[i] - (double)b.d[i]) > gap) gap = fabs((double)a.d[i] - (double)b.d[i]);
-    return gap / scale;
-}
-
-static void test_joint_fit(void) {
-    puts("lp_lin_and_nl: the linear fit bit for bit, the state-dependent one to rounding, the VAR fitted once");
-    Rng rng = rng_new(71, 0);
-    int K = 3, p = 2, T = 140, hor = 6;
-    Mat y = random_walks(&rng, K, T), switching = mat_new(T, 1);
-    for (int t = 0; t < T; t++) switching.d[t] = (mreal)(100 + 0.1 * t + rng_normal(&rng));
-    LpNlSpec spec = { { K, p, hor, LP_SHOCK_STANDARD_DEVIATION, VAR_SIGMA_LS }, p + 1, 1, 1, 1600, 2, 1 };
-    LpBands settings[2] = { {0}, { 1.96, 1, -1, 0 } };
-    double tolerance = sizeof(mreal) == sizeof(double) ? 1e-10 : 1e-3;
-    for (int b = 0; b < 2; b++) {
-        LpLinNlFit both = lp_lin_and_nl(y, switching, spec, settings[b]);
-        LpLinFit lin = lp_lin_with_bands(y, spec.lin, settings[b]);
-        LpNlFit nl = lp_nl_with_bands(y, switching, spec, settings[b]);
-        CHECK(same_notes(&both.lin.notes, &lin.notes, K, hor) && same_tensor(both.lin.irf_lin_mean, lin.irf_lin_mean)
-              && same_tensor(both.lin.irf_lin_low, lin.irf_lin_low) && same_tensor(both.lin.irf_lin_up, lin.irf_lin_up)
-              && memcmp(both.lin.d.d, lin.d.d, (size_t)K * K * sizeof(mreal)) == 0, "bands %d: the linear fit bit for bit", b);
-        CHECK(same_notes(&both.nl.notes, &nl.notes, K, hor), "bands %d: the state-dependent notes, VAR's included, are lp_nl's", b);
-            int fz_equal = 1;
-        for (int t = 1; t < T; t++) if (both.nl.fz.d[t] != nl.fz.d[t]) fz_equal = 0;
-        CHECK(fz_equal && both.nl.switching_is_constant == nl.switching_is_constant, "bands %d: the same weights", b);
-        CHECK(tensor_gap(both.nl.irf_s1_mean, nl.irf_s1_mean) <= tolerance && tensor_gap(both.nl.irf_s2_mean, nl.irf_s2_mean) <= tolerance,
-              "bands %d: the responses agree to rounding: %.3g %.3g", b, tensor_gap(both.nl.irf_s1_mean, nl.irf_s1_mean),
-              tensor_gap(both.nl.irf_s2_mean, nl.irf_s2_mean));
-        if (b == 1)
-            CHECK(tensor_gap(both.nl.irf_s1_low, nl.irf_s1_low) <= tolerance && tensor_gap(both.nl.irf_s2_up, nl.irf_s2_up) <= tolerance,
-                  "the bands agree to rounding");
-        lp_lin_nl_fit_free(&both); lp_lin_fit_free(&lin); lp_nl_fit_free(&nl);
-    }
-
-    /* a NaN in y: neither fit computes anything; one in the switching series:
-       the linear fit stands; tied shocks: no d in either */
-    Mat bad_y = mat_copy(y), bad_switching = mat_copy(switching), tied = mat_new(K, T);
-    AT(bad_y, 1, 40) = check_non_finite(0);
-    bad_switching.d[50] = check_non_finite(1);
-    for (int t = 1; t < T; t++) {
-        double u1 = rng_normal(&rng), u2 = rng_normal(&rng);
-        AT(tied, 0, t) = (mreal)(0.8 * AT(tied, 0, t - 1) + u1);
-        AT(tied, 1, t) = (mreal)(0.5 * AT(tied, 1, t - 1) + u2);
-        AT(tied, 2, t) = (mreal)(0.3 * AT(tied, 2, t - 1) + u1 + u2);
-    }
-    LpLinNlFit nan_y = lp_lin_and_nl(bad_y, switching, spec, settings[1]);
-    CHECK(nan_y.lin.notes.var_ols_status == -1 && nan_y.nl.notes.var_ols_status == -1 && !nan_y.lin.d.d && !nan_y.nl.d.d,
-          "a NaN in y: nothing computed in either");
-    LpLinNlFit nan_switching = lp_lin_and_nl(y, bad_switching, spec, settings[0]);
-    CHECK(nan_switching.lin.d.d && nan_switching.nl.notes.var_ols_status == -1 && !nan_switching.nl.irf_s1_mean.d,
-          "an infinity in the switching series: the linear fit stands, the state-dependent one computes nothing");
-    LpLinNlFit singular = lp_lin_and_nl(tied, switching, spec, settings[0]);
-    CHECK(singular.lin.notes.var_chol_status != 0 && singular.nl.notes.var_chol_status == singular.lin.notes.var_chol_status
-          && !singular.lin.d.d && !singular.nl.d.d, "tied shocks: no d in either");
-    lp_lin_nl_fit_free(&nan_y); lp_lin_nl_fit_free(&nan_switching); lp_lin_nl_fit_free(&singular);
-    mat_free(bad_y); mat_free(bad_switching); mat_free(tied); mat_free(switching); mat_free(y);
+    mat_free(y); mat_free(changed); mat_free(tied);
 }
 
 int main(void) {
     test_jorda();
     test_identities();
     test_against_reference();
-    test_weights();
-    test_half_weight();
     test_failures_and_views();
     test_var_impulse_responses();
     test_residual_flags();
     test_cache();
     test_bands();
-    test_joint_fit();
     test_random_configurations();
     test_accuracy_of_a_near_exact_fit();
     test_invariances();

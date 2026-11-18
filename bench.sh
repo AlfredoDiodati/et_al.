@@ -13,7 +13,7 @@
 # bench_*.py's own imports for which it specifically needs) - set PYTHON
 # to a venv interpreter that has them if plain python3 on PATH doesn't:
 #   PYTHON=/path/to/venv/bin/python ./bench.sh
-# bench_lp also needs Rscript, with the lpirfs R package installed.
+# bench_lp and bench_lp_nl also need Rscript, with the lpirfs R package installed.
 # bench_band_chol and bench_brent need scipy.
 
 cd "$(dirname "$0")"
@@ -30,7 +30,7 @@ FAILED_NAMES=""
 # the path is particular to the machine that ran it.
 printf "bench run: %s (%s)\n\n" "$(date)" "$("$PYTHON" --version 2>&1)" >> "$REPORT"
 
-SUITES="bench_mat bench_cumsum bench_rolling_mean bench_hp_filter bench_kalman bench_band_chol bench_brent bench_lp bench_ols_covariance bench_csv_missing_values bench_tensor bench_decomp bench_dist bench_ad bench_frame bench_random bench_stats bench_adam bench_special bench_json"
+SUITES="bench_mat bench_cumsum bench_rolling_mean bench_hp_filter bench_kalman bench_band_chol bench_brent bench_lp bench_lp_nl bench_ols_covariance bench_csv_missing_values bench_tensor bench_decomp bench_dist bench_ad bench_frame bench_random bench_stats bench_adam bench_special bench_json"
 
 for s in $SUITES; do
     printf "  %-16s" "$s"

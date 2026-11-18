@@ -9,7 +9,7 @@ and a random walk as the switching series. Prints the best of 5 rounds in
 microseconds per draw, both fits, for T = 200 and 500, and writes the same to
 out/lp_throughput_report.txt.
 */
-#include "../../lp/lp.h"
+#include "../../lp/lp_nl.h"
 #include <omp.h>
 #include <sys/stat.h>
 #include <time.h>

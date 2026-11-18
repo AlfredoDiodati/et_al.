@@ -84,6 +84,7 @@ the lot as unused.
 #include "../../sd/score_driven_location.h"
 #include "../../varima/var.h"
 #include "../../lp/lp.h"
+#include "../../lp/lp_nl.h"
 
 #include <stdio.h>
 
@@ -283,6 +284,12 @@ static int touch_every_module(void) {
     LpSpec lp_spec = { 2, 1, 3, LP_SHOCK_UNIT, VAR_SIGMA_ML };
     LpLinFit lp_fit = lp_lin(lp_data, lp_spec);
     if (lp_fit.irf_lin_mean.shape[1] != 4) problems++;
+    Mat lp_weight = mat_new(16, 1);
+    for (int t = 0; t < 16; t++) lp_weight.d[t] = (mreal)(0.5 + 0.4 * sin(0.9 * t));
+    LpNlSpec lp_nl_spec = { lp_spec, 1, 0, 0, 0, 1, 0 };
+    LpNlFit lp_nl_fit = lp_nl(lp_data, lp_weight, lp_nl_spec);
+    if (lp_nl_fit.irf_s1_mean.shape[1] != 4) problems++;
+    lp_nl_fit_free(&lp_nl_fit); mat_free(lp_weight);
     lp_lin_fit_free(&lp_fit); mat_free(lp_data);
 
     df_free(&joined); df_free(&queried); df_free(&frame);

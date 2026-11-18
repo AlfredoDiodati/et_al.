@@ -1,10 +1,10 @@
-# lp/lp.h - speed
+# lp/lp.h and lp/lp_nl.h - speed
 
-The speed of `lp/lp.h`'s `lp_lin` and `lp_nl`: against `lpirfs`, with many fits at once, and how the current algorithm was reached. Split out of `docs/LP_DOCUMENTATION.md`, which describes the models, the algorithm and the tests, because this is what a reader needs when changing the code rather than when calling it.
+The speed of `lp/lp.h`'s `lp_lin` and `lp/lp_nl.h`'s `lp_nl`: against `lpirfs`, with many fits at once, and how the current algorithm was reached. Split out of `docs/LP_DOCUMENTATION.md` and `docs/LP_NL_DOCUMENTATION.md`, which describe the models, the algorithm and the tests, because this is what a reader needs when changing the code rather than when calling it. It covers both headers in one file because the two models share the code being timed, `lp/lp.h`'s regressions of every horizon, and most measurements below time both on the same data.
 
 ## Against lpirfs
 
-`tests/performance/bench_lp.py` (in `bench.sh`; it needs R with the `lpirfs` package installed). Setup:
+`tests/performance/bench_lp.py` for `lp_lin` and `tests/performance/bench_lp_nl.py` for `lp_nl` (both in `bench.sh`; they need R with the `lpirfs` package installed). The table was measured on commit `59cc9d0`, when one script timed both models on the same data; `bench_lp.py` now draws no switching series, so its `T = 500` data set is another draw of the same process. Setup:
 
 - the calibration's specification: 5 variables, 4 lags, horizon 15, unit shocks; `lp_nl` with 4 lags in both parts, the HP filter at `lambda` 1600, `gamma` 2 and the lagged weight;
 - data from `default_rng(0)`: a VAR(1) with coefficient `0.5 I + 0.1 N(0, 1)` and standard normal errors, and a random walk around 100 as the switching series, at 200 and 500 observations;
@@ -74,7 +74,7 @@ The earlier changes in shared code, measured with 6 variables, 4 lags, horizon 1
 
 ## The price in accuracy
 
-Accuracy, measured against the long double reference of `lp_correctness.c`:
+Accuracy, measured against the long double reference of `tests/correctness/lp_long_double_reference.h`:
 - **Data:** 20 calibration-shaped data sets from `rng_new(31, s)`: two series at `100 log(100 + cumulated growth)`, one near 0.9, two near 0.02, with the 4-period moving average of the first as the switching series.
 - **Settings:** 4 lags, horizon 15, `T = 200`, unit shocks.
 - **Measure:** for each response-shock pair, the largest gap over the horizons relative to the largest reference response. Largest over all pairs:
