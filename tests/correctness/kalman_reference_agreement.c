@@ -149,6 +149,7 @@ static DynamicFactorFit fit_at(DynamicFactorSpec spec, const double *theta, cons
     f.paths.n_periods = 1;
     f.paths.n_state = spec.p;
     f.paths.att = matrix_of(att_T, spec.p, 1);
+    f.att_T = matrix_of(att_T, spec.p, 1);
     int shape[3] = { 1, spec.p, spec.p };
     f.paths.Ptt = tensor_from(3, shape, Ptt_T);
     return f;
@@ -213,7 +214,7 @@ void c_dfm_simulation_from_shocks(int p, int N, int n_periods, const double *the
     DynamicFactorFit f = fit_at(spec, theta, att_T, Ptt_T);
     Tensor Mt = covariates_of(M, n_periods, N, p);
     Mat eta = columns_of(eta_rows, n_periods, p), eps = columns_of(eps_rows, n_periods, N);
-    Mat y = dynamic_factor_simulation_from_shocks(&f, Mt, eta, eps);
+    Mat y = dynamic_factor_simulation_from_shocks(&f.model, Mt, f.att_T, eta, eps);
     for (int t = 0; t < n_periods; t++)
         for (int i = 0; i < N; i++) y_rows[(size_t)t * N + i] = AT(y, i, t);
     mat_free(y); mat_free(eta); mat_free(eps);

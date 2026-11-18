@@ -286,8 +286,11 @@ static void test_dynamic_factor_fit(void) {
 
     /* simulation with zero shocks is the mean path from att_T */
     Mat eta = mat_new(p, n_test), eps = mat_new(N, n_test);
-    Mat mean_path = dynamic_factor_simulation_from_shocks(&plain, M_test, eta, eps);
+    Mat mean_path = dynamic_factor_simulation_from_shocks(&plain.model, M_test, plain.att_T, eta, eps);
     for (int j = 0; j < p; j++) a[j] = AT(plain.paths.att, j, n_train - 1);
+    gap = 0;
+    for (int j = 0; j < p; j++) gap = fmax(gap, fabs(plain.att_T.d[j] - a[j]));
+    CHECK(gap == 0, "att_T differs from the last filtered state by %g", gap);
     gap = 0;
     for (int t = 0; t < n_test; t++) {
         for (int i = 0; i < N; i++) {
@@ -301,7 +304,7 @@ static void test_dynamic_factor_fit(void) {
 
     /* simulation's observation noise has variance sigma2 */
     Rng draws = rng_new(99, 12);
-    Tensor paths = dynamic_factor_simulation(&plain, M_test, 200, &draws);
+    Tensor paths = dynamic_factor_simulation(&plain.model, M_test, plain.att_T, 200, &draws);
     /* in the first period the state is exactly att_T, so what is left after
        the mean path is the observation noise alone */
     double squares = 0;
@@ -363,6 +366,9 @@ static void test_dynamic_factor_cache(void) {
     for (int t = 0; t < T; t++)
         for (int j = 0; j < p; j++) gap = fmax(gap, fabs(AT(loaded.paths.att, j, t) - AT(first.paths.att, j, t)));
     CHECK(T == loaded.paths.n_periods && gap == 0, "the recomputed paths differ from the fit's by %g", gap);
+    gap = 0;
+    for (int j = 0; j < p; j++) gap = fmax(gap, fabs(loaded.att_T.d[j] - first.att_T.d[j]));
+    CHECK(gap == 0, "the reloaded att_T differs from the fit's by %g", gap);
 
     /* the collapsed estimator does not read the filtered estimator's cache */
     DynamicFactorFit other = dynamic_factor_fit_result_new(data.spec);

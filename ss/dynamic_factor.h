@@ -403,7 +403,9 @@ typedef enum { DYNAMIC_FACTOR_FILTERED = 0, DYNAMIC_FACTOR_COLLAPSED = 1 } Dynam
 What dynamic_factor_fit and dynamic_factor_fit_collapsed return. model is the
 constrained estimate and theta its coordinates, log_likelihood the maximum
 without the 2 pi constant, and paths the filter's at the estimate: of y for
-the filtered estimator, of ystar for the collapsed one.
+the filtered estimator, of ystar for the collapsed one. att_T is the filtered
+state at the last period, p x 1, where forecasts start and where a simulation
+from the fit starts.
 
 niter counts the iterations of the latest run. A fit resumed from a cached one
 that stopped at its iteration cap is a chain of runs: total_niter is the sum
@@ -423,6 +425,7 @@ typedef struct {
     LbfgsStatus status;
     LbfgsStatus *run_status;
     KalmanPaths paths;
+    Vec att_T;
 } DynamicFactorFit;
 
 /* An empty result, owning its memory from the start, so
@@ -432,6 +435,7 @@ static inline DynamicFactorFit dynamic_factor_fit_result_new(DynamicFactorSpec s
     memset(&result, 0, sizeof(result));
     result.model = dynamic_factor_new(spec);
     result.theta = mat_new(dynamic_factor_n_theta(spec), 1);
+    result.att_T = mat_new(spec.p, 1);
     result.status = LBFGS_MAX_ITERATIONS;
     return result;
 }
@@ -439,9 +443,16 @@ static inline DynamicFactorFit dynamic_factor_fit_result_new(DynamicFactorSpec s
 static inline void dynamic_factor_fit_free(DynamicFactorFit *fit) {
     dynamic_factor_free(&fit->model);
     mat_free(fit->theta);
+    mat_free(fit->att_T);
     free(fit->run_status);
     fit->run_status = NULL;
     kalman_paths_free(&fit->paths);
+}
+
+/* The last column of the filtered states into att_T. */
+static inline void _dynamic_factor_store_att_T(DynamicFactorFit *fit) {
+    int T = fit->paths.n_periods;
+    for (int i = 0; i < fit->model.spec.p; i++) fit->att_T.d[i] = AT(fit->paths.att, i, T - 1);
 }
 
 /* The chain's reasons, oldest run first, with the latest appended. */
@@ -492,6 +503,8 @@ static inline DynamicFactorFit _dynamic_factor_fit(Mat y, Tensor M, const Dynami
     result.status = solved.status;
     result.run_status = _dynamic_factor_run_status_extend(NULL, 0, solved.status);
     result.paths = solved.paths;
+    result.att_T = mat_new(spec.p, 1);
+    _dynamic_factor_store_att_T(&result);
     return result;
 }
 
@@ -697,6 +710,7 @@ static inline int dynamic_factor_load_fit(DynamicFactorFit *result, Mat y, Tenso
     result->status = history[(int)nruns - 1];
     kalman_paths_free(&result->paths);
     result->paths = _dynamic_factor_paths_at(y, M, result->model.spec, result->theta, initialization, estimator);
+    _dynamic_factor_store_att_T(result);
     return 1;
 }
 
@@ -746,15 +760,8 @@ static inline DynamicFactorFit dynamic_factor_fit_collapsed_cached(Mat y, Tensor
                                       cache_path, force_refit);
 }
 
-/* The filtered state at the end of the fit, att_T and Ptt_T, which every
-   forecast and simulation starts from. Caller frees. */
-static inline Vec _dynamic_factor_last_att(const DynamicFactorFit *fit) {
-    int p = fit->model.spec.p, T = fit->paths.n_periods;
-    Vec att = mat_new(p, 1);
-    for (int i = 0; i < p; i++) att.d[i] = AT(fit->paths.att, i, T - 1);
-    return att;
-}
-
+/* The filtered state covariance at the end of the fit, Ptt_T, which the
+   forecasts start from with att_T. Caller frees. */
 static inline Mat _dynamic_factor_last_Ptt(const DynamicFactorFit *fit) {
     int p = fit->model.spec.p, T = fit->paths.n_periods;
     Mat Ptt = mat_new(p, p);
@@ -763,10 +770,10 @@ static inline Mat _dynamic_factor_last_Ptt(const DynamicFactorFit *fit) {
     return Ptt;
 }
 
-/* A context holding the fitted model, for forecasting and simulation. */
-static inline DynamicFactorContext *_dynamic_factor_context_of_fit(const DynamicFactorFit *fit, Tensor M) {
-    DynamicFactorContext *c = _dynamic_factor_context_new(fit->model.spec, M);
-    dynamic_factor_copy(&fit->model, &c->model);
+/* A context holding a given model, for forecasting and simulation. */
+static inline DynamicFactorContext *_dynamic_factor_context_of_model(const DynamicFactor *model, Tensor M) {
+    DynamicFactorContext *c = _dynamic_factor_context_new(model->spec, M);
+    dynamic_factor_copy(model, &c->model);
     return c;
 }
 
@@ -797,17 +804,17 @@ static inline void dynamic_factor_forecast_free(DynamicFactorForecast *f) {
    the fit's last update, as the source's scan starts from att[-1]. */
 static inline KalmanPaths _dynamic_factor_filter_test_period(const DynamicFactorFit *fit, DynamicFactorContext *c, Mat y_test) {
     int p = fit->model.spec.p;
-    Vec a0 = _dynamic_factor_last_att(fit), a1 = mat_new(p, 1);
+    Vec a1 = mat_new(p, 1);
     Mat P0 = _dynamic_factor_last_Ptt(fit), P1 = mat_new(p, p);
     KalmanSystem transition = _dynamic_factor_transition(&c->model);
-    kalman_predict(&transition, a0, P0, a1, P1);
+    kalman_predict(&transition, fit->att_T, P0, a1, P1);
     KalmanModel model = _dynamic_factor_kalman_model(c, 0);
     KalmanWorkspace *w = kalman_workspace_new(&model);
     Vec no_theta = { 0, 0, 0, NULL };
     KalmanInit init = { a1, P1 };
     KalmanPaths paths = kalman_filter(w, no_theta, y_test, init);
     kalman_workspace_free(w);
-    mat_free(a0); mat_free(a1); mat_free(P0); mat_free(P1);
+    mat_free(a1); mat_free(P0); mat_free(P1);
     return paths;
 }
 
@@ -838,7 +845,7 @@ static inline DynamicFactorForecast dynamic_factor_forecast(const DynamicFactorF
     DynamicFactorSpec spec = fit->model.spec;
     int N = spec.max_n, H = y_test.c;
     assert(y_test.r == N);
-    DynamicFactorContext *c = _dynamic_factor_context_of_fit(fit, M);
+    DynamicFactorContext *c = _dynamic_factor_context_of_model(&fit->model, M);
     KalmanPaths paths = _dynamic_factor_filter_test_period(fit, c, y_test);
     assert(paths.failed_at < 0);
 
@@ -870,8 +877,8 @@ static inline DynamicFactorForecast dynamic_factor_forecast(const DynamicFactorF
 static inline DynamicFactorForecast dynamic_factor_forecast_h(const DynamicFactorFit *fit, Tensor M, mreal q_alpha) {
     DynamicFactorSpec spec = fit->model.spec;
     int N = spec.max_n, p = spec.p, H = M.shape[0];
-    DynamicFactorContext *c = _dynamic_factor_context_of_fit(fit, M);
-    Vec a = _dynamic_factor_last_att(fit), a_next = mat_new(p, 1);
+    DynamicFactorContext *c = _dynamic_factor_context_of_model(&fit->model, M);
+    Vec a = mat_copy(fit->att_T), a_next = mat_new(p, 1);
     Mat P = _dynamic_factor_last_Ptt(fit), P_next = mat_new(p, p);
     KalmanSystem transition = _dynamic_factor_transition(&c->model);
 
@@ -917,7 +924,7 @@ static inline Tensor dynamic_factor_forecast_rolling_h(const DynamicFactorFit *f
         if (eval_horizons[i] > max_h) max_h = eval_horizons[i];
     }
     assert(M.shape[0] >= T_half + max_h - 1 && "forecast_rolling_h: M must reach T_half + max(h) - 1 periods");
-    DynamicFactorContext *c = _dynamic_factor_context_of_fit(fit, M);
+    DynamicFactorContext *c = _dynamic_factor_context_of_model(&fit->model, M);
     KalmanPaths paths = _dynamic_factor_filter_test_period(fit, c, y_test);
     assert(paths.failed_at < 0);
 
@@ -925,9 +932,8 @@ static inline Tensor dynamic_factor_forecast_rolling_h(const DynamicFactorFit *f
     for (int j = 0; j < p; j++) mu[j] = c->model.ct.d[j] / (1 - AT(c->model.B, j, j));
     int shape[3] = { n_horizons, T_half, N };
     Tensor preds = tensor_new(3, shape);
-    Vec a0 = _dynamic_factor_last_att(fit);
     for (int t = 0; t < T_half; t++) {
-        for (int j = 0; j < p; j++) a_t[j] = t == 0 ? a0.d[j] : AT(paths.att, j, t - 1);
+        for (int j = 0; j < p; j++) a_t[j] = t == 0 ? fit->att_T.d[j] : AT(paths.att, j, t - 1);
         for (int hi = 0; hi < n_horizons; hi++) {
             int h = eval_horizons[hi];
             for (int j = 0; j < p; j++) {
@@ -943,33 +949,32 @@ static inline Tensor dynamic_factor_forecast_rolling_h(const DynamicFactorFit *f
             }
         }
     }
-    mat_free(a0);
     kalman_paths_free(&paths);
     _dynamic_factor_context_free(c);
     return preds;
 }
 
 /* simulation: n paths of y_t = Z_t a_t + eps_t, a_{t+1} = B a_t + ct + eta_t
-   over the periods of M, from a_0 = att_T of the fit, through
-   kalman_simulate on the same system callback the fit filtered with.
-   Returns n x n_periods x N. */
-static inline Tensor dynamic_factor_simulation(const DynamicFactorFit *fit, Tensor M, int n, Rng *rng) {
-    DynamicFactorSpec spec = fit->model.spec;
-    int N = spec.max_n, n_periods = M.shape[0];
-    DynamicFactorContext *c = _dynamic_factor_context_of_fit(fit, M);
-    KalmanModel model = _dynamic_factor_kalman_model(c, 0);
-    KalmanWorkspace *w = kalman_workspace_new(&model);
-    Vec a0 = _dynamic_factor_last_att(fit);
+   over the periods of M, with the state of the first period a_start, through
+   kalman_simulate on the same system callback a fit filters with. From a fit,
+   model is &fit.model and a_start is fit.att_T, as the source's simulation
+   starts from att[-1]; for a Monte Carlo, any model and start. Returns
+   n x n_periods x N. */
+static inline Tensor dynamic_factor_simulation(const DynamicFactor *model, Tensor M, Vec a_start, int n, Rng *rng) {
+    int N = model->spec.max_n, n_periods = M.shape[0];
+    assert(a_start.r == model->spec.p && a_start.c == 1);
+    DynamicFactorContext *c = _dynamic_factor_context_of_model(model, M);
+    KalmanModel system = _dynamic_factor_kalman_model(c, 0);
+    KalmanWorkspace *w = kalman_workspace_new(&system);
     int shape[3] = { n, n_periods, N };
     Tensor out = tensor_new(3, shape);
     Vec no_theta = { 0, 0, 0, NULL };
     for (int path = 0; path < n; path++) {
-        Mat y = kalman_simulate(rng, w, no_theta, a0, n_periods);
+        Mat y = kalman_simulate(rng, w, no_theta, a_start, n_periods);
         for (int t = 0; t < n_periods; t++)
             for (int i = 0; i < N; i++) TAT3(out, path, t, i) = AT(y, i, t);
         mat_free(y);
     }
-    mat_free(a0);
     kalman_workspace_free(w);
     _dynamic_factor_context_free(c);
     return out;
@@ -977,14 +982,13 @@ static inline Tensor dynamic_factor_simulation(const DynamicFactorFit *fit, Tens
 
 /* One path of simulation driven by given shocks, eta p x n_periods and eps
    N x n_periods, for replaying the source's draws. Returns N x n_periods. */
-static inline Mat dynamic_factor_simulation_from_shocks(const DynamicFactorFit *fit, Tensor M, Mat eta, Mat eps) {
-    DynamicFactorContext *c = _dynamic_factor_context_of_fit(fit, M);
-    KalmanModel model = _dynamic_factor_kalman_model(c, 0);
-    KalmanWorkspace *w = kalman_workspace_new(&model);
-    Vec a0 = _dynamic_factor_last_att(fit);
+static inline Mat dynamic_factor_simulation_from_shocks(const DynamicFactor *model, Tensor M, Vec a_start, Mat eta, Mat eps) {
+    assert(a_start.r == model->spec.p && a_start.c == 1);
+    DynamicFactorContext *c = _dynamic_factor_context_of_model(model, M);
+    KalmanModel system = _dynamic_factor_kalman_model(c, 0);
+    KalmanWorkspace *w = kalman_workspace_new(&system);
     Vec no_theta = { 0, 0, 0, NULL };
-    Mat y = kalman_simulate_from_shocks(w, no_theta, a0, eta, eps);
-    mat_free(a0);
+    Mat y = kalman_simulate_from_shocks(w, no_theta, a_start, eta, eps);
     kalman_workspace_free(w);
     _dynamic_factor_context_free(c);
     return y;

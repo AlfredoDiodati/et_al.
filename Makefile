@@ -171,6 +171,10 @@ examples/qvarma_example: examples/qvarma_example.c $(QVARMA_DEPS)
 examples/qvarma_fixed_parameters_example: examples/qvarma_fixed_parameters_example.c $(QVARMA_DEPS)
 	$(CC) $(STAT_CFLAGS) -I. examples/qvarma_fixed_parameters_example.c $(LDLIBS) -o examples/qvarma_fixed_parameters_example
 
+# float64, as the model's tests are: the report compares two maxima.
+examples/dynamic_factor_example: examples/dynamic_factor_example.c $(DYNAMIC_FACTOR_DEPS)
+	$(CC) $(STAT_CFLAGS) -I. examples/dynamic_factor_example.c $(LDLIBS) -o examples/dynamic_factor_example
+
 examples/unit_root_example: examples/unit_root_example.c $(COINTEGRATION_DEPS) frame/csv.h frame/frame.h
 	$(CC) $(STAT_CFLAGS) -I. examples/unit_root_example.c $(LDLIBS) -o examples/unit_root_example
 

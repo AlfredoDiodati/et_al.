@@ -143,6 +143,9 @@ make examples/qvarma_example    # simulate from a t-QVARMA, forget the parameter
 make examples/qvarma_fixed_parameters_example   # hold nu at chosen values and fit the rest
 ./examples/qvarma_fixed_parameters_example      # writes examples/out/qvarma_fixed_parameters_example_report.txt
 
+make examples/dynamic_factor_example   # fit, cache, forecast and simulate a dynamic factor model
+./examples/dynamic_factor_example      # writes examples/out/dynamic_factor_example_report.txt
+
 make examples/unit_root_example # unit root, break and co-integration tests on US quarterly data
 ./examples/unit_root_example    # writes examples/out/unit_root_example_report.txt
 
