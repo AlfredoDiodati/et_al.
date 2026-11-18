@@ -448,12 +448,20 @@ Post-estimation:
 ```c
 Mat   qvarma_companion(const QvarmaParams *m);
 mreal qvarma_max_eigenvalue_modulus(const QvarmaParams *m);
+Mat *qvarma_score_jacobian(const QvarmaParams *m, Mat y);
 Mat   qvarma_mean_score_jacobian(const QvarmaParams *m, Mat y);
 QvarmaImpulseResponses qvarma_impulse_responses(const QvarmaParams *m, Mat D, QvarmaImpulseOptions options);
 QvarmaImpulseBands qvarma_impulse_bands(Rng *rng, const QvarmaParams *m, Mat D, Mat sign_restrictions,
                            QvarmaImpulseOptions options, QvarmaImpulseBandOptions band_options);
 Mat   qvarma_simulate(Rng *rng, const QvarmaParams *m, int T);
 ```
+
+`qvarma_score_jacobian` returns the Jacobian `D_t` of (21) for every period, an
+array of `T = y.c` matrices of size `K` x `K`, freed with
+`qvarma_free_mat_array(D, T)`. `qvarma_mean_score_jacobian` is their sample
+average, the `D` that 4.2 uses. `qvarma_impulse_responses` takes any `K` x `K`
+`D`, so a single `D_t` or any other combination of them can be passed instead
+of the average.
 
 `qvarma_impulse_responses` returns four arrays of `horizon + 1` matrices:
 `contemporaneous`, `stationary`, `cointegrated` and `total`. That is one point

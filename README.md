@@ -28,6 +28,7 @@ ET_AL. is a pure C11 econometrics and machine learning compute stack, built to r
   - [5. Tests and benchmarks are both first-class, and stay separate](#5-tests-and-benchmarks-are-both-first-class-and-stay-separate)
   - [6. Build in dependency order](#6-build-in-dependency-order)
   - [7. Fail loudly on a contract violation, not silently](#7-fail-loudly-on-a-contract-violation-not-silently)
+  - [8. Every piece of code earns its place](#8-every-piece-of-code-earns-its-place)
 - [Pitfalls](#pitfalls)
 
 ## What can I do with this software?
@@ -492,6 +493,35 @@ Each layer depends on the correctness of the one below it — do not implement a
 ### 7. Fail loudly on a contract violation, not silently
 
 Every function in this project enforces its own preconditions with `assert`, not a returned error code: a shape mismatch, an out-of-range index, an unreadable file, or a malformed query string all abort immediately rather than returning a sentinel value or a `NULL` a caller might forget to check. This is deliberate and consistent across every layer, from `linalg/decomp.h`'s LU failing on a singular matrix, to `frame/csv.h` refusing a ragged row, to `frame/sql.h` rejecting an unknown column — see each header's own doc for its specific contract. Two narrow exceptions exist. The first is `frame/sql.h`'s `df_sql_try`, and only because a SQL query is far more likely than most other inputs in this codebase to be actual end-user-typed text rather than something an internal caller already controls; even there, the crashing `df_sql` remains the default entry point, and the non-crashing path is the deliberate, narrowly-scoped exception, not a new project-wide norm. The second is a matrix that is singular because of the data it was built from: `mat_chol` and `mat_lstsq` take an `int *status` that reports it, and `mat_eig_sym_status` does the same for a symmetric eigenproblem, because a batch of estimations over simulated data reaches such matrices on ordinary draws and an assert would stop the batch at the first one. Passing `NULL` for the status keeps the assert, and every call site that is not deliberately handling such a draw passes `NULL` - see `docs/DECOMP_DOCUMENTATION.md`'s Contract section.
+
+### 8. Every piece of code earns its place
+
+Correct and fast is not the whole job. A reader has to be able to follow the code, and a caller has to be able to use the API without knowing what is inside it. Complexity that buys nothing is paid for by every later reader, test and change. The rules below are what removing it looks like; they come from a review of `filter/kalman.h` and `ss/dynamic_factor.h`, and each names the kind of case it was found on.
+
+For the API, what a caller sees:
+
+- **A public function is one a caller needs to call.** If the library already calls it on the caller's behalf, it is internal. A preparation step the filter runs by itself the first time it sees a data set does not also need to be public, and exposing it invites a second, conflicting way to use it.
+- **A public function can be called with public types only.** One whose argument is a type the caller cannot build is internal, whatever its name says.
+- **A public function takes what it uses, not a larger object to dig it out of**, and what a later call needs from a result is a field of that result, ready to pass. See [Model fitting API](#model-fitting-api).
+- **A result never holds placeholder values that look like data.** When a quantity cannot be computed, its field is empty (a `NULL` data pointer), not filled with zeros a caller could take for an answer.
+
+For the implementation, what a reader sees:
+
+- **No code for situations that cannot happen.** A compatibility path for a file format that never existed, or a flag recording a state nothing can produce, is code to read, test and keep working for no case at all.
+- **One fact, one field.** Two fields that always hold the same value can drift apart, and every reader has to check that they do not.
+- **Each allocation has one owner, which frees it.** Logic of the form "free this unless it is the caller's input" means ownership is unclear; give the memory to one object instead.
+- **Nothing is computed or allocated that nothing reads.** Trace who reads each value; an allocation whose result is never used is deleted, not kept for symmetry.
+- **Setup repeated in several functions is written once**, as one internal helper.
+- **A larger structure is not faked to reuse a function.** If one function needs another's workspace only for a few of its buffers, the part that does the work is split out to take those buffers directly, and both callers use it.
+
+What stays: something that looks removable but follows a convention shared with other headers, or that a caller cannot do without, is kept, and its doc says why. The measure is whether the code a reader and a caller face gets simpler, not the line count. `dynamic_factor_fit_result_new`, for example, stays because the other models' caches are loaded the same way.
+
+A review of a header is a refactor, so it is checked rather than argued:
+
+1. List the public functions and types, and ask the API questions of each; then read the internals and ask the implementation questions.
+2. Write or run an example that uses only public functions. Whatever it has to work around is what the API is missing.
+3. After the change, the correctness suites pass, also under AddressSanitizer and UndefinedBehaviorSanitizer; the outputs are compared bit for bit with the version before the change on the same inputs; and where the header has a hot loop, the two versions are timed against each other. A changed output means the change was not a simplification.
+4. The header's doc file records what changed and what was kept, with the reason for each.
 
 ## Pitfalls
 

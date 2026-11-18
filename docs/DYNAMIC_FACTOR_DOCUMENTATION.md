@@ -87,6 +87,25 @@ The fits agree to what two optimizers with different stopping rules leave, not t
 
 A whole fit is not benchmarked against the source: this is model tier, which the README's benchmarking policy compares only between versions of this package. The evaluation a fit repeats is benchmarked, on this model's systems, as part of `filter/kalman.h`'s benchmark; see `docs/KALMAN_DOCUMENTATION.md`. A whole fit is compared between versions of this package by `make bench-kalman_candidates`: at n = 2000, N = 100, p = 5 a fit took 1.936 s, then 1.767 s after the observations were reduced once per fit, then 1.154 s after the derivatives were computed over all coordinates at once, then 0.838 s after the diagonal B was applied entry by entry, always in 72 iterations; the record is in that doc's Changes measured.
 
+## Simplifications
+
+This header was reviewed under the README's design principle 8, in two steps: commit 5d45d6b, and commit 73a9665 for the simulation. Every output stayed identical to the last bit; how that was checked, and the timing, is item 4 of `docs/KALMAN_DOCUMENTATION.md`'s Changes measured.
+
+Changed for a caller:
+
+- `dynamic_factor_block_length` and `dynamic_factor_block_offset` became internal: they serve the parameter layout, and `dynamic_factor_n_theta` is what a caller needs.
+- The fit result's `status_is_known` flag and the code reading an older cache format were removed. This model's cache has had one format only, so a file missing a field is refused and the caller refits.
+- `dynamic_factor_forecast_h` returns its `log_liks` empty, `log_liks.d` NULL, rather than zeros: there is no test data to compute them from.
+- `dynamic_factor_simulation` and `dynamic_factor_simulation_from_shocks` take a model and a starting state rather than a fit, so the same call simulates from a fit (`&fit.model`, `fit.att_T`) and from parameters chosen by hand. The fit result gained `att_T` for that.
+
+Changed inside:
+
+- The context stored the spec twice; it is now read from the model only.
+- The collapsed data is owned by the estimator's context, which removed three places that freed it only when it was not y.
+- The two lines that built a context from a fitted model, repeated in five forecast and simulation functions, became one helper, and three covariance allocations nothing read were deleted.
+
+Kept: `dynamic_factor_fit_result_new` and loading into a given result, the convention of the other models' caches; `fit`, `fit_collapsed` and their cached variants as four entry points, named after the source's functions.
+
 ## Known limitations
 
 - R is the identity and Q and B are diagonal, as in the source.

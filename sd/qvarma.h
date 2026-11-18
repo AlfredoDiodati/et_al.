@@ -1816,17 +1816,16 @@ static inline mreal qvarma_max_eigenvalue_modulus(const QvarmaParams *m) {
 }
 
 /*
-The averaged Jacobian D of (21), which the impulse responses need. Its entry
-(j,k) is
+The Jacobian D_t of (21), one K x K matrix per period. Its entry (j,k) is
 
     ((nu - 2 + e'e) 1{j=k} - 2 e_j e_k) / (nu - 2 + e'e)^2
 
 with e the structural shock of (12), e_t = ((nu-2)/nu)^(1/2) Omega v_t, so it
-comes from one triangular solve per period. The model is nonlinear, so D_t
-varies over time; 4.2 uses its sample average, justified by ergodicity because
-v_t and e_t are iid. Caller must mat_free.
+comes from one triangular solve per period. Element t of the returned array is
+D_t, so any one of them, or any combination of them, can be passed to
+qvarma_impulse_responses. Caller must free with qvarma_free_mat_array(D, y.c).
 */
-static inline Mat qvarma_mean_score_jacobian(const QvarmaParams *m, Mat y) {
+static inline Mat *qvarma_score_jacobian(const QvarmaParams *m, Mat y) {
     int K = m->K, T = y.c;
     Tape *tape = tape_new();
     Vec theta = mat_new(qvarma_n_theta(m), 1);
@@ -1836,7 +1835,7 @@ static inline Mat qvarma_mean_score_jacobian(const QvarmaParams *m, Mat y) {
     Node **v_nodes = (Node**)malloc((size_t)T * sizeof(Node*));
     _qvarma_filter(tape, &linked, m, y, NULL, NULL, v_nodes);
 
-    Mat D = mat_new(K, K);
+    Mat *D = qvarma_new_mat_array(T, K, K);
     mreal scale = (mreal)sqrt(((double)m->nu - 2.0) / (double)m->nu);
     Vec shock = mat_new(K, 1);
     for (int t = 0; t < T; t++) {
@@ -1851,16 +1850,31 @@ static inline Mat qvarma_mean_score_jacobian(const QvarmaParams *m, Mat y) {
         mreal denominator = m->nu - 2 + norm;
         for (int j = 0; j < K; j++)
             for (int k = 0; k < K; k++)
-                AT(D, j, k) += ((j == k ? denominator : 0) - 2 * shock.d[j] * shock.d[k])
-                             / (denominator * denominator);
+                AT(D[t], j, k) = ((j == k ? denominator : 0) - 2 * shock.d[j] * shock.d[k])
+                               / (denominator * denominator);
     }
-    for (int i = 0; i < K * K; i++) D.d[i] /= (mreal)T;
 
     mat_free(shock);
     free(v_nodes);
     qvarma_linked_free(&linked);
     tape_free(tape);
     mat_free(theta);
+    return D;
+}
+
+/*
+The sample average of the D_t above, which is the D the impulse responses of
+4.2 use. The model is nonlinear, so D_t varies over time; 4.2 averages it,
+justified by ergodicity because v_t and e_t are iid. Caller must mat_free.
+*/
+static inline Mat qvarma_mean_score_jacobian(const QvarmaParams *m, Mat y) {
+    int K = m->K, T = y.c;
+    Mat *D_path = qvarma_score_jacobian(m, y);
+    Mat D = mat_new(K, K);
+    for (int t = 0; t < T; t++)
+        for (int i = 0; i < K * K; i++) D.d[i] += D_path[t].d[i];
+    for (int i = 0; i < K * K; i++) D.d[i] /= (mreal)T;
+    qvarma_free_mat_array(D_path, T);
     return D;
 }
 

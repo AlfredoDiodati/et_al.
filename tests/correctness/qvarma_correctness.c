@@ -846,18 +846,28 @@ static void test_impulse_bands(void) {
 }
 
 /*
-The averaged Jacobian of (21) against a slow, obviously correct version written
-here: the structural shock from a full solve against Omega_inv rather than the
-triangular routine, and the entries of D written out term by term.
+The per-period Jacobians D_t of (21) and their average against a slow,
+obviously correct version written here: the structural shock from a full solve
+against Omega_inv rather than the triangular routine, and the entries of D_t
+written out term by term.
 */
 static void test_score_jacobian(void) {
-    printf("averaged score Jacobian against a naive reference\n");
+    printf("per-period and averaged score Jacobian against a naive reference\n");
     QvarmaParams m = baseline();
     Rng rng = rng_new(707, 0);
     fill_plausible(&m, &rng);
     int T = 40;
     Mat y = random_series(m.K, T, &rng);
     Mat D = qvarma_mean_score_jacobian(&m, y);
+    Mat *D_path = qvarma_score_jacobian(&m, y);
+
+    /* The average must be exactly the mean of the path, since it is computed
+       from it in period order. */
+    for (int i = 0; i < m.K * m.K; i++) {
+        mreal sum = 0;
+        for (int t = 0; t < T; t++) sum += D_path[t].d[i];
+        CHECK(D.d[i] == sum / (mreal)T, "D must be the mean of D_t bit for bit");
+    }
 
     /* D is symmetric by construction, since its off-diagonal entry is
        -2 e_j e_k over a shared denominator. */
@@ -891,7 +901,9 @@ static void test_score_jacobian(void) {
         for (int j = 0; j < m.K; j++)
             for (int k = 0; k < m.K; k++) {
                 mreal numerator = (j == k ? denominator : 0) - 2 * shock.d[j] * shock.d[k];
-                AT(reference, j, k) += numerator / (denominator * denominator);
+                mreal reference_t = numerator / (denominator * denominator);
+                CHECK_NEAR(AT(D_path[t], j, k), reference_t, 1e-5, "D_t against the reference");
+                AT(reference, j, k) += reference_t;
             }
         mat_free(residual); mat_free(shock);
     }
@@ -902,6 +914,7 @@ static void test_score_jacobian(void) {
             CHECK_NEAR(AT(D, a, b), AT(reference, a, b), 1e-5, "D against the reference");
 
     mat_free(omega_inverse); mat_free(reference); mat_free(D);
+    qvarma_free_mat_array(D_path, T);
     free(v); qvarma_linked_free(&linked); tape_free(tape);
     mat_free(theta); mat_free(y); qvarma_params_free(&m);
     printf("  ok\n");
