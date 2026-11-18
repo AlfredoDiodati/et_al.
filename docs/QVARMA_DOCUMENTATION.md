@@ -43,7 +43,8 @@ API and the design; that one covers what the numbers are worth.
 Implemented: the filter and log-likelihood, the link and its exact inverse,
 maximum likelihood estimation, the impulse response engine of section 4
 including the sign-restricted confidence bands of 4.3, the simulator,
-stationarity diagnostics, the mean score Jacobian of (21), standard errors for
+stationarity diagnostics, the score Jacobian of (21) per period and its sample
+average, standard errors for
 every estimated parameter on both scales, a JSON parameter cache tied to the
 data it was fitted on, and report writers.
 
@@ -459,13 +460,30 @@ Mat   qvarma_simulate(Rng *rng, const QvarmaParams *m, int T);
 `qvarma_score_jacobian` returns the Jacobian `D_t` of (21) for every period, an
 array of `T = y.c` matrices of size `K` x `K`, freed with
 `qvarma_free_mat_array(D, T)`. `qvarma_mean_score_jacobian` is their sample
-average, the `D` that 4.2 uses. `qvarma_impulse_responses` takes any `K` x `K`
-`D`, so a single `D_t` or any other combination of them can be passed instead
-of the average.
+average, the `D` that 4.2 uses. `qvarma_impulse_responses` reads no data, only
+the `K` x `K` matrix it is given, so the `D_t` can be aggregated another way in
+the calling script. For example, the average over the last 40 periods only:
 
-`qvarma_impulse_responses` returns four arrays of `horizon + 1` matrices:
-`contemporaneous`, `stationary`, `cointegrated` and `total`. That is one point
-in the identified set, the one `Omega_inv`'s Cholesky orientation picks out.
+```c
+int T = y.c, window = 40;
+Mat *D_path = qvarma_score_jacobian(&m, y);
+Mat D = mat_new(m.K, m.K);
+for (int t = T - window; t < T; t++)
+    for (int i = 0; i < m.K * m.K; i++) D.d[i] += D_path[t].d[i] / window;
+QvarmaImpulseResponses r = qvarma_impulse_responses(&m, D, qvarma_default_impulse_options());
+qvarma_free_mat_array(D_path, T);
+```
+
+The point responses accept any `D`. The bands below rely on a rotation of the
+shocks turning `D` into `Q' D Q`, which holds for any weighted sum of the
+`D_t`, a single `D_t` included, but not in general for a nonlinear summary
+such as an entrywise median.
+
+`qvarma_impulse_responses` returns five arrays of `horizon + 1` matrices:
+`contemporaneous`, `stationary`, `cointegrated`, `total`, and `cumulative`, the
+running sum of `total` over the horizon, which is the response of the level when
+a series enters in differences. That is one point in the identified set, the one
+`Omega_inv`'s Cholesky orientation picks out.
 
 `qvarma_impulse_bands` covers the rest of that set, by 4.3. `QvarmaImpulseBands` holds three
 whole `QvarmaImpulseResponses`, `lower`, `median` and `upper`, so a band reads with
@@ -786,7 +804,9 @@ slow ones, including:
   rotation can exceed, and carry the signs that selected them; that the same
   seed gives the same band; and that an unsatisfiable restriction keeps nothing
   and reads not-a-number
-- the mean score Jacobian of (21) against a slow, obviously correct version
+- the score Jacobian `D_t` of (21) at every period, and its average, against a
+  slow, obviously correct version; and that the average is exactly the mean of
+  the per-period matrices
 - the impulse response and confidence band file layouts
 - the cache, and that `qvarma_fit_cached` reloads what `qvarma_fit` found
 - that a chain of three capped runs against one cache reports three runs and the
