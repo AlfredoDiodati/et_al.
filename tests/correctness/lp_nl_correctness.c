@@ -14,7 +14,8 @@ Checks:
   scaled by the same number, so the design is rank deficient at the first
   column of state 2 and the minimum-norm solution splits every coefficient
   evenly: both states' responses must equal the linear model's;
-- an infinity in the switching series computes nothing;
+- an infinity in the switching series computes nothing; lambda 0 makes the
+  cycle exactly 0, every weight NaN and no horizon solved;
 - the fit notes' residuals_are_zero: with y_2 at t equal to y_1 at t - 3
   and 2 lags, y_2 is fitted exactly at horizons 2 and 3, where the lag it
   equals is a regressor, and nowhere else;
@@ -331,7 +332,7 @@ static void test_half_weight(void) {
 }
 
 static void test_failures(void) {
-    puts("an infinity in the switching series");
+    puts("an infinity in the switching series, and lambda 0");
     Rng rng = rng_new(6, 0);
     int K = 3, p = 1, T = 100;
     LpSpec spec = { K, p, 3, LP_SHOCK_UNIT, VAR_SIGMA_ML };
@@ -342,7 +343,19 @@ static void test_failures(void) {
     LpNlSpec nl_spec = { spec, 1, 1, 1, 1600, 2, 1 };
     LpNlFit nl = lp_nl(y, switching, nl_spec);
     CHECK(nl.notes.var_ols_status == -1 && nl.irf_s1_mean.d == NULL, "infinity in the switching series: nothing computed");
-    lp_nl_fit_free(&nl);
+
+    /* lambda 0 makes the trend the series and the cycle exactly 0: no spread
+       to standardise by, so every weight is NaN and no horizon is solved */
+    switching.d[30] = (mreal)rng_normal(&rng);
+    LpNlSpec no_smoothing = nl_spec;
+    no_smoothing.lambda = 0;
+    LpNlFit flat = lp_nl(y, switching, no_smoothing);
+    int all_nan = 1, none_solved = 1;
+    for (int t = 0; t < T; t++) all_nan = all_nan && MISNAN(flat.fz.d[t]);
+    for (int h = 0; h < 3; h++) none_solved = none_solved && flat.notes.ols_status[h] < 0;
+    CHECK(flat.switching_is_constant == 1 && all_nan && none_solved, "lambda 0: flag %d, all NaN %d, none solved %d",
+          flat.switching_is_constant, all_nan, none_solved);
+    lp_nl_fit_free(&nl); lp_nl_fit_free(&flat);
     mat_free(switching); mat_free(y);
 }
 

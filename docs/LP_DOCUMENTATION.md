@@ -6,7 +6,7 @@
 
 Local projections estimate impulse responses one horizon at a time. At horizon `h` every variable `h` periods ahead is regressed on the lags of every variable, and the coefficients on the first lag, times a shock matrix, are the responses at that horizon.
 
-`lp/lp.h` holds the linear model, `lp_lin`, and what the state-dependent model shares with it: the shock matrix, the regressions of every horizon, the bands, the fit notes and the fields of the cache file. The state-dependent model, `lp_nl`, which splits the lags between two states with a weight between 0 and 1, is `lp/lp_nl.h`, documented in `docs/LP_NL_DOCUMENTATION.md`. Its speed is measured with this header's in `docs/LP_PERFORMANCE_DOCUMENTATION.md`.
+`lp/lp.h` holds the linear model, `lp_lin`, and what the state-dependent model shares with it: the shock matrix, the regressions of every horizon, the bands, the fit notes and the fields of the cache file. The state-dependent model, `lp_nl`, which splits the lags between two states with a weight between 0 and 1, is `lp/lp_nl.h`, documented in `docs/LP_NL_DOCUMENTATION.md`, and its speed is measured with this header's in `docs/LP_PERFORMANCE_DOCUMENTATION.md`. `lp/lp_nl_causal.h` is the same model with a weight that uses no period after `t`, documented in `docs/LP_NL_CAUSAL_DOCUMENTATION.md`.
 
 References:
 

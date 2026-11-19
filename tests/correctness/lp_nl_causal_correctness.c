@@ -24,7 +24,10 @@ Checks:
 - a strided view of y gives the fit of a copy;
 - a constant switching series sets switching_is_constant, every weight is
   0.5, every horizon is rank deficient at the first column of state 2 and
-  both states have the linear responses; an infinity in it computes nothing;
+  both states have the linear responses; every weight is exactly 0.5 for
+  levels from 0.003 to 1e4, lambda 6.25 to 129600 and 20 to 1000 periods;
+  lambda 0 gives weights of 0.5 for any series; an infinity in the
+  switching series computes nothing;
 - lp_lin_and_nl_causal against lp_lin_with_bands and
   lp_nl_causal_with_bands;
 - the cache: lp_nl_causal_fit_cached computes, then loads bit for bit,
@@ -241,6 +244,37 @@ static void test_degenerate_switching(void) {
           "constant: both states the linear responses: %.3g %.3g", relative_gap(flat.irf_s1_mean, lin.irf_lin_mean),
           relative_gap(flat.irf_s2_mean, lin.irf_lin_mean));
     lp_lin_fit_free(&lin);
+
+    /* the causal cycle of a constant series is exactly 0 over a range of
+       levels, lambdas and lengths, so every weight is exactly 0.5 */
+    double levels[5] = { 0.003, 1, -50, 120, 1e4 }, lambdas[3] = { 6.25, 1600, 129600 };
+    int lengths[3] = { 20, 200, 1000 };
+    for (int a = 0; a < 5; a++)
+        for (int b = 0; b < 3; b++)
+            for (int c = 0; c < 3; c++) {
+                int n = lengths[c];
+                Mat level_y = random_walks(&rng, K, n), level = mat_new(n, 1);
+                for (int t = 0; t < n; t++) level.d[t] = (mreal)levels[a];
+                LpNlSpec level_spec = spec;
+                level_spec.lambda = lambdas[b];
+                LpNlFit fit = lp_nl_causal(level_y, level, level_spec);
+                int half = 1;
+                for (int t = 0; t < n; t++) half = half && fit.fz.d[t] == (mreal)0.5;
+                CHECK(half && fit.switching_is_constant == 1, "level %g, lambda %g, %d periods: weights not all 0.5 or not flagged",
+                      levels[a], lambdas[b], n);
+                lp_nl_fit_free(&fit);
+                mat_free(level_y); mat_free(level);
+            }
+
+    /* lambda 0 makes the causal trend the series and the cycle exactly 0 */
+    Mat moving = random_walk_around(&rng, T, 100);
+    LpNlSpec no_smoothing = spec;
+    no_smoothing.lambda = 0;
+    LpNlFit unsmoothed = lp_nl_causal(y, moving, no_smoothing);
+    int half = 1;
+    for (int t = 0; t < T; t++) half = half && unsmoothed.fz.d[t] == (mreal)0.5;
+    CHECK(half && unsmoothed.switching_is_constant == 1, "lambda 0: weights not all 0.5 or not flagged");
+    lp_nl_fit_free(&unsmoothed); mat_free(moving);
 
     Mat infinite = random_walk_around(&rng, T, 100);
     infinite.d[30] = check_non_finite(1);

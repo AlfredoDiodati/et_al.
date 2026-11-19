@@ -4,7 +4,9 @@
 
 **Installation tier:** model (see README's [Installation tiers](../README.md#installation-tiers) policy). It exposes fitting procedures and fitted results, and builds on `lp/lp.h` and `filter/hp.h`.
 
-State-dependent local projections split the lags of every variable between two states with a weight between 0 and 1, and give one set of impulse responses per state. Everything the two models share is `lp/lp.h`'s and documented in `docs/LP_DOCUMENTATION.md`: the shock matrix `d`, the regressions of every horizon and how they are solved, the bands, the fit notes and the fields of the cache file. This file covers what is particular to `lp_nl`. `lp/lp_nl_causal.h` is the same model with a weight at `t` built from periods `1..t` only, the causal HP cycle standardised with its mean and standard deviation up to `t`, documented in `docs/LP_NL_CAUSAL_DOCUMENTATION.md`; its code is in this header. The speed of both is measured in `docs/LP_PERFORMANCE_DOCUMENTATION.md`.
+State-dependent local projections split the lags of every variable between two states with a weight between 0 and 1, and give one set of impulse responses per state. Everything the two models share is `lp/lp.h`'s and documented in `docs/LP_DOCUMENTATION.md`: the shock matrix `d`, the regressions of every horizon and how they are solved, the bands, the fit notes and the fields of the cache file. This file covers what is particular to `lp_nl`. The speed of `lp_lin` and `lp_nl` is measured in `docs/LP_PERFORMANCE_DOCUMENTATION.md`.
+
+`lp/lp_nl_causal.h` is the same model with a weight at `t` built from periods `1..t` only: the causal HP cycle, standardised with its mean and standard deviation up to `t`. It is documented in `docs/LP_NL_CAUSAL_DOCUMENTATION.md`. It holds its weight itself and reuses this header's fit through two internal steps, `_lp_nl_start`, the checks, notes and `d` before the weight, and `_lp_nl_estimate`, the regressions after it.
 
 References:
 
@@ -41,12 +43,13 @@ The regressions of every horizon go through `lp/lp.h`'s `_lp_horizons`, with two
 
 ### The weight's flag
 
-`switching_is_constant` is set when the HP cycle the weight is built from is no larger than 4 times the filter's own rounding, `4 (1 + 16 lambda) u max(1, max|switching|)`, with `u` the unit roundoff. The cycle of a constant series is zero in exact arithmetic, so the weights are then rounding noise. They are still computed, as `lpirfs` computes them; the flag is what tells a caller. A cycle whose standard deviation is exactly 0 gives NaN weights instead of 0 / 0; the two-sided cycle of a constant series is rounding noise and does not reach this.
+`switching_is_constant` is set when the HP cycle the weight is built from is no larger than 4 times the filter's own rounding, `4 (1 + 16 lambda) u max(1, max|switching|)`, with `u` the unit roundoff. The cycle of a constant series is zero in exact arithmetic, so the weights are then rounding noise. They are still computed, as `lpirfs` computes them; the flag is what tells a caller. A cycle that is exactly 0 everywhere, which `lambda` 0 gives since the trend is then the series itself, has no standard deviation to divide by: every weight is NaN and no horizon is solved.
 
 What the fit notes show in the cases particular to this model, measured in `tests/correctness/lp_nl_correctness.c`:
 
 - A weight of 0.5 everywhere makes the two state blocks the same columns, so every horizon's design is rank deficient at the first column of state 2 (`ols_status` `2 + K p`, `rank` `1 + K p`), and the minimum-norm solution gives both states the linear responses.
 - An infinity in the switching series gives `var_ols_status` -1 and nothing computed, as a NaN in `y` does.
+- `lambda` 0 with `use_hp` makes the cycle exactly 0: every weight is NaN, `switching_is_constant` is set and every horizon has `ols_status` below 0.
 - A constant switching series sets `switching_is_constant`.
 
 ### Both models at once
@@ -62,7 +65,7 @@ At the calibration's specification it is 7 to 10 per cent faster than the two se
 
 ### The cache
 
-`lp_nl_save_fit`, `lp_nl_load_fit` and `lp_nl_fit_cached` behave as the `lp_lin_` versions in `docs/LP_DOCUMENTATION.md`. The file also holds the switching settings, `causal_hp`, `fz`, `switching_is_constant` and the fingerprint of the switching series, and a load is refused for another switching series as well as for other data, and for a file of `lp_nl_causal`, whose `causal_hp` is 1. A file written before `causal_hp` was added has no such field and is refused, so `lp_nl_fit_cached` refits it once. The first lagged weight is NaN and is written as `null`.
+`lp_nl_save_fit`, `lp_nl_load_fit` and `lp_nl_fit_cached` behave as the `lp_lin_` versions in `docs/LP_DOCUMENTATION.md`. The file also holds the switching settings, `fz`, `switching_is_constant` and the fingerprint of the switching series, and a load is refused for another switching series as well as for other data. A file of `lp_nl_causal` also holds `"causal_hp": 1`, and `lp_nl_load_fit` refuses a file with that field. The first lagged weight is NaN and is written as `null`.
 
 ## API reference
 
@@ -103,7 +106,7 @@ The reference is `lpirfs` 0.2.5 on R 4.6.1. Every difference `docs/LP_DOCUMENTAT
 
 - **A long double reference:** each horizon's regression solved from its normal equations in long double, with a logistic weight.
 - **The weight** `fz` against its definition in four variants: HP cycle and logistic, lagged and not, the raw series through the logistic, and the series as the weight; a constant switching series is flagged.
-- The rank-deficient half weight, the residual flags (`y_2` at `t` equal to `y_1` at `t - 3`, 2 lags: flagged at horizons 2 and 3 only) and an infinity in the switching series, with the outcomes listed above.
+- The rank-deficient half weight, the residual flags (`y_2` at `t` equal to `y_1` at `t - 3`, 2 lags: flagged at horizons 2 and 3 only), an infinity in the switching series and `lambda` 0, with the outcomes listed above.
 - **Accuracy of a near-exact fit** (float64), on the data of `lp_correctness.c`'s version of this test with uniform weights given directly, `rng_new(8, 0)`: every horizon of both states within `2 u (kappa + kappa^2 rho)` of the reference times the largest response, built from `lp_nl`'s own `d`. Measured: 0.00146 of that bound, `0.0029 u (kappa + kappa^2 rho)`. On these data, over `lp_lin` and both states, QR at every horizon measured `0.0057` and the shared factor without its correction step `8.8`. Premises: `u kappa^2` at least 100 times the bound (measured `1.1e4`), the reference's error estimate under a hundredth of it (measured `2.5e-4`).
   - A first version of this test compared `lp_nl` with a reference built from `lp_lin`'s `d`. On these data `Sigma_u`, from residuals of `1e-6` on levels of 300, is only accurate to about `u 300 / 1e-6`, so the two models' `d` differ at `1e-8` relative and the test failed at 3.7 times its bound for a reason unrelated to the regressions.
 - **Random configurations** against the long double reference: 300 (3000 under `STRESS=1`), configuration `c` from `rng_new(2026, c)`.

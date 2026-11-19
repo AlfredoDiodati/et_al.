@@ -227,7 +227,7 @@ The filter runs on one thread. With serial times 10 to 300 times below the refer
 
 ## Known limitations and future work
 
-- **Two-sided by definition.** `mat_hp_trend`'s trend at `t` depends on the whole sample, the future included; a regime indicator built on its cycle uses information from after `t`. `mat_hp_trend_causal` is the one that does not.
+- **Two-sided by definition.** `mat_hp_trend`'s trend at `t` depends on the whole sample, the future included; a regime indicator built on its cycle uses information from after `t`. `mat_hp_trend_causal` is the one that does not; `lp/lp_nl_causal.h` builds its state weight on it (`docs/LP_NL_CAUSAL_DOCUMENTATION.md`).
 - **Endpoints.** The first and last few two-sided trend values rest on data from one side only, and move when observations are added.
 - **The causal filter is one Kalman pass per series.** The series share a workspace but are not filtered together, and its speed has not been measured against anything: no library this one is compared with has a causal HP filter.
 - **The estimate is per series and a local maximum,** and it is the estimate under the model above, whose cycle is white noise. Where the cycle of the data is autocorrelated, as macroeconomic cycles usually are, `hp_estimate` reports what that model's likelihood prefers, not a lambda tuned to any particular frequency band.
