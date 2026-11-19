@@ -1169,6 +1169,99 @@ static void test_series_accessors(void) {
     mat_free(row); mat_free(col); mat_free(wide);
 }
 
+/* The mean and population variance of x_1..x_{t+1} for every t, each prefix
+   by two passes in long double: the reference stats_running_mean_var is
+   checked against. */
+static void ref_running_moments(const mreal *x, int n, double *mean, double *var) {
+    for (int t = 0; t < n; t++) {
+        long double m = 0, s = 0;
+        for (int j = 0; j <= t; j++) m += x[j];
+        m /= t + 1;
+        for (int j = 0; j <= t; j++) s += (x[j] - m) * (x[j] - m);
+        mean[t] = (double)m;
+        var[t] = (double)(s / (t + 1));
+    }
+}
+
+static void test_running_moments(void) {
+    puts("running mean and variance: known values, orientations and views, ill-conditioned data against long double");
+    double mean[400], var[400];
+
+    /* 1, 2, 3, 4: means 1, 1.5, 2, 2.5 and variances 0, 1/4, 2/3, 5/4 */
+    Mat col = mat_new(4, 1);
+    for (int i = 0; i < 4; i++) col.d[i] = (mreal)(i + 1);
+    stats_running_mean_var(col, mean, var);
+    double want_mean[4] = { 1, 1.5, 2, 2.5 }, want_var[4] = { 0, 0.25, 2.0 / 3, 1.25 };
+    for (int t = 0; t < 4; t++) assert(fabs(mean[t] - want_mean[t]) < 1e-15 && fabs(var[t] - want_var[t]) < 1e-15);
+
+    /* one observation; a constant series has every variance exactly 0 */
+    Mat one = mat_new(1, 1);
+    one.d[0] = (mreal)-3.5;
+    stats_running_mean_var(one, mean, var);
+    assert(mean[0] == -3.5 && var[0] == 0);
+    Mat constant = mat_new(50, 1);
+    for (int i = 0; i < 50; i++) constant.d[i] = (mreal)120.3;
+    stats_running_mean_var(constant, mean, var);
+    for (int t = 0; t < 50; t++) assert(mean[t] == (double)(mreal)120.3 && var[t] == 0);
+
+    /* a row, and a strided column out of a wider matrix, give a copy's
+       numbers bit for bit; the last entry is the whole sample's moments */
+    Rng rng = rng_new(77, 0);
+    Mat wide = mat_new(60, 5);
+    for (int i = 0; i < 60; i++)
+        for (int j = 0; j < 5; j++) AT(wide, i, j) = (mreal)(3 + rng_normal(&rng));
+    Mat column = mat_slice(wide, 0, 60, 2, 3), copy = mat_copy(column), row = mat_new(1, 60);
+    for (int i = 0; i < 60; i++) row.d[i] = copy.d[i];
+    double copy_mean[60], copy_var[60], row_mean[60], row_var[60];
+    stats_running_mean_var(column, mean, var);
+    stats_running_mean_var(copy, copy_mean, copy_var);
+    stats_running_mean_var(row, row_mean, row_var);
+    assert(memcmp(mean, copy_mean, sizeof(copy_mean)) == 0 && memcmp(var, copy_var, sizeof(copy_var)) == 0);
+    assert(memcmp(row_mean, copy_mean, sizeof(copy_mean)) == 0 && memcmp(row_var, copy_var, sizeof(copy_var)) == 0);
+    double whole_mean, whole_var;
+    stats_dcol_mean_var(copy, &whole_mean, &whole_var);
+    assert(fabs(mean[59] - whole_mean) <= 1e-14 * fabs(whole_mean) && fabs(var[59] - whole_var) <= 1e-13 * whole_var);
+
+    /* ill-conditioned: a level of 1e4 with deviations of standard deviation
+       1, 400 observations, against the long double two-pass reference. The
+       one-pass sum of squares less n times the squared mean is the formula
+       this update replaces; its error is measured alongside. */
+    Mat level = mat_new(400, 1);
+    for (int i = 0; i < 400; i++) level.d[i] = (mreal)(1e4 + rng_normal(&rng));
+    double ref_mean[400], ref_var[400];
+    ref_running_moments(level.d, 400, ref_mean, ref_var);
+    stats_running_mean_var(level, mean, var);
+    /* The bound on the variance is Welford's, (t + 1) kappa u with kappa =
+       sqrt(1 + mean^2 / var) and u the double unit roundoff (Chan, Golub and
+       LeVeque 1983); worst is the largest error as a share of it. */
+    double worst = 0, worst_relative = 0, worst_one_pass = 0, sum = 0, sum_squares = 0;
+    for (int t = 0; t < 400; t++) {
+        sum += (double)level.d[t];
+        sum_squares += (double)level.d[t] * (double)level.d[t];
+        if (t == 0) continue;
+        double one_pass = sum_squares / (t + 1) - (sum / (t + 1)) * (sum / (t + 1));
+        double gap = fabs(var[t] - ref_var[t]) / ref_var[t], gap_one_pass = fabs(one_pass - ref_var[t]) / ref_var[t];
+        double bound = (t + 1) * sqrt(1 + ref_mean[t] * ref_mean[t] / ref_var[t]) * DBL_EPSILON / 2;
+        if (gap / bound > worst) worst = gap / bound;
+        if (gap > worst_relative) worst_relative = gap;
+        if (gap_one_pass > worst_one_pass) worst_one_pass = gap_one_pass;
+        assert(fabs(mean[t] - ref_mean[t]) <= 4e-16 * (t + 1) * fabs(ref_mean[t]));
+    }
+    printf("  level 1e4, deviations 1, 400 observations: largest relative error of the variance %.3g (%.3g of its bound),"
+           " one pass %.3g\n", worst_relative, worst, worst_one_pass);
+    assert(worst <= 1);
+
+    /* a NaN reaches every later entry and none before it */
+    Mat holed = mat_copy(copy);
+    holed.d[20] = (mreal)NAN;
+    assert(MISNAN(holed.d[20]));
+    stats_running_mean_var(holed, mean, var);
+    for (int t = 0; t < 60; t++) assert(t < 20 ? !MISNAN(mean[t]) && !MISNAN(var[t]) : MISNAN(mean[t]) && MISNAN(var[t]));
+
+    mat_free(col); mat_free(one); mat_free(constant); mat_free(wide); mat_free(copy); mat_free(row);
+    mat_free(level); mat_free(holed);
+}
+
 static void test_quantile_known_values(void) {
     puts("quantile against hand-computed interpolations");
     /* 1..5 in scrambled order, where every order statistic is its own
@@ -1466,6 +1559,7 @@ int main(void) {
     test_hac_vs_reference();
     test_hac_stress();
     test_series_accessors();
+    test_running_moments();
     test_quantile_known_values();
     test_quantile_views_and_adversarial();
     test_all_finite();

@@ -10,6 +10,7 @@ is written in header_composition.c; this file is the other half of it and
 carries no checks of its own beyond compiling and linking.
 */
 
+#include "../../lp/lp_nl_causal.h"
 #include "../../lp/lp_nl.h"
 #include "../../lp/lp.h"
 #include "../../varima/var.h"

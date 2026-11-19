@@ -85,6 +85,7 @@ the lot as unused.
 #include "../../varima/var.h"
 #include "../../lp/lp.h"
 #include "../../lp/lp_nl.h"
+#include "../../lp/lp_nl_causal.h"
 
 #include <stdio.h>
 
@@ -289,7 +290,9 @@ static int touch_every_module(void) {
     LpNlSpec lp_nl_spec = { lp_spec, 1, 0, 0, 0, 1, 0 };
     LpNlFit lp_nl_fit = lp_nl(lp_data, lp_weight, lp_nl_spec);
     if (lp_nl_fit.irf_s1_mean.shape[1] != 4) problems++;
-    lp_nl_fit_free(&lp_nl_fit); mat_free(lp_weight);
+    LpNlFit lp_nl_causal_fit = lp_nl_causal(lp_data, lp_weight, lp_nl_spec);
+    if (lp_nl_causal_fit.irf_s1_mean.shape[1] != 4 || lp_nl_causal_fit.causal_hp != 1) problems++;
+    lp_nl_fit_free(&lp_nl_fit); lp_nl_fit_free(&lp_nl_causal_fit); mat_free(lp_weight);
     lp_lin_fit_free(&lp_fit); mat_free(lp_data);
 
     df_free(&joined); df_free(&queried); df_free(&frame);

@@ -58,6 +58,7 @@ tests/correctness/qvarma_fixed_parameter_fit
 tests/correctness/var_recovery
 tests/correctness/lp_recovery
 tests/correctness/lp_nl_recovery
+tests/correctness/lp_nl_causal_correctness
 tests/performance/lp_throughput
 tests/performance/score_driven_location_gradient_cost
 liblp_f64.so

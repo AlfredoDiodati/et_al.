@@ -4,7 +4,7 @@
 
 **Installation tier:** model (see README's [Installation tiers](../README.md#installation-tiers) policy). It exposes fitting procedures and fitted results, and builds on `lp/lp.h` and `filter/hp.h`.
 
-State-dependent local projections split the lags of every variable between two states with a weight between 0 and 1, and give one set of impulse responses per state. Everything the two models share is `lp/lp.h`'s and documented in `docs/LP_DOCUMENTATION.md`: the shock matrix `d`, the regressions of every horizon and how they are solved, the bands, the fit notes and the fields of the cache file. This file covers what is particular to `lp_nl`. The speed of both is measured in `docs/LP_PERFORMANCE_DOCUMENTATION.md`.
+State-dependent local projections split the lags of every variable between two states with a weight between 0 and 1, and give one set of impulse responses per state. Everything the two models share is `lp/lp.h`'s and documented in `docs/LP_DOCUMENTATION.md`: the shock matrix `d`, the regressions of every horizon and how they are solved, the bands, the fit notes and the fields of the cache file. This file covers what is particular to `lp_nl`. `lp/lp_nl_causal.h` is the same model with a weight at `t` built from periods `1..t` only, the causal HP cycle standardised with its mean and standard deviation up to `t`, documented in `docs/LP_NL_CAUSAL_DOCUMENTATION.md`; its code is in this header. The speed of both is measured in `docs/LP_PERFORMANCE_DOCUMENTATION.md`.
 
 References:
 
@@ -33,7 +33,7 @@ The sample starts at `max(lags_endog_nl, lag_switching)`, where every lag and th
 ### Types
 
 - `LpNlSpec`: an `LpSpec` for `K`, the VAR behind `d`, `hor` and `shock_type`, plus `lags_endog_nl`, `use_logistic`, `use_hp`, `lambda`, `gamma` and `lag_switching`.
-- `LpNlFit`: the spec, the bands' settings, `irf_s1_mean`, `irf_s2_mean` and the bands of each, `d`, `fz`, `switching_is_constant` and the fit notes, `lp/lp.h`'s `LpNotes`.
+- `LpNlFit`: the spec, the bands' settings, `irf_s1_mean`, `irf_s2_mean` and the bands of each, `d`, `fz`, `switching_is_constant`, `causal_hp` (0 here, 1 for a fit of `lp/lp_nl_causal.h`) and the fit notes, `lp/lp.h`'s `LpNotes`.
 
 The responses have `lp_lin`'s layout, `[response][horizon][shock]`, and the same order against R.
 
@@ -41,7 +41,7 @@ The regressions of every horizon go through `lp/lp.h`'s `_lp_horizons`, with two
 
 ### The weight's flag
 
-`switching_is_constant` is set when the HP cycle the weight is built from is no larger than 4 times the filter's own rounding, `4 (1 + 16 lambda) u max(1, max|switching|)`, with `u` the unit roundoff. The cycle of a constant series is zero in exact arithmetic, so the weights are then rounding noise. They are still computed, as `lpirfs` computes them; the flag is what tells a caller.
+`switching_is_constant` is set when the HP cycle the weight is built from is no larger than 4 times the filter's own rounding, `4 (1 + 16 lambda) u max(1, max|switching|)`, with `u` the unit roundoff. The cycle of a constant series is zero in exact arithmetic, so the weights are then rounding noise. They are still computed, as `lpirfs` computes them; the flag is what tells a caller. A cycle whose standard deviation is exactly 0 gives NaN weights instead of 0 / 0; the two-sided cycle of a constant series is rounding noise and does not reach this.
 
 What the fit notes show in the cases particular to this model, measured in `tests/correctness/lp_nl_correctness.c`:
 
@@ -62,14 +62,14 @@ At the calibration's specification it is 7 to 10 per cent faster than the two se
 
 ### The cache
 
-`lp_nl_save_fit`, `lp_nl_load_fit` and `lp_nl_fit_cached` behave as the `lp_lin_` versions in `docs/LP_DOCUMENTATION.md`. The file also holds the switching settings, `fz`, `switching_is_constant` and the fingerprint of the switching series, and a load is refused for another switching series as well as for other data. The first lagged weight is NaN and is written as `null`.
+`lp_nl_save_fit`, `lp_nl_load_fit` and `lp_nl_fit_cached` behave as the `lp_lin_` versions in `docs/LP_DOCUMENTATION.md`. The file also holds the switching settings, `causal_hp`, `fz`, `switching_is_constant` and the fingerprint of the switching series, and a load is refused for another switching series as well as for other data, and for a file of `lp_nl_causal`, whose `causal_hp` is 1. A file written before `causal_hp` was added has no such field and is refused, so `lp_nl_fit_cached` refits it once. The first lagged weight is NaN and is written as `null`.
 
 ## API reference
 
 ```c
 typedef struct { LpSpec lin; int lags_endog_nl; int use_logistic; int use_hp; double lambda; double gamma; int lag_switching; } LpNlSpec;
 typedef struct { LpNlSpec spec; LpBands bands; Tensor irf_s1_mean, irf_s2_mean, irf_s1_low, irf_s1_up, irf_s2_low, irf_s2_up;
-                 Mat d; Mat fz; int switching_is_constant; LpNotes notes; } LpNlFit;
+                 Mat d; Mat fz; int switching_is_constant; int causal_hp; LpNotes notes; } LpNlFit;
 
 LpNlFit  lp_nl(Mat y, Mat switching, LpNlSpec spec);       /* lp_nl_with_bands without bands */
 LpNlFit  lp_nl_with_bands(Mat y, Mat switching, LpNlSpec spec, LpBands bands);

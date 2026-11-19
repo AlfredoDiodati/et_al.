@@ -21,6 +21,10 @@ Hodrick-Prescott cycle of the switching series, standardised with its n - 1
 standard deviation, when use_hp is set, and the switching series itself
 otherwise. With use_logistic off the switching series is the weight
 directly. With lag_switching on the weight used at t is the one at t - 1.
+lp/lp_nl_causal.h is the same model with a weight that at t uses the
+switching series up to t only: the cycle from filter/hp.h's causal filter,
+standardised with the mean and standard deviation of the cycle up to t.
+Both are implemented here, and causal_hp in the fit says which was used.
 The regressors are an intercept, the lags_endog_nl lags of every variable
 times 1 - F, state 1, and the same lags times F, state 2; the responses of
 each state are its first-lag block times d, where d comes from the linear
@@ -50,6 +54,7 @@ typedef struct {
     Mat d;
     Mat fz;                             /* T x 1, the weight used at each period, NaN where there is none */
     int switching_is_constant;          /* the HP cycle standardised into z was rounding noise */
+    int causal_hp; /* 1: z from the causal HP cycle, lp/lp_nl_causal.h; 0: the two-sided one */
     LpNotes notes;
 } LpNlFit;
 
@@ -65,9 +70,11 @@ static inline void lp_nl_fit_free(LpNlFit *fit) {
     _lp_notes_free(&fit->notes);
     LpNlSpec spec = fit->spec;
     LpBands bands = fit->bands;
+    int causal_hp = fit->causal_hp;
     *fit = (LpNlFit){0};
     fit->spec = spec;
     fit->bands = bands;
+    fit->causal_hp = causal_hp;
 }
 
 /* d and the VAR's notes, from a VAR(lags_endog_lin) on y. Returns 0 when there
@@ -88,14 +95,45 @@ static inline int _lp_shocks(Mat y, const LpSpec *spec, LpNotes *notes, Mat *d) 
 
 /* The weight fz of R/get_vals_switching.R and R/create_nl_data.R for a
    switching series of T periods, NaN where it is not defined (the first
-   period when lagged). Sets *switching_is_constant when the HP cycle it
-   standardised is no larger than the filter's own rounding. */
-static inline Mat _lp_weights(Mat switching, const LpNlSpec *spec, int *switching_is_constant) {
+   period when lagged). With causal_hp unset, the two-sided cycle is
+   standardised with its mean and standard deviation over all T periods.
+   With causal_hp set, the causal cycle c_t is standardised with the mean
+   and standard deviation of c_1..c_t, so the weight at t uses periods 1..t
+   only; z_1 = z_2 = 0, and z_t = 0 wherever c_1..c_t have no spread. Sets
+   *switching_is_constant when the HP cycle it standardised is no larger
+   than the filter's own rounding. A two-sided cycle with no spread at all
+   gives NaN weights. */
+static inline Mat _lp_weights(Mat switching, const LpNlSpec *spec, int causal_hp, int *switching_is_constant) {
     int T = switching.r;
     Mat weight = mat_new(T, 1);
     *switching_is_constant = 0;
     if (!spec->use_logistic) {
         for (int t = 0; t < T; t++) weight.d[t] = AT(switching, t, 0);
+    } else if (spec->use_hp && causal_hp) {
+        Mat cycle = mat_hp_cycle_causal(switching, spec->lambda, 0);
+        double size = 0, largest_cycle = 0;
+        for (int t = 0; t < T; t++) {
+            if (fabs((double)AT(switching, t, 0)) > size) size = fabs((double)AT(switching, t, 0));
+            if (fabs((double)cycle.d[t]) > largest_cycle) largest_cycle = fabs((double)cycle.d[t]);
+        }
+        /* The causal cycle of a constant series is exactly zero, since every
+           prediction error of the filter is; the bound is the two-sided
+           filter's, below. */
+        *switching_is_constant = largest_cycle <= 4 * (1 + 16 * spec->lambda) * MEPS * (size > 1 ? size : 1);
+        /* stats.h divides the variance by the t + 1 periods; sd_t divides by
+           t, as R's scale() does for the two-sided version below. */
+        double *running_mean = (double*)malloc((size_t)T * sizeof(double));
+        double *running_var = (double*)malloc((size_t)T * sizeof(double));
+        assert(running_mean && running_var);
+        stats_running_mean_var(cycle, running_mean, running_var);
+        for (int t = 0; t < T; t++) {
+            double z = 0;
+            if (t >= 2 && running_var[t] > 0)
+                z = ((double)cycle.d[t] - running_mean[t]) / sqrt(running_var[t] * (t + 1) / t);
+            weight.d[t] = (mreal)(exp(-spec->gamma * z) / (1 + exp(-spec->gamma * z)));
+        }
+        free(running_mean); free(running_var);
+        mat_free(cycle);
     } else if (spec->use_hp) {
         Mat cycle = mat_hp_cycle(switching, spec->lambda, 0);
         double mean = 0, square = 0, size = 0;
@@ -114,6 +152,10 @@ static inline Mat _lp_weights(Mat switching, const LpNlSpec *spec, int *switchin
            cycle of 3 on a level of 120 is still well clear of it. */
         *switching_is_constant = largest_cycle <= 4 * (1 + 16 * spec->lambda) * MEPS * (size > 1 ? size : 1);
         for (int t = 0; t < T; t++) {
+            if (sd == 0) {
+                weight.d[t] = (mreal)NAN;
+                continue;
+            }
             double z = ((double)cycle.d[t] - mean) / sd;
             weight.d[t] = (mreal)(exp(-spec->gamma * z) / (1 + exp(-spec->gamma * z)));
         }
@@ -133,8 +175,9 @@ static inline Mat _lp_weights(Mat switching, const LpNlSpec *spec, int *switchin
 
 /* lp_nl_with_bands, with d and the VAR's notes taken from linear, an
    lp_lin fit of the same y and spec.lin, when it is not NULL, rather than
-   from a VAR fitted here. */
-static inline LpNlFit _lp_nl(Mat y, Mat switching, LpNlSpec spec, LpBands bands, const LpLinFit *linear) {
+   from a VAR fitted here, and with the causal HP cycle when causal_hp is
+   set. */
+static inline LpNlFit _lp_nl(Mat y, Mat switching, LpNlSpec spec, LpBands bands, const LpLinFit *linear, int causal_hp) {
     _lp_check_spec(&spec.lin);
     _lp_check_bands(&bands);
     int K = spec.lin.K, p = spec.lags_endog_nl, T = y.c;
@@ -148,6 +191,7 @@ static inline LpNlFit _lp_nl(Mat y, Mat switching, LpNlSpec spec, LpBands bands,
     LpNlFit fit = {0};
     fit.spec = spec;
     fit.bands = bands;
+    fit.causal_hp = causal_hp;
     fit.notes = _lp_notes_new(K, spec.lin.hor);
     if (!mat_all_finite(switching)) {
         fit.notes.var_ols_status = -1;
@@ -162,7 +206,7 @@ static inline LpNlFit _lp_nl(Mat y, Mat switching, LpNlSpec spec, LpBands bands,
         if (!linear->d.d) return fit;
         fit.d = mat_copy(linear->d);
     } else if (!_lp_shocks(y, &spec.lin, &fit.notes, &fit.d)) return fit;
-    fit.fz = _lp_weights(switching, &spec, &fit.switching_is_constant);
+    fit.fz = _lp_weights(switching, &spec, causal_hp, &fit.switching_is_constant);
 
     /* the sample t = first..T-1: responses, and the regressors
        [1, lags (1 - F_t), lags F_t] */
@@ -215,7 +259,7 @@ bands are built as lp_lin_with_bands builds them, from that state's
 first-lag block, as R/lp_nl.R does.
 */
 static inline LpNlFit lp_nl_with_bands(Mat y, Mat switching, LpNlSpec spec, LpBands bands) {
-    return _lp_nl(y, switching, spec, bands, NULL);
+    return _lp_nl(y, switching, spec, bands, NULL, 0);
 }
 
 /* lp_nl_with_bands without bands. */
@@ -240,11 +284,15 @@ lp_nl_with_bands' only through d, which lp_nl fits with var_fit, a QR of
 the same design, so the two agree to rounding. Free with
 lp_lin_nl_fit_free.
 */
-static inline LpLinNlFit lp_lin_and_nl(Mat y, Mat switching, LpNlSpec spec, LpBands bands) {
+static inline LpLinNlFit _lp_lin_and_nl(Mat y, Mat switching, LpNlSpec spec, LpBands bands, int causal_hp) {
     LpLinNlFit both;
     both.lin = lp_lin_with_bands(y, spec.lin, bands);
-    both.nl = _lp_nl(y, switching, spec, bands, &both.lin);
+    both.nl = _lp_nl(y, switching, spec, bands, &both.lin, causal_hp);
     return both;
+}
+
+static inline LpLinNlFit lp_lin_and_nl(Mat y, Mat switching, LpNlSpec spec, LpBands bands) {
+    return _lp_lin_and_nl(y, switching, spec, bands, 0);
 }
 
 static inline void lp_lin_nl_fit_free(LpLinNlFit *fit) {
@@ -252,8 +300,9 @@ static inline void lp_lin_nl_fit_free(LpLinNlFit *fit) {
     lp_nl_fit_free(&fit->nl);
 }
 
-/* As lp_lin_save_fit, adding the switching settings, fz, the constant
-   switching flag and the fingerprint of the switching series. */
+/* As lp_lin_save_fit, adding the switching settings, which HP filter was
+   used, fz, the constant switching flag and the fingerprint of the
+   switching series. Saves the fits of lp/lp_nl_causal.h as well. */
 static inline void lp_nl_save_fit(const LpNlFit *fit, Mat y, Mat switching, const char *path) {
     assert(fit->d.d && "lp_nl_save_fit: the fit has no shock matrix and no responses");
     int K = fit->spec.lin.K, hor = fit->spec.lin.hor;
@@ -266,6 +315,7 @@ static inline void lp_nl_save_fit(const LpNlFit *fit, Mat y, Mat switching, cons
     json_object_set(root, "lambda", json_number(fit->spec.lambda));
     json_object_set(root, "gamma", json_number(fit->spec.gamma));
     json_object_set(root, "lag_switching", json_number(fit->spec.lag_switching));
+    json_object_set(root, "causal_hp", json_number(fit->causal_hp));
     json_object_set(root, "d", _var_matrix_to_json(fit->d));
     json_object_set(root, "fz", _lp_values_to_json(fit->fz.d, (size_t)fit->fz.r));
     json_object_set(root, "irf_s1_mean", _lp_values_to_json(fit->irf_s1_mean.d, tensor_size(fit->irf_s1_mean)));
@@ -285,9 +335,10 @@ static inline void lp_nl_save_fit(const LpNlFit *fit, Mat y, Mat switching, cons
     json_free(root);
 }
 
-/* As lp_lin_load_fit, for a file written by lp_nl_save_fit, checked against
-   both y and the switching series. */
-static inline int lp_nl_load_fit(LpNlFit *fit, Mat y, Mat switching, LpNlSpec spec, LpBands bands, const char *path) {
+/* lp_nl_load_fit, accepting only a file whose fit used the causal HP cycle
+   when causal_hp is set, and only one whose fit used the two-sided cycle
+   otherwise. */
+static inline int _lp_nl_load_fit(LpNlFit *fit, Mat y, Mat switching, LpNlSpec spec, LpBands bands, const char *path, int causal_hp) {
     _lp_check_spec(&spec.lin);
     _lp_check_bands(&bands);
     FILE *probe = fopen(path, "r");
@@ -297,7 +348,7 @@ static inline int lp_nl_load_fit(LpNlFit *fit, Mat y, Mat switching, LpNlSpec sp
     if (!root) return 0;
     int K = spec.lin.K, hor = spec.lin.hor, T = y.c;
     JsonValue *notes_object = root->type == JSON_OBJECT ? json_object_get(root, "fit") : NULL;
-    double lags_nl, use_logistic, use_hp, lambda, gamma, lag_switching, constant, fingerprint, switching_fingerprint;
+    double lags_nl, use_logistic, use_hp, lambda, gamma, lag_switching, causal, constant, fingerprint, switching_fingerprint;
     int ok = notes_object && notes_object->type == JSON_OBJECT && _lp_spec_matches(root, &spec.lin) && _lp_bands_match(root, &bands)
         && _var_json_number(root, "lags_endog_nl", &lags_nl) && lags_nl == spec.lags_endog_nl
         && _var_json_number(root, "use_logistic", &use_logistic) && use_logistic == spec.use_logistic
@@ -305,6 +356,7 @@ static inline int lp_nl_load_fit(LpNlFit *fit, Mat y, Mat switching, LpNlSpec sp
         && _var_json_number(root, "lambda", &lambda) && lambda == spec.lambda
         && _var_json_number(root, "gamma", &gamma) && gamma == spec.gamma
         && _var_json_number(root, "lag_switching", &lag_switching) && lag_switching == spec.lag_switching
+        && _var_json_number(root, "causal_hp", &causal) && causal == causal_hp
         && _var_json_number(notes_object, "switching_is_constant", &constant) && (constant == 0 || constant == 1)
         && _var_json_number(notes_object, "data_fingerprint", &fingerprint)
         && _var_json_number(notes_object, "switching_fingerprint", &switching_fingerprint)
@@ -313,6 +365,7 @@ static inline int lp_nl_load_fit(LpNlFit *fit, Mat y, Mat switching, LpNlSpec sp
     LpNlFit loaded = {0};
     loaded.spec = spec;
     loaded.bands = bands;
+    loaded.causal_hp = causal_hp;
     loaded.notes = _lp_notes_new(K, hor);
     loaded.d = mat_new(K, K);
     loaded.fz = mat_new(T, 1);
@@ -338,13 +391,24 @@ static inline int lp_nl_load_fit(LpNlFit *fit, Mat y, Mat switching, LpNlSpec sp
     return 1;
 }
 
-/* As lp_lin_fit_cached, for lp_nl. */
-static inline LpNlFit lp_nl_fit_cached(Mat y, Mat switching, LpNlSpec spec, LpBands bands, const char *cache_path, int force_refit) {
+/* As lp_lin_load_fit, for a file written by lp_nl_save_fit for a fit of
+   lp_nl, checked against both y and the switching series. */
+static inline int lp_nl_load_fit(LpNlFit *fit, Mat y, Mat switching, LpNlSpec spec, LpBands bands, const char *path) {
+    return _lp_nl_load_fit(fit, y, switching, spec, bands, path, 0);
+}
+
+static inline LpNlFit _lp_nl_fit_cached(Mat y, Mat switching, LpNlSpec spec, LpBands bands, const char *cache_path, int force_refit,
+                                        int causal_hp) {
     if (!force_refit) {
         LpNlFit cached = {0};
-        if (lp_nl_load_fit(&cached, y, switching, spec, bands, cache_path)) return cached;
+        if (_lp_nl_load_fit(&cached, y, switching, spec, bands, cache_path, causal_hp)) return cached;
     }
-    LpNlFit fit = lp_nl_with_bands(y, switching, spec, bands);
+    LpNlFit fit = _lp_nl(y, switching, spec, bands, NULL, causal_hp);
     if (fit.d.d) lp_nl_save_fit(&fit, y, switching, cache_path);
     return fit;
+}
+
+/* As lp_lin_fit_cached, for lp_nl. */
+static inline LpNlFit lp_nl_fit_cached(Mat y, Mat switching, LpNlSpec spec, LpBands bands, const char *cache_path, int force_refit) {
+    return _lp_nl_fit_cached(y, switching, spec, bands, cache_path, force_refit, 0);
 }
