@@ -6,7 +6,7 @@
 
 State-dependent local projections split the lags of every variable between two states with a weight between 0 and 1, and give one set of impulse responses per state. Everything the two models share is `lp/lp.h`'s and documented in `docs/LP_DOCUMENTATION.md`: the shock matrix `d`, the regressions of every horizon and how they are solved, the bands, the fit notes and the fields of the cache file. This file covers what is particular to `lp_nl`. The speed of `lp_lin` and `lp_nl` is measured in `docs/LP_PERFORMANCE_DOCUMENTATION.md`.
 
-`lp/lp_nl_causal.h` is the same model with a weight at `t` built from periods `1..t` only: the causal HP cycle, standardised with its mean and standard deviation up to `t`. It is documented in `docs/LP_NL_CAUSAL_DOCUMENTATION.md`. It holds its weight itself and reuses this header's fit through two internal steps, `_lp_nl_start`, the checks, notes and `d` before the weight, and `_lp_nl_estimate`, the regressions after it.
+`lp/lp_nl_causal.h` is the same model with a weight at `t` built from periods `1..t` only: the causal HP cycle, standardised with its mean and standard deviation up to `t`. It is documented in `docs/LP_NL_CAUSAL_DOCUMENTATION.md`. It holds that weight itself and fits the model with this header's internal functions; see "Structure" below.
 
 References:
 
@@ -66,6 +66,19 @@ At the calibration's specification it is 7 to 10 per cent faster than the two se
 ### The cache
 
 `lp_nl_save_fit`, `lp_nl_load_fit` and `lp_nl_fit_cached` behave as the `lp_lin_` versions in `docs/LP_DOCUMENTATION.md`. The file also holds the switching settings, `fz`, `switching_is_constant` and the fingerprint of the switching series, and a load is refused for another switching series as well as for other data. A file of `lp_nl_causal` also holds `"causal_hp": 1`, and `lp_nl_load_fit` refuses a file with that field. The first lagged weight is NaN and is written as `null`.
+
+### Structure
+
+A fit runs in two internal steps around the weight. `_lp_nl_start` checks the arguments, sets up the fit and its notes, and obtains `d`; `_lp_nl_estimate` runs every horizon's regression on `fz` and builds the responses and bands. `lp_nl` computes `fz` between the two with `_lp_weights`, and `lp/lp_nl_causal.h` with its own causal weight. The logistic, `_lp_logistic`, and the lag, `_lp_lag_weights`, are shared by both weights.
+
+The split was introduced with `lp/lp_nl_causal.h`. Kept from commit `240ecce`: every public function and type of this header with its arguments, and the cache file. Added: the field `causal_hp` of `LpNlFit`, always 0 here, and NaN weights for a cycle with no spread, where `240ecce` divided 0 by 0.
+
+Each weight function is called directly. Called through a function pointer, `_lp_weights` was compiled out of line, GCC vectorised its logistic loop with the vector `exp` of glibc's vector math library, which rounds differently from the scalar `exp`, and `fz` changed in the last bit in 86 of 120 periods of the first setting below.
+
+The split was compared with `240ecce` once, by a program outside the repository, on 144 settings: `K` from 1 to 3, `lags_endog_lin = lags_endog_nl` from 1 to 3, `lag_switching` off and on, horizon 5, 120 periods, draws from `rng_new(900 + K, 10 lags + lag_switching)`, without bands and with Newey-West bands at 1.96, and four switching series: a random walk around 100 through the HP filter, a constant 120 through the HP filter, the random walk less 100 through the logistic without the filter, and uniform weights between 0.2 and 0.8 given directly. Every output of `lp_nl_with_bands` and `lp_lin_and_nl` was compared:
+
+- built without `-ffast-math` (`-O3 -march=native -ffp-contract=off -fopenmp`, float64): equal bit for bit, the fit notes included, and the cache file of one setting equal byte for byte;
+- in the project's build, with `-ffast-math`: the notes and the cache file equal, and the values within `5.9e-14` relative. `-ffast-math` lets the compiler reorder sums differently in each inlining context; commit `43468d0` differs from `240ecce` the same way.
 
 ## API reference
 
