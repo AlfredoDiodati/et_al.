@@ -143,6 +143,7 @@ The point of sharing rather than duplicating is that the parts most likely to dr
 `tests/correctness/test_npz.c` covers, at both precisions:
 
 - Round trips: numeric only; mixed numeric and string columns interleaved, requiring declaration order to survive; row labels present and absent; UTF-8 strings spanning 1-, 2-, 3- and 4-byte sequences. Numeric comparison is **exact**, not toleranced — `.npz` carries raw bytes, so any difference is a byte-layout bug rather than a formatting-precision question.
+- **The threaded paths**, on a frame of `FRAME_NPZ_OMP_MIN_STRINGS + 1001` rows, so the rows split unevenly between threads: 16 columns of `srand(50)` noise, enough to pass `FRAME_NPZ_OMP_MIN_COPY_BYTES`, a string column of the UTF-8 fixture labels each followed by its row number, and row labels, written stored and deflated. The deflated archive is asserted to exceed `FRAME_NPZ_OMP_MIN_BYTES`, so its members are inflated on several threads, and both reads must be identical to the frame written.
 - **Archives real numpy produced**, embedded as bytes: one `np.savez` and one `np.savez_compressed` per precision (a float64 build reads both pairs, the float32 one widened), each holding a 1D array, a 4x2 array and a `<U8` string array. This is the "an external tool validates the format once during development, the test embeds the fixed result" pattern `gzip_inflate.c` uses for its fixed-Huffman block; nothing in the shipped suite runs Python. The deflated fixture is the only thing that exercises the `gzip_inflate_raw` branch, and the 2D `grid` member the only thing that exercises the column-expansion branch, since `df_write_npz` writes one 1D member per column and can never produce either.
 - **The compressed writer against the stored one.** `df_write_npz_compressed` must produce a genuinely smaller file on compressible data (asserted at under half, so a silently-disabled encoder fails), must not *grow* the archive on incompressible data, and must read back to a frame identical to the stored archive's. A one-row frame goes through it too, where a member's payload is a few bytes and the encoder's block-type choice is not obvious. The `STRESS=1` fuzz alternates the two writers over the same 200 random frames.
 - Adversarial shapes: one row, one column, an all-empty string column, and a zero-row frame — a legitimate numpy array rather than a contract violation, and the only shape whose members carry a header and no data block at all.
@@ -153,7 +154,7 @@ The point of sharing rather than duplicating is that the parts most likely to dr
   - a 1000-row frame of 300 numeric columns (fixed seed `srand(47)`, a fifth each zeros, plus or minus `1e30`, and `1e-30`, the rest uniform on -0.5 to 0.5) and one string column, with and without row labels, stored and deflated: 11 columns out of order plus one absent name, every column in archive order (required identical to the full read) and reversed, and only absent names (a frame of no rows, no columns and no row labels). The archive is larger than the 22 + 65535 bytes searched for the end-of-directory record, so the record and the directory are read from the middle of the file;
   - numpy's own embedded archives, where `grid` gives `grid0` and `grid1` and `grid0` finds nothing;
   - a zero-row and a one-row frame, and trailing zip comments of 1, 1000, 65534 and 65535 bytes, the last putting the end-of-directory record at the first byte of the window searched (`df_read_npz` is checked on the same files);
-  - **an unasked member is never read**: with a flipped byte in member `y`, reading `x` succeeds and reading `y` or the whole archive aborts; likewise for a member of another length and a `<i4` member. Two mutations of the reader, one that selects every member and one that reads every member and drops the unasked ones, each fail this suite;
+  - **an unasked member is never read**: with a flipped byte in member `y`, reading `x` succeeds and reading `y` or the whole archive aborts; likewise for a member of another length and a `<i4` member. Two mutations of the reader, one that selects every member and one that reads every member and drops the unasked ones, each fail this suite (`make test-mutations`);
   - no names, one name twice, and `__row_names__` asked for, each required to abort.
 - The malformed-archive cases are built by a **test-only zip writer**, deliberately a second implementation of the format rather than a call into `df_write_npz` — the same relationship `test_npy.c`'s `write_test_npy` has to `df_write_npy`. It is what lets an unsupported archive be constructed on purpose, and what the reader is checked against.
 
@@ -177,12 +178,38 @@ Against numpy, `tests/performance/bench_npz.py` reads 4 columns, `c217`, `c3`, `
 
 | rows | `df_read_npz_columns` | `np.load`, same 4 keys | `df_read_npz`, all 301 |
 |---|---|---|---|
-| 1,000, stored | 0.032 ms | 1.70 ms | 1.21 ms |
-| 100,000, stored | 0.800 ms | 2.63 ms | 326 ms |
-| 1,000, deflated | 0.106 ms | 1.79 ms | 6.75 ms |
-| 100,000, deflated | 6.60 ms | 8.31 ms | 781 ms |
+| 1,000, stored | 0.029 ms | 1.72 ms | 0.972 ms |
+| 100,000, stored | 0.482 ms | 2.57 ms | 72.7 ms |
+| 1,000, deflated | 0.099 ms | 1.79 ms | 2.20 ms |
+| 100,000, deflated | 2.79 ms | 8.45 ms | 113 ms |
 
-Before these changes the same script gave 4.69 ms and 19.1 ms for the two 100,000-row partial reads, and 5042 ms and 6176 ms for the full ones.
+Before any of these changes the same script gave 4.69 ms and 19.1 ms for the two 100,000-row partial reads, and 5042 ms and 6176 ms for the full ones. The table is after the changes in the next subsection as well.
+
+### Changes measured on full reads with a string column
+
+The same harness also writes 8 numeric columns of 100,000 and 1,000,000 rows with a string column `label` of 100 repeating categories (`cat_0` to `cat_99`) and row labels `r0`, `r1`, ... (marked `+s` in its report), read by `df_read_npz` stored and deflated; the bytes compared include every column name, string and row label. Each change below is against the version before it, float32 build, 16 threads, ratios baseline-first then candidate-first, on the 1,000,000-row archive unless said otherwise.
+
+- **Decoded strings are handed to the frame, not copied.** `frame_npz_decode_strings` allocates each string at its own length, and the array becomes the string column through `frame/frame.h`'s `frame_append_owned_string_col`, or becomes the row labels, without the copy `df_add_string_col` makes and without freeing the originals. Stored 178 ms to 134 ms (0.753, 0.754), deflated 258 ms to 213 ms (0.815, 0.823).
+- **ASCII elements are written straight into their allocation**, without the codepoint array and the UTF-8 encoder. Stored 135.6 ms to 127.4 ms (0.945, 0.934). Replaced afterwards by a simpler decoder that measures the same; see below.
+- **Deflated members are inflated and checked on several threads** when they hold at least `FRAME_NPZ_OMP_MIN_BYTES` (1 MiB) of deflated bytes; the file itself is still read in order on one thread. Deflated 209 ms to 158 ms (0.798, 0.709), and 4 deflated columns of the 100,000 x 300 archive 5.48 ms to 2.99 ms (0.567, 0.536); every stored read within 1.3% of the baseline. A first version that also threaded stored members, whose CRC32 alone is little work, measured 10% slower on the stored 100,000-row `+s` archive in both orders; see the note on that case below.
+- **The numeric block is filled a band of rows at a time** (`FRAME_NPZ_COPY_BAND_BYTES`, 16 KiB of the block per band), every member for one band before the next, so the band stays in cache while each column is written into it with a stride of the column count. Filled column by column, the block went through cache once per member. Stored 137 ms to 114 ms (0.835, 0.834), and the stored 1,000,000 x 4 archive 14.9 ms to 10.4 ms (0.699, 0.707).
+- **CRC32 by carry-less multiplication** where the compiler targets PCLMUL and SSE4.1 (`docs/GZIP_DOCUMENTATION.md`, Fix 4). Stored 112 ms to 98.7 ms (0.878, 0.889); 4 stored columns of the 100,000 x 300 archive 0.740 ms to 0.464 ms (0.622, 0.630).
+- **Strings are decoded on several threads** from `FRAME_NPZ_OMP_MIN_STRINGS` (65,536) rows. Stored 98.8 ms to 77.2 ms (0.758, 0.791), deflated 118 ms to 110 ms (0.885, 0.838).
+- **The bands of the numeric block are copied on several threads** when the block holds at least `FRAME_NPZ_OMP_MIN_COPY_BYTES` (4 MiB). Stored 75.4 ms to 71.2 ms (0.958, 0.942), the stored 1,000,000 x 4 archive 7.60 ms to 6.92 ms (0.922, 0.893). Entering the parallel region with its condition false, as an `if` clause does, made the 1,000 x 4 and 1,000 x 300 stored reads 2.5% to 4% slower in both orders, so below the threshold the bands go through a separate serial loop.
+
+**Simplified afterwards, at the same speed.** Two parts of the result were rewritten more plainly and compared with the version before by the same harness:
+- Each string is decoded by counting its UTF-8 length and then writing it into an allocation of that length, with `frame_npz_ucs4_to_utf8` reading the codepoints straight from the member and counting when given no output, as `frame_npz_utf8_to_ucs4` already did for the writer. This replaces the ASCII fast path, the codepoint and UTF-8 scratch buffers, and the per-thread scratch they needed. The two orders lie on opposite sides of 1 on every `+s` case, so no difference is measured; the harness's strings are all ASCII.
+- The numeric members are listed as `FrameNpzNumericSource` entries (data, first column, column count, element width) while the column names are assigned, in one loop over the members instead of two, and the band copy reads that list. A first version of it read each entry's fields through the array pointer inside the copy loop; each `memcpy` there may write any memory as far as the compiler knows, so it reloaded them for every row, and the stored reads without strings were 15% to 36% slower in both orders (100,000 x 4 at 1.309 and 1.362). Copying the fields into locals before the loop brings every case to within the noise or faster (the stored 1,000 x 300 archive 0.923, 0.924).
+
+Rejected while simplifying, both measured against the simplified version:
+- Copying single columns of `mreal` through `frame_npy_copy_elements` like every other member, without their own fixed-size copy: a call per element, and the stored 4 columns of 100,000 x 300 went from 0.440 ms to 1.84 ms (4.215, 4.190).
+- Inflating and checking members on threads by the total bytes read rather than the deflated bytes, so that stored members are threaded too: the stored 1,000,000 x 4 archive 8% faster (0.917, 0.922), but the stored reads of 1.2 MB to 1.6 MB 6% to 17% slower in both orders (the full 1,000 x 300 at 1.165 and 1.153, 4 columns of 100,000 x 300 at 1.150 and 1.130, 100,000 x 4 at 1.058 and 1.115).
+
+`make test-mutations` checks that `test_npz.c` fails when codepoints up to 0xFF are decoded as one byte, when single columns are copied from the band's own rows instead of the frame's, and, on the threaded paths alone, when every member is unpacked against the first member's directory entry and when the last row of every band is left uncopied.
+
+Rejected: freeing the strings of a large column on several threads in `df_free`. `make bench-npz_read_stages`, 1,000,000 strings of 7 bytes, median of 6 repetitions after one discarded, 16 threads: strings allocated by one thread take 13.8 ms to free on one thread and 197 ms on 16; strings allocated by every thread take 15.4 ms and 4.8 ms. `df_free` cannot tell which kind it has, and every loader but this one allocates on one thread.
+
+**The harness has an artifact on the stored 100,000-row `+s` archive.** A run in which the candidate and the baseline were the same code gave 1.189 and 1.248 for that case, and within 2.5% of 1 for every other case. A difference on that case smaller than about 25% is not a measurement, and the 10% above is one of them; the stored-member threading rejected above was judged on the other cases.
 
 ### The one suite that runs Python
 
@@ -209,12 +236,12 @@ Both are fixed, and both have a regression test in `tests/correctness/test_npy.c
 
 - **No ZIP64**, so no member may reach 4 GiB. At `<f8` that is 500 million rows in one column.
 - **No `|S` (byte-string) dtype on read.** `astype(str)` in Python is one call and produces the `<U` form this file reads.
-- **Reading a large archive with a string column is slower than numpy, and the cause has not been measured since the frame build was fixed.** `tests/performance/bench_npz.py`, nine columns (eight float32 and one 100-category string), against `numpy.savez`/`numpy.load` with every member touched on the numpy side, best of 3 batches of at least one second, 16 threads; our time over numpy's:
+- **Reading a large stored archive with a string column is 1.2 times numpy's time, and most of the rest is freeing the strings.** `tests/performance/bench_npz.py`, nine columns (eight float32 and one 100-category string), against `numpy.savez`/`numpy.load` with every member touched on the numpy side, best of 3 batches of at least one second, 16 threads; our time over numpy's:
 
   | rows | write, stored | read, stored | write, compressed | read, compressed |
   |---|---|---|---|---|
-  | 10,000 | 0.60x | 0.68x | 0.92x | 0.79x |
-  | 100,000 | 1.03x | 2.28x | 1.15x | 1.33x |
-  | 1,000,000 | 1.10x | 4.12x | 1.02x | 1.74x |
+  | 10,000 | 0.51x | 0.37x | 0.92x | 0.61x |
+  | 100,000 | 0.49x | 1.19x | 1.17x | 0.40x |
+  | 1,000,000 | 2.28x | 1.18x | 1.05x | 0.38x |
 
-  The read gap widens with `n`, so it is per-element. The write side still gathers each column out of the frame's shared row-major block with a stride of `n_numeric` (`frame_npz_numeric_image`), where numpy's arrays are already contiguous; `docs/PERFORMANCE_BACKLOG.md` item 10 has the fix for that.
+  The stored read at 1,000,000 rows is 42.8 ms against 36.3 ms. `make bench-npz_read_stages` times the stages on a frame of the same shape (8 float columns and the 100-category string column, 1,000,000 rows, median of 6 reads after one discarded): reading and unpacking the members 14.4 ms, building the frame 12.0 ms, `df_free` 15.6 ms. The free is nearly all the million separate frees of the string column, 13.8 ms in the same benchmark's second part, which a `DataFrame` stores as one allocation per string; numpy frees one block. Closing that needs a different string storage in `frame/frame.h`, not a change here. The stored write at 1,000,000 rows was 1.10x in the previous run of the same script and 2.28x in this one; the write is unchanged apart from the CRC32 and its variation between runs has not been looked into. The write side still gathers each column out of the frame's shared row-major block with a stride of `n_numeric` (`frame_npz_numeric_image`), where numpy's arrays are already contiguous; `docs/PERFORMANCE_BACKLOG.md` item 10 has the fix for that.

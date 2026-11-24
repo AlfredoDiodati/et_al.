@@ -14,14 +14,19 @@
 enum { NPY_READ_ARM_DF_NPY, NPY_READ_ARM_TENSOR_NPY, NPY_READ_ARM_DF_NPZ, NPY_READ_ARM_DF_NPZ_COLUMNS };
 
 /* Writes an rows x cols array to a .npy file, and the same columns to a
-   stored and to a deflated .npz, at this build's mreal precision. */
-void npy_read_arm_baseline_write(int rows, int cols, const char *npy_path, const char *stored_path,
+   stored and to a deflated .npz, at this build's mreal precision. With
+   labelled nonzero the two archives also carry a string column "label" of
+   100 repeating categories and row labels "r0", "r1", ..., which a .npy
+   cannot hold. */
+void npy_read_arm_baseline_write(int rows, int cols, int labelled, const char *npy_path, const char *stored_path,
                                  const char *deflated_path);
-void npy_read_arm_candidate_write(int rows, int cols, const char *npy_path, const char *stored_path,
+void npy_read_arm_candidate_write(int rows, int cols, int labelled, const char *npy_path, const char *stored_path,
                                   const char *deflated_path);
 
-/* Reads path with the given reader and returns the numeric values it holds,
-   row-major, as a malloc'd byte image of *bytes bytes, freed by the driver. */
+/* Reads path with the given reader and returns what it holds as a malloc'd
+   byte image of *bytes bytes, freed by the driver: the numeric values,
+   row-major, then for a frame each column name, each string column's
+   values and each row label, every one NUL-terminated. */
 unsigned char *npy_read_arm_baseline_read(int reader, const char *path, size_t *bytes);
 unsigned char *npy_read_arm_candidate_read(int reader, const char *path, size_t *bytes);
 

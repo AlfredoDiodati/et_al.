@@ -88,9 +88,10 @@ static inline void frame_npz_put_u32(unsigned char *p, uint32_t v) {
 
    A '<U7' element is 7 little-endian 32-bit codepoints, zero-padded on
    the right; a DataFrame's string column is NUL-terminated UTF-8. These
-   two convert between them. Writing NULL for out counts codepoints
-   without writing any, which is how a column's dtype width is measured
-   before anything has been allocated. */
+   two convert between them. Passing NULL for out counts without writing,
+   which is how a column's dtype width is measured before anything is
+   allocated on the way out, and how each string is allocated at its own
+   length on the way in. */
 
 static inline int frame_npz_utf8_to_ucs4(const char *s, uint32_t *out) {
     const unsigned char *p = (const unsigned char*)s;
@@ -118,38 +119,51 @@ static inline int frame_npz_utf8_to_ucs4(const char *s, uint32_t *out) {
     return n;
 }
 
-/* Writes at most 4*n bytes plus a NUL. Trailing zero codepoints are
-   numpy's padding, not content, so they end the string. */
-static inline size_t frame_npz_ucs4_to_utf8(const uint32_t *cp, int n, char *out) {
+/* Converts one element of n little-endian codepoints, as it sits in the
+   member, and returns the UTF-8 byte count; out, when not NULL, receives
+   those bytes and a NUL. Trailing zero codepoints are numpy's padding, not
+   content, so they end the string. */
+static inline size_t frame_npz_ucs4_to_utf8(const unsigned char *element, int n, char *out) {
     size_t k = 0;
     for (int i = 0; i < n; i++) {
-        uint32_t v = cp[i];
+        uint32_t v = frame_npz_u32(element + (size_t)i * 4);
         if (v == 0) break;
         if (v < 0x80) {
-            out[k++] = (char)v;
+            if (out) out[k] = (char)v;
+            k += 1;
         } else if (v < 0x800) {
-            out[k++] = (char)(0xC0 | (v >> 6));
-            out[k++] = (char)(0x80 | (v & 0x3F));
+            if (out) {
+                out[k] = (char)(0xC0 | (v >> 6));
+                out[k + 1] = (char)(0x80 | (v & 0x3F));
+            }
+            k += 2;
         } else if (v < 0x10000) {
-            out[k++] = (char)(0xE0 | (v >> 12));
-            out[k++] = (char)(0x80 | ((v >> 6) & 0x3F));
-            out[k++] = (char)(0x80 | (v & 0x3F));
+            if (out) {
+                out[k] = (char)(0xE0 | (v >> 12));
+                out[k + 1] = (char)(0x80 | ((v >> 6) & 0x3F));
+                out[k + 2] = (char)(0x80 | (v & 0x3F));
+            }
+            k += 3;
         } else {
             assert(v <= 0x10FFFF && "frame: .npz string element is not a Unicode codepoint");
-            out[k++] = (char)(0xF0 | (v >> 18));
-            out[k++] = (char)(0x80 | ((v >> 12) & 0x3F));
-            out[k++] = (char)(0x80 | ((v >> 6) & 0x3F));
-            out[k++] = (char)(0x80 | (v & 0x3F));
+            if (out) {
+                out[k] = (char)(0xF0 | (v >> 18));
+                out[k + 1] = (char)(0x80 | ((v >> 12) & 0x3F));
+                out[k + 2] = (char)(0x80 | ((v >> 6) & 0x3F));
+                out[k + 3] = (char)(0x80 | (v & 0x3F));
+            }
+            k += 4;
         }
     }
-    out[k] = '\0';
+    if (out) out[k] = '\0';
     return k;
 }
 
 /* --- reading --- */
 
-/* One archive member, already decompressed: its name with the .npy
-   suffix stripped, and the .npy image itself. */
+/* One archive member: its name with the .npy suffix stripped, and its
+   bytes, which are the member as stored in the archive after
+   frame_npz_read_member and the .npy image after frame_npz_unpack_member. */
 typedef struct {
     char *name;
     unsigned char *image;
@@ -210,19 +224,21 @@ static inline unsigned char *frame_npz_read_at(const FrameNpzFile *archive, long
 }
 
 /* Reads the member whose central-directory entry is e: its local header,
-   then its stored bytes, inflated when deflated and checked against the
-   CRC32 the directory records. key is the member name with .npy
-   stripped. */
+   then its stored bytes, which become member.image, still deflated when
+   the member is; frame_npz_unpack_member inflates and checks them. key is
+   the member name with .npy stripped. */
 static inline FrameNpzMember frame_npz_read_member(const FrameNpzFile *archive, const unsigned char *e,
                                                    const char *key, size_t key_length) {
     long size = archive->size;
     unsigned flags = frame_npz_u16(e + 8);
     unsigned method = frame_npz_u16(e + 10);
-    uint32_t crc = frame_npz_u32(e + 16);
     uint32_t compressed = frame_npz_u32(e + 20);
     uint32_t uncompressed = frame_npz_u32(e + 24);
     uint32_t local_offset = frame_npz_u32(e + 42);
     assert((flags & 0x0001u) == 0 && "frame: encrypted .npz members are not supported");
+    assert((method == 0 || method == 8) &&
+           "frame: .npz member uses a compression method other than stored or deflate");
+    assert((method != 0 || compressed == uncompressed) && "frame: stored .npz member declares two different sizes");
     assert(compressed != 0xFFFFFFFFu && uncompressed != 0xFFFFFFFFu && local_offset != 0xFFFFFFFFu &&
            "frame: ZIP64 .npz members (4 GiB or larger) are not supported");
 
@@ -238,29 +254,40 @@ static inline FrameNpzMember frame_npz_read_member(const FrameNpzFile *archive, 
     free(local);
     assert(data + (long)compressed <= size && "frame: .npz member data runs past the end of the file");
 
-    unsigned char *stored = frame_npz_read_at(archive, data, compressed);
-    unsigned char *image;
-    if (method == 0) {
-        assert(compressed == uncompressed && "frame: stored .npz member declares two different sizes");
-        image = stored;
-    } else {
-        assert(method == 8 && "frame: .npz member uses a compression method other than stored or deflate");
-        size_t got;
-        image = gzip_inflate_raw(stored, compressed, uncompressed, &got);
-        assert(got == uncompressed && "frame: .npz member inflated to the wrong size");
-        free(stored);
-    }
-    assert(gzip_crc32(image, uncompressed) == crc && "frame: .npz member failed its CRC32 check");
-
     FrameNpzMember member;
     member.name = (char*)malloc(key_length + 1);
     assert(member.name && "frame: out of memory");
     memcpy(member.name, key, key_length);
     member.name[key_length] = '\0';
-    member.image = image;
-    member.size = uncompressed;
+    member.image = frame_npz_read_at(archive, data, compressed);
+    member.size = compressed;
     return member;
 }
+
+/* Turns a member frame_npz_read_member read, whose central-directory
+   entry is e, into its .npy image: inflates it when it is deflated, then
+   checks it against the CRC32 the directory records. Touches nothing but
+   the member, so different members can be unpacked at once. */
+static inline void frame_npz_unpack_member(FrameNpzMember *member, const unsigned char *e) {
+    unsigned method = frame_npz_u16(e + 10);
+    uint32_t crc = frame_npz_u32(e + 16);
+    uint32_t uncompressed = frame_npz_u32(e + 24);
+    if (method == 8) {
+        size_t got;
+        unsigned char *image = gzip_inflate_raw(member->image, member->size, uncompressed, &got);
+        assert(got == uncompressed && "frame: .npz member inflated to the wrong size");
+        free(member->image);
+        member->image = image;
+        member->size = uncompressed;
+    }
+    assert(gzip_crc32(member->image, uncompressed) == crc && "frame: .npz member failed its CRC32 check");
+}
+
+/* Total deflated bytes of the members read from which they are unpacked
+   by several threads. */
+#ifndef FRAME_NPZ_OMP_MIN_BYTES
+#define FRAME_NPZ_OMP_MIN_BYTES (1u << 20)
+#endif
 
 /* Reads members of the archive at path straight from the file: the
    end-of-central-directory record from the file's tail, then the central
@@ -349,9 +376,27 @@ static inline FrameNpzMember *frame_npz_read_members(const char *path, const cha
 
     FrameNpzMember *members = (FrameNpzMember*)calloc((size_t)(n_selected > 0 ? n_selected : 1), sizeof(FrameNpzMember));
     assert(members && "frame: out of memory");
+    size_t deflated_bytes = 0;
     for (int m = 0; m < n_selected; m++) {
         const unsigned char *e = directory + entry[selected[m]];
         members[m] = frame_npz_read_member(&archive, e, (const char*)(e + 46), key_length[selected[m]]);
+        if (frame_npz_u16(e + 10) == 8) deflated_bytes += members[m].size;
+    }
+
+    /* The file is read in order above; inflating and checking are per
+       member, and run on several threads when there are enough deflated
+       bytes to inflate. Stored members are only checked, and checking them
+       on threads made stored archives of 1 to 2 MB slower
+       (docs/NPZ_DOCUMENTATION.md, Changes measured). The CRC32 tables are
+       built here, before any thread reads them. */
+    gzip_crc32_table();
+    if (n_selected > 1 && deflated_bytes >= FRAME_NPZ_OMP_MIN_BYTES) {
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(dynamic, 1)
+#endif
+        for (int m = 0; m < n_selected; m++) frame_npz_unpack_member(&members[m], directory + entry[selected[m]]);
+    } else {
+        for (int m = 0; m < n_selected; m++) frame_npz_unpack_member(&members[m], directory + entry[selected[m]]);
     }
 
     fclose(archive.f);
@@ -370,10 +415,26 @@ static inline int frame_npz_is_string_descr(const char *descr) {
     return descr[0] == '<' && descr[1] == 'U';
 }
 
-/* Decodes a '<U' member into r freshly allocated UTF-8 strings. The
-   caller frees each string and the array. Serves both a string column
-   and the row-label member, which are the same dtype and differ only in
-   where they end up. */
+/* Decodes one '<U' element of width codepoints into a freshly allocated
+   UTF-8 string of its own length. */
+static inline char *frame_npz_decode_element(const unsigned char *element, int width) {
+    char *value = (char*)malloc(frame_npz_ucs4_to_utf8(element, width, NULL) + 1);
+    assert(value && "frame: out of memory");
+    frame_npz_ucs4_to_utf8(element, width, value);
+    return value;
+}
+
+/* Rows of a string member from which it is decoded by several threads. */
+#ifndef FRAME_NPZ_OMP_MIN_STRINGS
+#define FRAME_NPZ_OMP_MIN_STRINGS 65536
+#endif
+
+/* Decodes a '<U' member into r freshly allocated UTF-8 strings, each
+   allocated at its own length, so the array can be handed to a frame as it
+   is. The caller frees each string and the array, or hands them over.
+   Serves both a string column and the row-label member, which are the same
+   dtype and differ only in where they end up. From
+   FRAME_NPZ_OMP_MIN_STRINGS rows the rows are split between threads. */
 static inline char **frame_npz_decode_strings(const FrameNpzMember *member, const char *descr,
                                                size_t data_start, const int *shape) {
     assert(shape[1] == 1 && "frame: .npz string members must be 1D (there is no column name for a second axis)");
@@ -384,35 +445,66 @@ static inline char **frame_npz_decode_strings(const FrameNpzMember *member, cons
            "frame: .npz string member truncated (data shorter than its dtype and shape declare)");
 
     char **values = (char**)malloc((size_t)(r > 0 ? r : 1) * sizeof(char*));
-    uint32_t *codepoints = (uint32_t*)malloc((size_t)(width > 0 ? width : 1) * sizeof(uint32_t));
-    for (int i = 0; i < r; i++) {
-        const unsigned char *element = member->image + data_start + (size_t)i * (size_t)width * 4;
-        for (int k = 0; k < width; k++) codepoints[k] = frame_npz_u32(element + (size_t)k * 4);
-        values[i] = (char*)malloc((size_t)width * 4 + 1);
-        frame_npz_ucs4_to_utf8(codepoints, width, values[i]);
+    assert(values && "frame: out of memory");
+    const unsigned char *data = member->image + data_start;
+    size_t stride = (size_t)width * 4;
+    if (r >= FRAME_NPZ_OMP_MIN_STRINGS) {
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static)
+#endif
+        for (int i = 0; i < r; i++) values[i] = frame_npz_decode_element(data + (size_t)i * stride, width);
+    } else {
+        for (int i = 0; i < r; i++) values[i] = frame_npz_decode_element(data + (size_t)i * stride, width);
     }
-    free(codepoints);
     return values;
 }
 
-static inline void frame_npz_free_strings(char **values, int r) {
-    for (int i = 0; i < r; i++) free(values[i]);
-    free(values);
-}
+/* A numeric member as the numeric block takes it: c elements of width
+   bytes per row, row-major from data, going to columns first_column to
+   first_column + c - 1. */
+typedef struct {
+    const unsigned char *data;
+    int first_column;
+    int c;
+    size_t width;
+} FrameNpzNumericSource;
 
-/* Copies a numeric member's r x c row-major data block into columns
-   first_column to first_column + c - 1 of numeric, converting from the
-   member's element width as frame_npy_copy_elements does. A single column
-   of mreal elements is copied element by element at a fixed size, which
-   the compiler turns into one load and one store. */
-static inline void frame_npz_copy_member_block(Mat numeric, int first_column, const unsigned char *data, int r,
-                                               int c, size_t width) {
-    if (c == 1 && width == sizeof(mreal)) {
-        for (int i = 0; i < r; i++) memcpy(&AT(numeric, i, first_column), data + (size_t)i * sizeof(mreal), sizeof(mreal));
-        return;
+/* Bytes of the numeric block written per band of rows while a frame is
+   built from members (frame_npz_frame_from_members). */
+#ifndef FRAME_NPZ_COPY_BAND_BYTES
+#define FRAME_NPZ_COPY_BAND_BYTES 16384
+#endif
+
+/* Bytes of the numeric block from which its bands are copied by several
+   threads. */
+#ifndef FRAME_NPZ_OMP_MIN_COPY_BYTES
+#define FRAME_NPZ_OMP_MIN_COPY_BYTES (4u << 20)
+#endif
+
+/* Copies rows start to start + band - 1 of every source, or to the last
+   row, into the numeric block, converting from each source's element width
+   as frame_npy_copy_elements does. A single column of mreal elements is
+   copied at a fixed size, which the compiler turns into one load and one
+   store. */
+static inline void frame_npz_copy_band(Mat numeric, int start, int band, const FrameNpzNumericSource *sources,
+                                       int n_sources) {
+    int end = numeric.r - start < band ? numeric.r : start + band;
+    for (int s = 0; s < n_sources; s++) {
+        /* Copied out of the array, since each memcpy below may write any
+           memory as far as the compiler knows, which would otherwise
+           reload these from it on every row. */
+        const unsigned char *data = sources[s].data;
+        int column = sources[s].first_column, c = sources[s].c;
+        size_t width = sources[s].width;
+        if (c == 1 && width == sizeof(mreal)) {
+            for (int i = start; i < end; i++)
+                memcpy(&AT(numeric, i, column), data + (size_t)i * sizeof(mreal), sizeof(mreal));
+        } else {
+            for (int i = start; i < end; i++)
+                frame_npy_copy_elements(&AT(numeric, i, column), data + (size_t)i * (size_t)c * width, (size_t)c,
+                                        width);
+        }
     }
-    for (int i = 0; i < r; i++)
-        frame_npy_copy_elements(&AT(numeric, i, first_column), data + (size_t)i * (size_t)c * width, (size_t)c, width);
 }
 
 /* Builds a frame from members already read, in their order. A numeric
@@ -433,7 +525,10 @@ static inline DataFrame frame_npz_frame_from_members(const FrameNpzMember *membe
     char **descrs = (char**)malloc((size_t)n_members * sizeof(char*));
     size_t *data_starts = (size_t*)malloc((size_t)n_members * sizeof(size_t));
     int *shapes = (int*)malloc((size_t)n_members * 2 * sizeof(int));
+    FrameNpzNumericSource *sources = (FrameNpzNumericSource*)malloc((size_t)n_members * sizeof(FrameNpzNumericSource));
+    assert(descrs && data_starts && shapes && sources && "frame: out of memory");
 
+    int rows = 0;
     for (int i = 0; i < n_members; i++) {
         char *header = frame_npy_header_text(members[i].image, members[i].size, &data_starts[i]);
         frame_npy_check_fortran_order(header);
@@ -442,63 +537,77 @@ static inline DataFrame frame_npz_frame_from_members(const FrameNpzMember *membe
         frame_npy_descr(header, descr, sizeof descr);
         descrs[i] = frame_strdup(descr);
         free(header);
-        assert(shapes[2 * i] == shapes[0] &&
+        if (i == 0) rows = shapes[0];
+        assert(shapes[2 * i] == rows &&
                "frame: .npz members disagree about the row count (a DataFrame has one, shared by every column)");
     }
 
-    /* The element width of each numeric member, 0 for a string member or
-       the row labels, and the total number of numeric columns. */
-    size_t *widths = (size_t*)malloc((size_t)n_members * sizeof(size_t));
-    assert(descrs && data_starts && shapes && widths && "frame: out of memory");
+    /* Column metadata and string columns in member order; numeric members
+       are recorded as sources and copied once the block's width is known. */
+    DataFrame df = df_new(rows);
     int row_names_member = -1;
+    int n_sources = 0;
     int n_numeric = 0;
     for (int i = 0; i < n_members; i++) {
-        widths[i] = 0;
+        const int *shape = &shapes[2 * i];
         if (strcmp(members[i].name, FRAME_NPZ_ROW_NAMES_KEY) == 0) { row_names_member = i; continue; }
-        if (frame_npz_is_string_descr(descrs[i])) continue;
-        widths[i] = frame_npy_numeric_width(descrs[i]);
-        assert(widths[i] != 0 &&
+        if (frame_npz_is_string_descr(descrs[i])) {
+            frame_append_owned_string_col(&df, members[i].name,
+                                          frame_npz_decode_strings(&members[i], descrs[i], data_starts[i], shape));
+            continue;
+        }
+        size_t width = frame_npy_numeric_width(descrs[i]);
+        assert(width != 0 &&
                "frame: .npz member dtype is neither a numeric dtype this build reads ('<f4' in a float build, "
                "'<f8' or '<f4' in a double build) nor a '<U' string - re-save numeric arrays at a matching "
                "precision, and string arrays via .astype(str)");
-        n_numeric += shapes[2 * i + 1];
-    }
-
-    DataFrame df = df_new(shapes[0]);
-    if (n_numeric > 0) df.numeric = mat_new(df.r, n_numeric);
-    int next_numeric = 0;
-    for (int i = 0; i < n_members; i++) {
-        if (strcmp(members[i].name, FRAME_NPZ_ROW_NAMES_KEY) == 0) continue;
-        const int *shape = &shapes[2 * i];
-        if (widths[i] == 0) {
-            char **values = frame_npz_decode_strings(&members[i], descrs[i], data_starts[i], shape);
-            df_add_string_col(&df, members[i].name, (const char *const *)values);
-            frame_npz_free_strings(values, shape[0]);
-            continue;
-        }
-        assert(data_starts[i] + (size_t)shape[0] * (size_t)shape[1] * widths[i] <= members[i].size &&
+        assert(data_starts[i] + (size_t)shape[0] * (size_t)shape[1] * width <= members[i].size &&
                "frame: .npy file truncated (data shorter than header declares)");
-        frame_npz_copy_member_block(df.numeric, next_numeric, members[i].image + data_starts[i], shape[0], shape[1],
-                                    widths[i]);
+        sources[n_sources].data = members[i].image + data_starts[i];
+        sources[n_sources].first_column = n_numeric;
+        sources[n_sources].c = shape[1];
+        sources[n_sources].width = width;
+        n_sources++;
         for (int j = 0; j < shape[1]; j++) {
             char name[256];
             int len = shape[1] == 1 ? snprintf(name, sizeof name, "%s", members[i].name)
                                     : snprintf(name, sizeof name, "%s%d", members[i].name, j);
             assert(len > 0 && len < (int)sizeof name && "frame: .npz member name too long to become a column name");
             (void)len;
-            frame_append_numeric_meta(&df, name, next_numeric + j);
+            frame_append_numeric_meta(&df, name, n_numeric + j);
         }
-        next_numeric += shape[1];
+        n_numeric += shape[1];
     }
-    free(widths);
+
+    /* The sources are copied into the numeric block a band of rows at a
+       time, every source for one band before the next band, so the band of
+       the block being written stays in cache while each column is written
+       into it with a stride of n_numeric. Column by column, the whole block
+       would pass through cache once per member. */
+    if (n_numeric > 0) {
+        df.numeric = mat_new(rows, n_numeric);
+        size_t row_bytes = (size_t)n_numeric * sizeof(mreal);
+        int band = (int)(FRAME_NPZ_COPY_BAND_BYTES / row_bytes);
+        if (band < 1) band = 1;
+        int n_bands = (rows + band - 1) / band;
+        if ((size_t)rows * row_bytes >= FRAME_NPZ_OMP_MIN_COPY_BYTES) {
+#ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+#endif
+            for (int b = 0; b < n_bands; b++) frame_npz_copy_band(df.numeric, b * band, band, sources, n_sources);
+        } else {
+            for (int b = 0; b < n_bands; b++) frame_npz_copy_band(df.numeric, b * band, band, sources, n_sources);
+        }
+    }
+    free(sources);
 
     if (row_names_member >= 0) {
         int i = row_names_member;
         assert(frame_npz_is_string_descr(descrs[i]) &&
                "frame: .npz " FRAME_NPZ_ROW_NAMES_KEY " member must be a '<U' string array");
-        char **values = frame_npz_decode_strings(&members[i], descrs[i], data_starts[i], &shapes[2 * i]);
-        df_set_row_names(&df, (const char *const *)values);
-        frame_npz_free_strings(values, df.r);
+        /* The frame is new and has no row labels yet, so the decoded ones
+           are handed to it rather than copied. */
+        df.row_names = frame_npz_decode_strings(&members[i], descrs[i], data_starts[i], &shapes[2 * i]);
     }
 
     for (int i = 0; i < n_members; i++) free(descrs[i]);

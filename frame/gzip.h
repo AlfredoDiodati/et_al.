@@ -408,9 +408,94 @@ static const uint32_t *gzip_crc32_table(void) {
     return table;
 }
 
+/* Set when the compiler targets the carry-less multiply instruction and
+   SSE4.1, which gzip_crc32_fold needs. */
+#if defined(__PCLMUL__) && defined(__SSE4_1__)
+#define GZIP_CRC32_FOLD 1
+#include <immintrin.h>
+#endif
+
+#ifdef GZIP_CRC32_FOLD
+/* CRC32 register update over len bytes, len at least 64 and a multiple of
+   16, by folding with carry-less multiplication: Gopal et al., "Fast CRC
+   Computation for Generic Polynomials Using PCLMULQDQ Instruction" (Intel,
+   2009), with the bit-reflected constants for polynomial 0xEDB88320 given
+   at the end of that paper, as Chromium's zlib uses them. Four 128-bit
+   lanes are folded 64 bytes per step, then into one lane, then reduced to
+   32 bits by Barrett reduction. crc is the register before, not inverted
+   at either end. */
+static inline uint32_t gzip_crc32_fold(const unsigned char *data, size_t len, uint32_t crc) {
+    const __m128i k1k2 = _mm_set_epi64x(0x01c6e41596LL, 0x0154442bd4LL);
+    const __m128i k3k4 = _mm_set_epi64x(0x00ccaa009eLL, 0x01751997d0LL);
+    const __m128i k5k0 = _mm_set_epi64x(0, 0x0163cd6124LL);
+    const __m128i poly = _mm_set_epi64x(0x01f7011641LL, 0x01db710641LL);
+
+    __m128i x1 = _mm_loadu_si128((const __m128i *)(data + 0));
+    __m128i x2 = _mm_loadu_si128((const __m128i *)(data + 16));
+    __m128i x3 = _mm_loadu_si128((const __m128i *)(data + 32));
+    __m128i x4 = _mm_loadu_si128((const __m128i *)(data + 48));
+    x1 = _mm_xor_si128(x1, _mm_cvtsi32_si128((int)crc));
+    data += 64;
+    len -= 64;
+    while (len >= 64) {
+        __m128i x5 = _mm_clmulepi64_si128(x1, k1k2, 0x00);
+        __m128i x6 = _mm_clmulepi64_si128(x2, k1k2, 0x00);
+        __m128i x7 = _mm_clmulepi64_si128(x3, k1k2, 0x00);
+        __m128i x8 = _mm_clmulepi64_si128(x4, k1k2, 0x00);
+        x1 = _mm_clmulepi64_si128(x1, k1k2, 0x11);
+        x2 = _mm_clmulepi64_si128(x2, k1k2, 0x11);
+        x3 = _mm_clmulepi64_si128(x3, k1k2, 0x11);
+        x4 = _mm_clmulepi64_si128(x4, k1k2, 0x11);
+        x1 = _mm_xor_si128(_mm_xor_si128(x1, x5), _mm_loadu_si128((const __m128i *)(data + 0)));
+        x2 = _mm_xor_si128(_mm_xor_si128(x2, x6), _mm_loadu_si128((const __m128i *)(data + 16)));
+        x3 = _mm_xor_si128(_mm_xor_si128(x3, x7), _mm_loadu_si128((const __m128i *)(data + 32)));
+        x4 = _mm_xor_si128(_mm_xor_si128(x4, x8), _mm_loadu_si128((const __m128i *)(data + 48)));
+        data += 64;
+        len -= 64;
+    }
+
+    /* Four lanes into one, then the remaining 16-byte blocks into it. */
+    __m128i lanes[3] = { x2, x3, x4 };
+    for (int k = 0; k < 3; k++) {
+        __m128i x5 = _mm_clmulepi64_si128(x1, k3k4, 0x00);
+        x1 = _mm_clmulepi64_si128(x1, k3k4, 0x11);
+        x1 = _mm_xor_si128(_mm_xor_si128(x1, lanes[k]), x5);
+    }
+    while (len >= 16) {
+        __m128i x5 = _mm_clmulepi64_si128(x1, k3k4, 0x00);
+        x1 = _mm_clmulepi64_si128(x1, k3k4, 0x11);
+        x1 = _mm_xor_si128(_mm_xor_si128(x1, _mm_loadu_si128((const __m128i *)data)), x5);
+        data += 16;
+        len -= 16;
+    }
+
+    /* 128 bits to 64, then Barrett reduction to 32. */
+    const __m128i low32 = _mm_setr_epi32(~0, 0, ~0, 0);
+    x2 = _mm_clmulepi64_si128(x1, k3k4, 0x10);
+    x1 = _mm_xor_si128(_mm_srli_si128(x1, 8), x2);
+    x2 = _mm_srli_si128(x1, 4);
+    x1 = _mm_and_si128(x1, low32);
+    x1 = _mm_xor_si128(_mm_clmulepi64_si128(x1, k5k0, 0x00), x2);
+    x2 = _mm_and_si128(x1, low32);
+    x2 = _mm_clmulepi64_si128(x2, poly, 0x10);
+    x2 = _mm_and_si128(x2, low32);
+    x2 = _mm_clmulepi64_si128(x2, poly, 0x00);
+    x1 = _mm_xor_si128(x1, x2);
+    return (uint32_t)_mm_extract_epi32(x1, 1);
+}
+#endif
+
 static inline uint32_t gzip_crc32(const unsigned char *data, size_t len) {
     const uint32_t *table = gzip_crc32_table();
     uint32_t crc = 0xFFFFFFFFu;
+#ifdef GZIP_CRC32_FOLD
+    if (len >= 64) {
+        size_t folded = len & ~(size_t)15;
+        crc = gzip_crc32_fold(data, folded, crc);
+        data += folded;
+        len -= folded;
+    }
+#endif
     while (len >= GZIP_CRC32_SLICES) {
         uint32_t first = crc ^ ((uint32_t)data[0] | (uint32_t)data[1] << 8 | (uint32_t)data[2] << 16 |
                                 (uint32_t)data[3] << 24);

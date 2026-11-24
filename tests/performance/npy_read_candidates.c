@@ -20,7 +20,10 @@
    df_read_npz on each archive. Shapes 1000 x 300 and 100000 x 300, a wide
    archive of which df_read_npz_columns reads 4 columns, on each archive;
    at 1000 x 300 df_read_npz also reads the whole of each archive, which at
-   100000 x 300 takes seconds per read and is left out.
+   100000 x 300 takes seconds per read and is left out. Shapes 100000 x 8
+   and 1000000 x 8 with a string column and row labels as well (marked +s),
+   read by df_read_npz on each archive; their agreement covers the column
+   names, the strings and the row labels too.
 
    1. Agreement. Every reader on every file through both trees; the values
       read must be identical byte for byte, and the binary exits 1 if they
@@ -85,19 +88,21 @@ int main(void) {
         { "4 columns deflated", NPY_READ_ARM_DF_NPZ_COLUMNS, deflated_path },
     };
     /* Each shape with the readers, as indices into reads, run on it. */
-    struct { int rows, cols, n_reads, reads[6]; } shapes[] = {
-        { 1000, 4, 4, { 0, 1, 2, 3 } },
-        { 100000, 4, 4, { 0, 1, 2, 3 } },
-        { 1000000, 4, 4, { 0, 1, 2, 3 } },
-        { 1000, 300, 4, { 4, 5, 2, 3 } },
-        { 100000, 300, 2, { 4, 5 } },
+    struct { int rows, cols, labelled, n_reads, reads[6]; } shapes[] = {
+        { 1000, 4, 0, 4, { 0, 1, 2, 3 } },
+        { 100000, 4, 0, 4, { 0, 1, 2, 3 } },
+        { 1000000, 4, 0, 4, { 0, 1, 2, 3 } },
+        { 1000, 300, 0, 4, { 4, 5, 2, 3 } },
+        { 100000, 300, 0, 2, { 4, 5 } },
+        { 100000, 8, 1, 2, { 2, 3 } },
+        { 1000000, 8, 1, 2, { 2, 3 } },
     };
     int n_shapes = (int)(sizeof shapes / sizeof shapes[0]);
 
     int mismatches = 0;
     fprintf(out, "1. Agreement\n");
     for (int s = 0; s < n_shapes; s++) {
-        npy_read_arm_candidate_write(shapes[s].rows, shapes[s].cols, npy_path, stored_path, deflated_path);
+        npy_read_arm_candidate_write(shapes[s].rows, shapes[s].cols, shapes[s].labelled, npy_path, stored_path, deflated_path);
         for (int q = 0; q < shapes[s].n_reads; q++) {
             int k = shapes[s].reads[q];
             size_t base_bytes, cand_bytes;
@@ -105,8 +110,8 @@ int main(void) {
             unsigned char *cand = npy_read_arm_candidate_read(reads[k].reader, reads[k].path, &cand_bytes);
             int same = base_bytes == cand_bytes && memcmp(base, cand, base_bytes) == 0;
             mismatches += !same;
-            fprintf(out, "%-21s %7d x %d: %s\n", reads[k].label, shapes[s].rows, shapes[s].cols,
-                    same ? "identical" : "DIFFERENT");
+            fprintf(out, "%-21s %7d x %d%s: %s\n", reads[k].label, shapes[s].rows, shapes[s].cols,
+                    shapes[s].labelled ? "+s" : "", same ? "identical" : "DIFFERENT");
             free(base);
             free(cand);
         }
@@ -116,7 +121,7 @@ int main(void) {
     fprintf(out, "\n2. Speed, median seconds per read\n%-21s %13s %12s %12s %21s\n", "reader", "rows x cols",
             "baseline", "candidate", "candidate / baseline");
     for (int s = 0; s < n_shapes; s++) {
-        npy_read_arm_candidate_write(shapes[s].rows, shapes[s].cols, npy_path, stored_path, deflated_path);
+        npy_read_arm_candidate_write(shapes[s].rows, shapes[s].cols, shapes[s].labelled, npy_path, stored_path, deflated_path);
         for (int q = 0; q < shapes[s].n_reads; q++) {
             int k = shapes[s].reads[q];
             printf("timing %s, %d x %d\n", reads[k].label, shapes[s].rows, shapes[s].cols);
@@ -145,7 +150,8 @@ int main(void) {
             }
             double r0 = median(ratio[0], count[0]), r1 = median(ratio[1], count[1]);
             char shape_label[32];
-            snprintf(shape_label, sizeof shape_label, "%d x %d", shapes[s].rows, shapes[s].cols);
+            snprintf(shape_label, sizeof shape_label, "%d x %d%s", shapes[s].rows, shapes[s].cols,
+                     shapes[s].labelled ? "+s" : "");
             fprintf(out, "%-21s %13s %12.4g %12.4g %10.3f %6.3f%s\n", reads[k].label, shape_label,
                     median(base, kept), median(cand, kept), r0, r1, (r0 - 1) * (r1 - 1) < 0 ? "*" : "");
             fflush(out);

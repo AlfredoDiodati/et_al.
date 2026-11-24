@@ -530,6 +530,61 @@ static void test_unicode_strings_roundtrip(void) {
     remove(path);
 }
 
+static int df_identical(const DataFrame *a, const DataFrame *b);
+
+/* Large enough that the reader takes each of its threaded paths: the
+   string column and the row labels have more than FRAME_NPZ_OMP_MIN_STRINGS
+   rows, split unevenly between threads; the 16 noise columns fill more than
+   FRAME_NPZ_OMP_MIN_COPY_BYTES of the numeric block; and, since noise does
+   not compress, the deflated archive holds more than FRAME_NPZ_OMP_MIN_BYTES
+   of deflated members. */
+static void test_threaded_paths_roundtrip(void) {
+    puts("an archive past the threading sizes round-trips its strings, row labels and noise columns, stored and deflated");
+    int r = FRAME_NPZ_OMP_MIN_STRINGS + 1001;
+    int n_noise = 16;
+    assert((size_t)r * (size_t)n_noise * sizeof(mreal) >= FRAME_NPZ_OMP_MIN_COPY_BYTES);
+    const char *stored_path = "out/test_npz_threaded_stored.npz";
+    const char *deflated_path = "out/test_npz_threaded_deflated.npz";
+    DataFrame df = df_new(r);
+    Vec noise = mat_new(r, 1);
+    srand(50);
+    for (int j = 0; j < n_noise; j++) {
+        char name[8];
+        snprintf(name, sizeof name, "n%d", j);
+        for (int i = 0; i < r; i++) noise.d[i] = (mreal)rand() / (mreal)RAND_MAX - (mreal)0.5;
+        df_add_numeric_col(&df, name, noise);
+    }
+    mat_free(noise);
+    char **text = (char**)malloc((size_t)r * sizeof(char*));
+    assert(text);
+    for (int i = 0; i < r; i++) {
+        text[i] = (char*)malloc(64);
+        assert(text[i]);
+        snprintf(text[i], 64, "%s%d", utf8_fixture_labels[i % 4], i);
+    }
+    df_add_string_col(&df, "label", (const char *const *)text);
+    for (int i = 0; i < r; i++) snprintf(text[i], 64, "row_%d", i);
+    df_set_row_names(&df, (const char *const *)text);
+    for (int i = 0; i < r; i++) free(text[i]);
+    free(text);
+
+    df_write_npz(&df, stored_path);
+    df_write_npz_compressed(&df, deflated_path);
+    FILE *f = fopen(deflated_path, "rb");
+    assert(f);
+    fseek(f, 0, SEEK_END);
+    assert(ftell(f) > (long)FRAME_NPZ_OMP_MIN_BYTES);
+    fclose(f);
+    const char *paths[2] = { stored_path, deflated_path };
+    for (int p = 0; p < 2; p++) {
+        DataFrame back = df_read_npz(paths[p]);
+        assert(df_identical(&df, &back));
+        df_free(&back);
+        remove(paths[p]);
+    }
+    df_free(&df);
+}
+
 /* The fixture's `grid` member is a genuine 4 x 2 array, which nothing
    df_write_npz produces (it writes one 1D member per column) - the only
    way this branch runs is a file numpy wrote. */
@@ -1401,6 +1456,7 @@ int main(void) {
     test_mixed_columns_preserve_declaration_order();
     test_row_names_roundtrip();
     test_unicode_strings_roundtrip();
+    test_threaded_paths_roundtrip();
     test_reads_real_numpy_archives();
     test_adversarial_shapes();
     test_compressed_archive_means_the_same_thing();

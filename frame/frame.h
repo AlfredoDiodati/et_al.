@@ -129,12 +129,12 @@ static inline void df_add_numeric_col(DataFrame *df, const char *name, Vec col) 
     df->n_cols++;
 }
 
-/* Appends a string column (r entries, deep-copied - caller keeps ownership
-   of col and every string in it). */
-static inline void df_add_string_col(DataFrame *df, const char *name, const char *const *col) {
-    char **owned = (char**)malloc((size_t)df->r * sizeof(char*));
-    for (int i = 0; i < df->r; i++) owned[i] = frame_strdup(col[i]);
-
+/* Appends a string column by taking over owned, an array of df->r
+   malloc'd strings, together with every string in it: they are freed with
+   the frame, and the caller must not free or use them afterwards. For a
+   loader that already decodes each value into its own allocation, this
+   saves copying every string and then freeing the originals. */
+static inline void frame_append_owned_string_col(DataFrame *df, const char *name, char **owned) {
     df->string_cols = (char***)realloc(df->string_cols, (size_t)(df->n_string + 1) * sizeof(char**));
     df->string_cols[df->n_string] = owned;
 
@@ -144,6 +144,14 @@ static inline void df_add_string_col(DataFrame *df, const char *name, const char
     df->columns[df->n_cols].index = df->n_string;
     df->n_cols++;
     df->n_string++;
+}
+
+/* Appends a string column (r entries, deep-copied - caller keeps ownership
+   of col and every string in it). */
+static inline void df_add_string_col(DataFrame *df, const char *name, const char *const *col) {
+    char **owned = (char**)malloc((size_t)df->r * sizeof(char*));
+    for (int i = 0; i < df->r; i++) owned[i] = frame_strdup(col[i]);
+    frame_append_owned_string_col(df, name, owned);
 }
 
 /* Sets (or replaces) row labels - r entries, deep-copied. Optional: a

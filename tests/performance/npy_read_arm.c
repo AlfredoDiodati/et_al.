@@ -18,12 +18,33 @@ static DataFrame arm_read_frame(int reader, const char *path) {
     return df_read_npz_columns(path, arm_column_names, 4);
 }
 
+/* Appends text and its NUL at out + *total, when out is not NULL, and
+   advances *total past them. */
+static void arm_put_text(unsigned char *out, size_t *total, const char *text) {
+    size_t length = strlen(text) + 1;
+    if (out) memcpy(out + *total, text, length);
+    *total += length;
+}
+
+/* The frame's column names, string values and row labels, each with its
+   NUL, written one after another to out; returns their total length, and
+   with out NULL only counts it. */
+static size_t arm_frame_text(const DataFrame *frame, unsigned char *out) {
+    size_t total = 0;
+    for (int j = 0; j < frame->n_cols; j++) arm_put_text(out, &total, frame->columns[j].name);
+    for (int s = 0; s < frame->n_string; s++)
+        for (int i = 0; i < frame->r; i++) arm_put_text(out, &total, frame->string_cols[s][i]);
+    if (frame->row_names)
+        for (int i = 0; i < frame->r; i++) arm_put_text(out, &total, frame->row_names[i]);
+    return total;
+}
+
 /* Column j of row i: integer-valued in even columns, as in a panel of
    counts or identifiers, and with a fractional part from a linear
    congruential sequence in odd ones, so the deflated archive holds both a
    compressible and a nearly incompressible kind of column. */
-void ARM_NAME(NPY_READ_ARM_ENTRY, _write)(int rows, int cols, const char *npy_path, const char *stored_path,
-                                          const char *deflated_path) {
+void ARM_NAME(NPY_READ_ARM_ENTRY, _write)(int rows, int cols, int labelled, const char *npy_path,
+                                          const char *stored_path, const char *deflated_path) {
     Mat values = mat_new(rows, cols);
     uint32_t state = 12345u;
     for (int i = 0; i < rows; i++)
@@ -35,6 +56,20 @@ void ARM_NAME(NPY_READ_ARM_ENTRY, _write)(int rows, int cols, const char *npy_pa
     DataFrame frame = df_from_matrix(values, NULL);
     mat_free(values);
     df_write_npy(&frame, npy_path);
+    if (labelled) {
+        char **text = (char **)malloc((size_t)rows * sizeof(char *));
+        assert(text);
+        for (int i = 0; i < rows; i++) {
+            text[i] = (char *)malloc(16);
+            assert(text[i]);
+            snprintf(text[i], 16, "cat_%d", i % 100);
+        }
+        df_add_string_col(&frame, "label", (const char *const *)text);
+        for (int i = 0; i < rows; i++) snprintf(text[i], 16, "r%d", i);
+        df_set_row_names(&frame, (const char *const *)text);
+        for (int i = 0; i < rows; i++) free(text[i]);
+        free(text);
+    }
     df_write_npz(&frame, stored_path);
     df_write_npz_compressed(&frame, deflated_path);
     df_free(&frame);
@@ -52,12 +87,14 @@ unsigned char *ARM_NAME(NPY_READ_ARM_ENTRY, _read)(int reader, const char *path,
         return image;
     }
     DataFrame frame = arm_read_frame(reader, path);
-    *bytes = (size_t)frame.r * (size_t)frame.numeric.c * sizeof(mreal);
+    size_t numeric_bytes = (size_t)frame.r * (size_t)frame.numeric.c * sizeof(mreal);
+    *bytes = numeric_bytes + arm_frame_text(&frame, NULL);
     image = (unsigned char *)malloc(*bytes ? *bytes : 1);
     assert(image);
     for (int i = 0; i < frame.r; i++)
         memcpy(image + (size_t)i * frame.numeric.c * sizeof(mreal), &AT(frame.numeric, i, 0),
                (size_t)frame.numeric.c * sizeof(mreal));
+    arm_frame_text(&frame, image + numeric_bytes);
     df_free(&frame);
     return image;
 }

@@ -97,6 +97,7 @@ tests/performance/fast_mcs_against_mcs
 tests/performance/seri_mcs_performance
 tests/performance/seri_mcs_candidates
 tests/performance/npy_read_candidates
+tests/performance/npz_read_stages
 tests/performance/tensor_omp_threshold
 tests/performance/tensor_reduce_tile
 tests/performance/tensor_batch_threads

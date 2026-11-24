@@ -1,4 +1,4 @@
-test run: di 24 nov 2026 15:25:01 CET
+test run: di 24 nov 2026 18:00:42 CET
 
 === tracked_build_output: PASS ===
 no build output is tracked
@@ -71,14 +71,14 @@ make: 'tests/correctness/test_csv' is up to date.
 make: 'tests/correctness/csv_missing_values' is up to date.
 make: 'tests/correctness/test_txt' is up to date.
 make: 'tests/correctness/test_npy' is up to date.
-make: 'tests/correctness/test_npz' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/test_npz.c -lm -lopenblas -o tests/correctness/test_npz
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -DMAT_DOUBLE tests/correctness/float32_file_widening.c -lm -lopenblas -o tests/correctness/float32_file_widening
 make: 'tests/correctness/test_json' is up to date.
 make: 'tests/correctness/test_sql' is up to date.
 make: 'tests/correctness/test_join' is up to date.
 make: 'tests/correctness/gzip_inflate' is up to date.
-make: 'tests/correctness/gzip_deflate' is up to date.
-make: 'tests/correctness/rdata_array_read' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/gzip_deflate.c -lm -lopenblas -o tests/correctness/gzip_deflate
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/rdata_array_read.c -lm -lopenblas -o tests/correctness/rdata_array_read
 make: 'tests/correctness/adf_correctness' is up to date.
 make: 'tests/correctness/kpss_correctness' is up to date.
 make: 'tests/correctness/dfgls_correctness' is up to date.
@@ -114,11 +114,11 @@ make: 'tests/integration/tensor_to_optimizer' is up to date.
 make: 'tests/integration/join_missing_values' is up to date.
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
-make: 'tests/integration/pipeline_ownership' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -lopenblas -o tests/integration/pipeline_ownership
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
-make: Nothing to be done for 'examples'.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -I. examples/rdata_example.c -lm -lopenblas -o examples/rdata_example
 
 === poly_correctness: PASS ===
 basis/poly.h correctness, float32 build
@@ -1054,10 +1054,9 @@ numeric round-trip: values, column names and order survive write/read
 mixed numeric/string columns keep declaration order through the archive
 row labels survive as the reserved __row_names__ member, not as a column
 UTF-8 string columns round-trip through numpy's UCS-4 dtype (1-, 2-, 3- and 4-byte sequences)
+an archive past the threading sizes round-trips its strings, row labels and noise columns, stored and deflated
 real numpy archive (np.savez float32, stored): values, dtypes, 2D expansion and unicode all read back
 real numpy archive (np.savez_compressed float32, deflated): values, dtypes, 2D expansion and unicode all read back
-real numpy archive (np.savez float64, stored): values, dtypes, 2D expansion and unicode all read back
-real numpy archive (np.savez_compressed float64, deflated): values, dtypes, 2D expansion and unicode all read back
 adversarial: one row, one column, and an all-empty string column
 df_write_npz_compressed: smaller file, same frame back
 a frame rebuilt from the archive is a valid df_sql and df_join input
@@ -1067,8 +1066,6 @@ df_read_npz_columns: asked columns in the asked order, with the row labels
 df_read_npz_columns: agrees with df_read_npz on a 1000 x 301 archive, stored and deflated
 df_read_npz_columns on a real numpy archive (np.savez float32, stored)
 df_read_npz_columns on a real numpy archive (np.savez_compressed float32, deflated)
-df_read_npz_columns on a real numpy archive (np.savez float64, stored)
-df_read_npz_columns on a real numpy archive (np.savez_compressed float64, deflated)
 df_read_npz_columns: zero rows, one row, and zip comments up to the largest length
 df_read_npz_columns: an unasked member is never read, an asked one is checked
 df_read_npz_columns contract violations abort (no names, a name twice, the row-label key)

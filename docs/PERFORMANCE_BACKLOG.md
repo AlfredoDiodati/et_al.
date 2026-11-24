@@ -1700,15 +1700,18 @@ isolate it from, say, zlib's own decode loop simply being better tuned.**
 **Read: fixed locally in `frame/npz.h`**, which now counts the numeric
 columns, allocates `numeric` once and copies each member into its final
 columns through `frame_append_numeric_meta`, as `frame/sql.h` and
-`frame/join.h` do; together with a CRC32 that folds 16 bytes per step, the
-stored read of the nine columns below is now 0.68x, 2.28x and 4.12x numpy's
-time at 10,000, 100,000 and 1,000,000 rows (`docs/NPZ_DOCUMENTATION.md`'s
-Changes measured and Known limitations). The remaining gap has not been
-measured. `frame/csv.h` and `frame/txt.h` still build one column at a time,
-so the two-pass API in `frame/frame.h` is still the shared fix for them. The
-writer's strided gather below is unchanged; with the faster CRC32 the write
-is 0.60x, 1.03x and 1.10x numpy's time at the same sizes. What follows is the
-entry as it stood before.
+`frame/join.h` do. With the further changes in `docs/NPZ_DOCUMENTATION.md`'s
+two Changes measured sections (decoded strings handed to the frame, a banded
+and threaded numeric copy, a carry-less CRC32, threaded inflate and string
+decoding), the stored read of the nine columns below is now 0.37x, 1.19x and
+1.18x numpy's time at 10,000, 100,000 and 1,000,000 rows. At 1,000,000 rows
+`make bench-npz_read_stages` puts 15.6 ms of the read in `df_free`, nearly all
+of it the million separate frees of the string column; a `DataFrame` stores
+one allocation per string, so what is left of the gap belongs to
+`frame/frame.h`'s string storage. `frame/csv.h` and `frame/txt.h` still build
+one column at a time, so the two-pass API in `frame/frame.h` is still the
+shared fix for them. The writer's strided gather below is unchanged. What
+follows is the entry as it stood before.
 
 From `tests/performance/bench_npz.py`. Nine columns (eight float32, one
 100-category string), against `numpy.savez` / `numpy.load` with every member

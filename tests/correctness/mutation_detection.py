@@ -35,7 +35,18 @@ Subjects:
   tests/correctness/hp_filter_lambda_estimation.c: a wrong second
   difference, a wrong diagonal in M, sigma2_c divided by n instead of n - 2,
   log det M dropped, and the full banded solve in place of its forward half,
-  which tests/correctness/band_chol_correctness.c checks too.
+  which tests/correctness/band_chol_correctness.c checks too;
+- frame/gzip.h, against tests/correctness/gzip_inflate.c and
+  tests/correctness/gzip_deflate.c: a CRC32 table built with the wrong
+  shift, one carry-less folding constant off by one, and a Huffman
+  subtable indexed one bit too far;
+- frame/npz.h, against tests/correctness/test_npz.c: the subset reader
+  selecting every member, or reading every member and dropping the unasked
+  ones; a member's CRC32 not checked; codepoints up to 0xFF decoded as one
+  byte; single columns copied from the band's own rows instead of the
+  frame's; and, on the threaded paths alone, every member unpacked against
+  the first member's directory entry and the last row of every band left
+  uncopied.
 
 One mutation is expected to go undetected: removing the finiteness test on the
 parabola in brent_bounded. With GCC on x86-64 the comparisons after it already
@@ -66,7 +77,10 @@ TREE = ["linalg", "random", "solver", "filter", "ss", "frame", "json.h", "tests/
         "tests/correctness/band_chol_correctness.c",
         "tests/correctness/brent_correctness.c",
         "tests/correctness/brent_reference_agreement.c",
-        "tests/correctness/brent_reference_agreement.py"]
+        "tests/correctness/brent_reference_agreement.py",
+        "tests/correctness/gzip_inflate.c",
+        "tests/correctness/gzip_deflate.c",
+        "tests/correctness/test_npz.c"]
 
 BAND_CHOL = [("band_chol_correctness", "1"), ("band_chol_correctness", "")]
 BRENT = [("brent_correctness", "1")]
@@ -74,6 +88,20 @@ BRENT_PATH = [("brent_reference_agreement", None)]
 KALMAN = [("kalman_correctness", "1")]
 HP_CAUSAL = [("hp_filter_causal_correctness", "1")]
 HP_ESTIMATE = [("hp_filter_lambda_estimation", "1")]
+GZIP_INFLATE = [("gzip_inflate", "")]
+GZIP_DEFLATE = [("gzip_deflate", "")]
+NPZ = [("test_npz", "")]
+
+# A pass over every directory entry before the selection, reading and
+# unpacking each member and throwing it away.
+NPZ_READ_ALL = """    for (int i = 0; i < n_entries; i++) {
+        FrameNpzMember extra = frame_npz_read_member(&archive, directory + entry[i],
+                                                     (const char*)(directory + entry[i] + 46), key_length[i]);
+        frame_npz_unpack_member(&extra, directory + entry[i]);
+        free(extra.name);
+        free(extra.image);
+    }
+"""
 
 # name, file, original text, faulty text, checks, expected to be caught
 MUTATIONS = [
@@ -221,6 +249,40 @@ MUTATIONS = [
     ("forward banded solve runs the full solve", "linalg/solver.h",
      "_pbtrs_forward(factor.d, factor.r, factor.c - 1, factor.stride, x.d);",
      "_pbtrs(factor.d, factor.r, factor.c - 1, factor.stride, x.d);", BAND_CHOL + HP_ESTIMATE, True),
+    ("CRC32: a table built with the wrong shift", "frame/gzip.h",
+     "table[k * 256 + i] = (previous >> 8) ^ table[previous & 0xFF];",
+     "table[k * 256 + i] = (previous >> 7) ^ table[previous & 0xFF];", GZIP_INFLATE, True),
+    ("CRC32 fold: one folding constant off by one", "frame/gzip.h",
+     "0x01751997d0LL", "0x01751997d1LL", GZIP_INFLATE, True),
+    ("Huffman: subtable indexed one bit too far", "frame/gzip.h",
+     "((peek >> GZIP_ROOT_BITS) & ((1u << h->sub_bits) - 1))",
+     "((peek >> (GZIP_ROOT_BITS + 1)) & ((1u << h->sub_bits) - 1))", GZIP_DEFLATE + NPZ, True),
+    ("npz subset: every member selected", "frame/npz.h",
+     "    if (!keys) {\n        for (int i = 0; i < n_entries; i++) selected[n_selected++] = i;",
+     "    if (1) {\n        for (int i = 0; i < n_entries; i++) selected[n_selected++] = i;", NPZ, True),
+    ("npz subset: every member read, the unasked ones dropped", "frame/npz.h",
+     "    /* The entries to read, in the order their columns will appear. */\n",
+     "    /* The entries to read, in the order their columns will appear. */\n" + NPZ_READ_ALL, NPZ, True),
+    ("npz: a member's CRC32 not checked", "frame/npz.h",
+     '    assert(gzip_crc32(member->image, uncompressed) == crc && "frame: .npz member failed its CRC32 check");',
+     "    (void)crc;", NPZ, True),
+    ("npz: codepoints up to 0xFF decoded as one byte", "frame/npz.h",
+     "        if (v < 0x80) {", "        if (v < 0x100) {", NPZ, True),
+    ("npz: single columns copied from the band's own rows, not the frame's", "frame/npz.h",
+     "data + (size_t)i * sizeof(mreal), sizeof(mreal));", "data + (size_t)(i - start) * sizeof(mreal), sizeof(mreal));",
+     NPZ, True),
+    ("npz threaded unpack: every member against the first member's entry", "frame/npz.h",
+     "        #pragma omp parallel for schedule(dynamic, 1)\n#endif\n"
+     "        for (int m = 0; m < n_selected; m++) frame_npz_unpack_member(&members[m], directory + entry[selected[m]]);",
+     "        #pragma omp parallel for schedule(dynamic, 1)\n#endif\n"
+     "        for (int m = 0; m < n_selected; m++) frame_npz_unpack_member(&members[m], directory + entry[selected[0]]);",
+     NPZ, True),
+    ("npz threaded band copy: the last row of every band left uncopied", "frame/npz.h",
+     "            #pragma omp parallel for schedule(static)\n#endif\n"
+     "            for (int b = 0; b < n_bands; b++) frame_npz_copy_band(df.numeric, b * band, band, sources,",
+     "            #pragma omp parallel for schedule(static)\n#endif\n"
+     "            for (int b = 0; b < n_bands; b++) frame_npz_copy_band(df.numeric, b * band, band - 1, sources,",
+     NPZ, True),
 ]
 
 

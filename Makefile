@@ -1353,9 +1353,11 @@ bench-seri_mcs_candidates: tests/performance/seri_mcs_candidates.c tests/perform
 	./tests/performance/seri_mcs_candidates
 
 # A candidate version of frame/npy.h and frame/npz.h against a baseline:
-# every reader on .npy and .npz files of 1000 to 1000000 rows, and
-# df_read_npz_columns on 300-column archives, through both trees (frame/gzip.h
-# included), compared byte for byte and then timed in alternated batches, at the
+# every reader on .npy and .npz files of 1000 to 1000000 rows,
+# df_read_npz_columns on 300-column archives, and df_read_npz on archives
+# with a string column and row labels, through both trees (frame/gzip.h and
+# frame/frame.h included), compared byte for byte and then timed in
+# alternated batches, at the
 # precision MAT_DOUBLE selects. Results go to
 # out/npy_read_candidates_report_f32.txt or _f64.txt. Not part of `test` or
 # bench.sh.
@@ -1370,6 +1372,15 @@ bench-npy_read_candidates: tests/performance/npy_read_candidates.c tests/perform
 	$(CC) $(CFLAGS) tests/performance/npy_read_candidates.c tests/performance/npy_read_arm_baseline.o tests/performance/npy_read_arm_candidate.o $(LDLIBS) -o tests/performance/npy_read_candidates
 	rm -f tests/performance/npy_read_arm_baseline.o tests/performance/npy_read_arm_candidate.o
 	./tests/performance/npy_read_candidates
+
+# Where a full read of a 1000000-row stored .npz with a string column spends
+# its time, stage by stage, and what freeing a million strings costs by which
+# threads allocated and free them; see the file's header. Writes
+# out/npz_read_stages_report.txt. Not part of `test` or bench.sh.
+tests/performance/npz_read_stages: tests/performance/npz_read_stages.c frame/npz.h frame/npy.h frame/gzip.h frame/frame.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/npz_read_stages.c $(LDLIBS) -o tests/performance/npz_read_stages
+bench-npz_read_stages: tests/performance/npz_read_stages
+	./tests/performance/npz_read_stages
 
 # seri_mcs() timing from 16 to 50000 models and from 200 to 100000
 # observations, against the per-column moments it computes and against one
@@ -1611,7 +1622,7 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: seri-runs-npz test-mutations test-hp-state-space-python bench-band_chol_block_threshold bench-band_chol_solve_threshold test-band-chol-python test-brent-python bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-lp-nl-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery study-qvarma_consistency_rate study-qvarma_parameter_space install-core install-model uninstall-core uninstall-model
+.PHONY: seri-runs-npz test-mutations bench-npz_read_stages test-hp-state-space-python bench-band_chol_block_threshold bench-band_chol_solve_threshold test-band-chol-python test-brent-python bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-lp-nl-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery study-qvarma_consistency_rate study-qvarma_parameter_space install-core install-model uninstall-core uninstall-model
 
 # Where one evaluation of the Woodbury Kalman filter spends its time, stage by
 # stage, on ss/dynamic_factor.h's systems; see the file's header. Writes
