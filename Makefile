@@ -1353,8 +1353,9 @@ bench-seri_mcs_candidates: tests/performance/seri_mcs_candidates.c tests/perform
 	./tests/performance/seri_mcs_candidates
 
 # A candidate version of frame/npy.h and frame/npz.h against a baseline:
-# every reader on .npy and .npz files of 1000 to 1000000 rows, through both
-# trees, compared byte for byte and then timed in alternated batches, at the
+# every reader on .npy and .npz files of 1000 to 1000000 rows, and
+# df_read_npz_columns on 300-column archives, through both trees (frame/gzip.h
+# included), compared byte for byte and then timed in alternated batches, at the
 # precision MAT_DOUBLE selects. Results go to
 # out/npy_read_candidates_report_f32.txt or _f64.txt. Not part of `test` or
 # bench.sh.

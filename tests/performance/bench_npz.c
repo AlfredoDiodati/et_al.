@@ -63,6 +63,14 @@ int c_npz_load(const char *path) {
     return r;
 }
 
+/* Returns the column count, so the driver can check every name was found. */
+int c_npz_load_columns(const char *path, const char *const *names, int n_names) {
+    DataFrame df = df_read_npz_columns(path, names, n_names);
+    int c = df.n_cols;
+    df_free(&df);
+    return c;
+}
+
 /* frame/gzip.h's two directions on their own, with no container or DataFrame
    around them - this is what isolates the encoder and decoder from the
    zip bookkeeping when the archive numbers come out slower than numpy's. */

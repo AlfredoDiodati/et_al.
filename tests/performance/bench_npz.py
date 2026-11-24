@@ -1,6 +1,6 @@
 """frame/npz.h and frame/gzip.h against numpy and zlib.
 
-Three questions, deliberately separated, because .npz is the one frame/
+Four questions, deliberately separated, because .npz is the one frame/
 format whose cost is not mostly parsing:
 
   1. df_read_npz / df_write_npz against np.load / np.savez, stored
@@ -13,6 +13,10 @@ format whose cost is not mostly parsing:
      container around them, at every compression level. When (2) comes
      out slower this is what says whether the container or the codec is
      responsible.
+  4. df_read_npz_columns of 4 named columns out of a 300-column archive,
+     against np.load's lazy mapping indexed by the same 4 keys, which also
+     reads only those members, and against df_read_npz of the whole
+     archive, which is what the subset read saves.
 
 The frames carry a string column as well as numeric ones, since a
 DataFrame's string columns are both the thing .npy cannot represent and
@@ -48,6 +52,8 @@ lib.c_npz_write_compressed.argtypes = [C]
 lib.c_npz_write_compressed.restype = None
 lib.c_npz_load.argtypes = [C]
 lib.c_npz_load.restype = ctypes.c_int
+lib.c_npz_load_columns.argtypes = [C, ctypes.POINTER(C), ctypes.c_int]
+lib.c_npz_load_columns.restype = ctypes.c_int
 lib.c_gzip_set_input.argtypes = [U, ctypes.c_int]
 lib.c_gzip_set_input.restype = None
 lib.c_gzip_free_input.restype = None
@@ -169,6 +175,37 @@ with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         ours = bench(lambda: lib.c_npz_load(path.encode()))
         ref = bench(load_numpy_compressed)
         row(f"{n}x{COLS + 1}", ours, ref)
+
+    # Four columns spread over the archive, asked for out of archive order.
+    WIDE_COLS = 300
+    asked = ["c217", "c3", "c299", "c150"]
+    asked_c = (C * len(asked))(*[k.encode() for k in asked])
+    for label, save in (("stored", np.savez), ("compressed", np.savez_compressed)):
+        header(f"df_read_npz_columns, 4 of {WIDE_COLS + 1} columns, {label} (vs numpy.load of the same 4 keys)")
+        full_rows = []
+        for n in [1_000, 100_000]:
+            numeric = rng.standard_normal((WIDE_COLS, n)).astype(np.float32)
+            labels = np.array([f"cat_{i % CATEGORIES}" for i in range(n)])
+            kwargs = {f"c{j}": numeric[j] for j in range(WIDE_COLS)}
+            kwargs["label"] = labels
+            path = os.path.join(tmp, f"wide_{label}_{n}.npz")
+            save(path, **kwargs)
+            assert lib.c_npz_load_columns(path.encode(), asked_c, len(asked)) == len(asked)
+
+            def load_numpy_subset():
+                with np.load(path) as z:
+                    for k in asked:
+                        z[k]
+
+            ours = bench(lambda: lib.c_npz_load_columns(path.encode(), asked_c, len(asked)))
+            ref = bench(load_numpy_subset)
+            row(f"{n}x{WIDE_COLS + 1}", ours, ref)
+            full_rows.append((n, bench(lambda: lib.c_npz_load(path.encode())), ours))
+        print(f"\n  df_read_npz of all {WIDE_COLS + 1} columns against the 4 above, {label}")
+        print(f"{'rows x cols':>16}  {'full ms':>10}  {'4 cols ms':>10}  {'full / 4':>8}")
+        print("-" * 50)
+        for n, full, ours in full_rows:
+            print(f"{f'{n}x{WIDE_COLS + 1}':>16}  {full:>10.3f}  {ours:>10.3f}  {full / ours:>8.0f}")
 
 # frame/gzip.h against zlib with no container in the way. Two payloads: the raw
 # bytes of a float32 column, which is what a numeric .npz member actually

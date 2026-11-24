@@ -8,8 +8,10 @@
    once, so the two cannot share a translation unit; across this boundary
    only paths, scalars and byte buffers pass. */
 
-/* Which reader a call goes through. */
-enum { NPY_READ_ARM_DF_NPY, NPY_READ_ARM_TENSOR_NPY, NPY_READ_ARM_DF_NPZ };
+/* Which reader a call goes through. NPY_READ_ARM_DF_NPZ_COLUMNS asks
+   df_read_npz_columns for col217, col3, col299 and col150, out of archive
+   order, so it needs an archive of at least 300 columns. */
+enum { NPY_READ_ARM_DF_NPY, NPY_READ_ARM_TENSOR_NPY, NPY_READ_ARM_DF_NPZ, NPY_READ_ARM_DF_NPZ_COLUMNS };
 
 /* Writes an rows x cols array to a .npy file, and the same columns to a
    stored and to a deflated .npz, at this build's mreal precision. */

@@ -1641,7 +1641,15 @@ else on this list.
 **Status: lowest actionability of the whole list - investigate feasibility
 before committing to a fix.**
 
-## 9. `gzip_decode_symbol` table cache pressure (`frame/gzip.h`)
+## 9. `gzip_decode_symbol` table cache pressure (`frame/gzip.h`) - fixed
+
+**Fixed by a two-level table**, `docs/GZIP_DOCUMENTATION.md`'s Performance,
+Fix 2. Cache pressure during decoding was not the main cost on `.npz`
+members: rebuilding the three `2^15`-entry tables at every dynamic block was.
+With a 1,024-entry root and subtables for longer codes, `gzip_inflate_raw`
+on the float32 bytes below takes 30.2 ms against zlib's 30.7 ms, and on the
+headers 20.1 ms against 20.0 ms. What follows is the entry as it stood
+before the fix.
 
 **Now measured against an external reference.** This entry used to open by
 saying no external package made sense to compare a from-scratch DEFLATE
@@ -1687,7 +1695,20 @@ developed in. Confirm with a real profiler before implementing; the
 alphabet-dependence above is consistent with cache pressure but does not
 isolate it from, say, zlib's own decode loop simply being better tuned.**
 
-## 10. `df_read_npz` / `df_write_npz` on stored archives (`frame/npz.h`)
+## 10. `df_read_npz` / `df_write_npz` on stored archives (`frame/npz.h`) - read half fixed
+
+**Read: fixed locally in `frame/npz.h`**, which now counts the numeric
+columns, allocates `numeric` once and copies each member into its final
+columns through `frame_append_numeric_meta`, as `frame/sql.h` and
+`frame/join.h` do; together with a CRC32 that folds 16 bytes per step, the
+stored read of the nine columns below is now 0.68x, 2.28x and 4.12x numpy's
+time at 10,000, 100,000 and 1,000,000 rows (`docs/NPZ_DOCUMENTATION.md`'s
+Changes measured and Known limitations). The remaining gap has not been
+measured. `frame/csv.h` and `frame/txt.h` still build one column at a time,
+so the two-pass API in `frame/frame.h` is still the shared fix for them. The
+writer's strided gather below is unchanged; with the faster CRC32 the write
+is 0.60x, 1.03x and 1.10x numpy's time at the same sizes. What follows is the
+entry as it stood before.
 
 From `tests/performance/bench_npz.py`. Nine columns (eight float32, one
 100-category string), against `numpy.savez` / `numpy.load` with every member

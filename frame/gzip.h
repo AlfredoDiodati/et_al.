@@ -27,19 +27,27 @@
 
 #define GZIP_MAX_BITS 15
 #define GZIP_FAST_SIZE (1 << GZIP_MAX_BITS)
+#define GZIP_ROOT_BITS 10
+#define GZIP_ROOT_SIZE (1 << GZIP_ROOT_BITS)
+#define GZIP_HUFFMAN_LINK 0x8000u
 
-/* Direct-lookup Huffman decode table: len[v] is the code length assigned
-   to lookahead value v (0 if v is not a valid prefix - only reachable for
-   an incomplete/malformed code), sym[v] the symbol for that entry. Every
-   possible GZIP_MAX_BITS-bit lookahead gets an entry, so decoding a
-   symbol is one table read instead of a bit-by-bit walk (see
-   gzip_decode_symbol) - the entries a short code's 2^(MAX_BITS-len)
-   don't-care continuations span are all filled with the same (sym, len)
-   at build time (see gzip_huffman_build), so the table is exactly as
-   large as it needs to be to make every lookahead resolve in one step. */
+/* Two-level Huffman decode table, indexed by the next GZIP_MAX_BITS bits
+   of lookahead. root is indexed by the first GZIP_ROOT_BITS of them. An
+   entry of a code no longer than that holds sym | len << 9, repeated over
+   every continuation of the code. An entry whose codes are longer holds
+   GZIP_HUFFMAN_LINK | offset of a subtable of 2^sub_bits entries in sub,
+   indexed by the next sub_bits bits, laid out the same way. sub_bits is
+   the longest code length minus GZIP_ROOT_BITS, so one lookup in root and
+   at most one in sub resolve any code. An entry of 0 has length 0: the
+   lookahead is not a valid code, reachable only in an incomplete or
+   malformed code. Building it writes GZIP_ROOT_SIZE entries plus the
+   subtables in use, against 2^GZIP_MAX_BITS for a one-level table, which
+   a dynamic block, rebuilding its three tables every 16384 symbols or so,
+   pays every time. */
 typedef struct {
-    unsigned short sym[GZIP_FAST_SIZE];
-    unsigned char len[GZIP_FAST_SIZE];
+    unsigned short root[GZIP_ROOT_SIZE];
+    unsigned short sub[GZIP_FAST_SIZE];
+    int sub_bits;
 } GzipHuffman;
 
 static inline unsigned gzip_reverse_bits(unsigned code, int len) {
@@ -48,16 +56,16 @@ static inline unsigned gzip_reverse_bits(unsigned code, int len) {
     return r;
 }
 
-/* Builds sym[]/len[] from a code-length-per-symbol array (RFC 1951 3.2.2's
-   canonical-code assignment, computed directly rather than via the
-   count/offset table gzip_decode_symbol's bit-by-bit walk used to need):
-   count codes per length, derive each length's first numeric code, then
-   assign codes to symbols in symbol order, incrementing per length. A
-   symbol's code is MSB-first (RFC 1951 3.1.1); the bit reader below
-   accumulates lookahead LSB-first (arrival order = low bit = first bit),
-   so a code's *bit-reversed* value is what indexes this table directly -
-   reversing the (at most 15-bit) code once per symbol here is far
-   cheaper than reversing every incoming byte at decode time. */
+/* Builds the table from a code-length-per-symbol array (RFC 1951 3.2.2's
+   canonical-code assignment): count codes per length, derive each
+   length's first numeric code, then assign codes to symbols in symbol
+   order, incrementing per length. A symbol's code is MSB-first (RFC 1951
+   3.1.1); the bit reader below accumulates lookahead LSB-first (arrival
+   order = low bit = first bit), so a code's *bit-reversed* value is what
+   indexes the table directly - reversing the (at most 15-bit) code once
+   per symbol here is far cheaper than reversing every incoming byte at
+   decode time. The subtables take at most GZIP_ROOT_SIZE * 2^(15 - 10)
+   = GZIP_FAST_SIZE entries, which is the size of sub. */
 static inline void gzip_huffman_build(GzipHuffman *h, const unsigned char *lengths, int n) {
     int count[GZIP_MAX_BITS + 1];
     for (int len = 0; len <= GZIP_MAX_BITS; len++) count[len] = 0;
@@ -66,22 +74,38 @@ static inline void gzip_huffman_build(GzipHuffman *h, const unsigned char *lengt
 
     int next_code[GZIP_MAX_BITS + 1];
     int code = 0;
+    int longest = 0;
     for (int len = 1; len <= GZIP_MAX_BITS; len++) {
         code = (code + count[len - 1]) << 1;
         next_code[len] = code;
+        if (count[len]) longest = len;
     }
+    h->sub_bits = longest > GZIP_ROOT_BITS ? longest - GZIP_ROOT_BITS : 0;
+    unsigned sub_size = 1u << h->sub_bits;
 
-    memset(h->len, 0, sizeof h->len);
-
+    memset(h->root, 0, sizeof h->root);
+    /* Never read when no code is longer than GZIP_ROOT_BITS; written so
+       that the compiler sees sub written on every path that reads it. */
+    h->sub[0] = 0;
+    unsigned sub_used = 0;
     for (int sym = 0; sym < n; sym++) {
         int len = lengths[sym];
         if (len == 0) continue;
         unsigned rev = gzip_reverse_bits((unsigned)next_code[len]++, len);
-        int step = 1 << len;
-        for (unsigned v = rev; v < (unsigned)GZIP_FAST_SIZE; v += (unsigned)step) {
-            h->sym[v] = (unsigned short)sym;
-            h->len[v] = (unsigned char)len;
+        unsigned short entry = (unsigned short)((unsigned)sym | (unsigned)len << 9);
+        if (len <= GZIP_ROOT_BITS) {
+            for (unsigned v = rev; v < (unsigned)GZIP_ROOT_SIZE; v += 1u << len) h->root[v] = entry;
+            continue;
         }
+        unsigned prefix = rev & (GZIP_ROOT_SIZE - 1);
+        if (!(h->root[prefix] & GZIP_HUFFMAN_LINK)) {
+            assert(sub_used + sub_size <= (unsigned)GZIP_FAST_SIZE && "gzip: huffman subtables overflow");
+            memset(h->sub + sub_used, 0, sub_size * sizeof h->sub[0]);
+            h->root[prefix] = (unsigned short)(GZIP_HUFFMAN_LINK | sub_used);
+            sub_used += sub_size;
+        }
+        unsigned short *table = h->sub + (h->root[prefix] & ~GZIP_HUFFMAN_LINK);
+        for (unsigned v = rev >> GZIP_ROOT_BITS; v < sub_size; v += 1u << (len - GZIP_ROOT_BITS)) table[v] = entry;
     }
 }
 
@@ -92,7 +116,7 @@ static inline void gzip_huffman_build(GzipHuffman *h, const unsigned char *lengt
    assembled (see gzip_huffman_build's comment on the two different bit
    orders in play). Peeking GZIP_MAX_BITS ahead without consuming, then
    consuming exactly the matched code's real length, is what lets
-   gzip_decode_symbol resolve a symbol in one table read. */
+   gzip_decode_symbol resolve a symbol in one or two table reads. */
 typedef struct {
     const unsigned char *src;
     size_t len;
@@ -149,16 +173,19 @@ static inline void gzip_align_byte(GzipBitReader *r) {
     r->bitcount = 0;
 }
 
-/* Decodes one symbol against h: a single table lookup on the next
-   GZIP_MAX_BITS bits of lookahead gives both the symbol and its real
-   code length in one step (see GzipHuffman's own comment for why the
-   table can be indexed directly, no bit-by-bit walk needed). */
+/* Decodes one symbol against h: a lookup in root on the first
+   GZIP_ROOT_BITS bits of lookahead, and for a longer code one more in the
+   subtable it links to, give both the symbol and its real code length
+   (see GzipHuffman's own comment). */
 static inline int gzip_decode_symbol(GzipBitReader *r, const GzipHuffman *h) {
     unsigned peek = gzip_peek_bits(r, GZIP_MAX_BITS);
-    int len = h->len[peek];
+    unsigned entry = h->root[peek & (GZIP_ROOT_SIZE - 1)];
+    if (entry & GZIP_HUFFMAN_LINK)
+        entry = h->sub[(entry & ~GZIP_HUFFMAN_LINK) + ((peek >> GZIP_ROOT_BITS) & ((1u << h->sub_bits) - 1))];
+    int len = (int)(entry >> 9);
     assert(len != 0 && "gzip: invalid huffman code (corrupt deflate stream)");
     gzip_consume_bits(r, len);
-    return h->sym[peek];
+    return (int)(entry & 0x1FFu);
 }
 
 typedef struct { unsigned char *d; size_t n, cap; } GzipOutBuf;
@@ -355,8 +382,15 @@ static inline unsigned char *gzip_inflate_raw(const unsigned char *src, size_t s
    FHCRC fields depending on the flag bits, then the raw DEFLATE stream,
    then a CRC32 and the uncompressed size mod 2^32. --- */
 
+/* GZIP_CRC32_SLICES tables of 256 entries, stored one after another.
+   Table 0 is the CRC of one byte; table k is the CRC of one byte followed
+   by k zero bytes, so gzip_crc32 folds in GZIP_CRC32_SLICES bytes per step
+   with lookups that do not wait on each other, instead of one lookup per
+   byte each waiting on the previous one. */
+#define GZIP_CRC32_SLICES 16
+
 static const uint32_t *gzip_crc32_table(void) {
-    static uint32_t table[256];
+    static uint32_t table[GZIP_CRC32_SLICES * 256];
     static int built = 0;
     if (!built) {
         for (uint32_t i = 0; i < 256; i++) {
@@ -364,6 +398,11 @@ static const uint32_t *gzip_crc32_table(void) {
             for (int k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
             table[i] = c;
         }
+        for (int k = 1; k < GZIP_CRC32_SLICES; k++)
+            for (int i = 0; i < 256; i++) {
+                uint32_t previous = table[(k - 1) * 256 + i];
+                table[k * 256 + i] = (previous >> 8) ^ table[previous & 0xFF];
+            }
         built = 1;
     }
     return table;
@@ -372,6 +411,16 @@ static const uint32_t *gzip_crc32_table(void) {
 static inline uint32_t gzip_crc32(const unsigned char *data, size_t len) {
     const uint32_t *table = gzip_crc32_table();
     uint32_t crc = 0xFFFFFFFFu;
+    while (len >= GZIP_CRC32_SLICES) {
+        uint32_t first = crc ^ ((uint32_t)data[0] | (uint32_t)data[1] << 8 | (uint32_t)data[2] << 16 |
+                                (uint32_t)data[3] << 24);
+        uint32_t next = 0;
+        for (int b = 0; b < 4; b++) next ^= table[(GZIP_CRC32_SLICES - 1 - b) * 256 + ((first >> (8 * b)) & 0xFF)];
+        for (int b = 4; b < GZIP_CRC32_SLICES; b++) next ^= table[(GZIP_CRC32_SLICES - 1 - b) * 256 + data[b]];
+        crc = next;
+        data += GZIP_CRC32_SLICES;
+        len -= GZIP_CRC32_SLICES;
+    }
     for (size_t i = 0; i < len; i++) crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
     return crc ^ 0xFFFFFFFFu;
 }

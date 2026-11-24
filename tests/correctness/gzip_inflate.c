@@ -24,7 +24,8 @@
    validate a hand-written implementation of the same format during
    development, then the test embeds fixed bytes" pattern already used by
    tests/correctness/test_npy.c for real numpy.load() output). What this
-   file covers directly: CRC32 against the standard check value, stored
+   file covers directly: CRC32 against the standard check value and against
+   its bitwise definition at every length and offset mod 8, stored
    (uncompressed) blocks, one real fixed-Huffman block, gzip header
    optional fields (FEXTRA/FNAME/FCOMMENT/FHCRC), and every malformed-
    input rejection path. */
@@ -69,6 +70,40 @@ static void test_crc32_check_value(void) {
     puts("crc32 matches the standard CRC-32/ISO-HDLC check value for \"123456789\"");
     uint32_t crc = gzip_crc32((const unsigned char*)"123456789", 9);
     assert(crc == 0xCBF43926u);
+}
+
+/* The CRC by its one-bit-at-a-time definition, from the polynomial alone,
+   with no table shared with frame/gzip.h. */
+static uint32_t crc32_bitwise(const unsigned char *data, size_t len) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int k = 0; k < 8; k++) crc = (crc & 1) ? (0xEDB88320u ^ (crc >> 1)) : (crc >> 1);
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+/* gzip_crc32 folds 8 bytes per step and the remainder one at a time, so
+   every length mod 8 and every start offset mod 8 is a separate path. */
+static void test_crc32_matches_bitwise_definition(void) {
+    puts("crc32 matches the bitwise definition at every length 0..200 from every start offset 0..15, and on 1 MiB");
+    enum { LONG = 1 << 20 };
+    unsigned char *bytes = (unsigned char*)malloc(LONG + 16);
+    assert(bytes);
+    srand(49);
+    for (size_t i = 0; i < LONG + 16; i++) bytes[i] = (unsigned char)(rand() & 0xFF);
+    for (size_t offset = 0; offset < 16; offset++)
+        for (size_t len = 0; len <= 200; len++)
+            assert(gzip_crc32(bytes + offset, len) == crc32_bitwise(bytes + offset, len));
+    assert(gzip_crc32(bytes + 3, LONG) == crc32_bitwise(bytes + 3, LONG));
+    /* One flipped bit at any position changes the value. */
+    uint32_t reference = gzip_crc32(bytes, 4096);
+    for (size_t i = 0; i < 4096; i += 37) {
+        bytes[i] ^= 0x10;
+        assert(gzip_crc32(bytes, 4096) != reference);
+        bytes[i] ^= 0x10;
+    }
+    free(bytes);
 }
 
 static void test_stored_block_roundtrip(void) {
@@ -433,6 +468,7 @@ static void test_fuzz_stress(void) {
 
 int main(void) {
     test_crc32_check_value();
+    test_crc32_matches_bitwise_definition();
     test_stored_block_roundtrip();
     test_multiple_stored_blocks();
     test_empty_payload();

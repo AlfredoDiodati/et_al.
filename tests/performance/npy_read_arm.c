@@ -10,6 +10,14 @@
 #define ARM_JOIN(a, b) a##b
 #define ARM_NAME(a, b) ARM_JOIN(a, b)
 
+static const char *const arm_column_names[] = { "col217", "col3", "col299", "col150" };
+
+static DataFrame arm_read_frame(int reader, const char *path) {
+    if (reader == NPY_READ_ARM_DF_NPY) return df_read_npy(path);
+    if (reader == NPY_READ_ARM_DF_NPZ) return df_read_npz(path);
+    return df_read_npz_columns(path, arm_column_names, 4);
+}
+
 /* Column j of row i: integer-valued in even columns, as in a panel of
    counts or identifiers, and with a fractional part from a linear
    congruential sequence in odd ones, so the deflated archive holds both a
@@ -43,7 +51,7 @@ unsigned char *ARM_NAME(NPY_READ_ARM_ENTRY, _read)(int reader, const char *path,
         tensor_free(t);
         return image;
     }
-    DataFrame frame = reader == NPY_READ_ARM_DF_NPY ? df_read_npy(path) : df_read_npz(path);
+    DataFrame frame = arm_read_frame(reader, path);
     *bytes = (size_t)frame.r * (size_t)frame.numeric.c * sizeof(mreal);
     image = (unsigned char *)malloc(*bytes ? *bytes : 1);
     assert(image);
@@ -64,7 +72,7 @@ double ARM_NAME(NPY_READ_ARM_ENTRY, _time)(int reader, const char *path, int rep
             checksum += t.d[0];
             tensor_free(t);
         } else {
-            DataFrame frame = reader == NPY_READ_ARM_DF_NPY ? df_read_npy(path) : df_read_npz(path);
+            DataFrame frame = arm_read_frame(reader, path);
             checksum += frame.r ? AT(frame.numeric, 0, 0) : 0;
             df_free(&frame);
         }

@@ -1,10 +1,10 @@
-test run: wo 18 nov 2026 18:20:03 CET
+test run: di 24 nov 2026 15:25:01 CET
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 106 suites
+make test and check.sh run the same 107 suites
 
 === paths_outside_repo: PASS ===
 no tracked source names a path outside the repository
@@ -48,7 +48,7 @@ make: 'tests/correctness/mcs_primitives' is up to date.
 make: 'tests/correctness/mcs_size_and_power' is up to date.
 make: 'tests/correctness/fast_mcs_correctness' is up to date.
 make: 'tests/correctness/fast_mcs_size_and_power' is up to date.
-make: 'tests/correctness/seri_mcs_correctness' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  tests/correctness/seri_mcs_correctness.c -lm -lopenblas -o tests/correctness/seri_mcs_correctness
 make: 'tests/correctness/test_broadcast' is up to date.
 make: 'tests/correctness/test_gauss' is up to date.
 make: 'tests/correctness/chi_squared_tail_correctness' is up to date.
@@ -72,7 +72,7 @@ make: 'tests/correctness/csv_missing_values' is up to date.
 make: 'tests/correctness/test_txt' is up to date.
 make: 'tests/correctness/test_npy' is up to date.
 make: 'tests/correctness/test_npz' is up to date.
-make: 'tests/correctness/float32_file_widening' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp  -DMAT_DOUBLE tests/correctness/float32_file_widening.c -lm -lopenblas -o tests/correctness/float32_file_widening
 make: 'tests/correctness/test_json' is up to date.
 make: 'tests/correctness/test_sql' is up to date.
 make: 'tests/correctness/test_join' is up to date.
@@ -106,6 +106,7 @@ make: 'tests/correctness/lp_correctness' is up to date.
 make: 'tests/correctness/lp_recovery' is up to date.
 make: 'tests/correctness/lp_nl_correctness' is up to date.
 make: 'tests/correctness/lp_nl_recovery' is up to date.
+make: 'tests/correctness/lp_nl_causal_correctness' is up to date.
 make: 'tests/integration/basis_to_regression' is up to date.
 make: 'tests/integration/frame_to_model' is up to date.
 make: 'tests/integration/frame_to_tensor' is up to date.
@@ -114,9 +115,9 @@ make: 'tests/integration/join_missing_values' is up to date.
 make: 'tests/integration/distributed_simulation' is up to date.
 make: 'tests/integration/optimizer_swap' is up to date.
 make: 'tests/integration/pipeline_ownership' is up to date.
-make: 'tests/integration/npz_to_statistics' is up to date.
-make: 'tests/integration/header_composition' is up to date.
-make: 'tests/integration/header_composition_f32' is up to date.
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -lopenblas -o tests/integration/npz_to_statistics
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition
+cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/openblas -fopenmp -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -lopenblas -o tests/integration/header_composition_f32
 make: Nothing to be done for 'examples'.
 
 === poly_correctness: PASS ===
@@ -527,6 +528,8 @@ HAC long-run variance: strided views vs contiguous twins
 HAC long-run variance: adversarial inputs
 HAC long-run variance: randomized vs independent reference (fixed seed)
 series length and element access, both orientations
+running mean and variance: known values, orientations and views, ill-conditioned data against long double
+  level 1e4, deviations 1, 400 observations: largest relative error of the variance 1.63e-12 (0.129 of its bound), one pass 4.62e-07
 quantile against hand-computed interpolations
 quantile on views and degenerate samples
 stats_all_finite: NaN, both infinities, and the finite boundary values
@@ -1053,11 +1056,22 @@ row labels survive as the reserved __row_names__ member, not as a column
 UTF-8 string columns round-trip through numpy's UCS-4 dtype (1-, 2-, 3- and 4-byte sequences)
 real numpy archive (np.savez float32, stored): values, dtypes, 2D expansion and unicode all read back
 real numpy archive (np.savez_compressed float32, deflated): values, dtypes, 2D expansion and unicode all read back
+real numpy archive (np.savez float64, stored): values, dtypes, 2D expansion and unicode all read back
+real numpy archive (np.savez_compressed float64, deflated): values, dtypes, 2D expansion and unicode all read back
 adversarial: one row, one column, and an all-empty string column
 df_write_npz_compressed: smaller file, same frame back
 a frame rebuilt from the archive is a valid df_sql and df_join input
 malformed .npz aborts (fork + expect SIGABRT)
 df_write_npz contract violations abort (empty frame, reserved column name)
+df_read_npz_columns: asked columns in the asked order, with the row labels
+df_read_npz_columns: agrees with df_read_npz on a 1000 x 301 archive, stored and deflated
+df_read_npz_columns on a real numpy archive (np.savez float32, stored)
+df_read_npz_columns on a real numpy archive (np.savez_compressed float32, deflated)
+df_read_npz_columns on a real numpy archive (np.savez float64, stored)
+df_read_npz_columns on a real numpy archive (np.savez_compressed float64, deflated)
+df_read_npz_columns: zero rows, one row, and zip comments up to the largest length
+df_read_npz_columns: an unasked member is never read, an asked one is checked
+df_read_npz_columns contract violations abort (no names, a name twice, the row-label key)
 test_npz: all passed
 
 === float32_file_widening: PASS ===
@@ -1138,6 +1152,7 @@ test_join: all passed
 
 === gzip_inflate: PASS ===
 crc32 matches the standard CRC-32/ISO-HDLC check value for "123456789"
+crc32 matches the bitwise definition at every length 0..200 from every start offset 0..15, and on 1 MiB
 stored (uncompressed) block round-trips exactly, with correct CRC32/size checks
 two consecutive stored blocks (BFINAL only on the second) concatenate correctly
 a stored block with a zero-length payload decompresses to zero bytes, not a crash
@@ -1805,7 +1820,7 @@ lp_recovery: all passed, 400 draws per case, report in out/lp_recovery_report.tx
 every horizon against long double normal equations
 fz against its definition: HP cycle, n - 1 standardisation, logistic, lag; raw and unlagged variants
 a weight of 0.5 everywhere: rank deficient, and both states equal the linear responses
-an infinity in the switching series
+an infinity in the switching series, and lambda 0
 residuals_are_zero: y_2 at t is y_1 at t - 3, so it is fitted exactly at horizons 2 and 3 only
 cache: bit-for-bit round trip, refusals leave the fit untouched, cached loads, force_refit, no file without d
 bands: against the long double reference, NaN at a rank-deficient horizon, the cache
@@ -1820,6 +1835,18 @@ lp_nl_correctness: all passed
 
 === lp_nl_recovery: PASS ===
 lp_nl_recovery: all passed, 400 draws per case, report in out/lp_nl_recovery_report.txt
+
+=== lp_nl_causal_correctness: PASS ===
+fz against the causal cycle built from two-sided trends of every prefix
+  largest gap 0.000286 of its tolerance
+the weight at t does not move when periods after t change
+the responses and bands are lp_nl's on the same weights
+without the HP filter the fit is lp_nl's; with it the weights differ
+a strided view of y gives the fit of a copy
+a constant switching series: flagged, weights 0.5, both states the linear responses; an infinity: nothing computed
+lp_lin_and_nl_causal against the two separate calls
+cache: round trip, force_refit, and the causal and two-sided files refused by each other's load
+lp_nl_causal_correctness: all passed
 
 === integration ===
 === basis_to_regression: PASS ===
@@ -1961,4 +1988,4 @@ PASSED, 0 failures
 
 
 === summary ===
-110 passed, 0 failed
+111 passed, 0 failed

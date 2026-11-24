@@ -25,6 +25,9 @@
        df_write_npz(&df, "d.npz")          ->   np.load("d.npz")["gdp"]
        df_write_npz_compressed(&df, ...)   ->   np.load("d.npz")["gdp"]
 
+   and df_read_npz_columns for a few named members of a wide archive,
+   reading those members alone, as np.load's lazy mapping does.
+
    Scope, matching frame/npy.h's own deliberately narrow bar:
 
    - Both stored (np.savez) and deflated (np.savez_compressed) members,
@@ -175,85 +178,189 @@ static inline size_t frame_npz_find_eocd(const unsigned char *buf, size_t size) 
     return 0;
 }
 
-/* Reads every member of an in-memory zip archive, decompressing the
-   deflated ones through frame/gzip.h and checking each member's CRC32 against
-   the archive's own. Returns a freshly allocated array the caller
+/* An archive open for reading. Its last bytes, read once to find the
+   end-of-central-directory record, are kept and serve every later read
+   that falls inside them, so an archive smaller than that window is read
+   from disk once, as a whole, and a wide archive's central directory
+   usually comes from memory too. */
+typedef struct {
+    FILE *f;
+    long size;
+    unsigned char *tail;
+    long tail_offset;
+} FrameNpzFile;
+
+/* length bytes of the archive from offset into a fresh buffer the caller
+   frees. */
+static inline unsigned char *frame_npz_read_at(const FrameNpzFile *archive, long offset, size_t length) {
+    assert(offset >= 0 && offset + (long)length <= archive->size && "frame: .npz read runs past the end of the file");
+    unsigned char *buffer = (unsigned char*)malloc(length ? length : 1);
+    assert(buffer && "frame: out of memory");
+    if (archive->tail && offset >= archive->tail_offset) {
+        memcpy(buffer, archive->tail + (offset - archive->tail_offset), length);
+        return buffer;
+    }
+    int sought = fseek(archive->f, offset, SEEK_SET);
+    assert(sought == 0 && "frame: .npz seek failed");
+    size_t got = fread(buffer, 1, length, archive->f);
+    assert(got == length && "frame: .npz archive is shorter than its directory says");
+    (void)sought;
+    (void)got;
+    return buffer;
+}
+
+/* Reads the member whose central-directory entry is e: its local header,
+   then its stored bytes, inflated when deflated and checked against the
+   CRC32 the directory records. key is the member name with .npy
+   stripped. */
+static inline FrameNpzMember frame_npz_read_member(const FrameNpzFile *archive, const unsigned char *e,
+                                                   const char *key, size_t key_length) {
+    long size = archive->size;
+    unsigned flags = frame_npz_u16(e + 8);
+    unsigned method = frame_npz_u16(e + 10);
+    uint32_t crc = frame_npz_u32(e + 16);
+    uint32_t compressed = frame_npz_u32(e + 20);
+    uint32_t uncompressed = frame_npz_u32(e + 24);
+    uint32_t local_offset = frame_npz_u32(e + 42);
+    assert((flags & 0x0001u) == 0 && "frame: encrypted .npz members are not supported");
+    assert(compressed != 0xFFFFFFFFu && uncompressed != 0xFFFFFFFFu && local_offset != 0xFFFFFFFFu &&
+           "frame: ZIP64 .npz members (4 GiB or larger) are not supported");
+
+    /* The local header repeats the name and carries its own extra field,
+       whose length differs from the central directory's - numpy puts a
+       ZIP64 extra field in the local header and none in the central one -
+       so the data offset has to come from the local header's own two
+       length fields. */
+    assert((long)local_offset + 30 <= size && "frame: .npz local header runs past the end of the file");
+    unsigned char *local = frame_npz_read_at(archive, (long)local_offset, 30);
+    assert(frame_npz_u32(local) == FRAME_NPZ_SIG_LOCAL && "frame: .npz local header has a bad signature");
+    long data = (long)local_offset + 30 + frame_npz_u16(local + 26) + frame_npz_u16(local + 28);
+    free(local);
+    assert(data + (long)compressed <= size && "frame: .npz member data runs past the end of the file");
+
+    unsigned char *stored = frame_npz_read_at(archive, data, compressed);
+    unsigned char *image;
+    if (method == 0) {
+        assert(compressed == uncompressed && "frame: stored .npz member declares two different sizes");
+        image = stored;
+    } else {
+        assert(method == 8 && "frame: .npz member uses a compression method other than stored or deflate");
+        size_t got;
+        image = gzip_inflate_raw(stored, compressed, uncompressed, &got);
+        assert(got == uncompressed && "frame: .npz member inflated to the wrong size");
+        free(stored);
+    }
+    assert(gzip_crc32(image, uncompressed) == crc && "frame: .npz member failed its CRC32 check");
+
+    FrameNpzMember member;
+    member.name = (char*)malloc(key_length + 1);
+    assert(member.name && "frame: out of memory");
+    memcpy(member.name, key, key_length);
+    member.name[key_length] = '\0';
+    member.image = image;
+    member.size = uncompressed;
+    return member;
+}
+
+/* Reads members of the archive at path straight from the file: the
+   end-of-central-directory record from the file's tail, then the central
+   directory, then only the members selected, so an unselected member is
+   never read, inflated or checked. With keys NULL every member is
+   selected, in the archive's order. Otherwise the members whose keys are
+   in keys are, in the order of keys, followed by the row-label member when
+   the archive has one and at least one key was found; a key the archive
+   does not hold is skipped. Returns a freshly allocated array the caller
    releases with frame_npz_members_free. */
-static inline FrameNpzMember *frame_npz_read_members(const unsigned char *buf, size_t size, int *out_n) {
-    size_t eocd = frame_npz_find_eocd(buf, size);
-    assert(frame_npz_u16(buf + eocd + 4) == 0 && frame_npz_u16(buf + eocd + 6) == 0 &&
+static inline FrameNpzMember *frame_npz_read_members(const char *path, const char *const *keys, int n_keys,
+                                                     int *out_n) {
+    FrameNpzFile archive;
+    archive.f = fopen(path, "rb");
+    assert(archive.f && "frame: could not open file");
+    int at_end = fseek(archive.f, 0, SEEK_END);
+    assert(at_end == 0 && "frame: .npz seek failed");
+    (void)at_end;
+    archive.size = ftell(archive.f);
+    long size = archive.size;
+    assert(size >= 22 && "frame: file too small to be a valid .npz");
+
+    /* The end-of-central-directory record is within the last 22 + 65535
+       bytes, the largest trailing comment a zip can carry. */
+    long tail_length = size < 22 + 65535 ? size : 22 + 65535;
+    archive.tail = NULL;
+    archive.tail_offset = size - tail_length;
+    archive.tail = frame_npz_read_at(&archive, archive.tail_offset, (size_t)tail_length);
+    const unsigned char *eocd = archive.tail + frame_npz_find_eocd(archive.tail, (size_t)tail_length);
+    assert(frame_npz_u16(eocd + 4) == 0 && frame_npz_u16(eocd + 6) == 0 &&
            "frame: .npz spanning multiple disks is not supported");
-
-    int n = (int)frame_npz_u16(buf + eocd + 10);
-    uint32_t cd_size = frame_npz_u32(buf + eocd + 12);
-    uint32_t cd_offset = frame_npz_u32(buf + eocd + 16);
-    assert(cd_offset != 0xFFFFFFFFu && cd_size != 0xFFFFFFFFu &&
+    int n_entries = (int)frame_npz_u16(eocd + 10);
+    uint32_t directory_size = frame_npz_u32(eocd + 12);
+    uint32_t directory_offset = frame_npz_u32(eocd + 16);
+    assert(directory_offset != 0xFFFFFFFFu && directory_size != 0xFFFFFFFFu &&
            "frame: ZIP64 .npz archives are not supported");
-    assert((size_t)cd_offset + cd_size <= size && "frame: .npz central directory runs past the end of the file");
+    assert((long)directory_offset + (long)directory_size <= size &&
+           "frame: .npz central directory runs past the end of the file");
+    unsigned char *directory = frame_npz_read_at(&archive, (long)directory_offset, directory_size);
 
-    FrameNpzMember *members = (FrameNpzMember*)malloc((size_t)(n > 0 ? n : 1) * sizeof(FrameNpzMember));
-    size_t p = cd_offset;
-
-    for (int i = 0; i < n; i++) {
-        assert(p + 46 <= (size_t)cd_offset + cd_size && "frame: .npz central directory truncated");
-        assert(frame_npz_u32(buf + p) == FRAME_NPZ_SIG_CENTRAL && "frame: .npz central-directory entry has a bad signature");
-
-        unsigned flags = frame_npz_u16(buf + p + 8);
-        assert((flags & 0x0001u) == 0 && "frame: encrypted .npz members are not supported");
-        unsigned method = frame_npz_u16(buf + p + 10);
-        uint32_t crc = frame_npz_u32(buf + p + 16);
-        uint32_t compressed = frame_npz_u32(buf + p + 20);
-        uint32_t uncompressed = frame_npz_u32(buf + p + 24);
-        unsigned name_len = frame_npz_u16(buf + p + 28);
-        unsigned extra_len = frame_npz_u16(buf + p + 30);
-        unsigned comment_len = frame_npz_u16(buf + p + 32);
-        uint32_t local_offset = frame_npz_u32(buf + p + 42);
-        assert(compressed != 0xFFFFFFFFu && uncompressed != 0xFFFFFFFFu && local_offset != 0xFFFFFFFFu &&
-               "frame: ZIP64 .npz members (4 GiB or larger) are not supported");
-        assert(p + 46 + name_len + extra_len + comment_len <= (size_t)cd_offset + cd_size &&
+    /* Where each entry starts in the directory, and the length of its key,
+       the name with numpy's ".npy" suffix stripped. */
+    int n_slots = n_entries > 0 ? n_entries : 1;
+    size_t *entry = (size_t*)malloc((size_t)n_slots * sizeof(size_t));
+    size_t *key_length = (size_t*)malloc((size_t)n_slots * sizeof(size_t));
+    assert(entry && key_length && "frame: out of memory");
+    int row_names_entry = -1;
+    size_t p = 0;
+    for (int i = 0; i < n_entries; i++) {
+        assert(p + 46 <= directory_size && "frame: .npz central directory truncated");
+        assert(frame_npz_u32(directory + p) == FRAME_NPZ_SIG_CENTRAL &&
+               "frame: .npz central-directory entry has a bad signature");
+        unsigned name_length = frame_npz_u16(directory + p + 28);
+        unsigned extra_length = frame_npz_u16(directory + p + 30);
+        unsigned comment_length = frame_npz_u16(directory + p + 32);
+        assert(p + 46 + name_length + extra_length + comment_length <= directory_size &&
                "frame: .npz central-directory entry runs past the directory");
-
-        /* The local header repeats the name and carries its own extra
-           field, whose length differs from the central directory's -
-           numpy puts a ZIP64 extra field in the local header and none in
-           the central one - so the data offset has to come from the
-           local header's own two length fields. */
-        assert((size_t)local_offset + 30 <= size && "frame: .npz local header runs past the end of the file");
-        const unsigned char *lh = buf + local_offset;
-        assert(frame_npz_u32(lh) == FRAME_NPZ_SIG_LOCAL && "frame: .npz local header has a bad signature");
-        size_t data = (size_t)local_offset + 30 + frame_npz_u16(lh + 26) + frame_npz_u16(lh + 28);
-        assert(data + compressed <= size && "frame: .npz member data runs past the end of the file");
-
-        unsigned char *image;
-        if (method == 0) {
-            assert(compressed == uncompressed && "frame: stored .npz member declares two different sizes");
-            image = (unsigned char*)malloc(uncompressed ? uncompressed : 1);
-            memcpy(image, buf + data, uncompressed);
-        } else if (method == 8) {
-            size_t got;
-            image = gzip_inflate_raw(buf + data, compressed, uncompressed, &got);
-            assert(got == uncompressed && "frame: .npz member inflated to the wrong size");
-        } else {
-            assert(0 && "frame: .npz member uses a compression method other than stored or deflate");
-            image = NULL;
-        }
-        assert(gzip_crc32(image, uncompressed) == crc && "frame: .npz member failed its CRC32 check");
-
-        /* numpy names every member "<key>.npy"; the key is the column. */
-        const char *raw_name = (const char*)(buf + p + 46);
-        size_t key_len = name_len;
-        if (key_len > 4 && memcmp(raw_name + key_len - 4, ".npy", 4) == 0) key_len -= 4;
-        char *name = (char*)malloc(key_len + 1);
-        memcpy(name, raw_name, key_len);
-        name[key_len] = '\0';
-
-        members[i].name = name;
-        members[i].image = image;
-        members[i].size = uncompressed;
-        p += 46 + name_len + extra_len + comment_len;
+        const char *raw_name = (const char*)(directory + p + 46);
+        size_t length = name_length;
+        if (length > 4 && memcmp(raw_name + length - 4, ".npy", 4) == 0) length -= 4;
+        entry[i] = p;
+        key_length[i] = length;
+        if (row_names_entry < 0 && length == strlen(FRAME_NPZ_ROW_NAMES_KEY) &&
+            memcmp(raw_name, FRAME_NPZ_ROW_NAMES_KEY, length) == 0)
+            row_names_entry = i;
+        p += 46 + name_length + extra_length + comment_length;
     }
 
-    *out_n = n;
+    /* The entries to read, in the order their columns will appear. */
+    int *selected = (int*)malloc((size_t)(keys ? n_keys + 1 : n_slots) * sizeof(int));
+    assert(selected && "frame: out of memory");
+    int n_selected = 0;
+    if (!keys) {
+        for (int i = 0; i < n_entries; i++) selected[n_selected++] = i;
+    } else {
+        for (int k = 0; k < n_keys; k++) {
+            size_t length = strlen(keys[k]);
+            for (int i = 0; i < n_entries; i++)
+                if (key_length[i] == length && memcmp(directory + entry[i] + 46, keys[k], length) == 0) {
+                    selected[n_selected++] = i;
+                    break;
+                }
+        }
+        if (n_selected > 0 && row_names_entry >= 0) selected[n_selected++] = row_names_entry;
+    }
+
+    FrameNpzMember *members = (FrameNpzMember*)calloc((size_t)(n_selected > 0 ? n_selected : 1), sizeof(FrameNpzMember));
+    assert(members && "frame: out of memory");
+    for (int m = 0; m < n_selected; m++) {
+        const unsigned char *e = directory + entry[selected[m]];
+        members[m] = frame_npz_read_member(&archive, e, (const char*)(e + 46), key_length[selected[m]]);
+    }
+
+    fclose(archive.f);
+    free(archive.tail);
+    free(directory);
+    free(entry);
+    free(key_length);
+    free(selected);
+    *out_n = n_selected;
     return members;
 }
 
@@ -293,52 +400,33 @@ static inline void frame_npz_free_strings(char **values, int r) {
     free(values);
 }
 
-/* Appends one member's contents to df as columns. A numeric member
-   becomes one column per array column - named by the key when the array
-   is 1D or has a single column, and "<key>0", "<key>1", ... when it is
-   wider, the same generated-name convention df_from_matrix uses. A '<U'
-   member becomes one string column. */
-static inline void frame_npz_add_member(DataFrame *df, const FrameNpzMember *member, const char *descr,
-                                         size_t data_start, const int *shape) {
-    if (frame_npz_is_string_descr(descr)) {
-        char **values = frame_npz_decode_strings(member, descr, data_start, shape);
-        df_add_string_col(df, member->name, (const char *const *)values);
-        frame_npz_free_strings(values, shape[0]);
+/* Copies a numeric member's r x c row-major data block into columns
+   first_column to first_column + c - 1 of numeric, converting from the
+   member's element width as frame_npy_copy_elements does. A single column
+   of mreal elements is copied element by element at a fixed size, which
+   the compiler turns into one load and one store. */
+static inline void frame_npz_copy_member_block(Mat numeric, int first_column, const unsigned char *data, int r,
+                                               int c, size_t width) {
+    if (c == 1 && width == sizeof(mreal)) {
+        for (int i = 0; i < r; i++) memcpy(&AT(numeric, i, first_column), data + (size_t)i * sizeof(mreal), sizeof(mreal));
         return;
     }
-
-    size_t width = frame_npy_numeric_width(descr);
-    assert(width != 0 &&
-           "frame: .npz member dtype is neither a numeric dtype this build reads ('<f4' in a float build, "
-           "'<f8' or '<f4' in a double build) nor a '<U' string - re-save numeric arrays at a matching "
-           "precision, and string arrays via .astype(str)");
-
-    Mat m = frame_npy_data_matrix(member->image, member->size, data_start, shape, width);
-    Vec col = mat_new(shape[0], 1);
-    for (int j = 0; j < shape[1]; j++) {
-        char name[256];
-        int len = shape[1] == 1 ? snprintf(name, sizeof name, "%s", member->name)
-                                : snprintf(name, sizeof name, "%s%d", member->name, j);
-        assert(len > 0 && len < (int)sizeof name && "frame: .npz member name too long to become a column name");
-        for (int i = 0; i < shape[0]; i++) col.d[i] = AT(m, i, j);
-        df_add_numeric_col(df, name, col);
-    }
-    mat_free(col);
-    mat_free(m);
+    for (int i = 0; i < r; i++)
+        frame_npy_copy_elements(&AT(numeric, i, first_column), data + (size_t)i * (size_t)c * width, (size_t)c, width);
 }
 
-/* Reads a .npz archive into a DataFrame: one column per array member, in
-   the archive's own order, named by the member key. A member named
-   FRAME_NPZ_ROW_NAMES_KEY becomes the frame's row labels instead of a
-   column. Every member must declare the same first dimension, since a
-   DataFrame has one row count shared by all its columns. */
-static inline DataFrame df_read_npz(const char *path) {
-    long size;
-    unsigned char *buf = (unsigned char*)frame_read_file(path, &size);
-    int n_members;
-    FrameNpzMember *members = frame_npz_read_members(buf, (size_t)size, &n_members);
-    free(buf);
-    assert(n_members > 0 && "frame: .npz archive holds no arrays");
+/* Builds a frame from members already read, in their order. A numeric
+   member becomes one column per array column - named by the key when the
+   array is 1D or has a single column, and "<key>0", "<key>1", ... when it
+   is wider, the same generated-name convention df_from_matrix uses. A '<U'
+   member becomes one string column. A member named FRAME_NPZ_ROW_NAMES_KEY
+   becomes the frame's row labels instead of a column. Every member must
+   declare the same first dimension, since a DataFrame has one row count
+   shared by all its columns. No members give a frame of no rows and no
+   columns. The numeric block is allocated once at its final width and
+   each member is copied straight into its columns. */
+static inline DataFrame frame_npz_frame_from_members(const FrameNpzMember *members, int n_members) {
+    if (n_members <= 0) return df_new(0);
 
     /* Every member's header is parsed once, up front, so the row count is
        known before the frame is built and no member is decoded twice. */
@@ -358,12 +446,51 @@ static inline DataFrame df_read_npz(const char *path) {
                "frame: .npz members disagree about the row count (a DataFrame has one, shared by every column)");
     }
 
-    DataFrame df = df_new(shapes[0]);
+    /* The element width of each numeric member, 0 for a string member or
+       the row labels, and the total number of numeric columns. */
+    size_t *widths = (size_t*)malloc((size_t)n_members * sizeof(size_t));
+    assert(descrs && data_starts && shapes && widths && "frame: out of memory");
     int row_names_member = -1;
+    int n_numeric = 0;
     for (int i = 0; i < n_members; i++) {
+        widths[i] = 0;
         if (strcmp(members[i].name, FRAME_NPZ_ROW_NAMES_KEY) == 0) { row_names_member = i; continue; }
-        frame_npz_add_member(&df, &members[i], descrs[i], data_starts[i], &shapes[2 * i]);
+        if (frame_npz_is_string_descr(descrs[i])) continue;
+        widths[i] = frame_npy_numeric_width(descrs[i]);
+        assert(widths[i] != 0 &&
+               "frame: .npz member dtype is neither a numeric dtype this build reads ('<f4' in a float build, "
+               "'<f8' or '<f4' in a double build) nor a '<U' string - re-save numeric arrays at a matching "
+               "precision, and string arrays via .astype(str)");
+        n_numeric += shapes[2 * i + 1];
     }
+
+    DataFrame df = df_new(shapes[0]);
+    if (n_numeric > 0) df.numeric = mat_new(df.r, n_numeric);
+    int next_numeric = 0;
+    for (int i = 0; i < n_members; i++) {
+        if (strcmp(members[i].name, FRAME_NPZ_ROW_NAMES_KEY) == 0) continue;
+        const int *shape = &shapes[2 * i];
+        if (widths[i] == 0) {
+            char **values = frame_npz_decode_strings(&members[i], descrs[i], data_starts[i], shape);
+            df_add_string_col(&df, members[i].name, (const char *const *)values);
+            frame_npz_free_strings(values, shape[0]);
+            continue;
+        }
+        assert(data_starts[i] + (size_t)shape[0] * (size_t)shape[1] * widths[i] <= members[i].size &&
+               "frame: .npy file truncated (data shorter than header declares)");
+        frame_npz_copy_member_block(df.numeric, next_numeric, members[i].image + data_starts[i], shape[0], shape[1],
+                                    widths[i]);
+        for (int j = 0; j < shape[1]; j++) {
+            char name[256];
+            int len = shape[1] == 1 ? snprintf(name, sizeof name, "%s", members[i].name)
+                                    : snprintf(name, sizeof name, "%s%d", members[i].name, j);
+            assert(len > 0 && len < (int)sizeof name && "frame: .npz member name too long to become a column name");
+            (void)len;
+            frame_append_numeric_meta(&df, name, next_numeric + j);
+        }
+        next_numeric += shape[1];
+    }
+    free(widths);
 
     if (row_names_member >= 0) {
         int i = row_names_member;
@@ -378,6 +505,47 @@ static inline DataFrame df_read_npz(const char *path) {
     free(descrs);
     free(data_starts);
     free(shapes);
+    return df;
+}
+
+/* Reads a .npz archive into a DataFrame: one column per array member, in
+   the archive's own order, named by the member key. A member named
+   FRAME_NPZ_ROW_NAMES_KEY becomes the frame's row labels instead of a
+   column. Every member must declare the same first dimension, since a
+   DataFrame has one row count shared by all its columns. */
+static inline DataFrame df_read_npz(const char *path) {
+    int n_members;
+    FrameNpzMember *members = frame_npz_read_members(path, NULL, 0, &n_members);
+    assert(n_members > 0 && "frame: .npz archive holds no arrays");
+    DataFrame df = frame_npz_frame_from_members(members, n_members);
+    frame_npz_members_free(members, n_members);
+    return df;
+}
+
+/* Reads only the members of a .npz archive whose keys are in names, in the
+   order of names. No other member is read from disk, inflated or checked.
+   Each member becomes columns as in df_read_npz, so a
+   2D member asked for by its key gives "<key>0", "<key>1", ..., and the
+   archive's row labels, when it has them, come with the columns.
+
+   A name the archive does not hold is left out of the frame, so a caller
+   reading a cache can treat a missing column as a miss; when no name is
+   found the frame has no rows and no columns. Only the members read have
+   to agree on the row count. Asking twice for one name, or for
+   FRAME_NPZ_ROW_NAMES_KEY, which holds the row labels rather than a column,
+   is a contract violation. Caller must df_free. */
+static inline DataFrame df_read_npz_columns(const char *path, const char *const *names, int n_names) {
+    assert(names && n_names >= 1 && "frame: df_read_npz_columns needs at least one name");
+    for (int k = 0; k < n_names; k++) {
+        assert(names[k] && "frame: df_read_npz_columns given a NULL name");
+        assert(strcmp(names[k], FRAME_NPZ_ROW_NAMES_KEY) != 0 &&
+               "frame: " FRAME_NPZ_ROW_NAMES_KEY " holds the row labels, which come with any column read");
+        for (int l = 0; l < k; l++)
+            assert(strcmp(names[k], names[l]) != 0 && "frame: df_read_npz_columns given the same name twice");
+    }
+    int n_members;
+    FrameNpzMember *members = frame_npz_read_members(path, names, n_names, &n_members);
+    DataFrame df = frame_npz_frame_from_members(members, n_members);
     frame_npz_members_free(members, n_members);
     return df;
 }

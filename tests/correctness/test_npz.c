@@ -888,6 +888,389 @@ static void test_write_contract_aborts(void) {
     remove(g_write_path);
 }
 
+/* --- df_read_npz_columns. Its reference is df_read_npz on the same file:
+   every column it returns must be the full read's column of that name, bit
+   for bit, in the order asked, with the full read's row labels. --- */
+
+static int column_position(const DataFrame *df, const char *name) {
+    for (int j = 0; j < df->n_cols; j++)
+        if (strcmp(df->columns[j].name, name) == 0) return j;
+    return -1;
+}
+
+/* Whether column j of a and the column of b named name have the same name,
+   type and bits. Numeric values are compared with memcmp rather than ==,
+   since the archive carries raw bytes and a reader that changed one is
+   wrong whatever the value. */
+static int same_column(const DataFrame *a, int j, const DataFrame *b, const char *name) {
+    int k = column_position(b, name);
+    if (j < 0 || j >= a->n_cols || k < 0 || a->r != b->r) return 0;
+    if (strcmp(a->columns[j].name, name) != 0 || a->columns[j].type != b->columns[k].type) return 0;
+    if (a->columns[j].type == COL_NUMERIC) {
+        for (int i = 0; i < a->r; i++)
+            if (memcmp(&AT(a->numeric, i, a->columns[j].index), &AT(b->numeric, i, b->columns[k].index),
+                       sizeof(mreal)) != 0) return 0;
+        return 1;
+    }
+    for (int i = 0; i < a->r; i++)
+        if (strcmp(a->string_cols[a->columns[j].index][i], b->string_cols[b->columns[k].index][i]) != 0) return 0;
+    return 1;
+}
+
+/* Whether subset is what df_read_npz_columns(names) should return given
+   the full read of the same archive: the names full holds, in the order
+   asked, each identical to full's column, and full's row labels; or, when
+   full holds none of the names, a frame of no rows and no columns. Only
+   for archives whose members are all 1D, where a key is a column name. */
+static int matches_full_read(const DataFrame *subset, const DataFrame *full, const char *const *names, int n_names) {
+    int j = 0;
+    for (int k = 0; k < n_names; k++) {
+        if (column_position(full, names[k]) < 0) continue;
+        if (!same_column(subset, j, full, names[k])) return 0;
+        j++;
+    }
+    if (subset->n_cols != j) return 0;
+    if (j == 0) return subset->r == 0 && subset->row_names == NULL;
+    if ((subset->row_names == NULL) != (full->row_names == NULL)) return 0;
+    if (subset->row_names)
+        for (int i = 0; i < subset->r; i++)
+            if (strcmp(subset->row_names[i], full->row_names[i]) != 0) return 0;
+    return 1;
+}
+
+static void test_column_subset_known_values(void) {
+    puts("df_read_npz_columns: asked columns in the asked order, with the row labels");
+
+    const char *path = "out/test_npz_columns_known.npz";
+    DataFrame df = df_new(3);
+    Vec a = mat_lit(3, 1, 1.5f, -2.f, 0.f);
+    Vec b = mat_lit(3, 1, 10.f, 20.f, 30.f);
+    Vec c = mat_lit(3, 1, -1e30f, 1e-30f, 7.f);
+    const char *s[3] = { "north", "", "caff\xc3\xa8" };
+    const char *rows[3] = { "r0", "r1", "r2" };
+    df_add_numeric_col(&df, "a", a);
+    df_add_string_col(&df, "s", s);
+    df_add_numeric_col(&df, "b", b);
+    df_add_numeric_col(&df, "c", c);
+    df_set_row_names(&df, rows);
+
+    for (int compressed = 0; compressed < 2; compressed++) {
+        if (compressed) df_write_npz_compressed(&df, path);
+        else df_write_npz(&df, path);
+
+        const char *asked[3] = { "c", "s", "a" };
+        DataFrame back = df_read_npz_columns(path, asked, 3);
+        assert(back.r == 3 && back.n_cols == 3 && back.n_string == 1);
+        assert(strcmp(back.columns[0].name, "c") == 0 && back.columns[0].type == COL_NUMERIC);
+        assert(strcmp(back.columns[1].name, "s") == 0 && back.columns[1].type == COL_STRING);
+        assert(strcmp(back.columns[2].name, "a") == 0 && back.columns[2].type == COL_NUMERIC);
+        Mat back_c = df_col_numeric(&back, "c"), back_a = df_col_numeric(&back, "a");
+        for (int i = 0; i < 3; i++) {
+            assert(AT(back_c, i, 0) == AT(c, i, 0));
+            assert(AT(back_a, i, 0) == AT(a, i, 0));
+            assert(strcmp(df_col_string(&back, "s")[i], s[i]) == 0);
+            assert(back.row_names && strcmp(back.row_names[i], rows[i]) == 0);
+        }
+        df_free(&back);
+
+        /* one column, the last member before the row labels */
+        const char *only_b[1] = { "b" };
+        DataFrame just_b = df_read_npz_columns(path, only_b, 1);
+        assert(just_b.n_cols == 1 && just_b.r == 3 && just_b.row_names);
+        for (int i = 0; i < 3; i++) assert(AT(just_b.numeric, i, 0) == AT(b, i, 0));
+        df_free(&just_b);
+    }
+
+    mat_free(a); mat_free(b); mat_free(c);
+    df_free(&df);
+    remove(path);
+}
+
+/* A frame of 1000 rows and 300 numeric columns plus a string column, so
+   the archive is larger than the 22 + 65535 bytes the end-of-directory
+   search reads from the file's tail. Values from a fixed seed, biased
+   toward zeros, huge and tiny magnitudes. */
+static DataFrame wide_frame(int with_row_names) {
+    srand(47);
+    int r = 1000, n_numeric = 300;
+    DataFrame df = df_new(r);
+    Vec column = mat_new(r, 1);
+    char name[32];
+    for (int j = 0; j < n_numeric; j++) {
+        for (int i = 0; i < r; i++) {
+            switch (rand() % 5) {
+                case 0: column.d[i] = 0; break;
+                case 1: column.d[i] = (mreal)(rand() % 2 ? 1 : -1) * (mreal)1e30; break;
+                case 2: column.d[i] = (mreal)1e-30; break;
+                default: column.d[i] = (mreal)rand() / (mreal)RAND_MAX - (mreal)0.5; break;
+            }
+        }
+        snprintf(name, sizeof name, "v_%d", j);
+        df_add_numeric_col(&df, name, column);
+    }
+    const char **labels = (const char**)malloc((size_t)r * sizeof(char*));
+    char **owned = (char**)malloc((size_t)r * sizeof(char*));
+    for (int i = 0; i < r; i++) {
+        snprintf(name, sizeof name, "row %d", i);
+        owned[i] = frame_strdup(name);
+        labels[i] = owned[i];
+    }
+    df_add_string_col(&df, "label", labels);
+    if (with_row_names) df_set_row_names(&df, labels);
+    for (int i = 0; i < r; i++) free(owned[i]);
+    free(owned);
+    free(labels);
+    mat_free(column);
+    return df;
+}
+
+static void test_column_subset_agrees_with_full_read(void) {
+    puts("df_read_npz_columns: agrees with df_read_npz on a 1000 x 301 archive, stored and deflated");
+
+    const char *path = "out/test_npz_columns_wide.npz";
+    for (int with_row_names = 0; with_row_names < 2; with_row_names++) {
+        DataFrame df = wide_frame(with_row_names);
+        for (int compressed = 0; compressed < 2; compressed++) {
+            if (compressed) df_write_npz_compressed(&df, path);
+            else df_write_npz(&df, path);
+            DataFrame full = df_read_npz(path);
+            assert(df_identical(&df, &full));
+
+            /* out of archive order, the first and last members among them,
+               and a name the archive does not hold */
+            const char *asked[] = { "v_217", "v_3", "label", "v_0", "v_299", "v_150", "v_42", "v_42b", "v_88",
+                                    "v_1", "v_270", "v_9" };
+            int n_asked = (int)(sizeof asked / sizeof *asked);
+            DataFrame some = df_read_npz_columns(path, asked, n_asked);
+            assert(some.n_cols == n_asked - 1 && some.r == 1000);
+            assert(column_position(&some, "v_42b") < 0);
+            assert(matches_full_read(&some, &full, asked, n_asked));
+            df_free(&some);
+
+            /* every column, in archive order and reversed */
+            const char **every = (const char**)malloc((size_t)full.n_cols * sizeof(char*));
+            for (int k = 0; k < full.n_cols; k++) every[k] = full.columns[k].name;
+            DataFrame all = df_read_npz_columns(path, every, full.n_cols);
+            assert(df_identical(&all, &full));
+            df_free(&all);
+            for (int k = 0; k < full.n_cols; k++) every[k] = full.columns[full.n_cols - 1 - k].name;
+            DataFrame reversed = df_read_npz_columns(path, every, full.n_cols);
+            assert(matches_full_read(&reversed, &full, every, full.n_cols));
+            df_free(&reversed);
+            free(every);
+
+            /* no name found: a frame of no rows and no columns, and no row
+               labels even when the archive has them */
+            const char *absent[2] = { "v_300", "v" };
+            DataFrame none = df_read_npz_columns(path, absent, 2);
+            assert(none.r == 0 && none.n_cols == 0 && none.row_names == NULL);
+            df_free(&none);
+            df_free(&full);
+        }
+        df_free(&df);
+    }
+    remove(path);
+}
+
+/* numpy's own archives carry a 2D member, which df_write_npz never writes,
+   and ZIP64 extra fields in their local headers. A 2D member is asked for
+   by its key and comes back as all of its columns. */
+static void check_numpy_fixture_columns(const char *label, const unsigned char *bytes, size_t n) {
+    printf("df_read_npz_columns on a real numpy archive (%s)\n", label);
+    const char *path = "out/test_npz_columns_numpy.npz";
+    write_bytes(path, bytes, n);
+    DataFrame full = df_read_npz(path);
+
+    const char *asked[2] = { "label", "grid" };
+    DataFrame some = df_read_npz_columns(path, asked, 2);
+    assert(some.r == 4 && some.n_cols == 3);
+    assert(same_column(&some, 0, &full, "label"));
+    assert(same_column(&some, 1, &full, "grid0"));
+    assert(same_column(&some, 2, &full, "grid1"));
+    df_free(&some);
+
+    /* a generated column name is not a member key */
+    const char *generated[1] = { "grid0" };
+    DataFrame none = df_read_npz_columns(path, generated, 1);
+    assert(none.n_cols == 0 && none.r == 0);
+    df_free(&none);
+
+    const char *vec[1] = { "vec" };
+    DataFrame just_vec = df_read_npz_columns(path, vec, 1);
+    assert(just_vec.n_cols == 1 && same_column(&just_vec, 0, &full, "vec"));
+    df_free(&just_vec);
+
+    df_free(&full);
+    remove(path);
+}
+
+static void test_column_subset_reads_real_numpy_archives(void) {
+    check_numpy_fixture_columns("np.savez float32, stored", numpy_stored_f32, sizeof numpy_stored_f32);
+    check_numpy_fixture_columns("np.savez_compressed float32, deflated", numpy_deflated_f32, sizeof numpy_deflated_f32);
+#ifdef MAT_DOUBLE
+    check_numpy_fixture_columns("np.savez float64, stored", numpy_stored_f64, sizeof numpy_stored_f64);
+    check_numpy_fixture_columns("np.savez_compressed float64, deflated", numpy_deflated_f64, sizeof numpy_deflated_f64);
+#endif
+}
+
+static void test_column_subset_adversarial_shapes(void) {
+    puts("df_read_npz_columns: zero rows, one row, and zip comments up to the largest length");
+
+    const char *path = "out/test_npz_columns_adversarial.npz";
+    DataFrame no_rows = df_new(0);
+    Vec none = mat_new(0, 1);
+    df_add_numeric_col(&no_rows, "x", none);
+    df_add_string_col(&no_rows, "s", NULL);
+    df_write_npz(&no_rows, path);
+    const char *only_s[1] = { "s" };
+    DataFrame no_rows_back = df_read_npz_columns(path, only_s, 1);
+    assert(no_rows_back.r == 0 && no_rows_back.n_cols == 1 && no_rows_back.columns[0].type == COL_STRING);
+    df_free(&no_rows_back);
+
+    DataFrame single = df_new(1);
+    Vec one = mat_lit(1, 1, 99.f);
+    df_add_numeric_col(&single, "x", one);
+    df_add_numeric_col(&single, "y", one);
+    df_write_npz_compressed(&single, path);
+    const char *only_y[1] = { "y" };
+    DataFrame single_back = df_read_npz_columns(path, only_y, 1);
+    assert(single_back.r == 1 && single_back.n_cols == 1 && AT(single_back.numeric, 0, 0) == 99.f);
+    df_free(&single_back);
+
+    /* A trailing comment moves the end-of-directory record away from the
+       end of the file. At 65535 bytes, the most the 16-bit length allows,
+       the record is the first byte of the tail the reader takes from the
+       file; past it the record is out of reach by the format's own rule. */
+    long valid_len;
+    df_write_npz(&single, path);
+    unsigned char *valid = (unsigned char*)frame_read_file(path, &valid_len);
+    unsigned comment_lengths[4] = { 1, 1000, 65534, 65535 };
+    for (int t = 0; t < 4; t++) {
+        size_t total = (size_t)valid_len + comment_lengths[t];
+        unsigned char *with_comment = (unsigned char*)malloc(total);
+        memcpy(with_comment, valid, (size_t)valid_len);
+        memset(with_comment + valid_len, 'A', comment_lengths[t]);
+        put16(with_comment + valid_len - 2, comment_lengths[t]);
+        write_bytes(path, with_comment, total);
+        DataFrame full = df_read_npz(path);
+        assert(df_identical(&full, &single));
+        DataFrame back = df_read_npz_columns(path, only_y, 1);
+        assert(back.n_cols == 1 && AT(back.numeric, 0, 0) == 99.f);
+        df_free(&full);
+        df_free(&back);
+        free(with_comment);
+    }
+    free(valid);
+
+    mat_free(none); mat_free(one);
+    df_free(&no_rows); df_free(&single);
+    remove(path);
+}
+
+static const char *g_columns_path = "out/test_npz_columns_bad.npz";
+static const char *g_columns_x[1] = { "x" };
+static const char *g_columns_y[1] = { "y" };
+static void call_read_y(void) { DataFrame df = df_read_npz_columns(g_columns_path, g_columns_y, 1); (void)df; }
+static void call_read_full(void) { DataFrame df = df_read_npz(g_columns_path); (void)df; }
+static void call_read_none(void) { DataFrame df = df_read_npz_columns(g_columns_path, g_columns_x, 0); (void)df; }
+static void call_read_twice(void) {
+    const char *names[3] = { "x", "y", "x" };
+    DataFrame df = df_read_npz_columns(g_columns_path, names, 3);
+    (void)df;
+}
+static void call_read_row_names_key(void) {
+    const char *names[2] = { "x", FRAME_NPZ_ROW_NAMES_KEY };
+    DataFrame df = df_read_npz_columns(g_columns_path, names, 2);
+    (void)df;
+}
+static void call_read_short_and_long(void) {
+    const char *names[2] = { "short", "long" };
+    DataFrame df = df_read_npz_columns(g_columns_path, names, 2);
+    (void)df;
+}
+
+/* A member that is not asked for is never read: a corrupted one, one of
+   another length and one of a dtype this build cannot read all go
+   unnoticed, while asking for it, or reading the whole archive, still
+   fails. This is what separates a reader that skips members from one that
+   reads them all and drops some afterwards. */
+static void test_column_subset_reads_only_what_it_asks_for(void) {
+    puts("df_read_npz_columns: an unasked member is never read, an asked one is checked");
+
+    DataFrame df = df_new(40);
+    Vec x = mat_new(40, 1), y = mat_new(40, 1);
+    for (int i = 0; i < 40; i++) { x.d[i] = (mreal)i; y.d[i] = (mreal)(100 + i); }
+    df_add_numeric_col(&df, "x", x);
+    df_add_numeric_col(&df, "y", y);
+    df_write_npz(&df, g_columns_path);
+
+    /* flip a value byte of y, the second member */
+    long len;
+    unsigned char *bytes = (unsigned char*)frame_read_file(g_columns_path, &len);
+    uint32_t directory = frame_npz_u32(bytes + len - 22 + 16);
+    unsigned first_name = frame_npz_u16(bytes + directory + 28);
+    uint32_t y_local = frame_npz_u32(bytes + directory + 46 + first_name + 42);
+    size_t y_data = y_local + 30 + frame_npz_u16(bytes + y_local + 26) + frame_npz_u16(bytes + y_local + 28);
+    bytes[y_data + 128 + 4] ^= 0xFF;
+    write_bytes(g_columns_path, bytes, (size_t)len);
+    free(bytes);
+
+    DataFrame just_x = df_read_npz_columns(g_columns_path, g_columns_x, 1);
+    assert(just_x.n_cols == 1 && just_x.r == 40);
+    for (int i = 0; i < 40; i++) assert(AT(just_x.numeric, i, 0) == (mreal)i);
+    df_free(&just_x);
+    expect_abort(call_read_y);
+    expect_abort(call_read_full);
+
+    /* members disagreeing about the row count, only one of them asked for */
+    mreal two[2] = { 1, 2 }, three[3] = { 1, 2, 3 };
+    FixtureArray lengths[2] = {
+        { "short", frame_npy_mreal_descr(), two, sizeof two, 2, 1 },
+        { "long", frame_npy_mreal_descr(), three, sizeof three, 3, 1 }
+    };
+    build_fixture_npz(g_columns_path, lengths, 2);
+    const char *only_short[1] = { "short" };
+    DataFrame short_back = df_read_npz_columns(g_columns_path, only_short, 1);
+    assert(short_back.r == 2 && short_back.n_cols == 1 && AT(short_back.numeric, 1, 0) == 2);
+    df_free(&short_back);
+    expect_abort(call_read_short_and_long);
+
+    /* a '<i4' member beside a readable one */
+    int32_t ints[2] = { 1, 2 };
+    FixtureArray dtypes[2] = {
+        { "y", "<i4", ints, sizeof ints, 2, 1 },
+        { "x", frame_npy_mreal_descr(), two, sizeof two, 2, 1 }
+    };
+    build_fixture_npz(g_columns_path, dtypes, 2);
+    DataFrame x_back = df_read_npz_columns(g_columns_path, g_columns_x, 1);
+    assert(x_back.r == 2 && x_back.n_cols == 1);
+    df_free(&x_back);
+    expect_abort(call_read_y);
+
+    mat_free(x); mat_free(y);
+    df_free(&df);
+    remove(g_columns_path);
+}
+
+static void test_column_subset_contract_aborts(void) {
+    puts("df_read_npz_columns contract violations abort (no names, a name twice, the row-label key)");
+    DataFrame df = df_new(2);
+    Vec x = mat_lit(2, 1, 1.f, 2.f);
+    df_add_numeric_col(&df, "x", x);
+    df_add_numeric_col(&df, "y", x);
+    df_write_npz(&df, g_columns_path);
+    expect_abort(call_read_none);
+    expect_abort(call_read_twice);
+    expect_abort(call_read_row_names_key);
+    /* the same archive is readable, so the aborts above are the contract */
+    DataFrame back = df_read_npz_columns(g_columns_path, g_columns_x, 1);
+    assert(back.n_cols == 1);
+    df_free(&back);
+    mat_free(x);
+    df_free(&df);
+    remove(g_columns_path);
+}
+
 /* --- STRESS=1: fixed-seed randomized round-trip fuzzing over frames
    with numeric columns, string columns and row labels together, the same
    technique test_npy.c/test_csv.c/test_json.c use. Comparison is exact
@@ -976,6 +1359,42 @@ static void test_random_roundtrip_stress(void) {
     printf("  200 random mixed DataFrames round-tripped ok (stored and deflated alternating)\n");
 }
 
+/* Random frames, each read back through random subsets of its columns in
+   random order, some with a name the archive does not hold, against the
+   full read of the same file. */
+static void test_random_column_subset_stress(void) {
+    puts("  random column subsets against the full read (fixed seed)");
+    srand(48);
+    const char *path = "out/test_npz_columns_fuzz.npz";
+    const char *absent = "not_a_column";
+    for (int trial = 0; trial < 200; trial++) {
+        DataFrame original = random_dataframe();
+        if (trial % 2) df_write_npz_compressed(&original, path);
+        else df_write_npz(&original, path);
+        DataFrame full = df_read_npz(path);
+        for (int draw = 0; draw < 5; draw++) {
+            const char *names[8];
+            int n_names = 0;
+            int order[8];
+            for (int k = 0; k < original.n_cols; k++) order[k] = k;
+            for (int k = original.n_cols - 1; k > 0; k--) {
+                int l = rand() % (k + 1);
+                int t = order[k]; order[k] = order[l]; order[l] = t;
+            }
+            int take = 1 + rand() % original.n_cols;
+            for (int k = 0; k < take; k++) names[n_names++] = original.columns[order[k]].name;
+            if (rand() % 3 == 0) names[n_names++] = absent;
+            DataFrame some = df_read_npz_columns(path, names, n_names);
+            assert(matches_full_read(&some, &full, names, n_names));
+            df_free(&some);
+        }
+        df_free(&original);
+        df_free(&full);
+    }
+    remove(path);
+    printf("  200 random DataFrames, 5 subsets each, agreed with the full read\n");
+}
+
 int main(void) {
     frame_mkdir_p("out");
     test_numeric_roundtrip();
@@ -988,8 +1407,17 @@ int main(void) {
     test_rebuilt_metadata_drives_sql_and_join();
     test_malformed_npz_aborts();
     test_write_contract_aborts();
+    test_column_subset_known_values();
+    test_column_subset_agrees_with_full_read();
+    test_column_subset_reads_real_numpy_archives();
+    test_column_subset_adversarial_shapes();
+    test_column_subset_reads_only_what_it_asks_for();
+    test_column_subset_contract_aborts();
 
-    if (getenv("STRESS")) test_random_roundtrip_stress();
+    if (getenv("STRESS")) {
+        test_random_roundtrip_stress();
+        test_random_column_subset_stress();
+    }
 
     puts("test_npz: all passed");
     return 0;
