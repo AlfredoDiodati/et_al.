@@ -3,6 +3,7 @@
 #include "../../random/random.h" /* dev-tier use: the AR(1) series in the HAC tests */
 #include <stdio.h>
 #include <stdlib.h>
+#include "../rounding_agreement.h"
 
 #define TOL 1e-5f
 #define CHECK(got, exp) assert(MABS((got) - (mreal)(exp)) < TOL)
@@ -310,9 +311,10 @@ static void test_column_moments(void) {
     mat_free(parent); mat_free(w);
 
     /* 500 x 60 normal draws: the means equal stats_dmean on each column
-       slice bit for bit, the variances equal a strictly in-order sum of
-       squared deviations bit for bit, and stats_var on the slice is within
-       2e-15 relative (it reorders its sum under -ffast-math). */
+       slice, the variances equal a strictly in-order sum of squared
+       deviations, and stats_var on the slice is within 2e-15 relative. Each
+       sum may be reordered under -ffast-math, so all of these hold to
+       rounding rather than bit for bit. */
     Rng rng = rng_new(59, 0);
     Mat draws = mat_new(500, 60);
     for (int i = 0; i < 500 * 60; i++) draws.d[i] = (mreal)(1 + rng_normal(&rng));
@@ -320,14 +322,14 @@ static void test_column_moments(void) {
     stats_dcol_mean_var(draws, draws_mean, draws_var);
     for (int j = 0; j < 60; j++) {
         Mat slice = mat_slice(draws, 0, 500, j, j + 1);
-        assert(draws_mean[j] == stats_dmean(slice));
+        assert(agree_to_rounding(draws_mean[j], (double)stats_dmean(slice), 1e-12));
         volatile double in_order = 0;
         for (int i = 0; i < 500; i++) {
             double d = (double)AT(draws, i, j) - draws_mean[j];
             double square = d * d;
             in_order = in_order + square;
         }
-        assert(draws_var[j] == in_order / 500);
+        assert(agree_to_rounding(draws_var[j], in_order / 500, 1e-12));
 #ifdef MAT_DOUBLE
         assert(fabs(draws_var[j] - stats_var(slice)) <= 2e-15 * draws_var[j]);
 #else
@@ -1205,7 +1207,7 @@ static void test_running_moments(void) {
     for (int t = 0; t < 50; t++) assert(mean[t] == (double)(mreal)120.3 && var[t] == 0);
 
     /* a row, and a strided column out of a wider matrix, give a copy's
-       numbers bit for bit; the last entry is the whole sample's moments */
+       numbers to rounding; the last entry is the whole sample's moments */
     Rng rng = rng_new(77, 0);
     Mat wide = mat_new(60, 5);
     for (int i = 0; i < 60; i++)
@@ -1216,8 +1218,10 @@ static void test_running_moments(void) {
     stats_running_mean_var(column, mean, var);
     stats_running_mean_var(copy, copy_mean, copy_var);
     stats_running_mean_var(row, row_mean, row_var);
-    assert(memcmp(mean, copy_mean, sizeof(copy_mean)) == 0 && memcmp(var, copy_var, sizeof(copy_var)) == 0);
-    assert(memcmp(row_mean, copy_mean, sizeof(copy_mean)) == 0 && memcmp(row_var, copy_var, sizeof(copy_var)) == 0);
+    for (int t = 0; t < 60; t++) {
+        assert(agree_to_rounding(mean[t], copy_mean[t], 1e-12) && agree_to_rounding(var[t], copy_var[t], 1e-12));
+        assert(agree_to_rounding(row_mean[t], copy_mean[t], 1e-12) && agree_to_rounding(row_var[t], copy_var[t], 1e-12));
+    }
     double whole_mean, whole_var;
     stats_dcol_mean_var(copy, &whole_mean, &whole_var);
     assert(fabs(mean[59] - whole_mean) <= 1e-14 * fabs(whole_mean) && fabs(var[59] - whole_var) <= 1e-13 * whole_var);

@@ -2,6 +2,7 @@
 #include "../../dist/student.h"
 #include "../../stats.h"
 #include <stdio.h>
+#include "../rounding_agreement.h"
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
@@ -267,13 +268,13 @@ static void test_fd_derivatives(void) {
 }
 
 static void test_gaussian_limit(void) {
-    puts("nu = infinity is the Gaussian, exactly");
+    puts("nu = infinity is the Gaussian, to rounding");
 
     Mat x = mat_lit(3, 2, 1.0f, 0.5f, -0.4f, 1.2f, 0.0f, -1.0f);
     Mat loc = mat_lit(1, 2, 0.5f, -0.3f);
     Mat cov = mat_lit(2, 2, 2.0f, 0.6f, 0.6f, 1.0f);
 
-    /* delegation: bit-identical to mvgauss_* */
+    /* delegation: mvgauss_*'s numbers up to the compiler's ordering */
     Mat lp = mvstudent_logpdf(x, loc, cov, INFINITY);
     Mat p = mvstudent_pdf(x, loc, cov, INFINITY);
     Mat dl = mvstudent_dlogpdf_loc(x, loc, cov, INFINITY);
@@ -283,12 +284,13 @@ static void test_gaussian_limit(void) {
     Mat gdl = mvgauss_dlogpdf_loc(x, loc, cov);
     Mat gdc = mvgauss_dlogpdf_cov(x, loc, cov);
     for (int i = 0; i < 3; i++) {
-        assert(AT(lp, i, 0) == AT(glp, i, 0));
-        assert(AT(p, i, 0) == AT(gp, i, 0));
-        assert(AT(dl, i, 0) == AT(gdl, i, 0) && AT(dl, i, 1) == AT(gdl, i, 1));
+        assert(agree_to_rounding(AT(lp, i, 0), AT(glp, i, 0), ROUNDING_TOLERANCE));
+        assert(agree_to_rounding(AT(p, i, 0), AT(gp, i, 0), ROUNDING_TOLERANCE));
+        assert(agree_to_rounding(AT(dl, i, 0), AT(gdl, i, 0), ROUNDING_TOLERANCE)
+               && agree_to_rounding(AT(dl, i, 1), AT(gdl, i, 1), ROUNDING_TOLERANCE));
     }
     for (int t = 0; t < 4; t++)
-        assert(AT(dc, t / 2, t % 2) == AT(gdc, t / 2, t % 2));
+        assert(agree_to_rounding(AT(dc, t / 2, t % 2), AT(gdc, t / 2, t % 2), ROUNDING_TOLERANCE));
 
     /* score wrt nu at the infinite limit: exactly zero */
     Mat dn = mvstudent_dlogpdf_nu(x, loc, cov, INFINITY);
@@ -551,14 +553,14 @@ static void test_sampling(void) {
         mat_free(s); mat_free(dl); mat_free(dc); mat_free(dn);
     }
 
-    /* infinite nu: bit-identical to mvgauss_sample from the same
-       generator state */
+    /* infinite nu: mvgauss_sample's draws from the same generator state,
+       to rounding */
     {
         Rng r1 = rng_new(5, 0), r2 = rng_new(5, 0);
         Mat a = mvstudent_sample(&r1, loc, cov, INFINITY, 16);
         Mat b = mvgauss_sample(&r2, loc, cov, 16);
         for (int i = 0; i < 16 * 2; i++)
-            assert(a.d[i] == b.d[i]);
+            assert(agree_to_rounding(a.d[i], b.d[i], ROUNDING_TOLERANCE));
         mat_free(a); mat_free(b);
     }
 

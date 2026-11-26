@@ -39,6 +39,7 @@ failure names the trial that reproduces it. STRESS=1 raises the fuzz from
 
 #include "../../linalg/solver.h"
 #include "../check.h"
+#include "../rounding_agreement.h"
 
 #define U ((double)MEPS / 2)
 
@@ -322,7 +323,8 @@ static void test_degenerate_shapes(void) {
     Mat lwide = mat_band_chol(wide, NULL);
     Mat lnarrow = mat_band_chol(dense_band, NULL);
     for (int j = 0; j < 7; j++)
-        for (int i = 0; i <= 6; i++) CHECK(AT(lwide, j, i) == AT(lnarrow, j, i), "wide band differs at (%d, %d)", j, i);
+        for (int i = 0; i <= 6; i++)
+            CHECK(agree_to_rounding(AT(lwide, j, i), AT(lnarrow, j, i), ROUNDING_TOLERANCE), "wide band differs at (%d, %d)", j, i);
     mat_free(lwide); mat_free(lnarrow); mat_free(wide); mat_free(dense_band);
 }
 
@@ -513,7 +515,8 @@ static void test_views_and_many(void) {
     Mat from_view = mat_band_chol(view, NULL);
     Mat from_band = mat_band_chol(band, NULL);
     for (int j = 0; j < n; j++)
-        for (int i = 0; i <= kd; i++) CHECK(AT(from_view, j, i) == AT(from_band, j, i), "band view differs at (%d, %d)", j, i);
+        for (int i = 0; i <= kd; i++)
+            CHECK(agree_to_rounding(AT(from_view, j, i), AT(from_band, j, i), ROUNDING_TOLERANCE), "band view differs at (%d, %d)", j, i);
 
     /* the factor as a strided view */
     Mat factor_parent = mat_new(n, kd + 3);

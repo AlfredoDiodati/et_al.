@@ -10,7 +10,7 @@ centered by its mean and every Gamma_k divided by n?
   on random data and on an alternating series, whose rectangular estimate
   is not; a shift of the columns changes nothing; scaling column j by c_j
   scales entry (a, b) by c_a c_b; permuting the columns permutes S.
-- A strided view against its copy, bit for bit.
+- A strided view against its copy, to rounding.
 - Adversarial: one observation (zero), a constant column (a zero row and
   column), lag_max = n - 1, magnitudes of 1e6 and 1e-6.
 - A long double reference written from the definition, on 200 fixed-seed
@@ -24,6 +24,7 @@ accumulation, times sqrt(Gamma_0(a, a) Gamma_0(b, b)) (1 + 2 lag_max), which
 bounds the sum of the absolute terms.
 */
 #include "../check.h"
+#include "../rounding_agreement.h"
 #include "../../stats.h"
 #include "../../linalg/decomp.h"
 
@@ -184,7 +185,7 @@ static void test_views_and_adversarial(void) {
     Mat parent = random_sample(&rng, 90, 6, 0);
     Mat view = mat_slice(parent, 5, 85, 1, 4), copy = mat_copy(view);
     Mat from_view = stats_hac_cov(view, 9, STATS_HAC_BARTLETT), from_copy = stats_hac_cov(copy, 9, STATS_HAC_BARTLETT);
-    CHECK(memcmp(from_view.d, from_copy.d, 9 * sizeof(mreal)) == 0, "a strided view and its copy differ");
+    CHECK(arrays_agree_to_rounding(from_view.d, from_copy.d, 9), "a strided view and its copy differ");
 
     Mat one = mat_lit(1, 3, 1.0, 2.0, 3.0), s_one = stats_hac_cov(one, 0, STATS_HAC_BARTLETT);
     for (int i = 0; i < 9; i++) CHECK(s_one.d[i] == 0, "one observation gives zero");

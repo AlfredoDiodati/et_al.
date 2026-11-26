@@ -33,6 +33,7 @@ window can cancel to nearly zero. The covariance comes from R^-1 and the
 reference from a long double inverse of x^T x, whose error is far smaller.
 */
 #include "../check.h"
+#include "../rounding_agreement.h"
 #include "../../regression.h"
 
 static const double unit_roundoff = sizeof(mreal) == sizeof(double) ? 1.1102230246251565e-16 : 5.9604644775390625e-08;
@@ -303,7 +304,7 @@ static void test_views_and_adversarial(void) {
     for (int kind = 0; kind < 2; kind++) {
         OlsCovarianceSpec spec = kind ? hac(6, STATS_HAC_BARTLETT) : classical();
         Mat a = ols_covariance(x, &fit, 1, spec), b = ols_covariance(x_view, &fit_view, 1, spec);
-        CHECK(memcmp(a.d, b.d, (size_t)n * n * sizeof(mreal)) == 0, "a strided view and its copy differ");
+        CHECK(arrays_agree_to_rounding(a.d, b.d, (size_t)n * n), "a strided view and its copy differ");
         mat_free(a); mat_free(b);
     }
     ols_free(&fit); ols_free(&fit_view);

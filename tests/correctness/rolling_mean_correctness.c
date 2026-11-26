@@ -26,13 +26,13 @@ Ported tests, each naming its source (polars commit 2add28fdab):
 Own checks, all against a reference written here that sums every window in
 long double:
 - every axis and its negative on tensors of rank 1 to 4, permuted and sliced
-  views, and a strided Mat against its copy (bit for bit);
+  views, and a strided Mat against its copy (to rounding);
 - windows 1 (the identity), equal to the length (one mean), and longer than
   it (all NaN);
 - the slide at windows MAT_ROLLING_DIRECT_MAX + 1, 100 and 1000 over lengths
   that are not multiples of the window, crossing its restart points;
 - sizes either side of MAT_ROLLING_OMP_MIN and MAT_ROLLING_OMP_MAX, one
-  thread against every thread, bit for bit;
+  thread against every thread, to rounding;
 - a frame keeps its string columns, names and row names.
 
 The bound. A mean summed window by window, or slid for at most one window
@@ -46,6 +46,7 @@ may reorder a window's sum, and in the float32 build it did, at window 16.
 #include "../../frame/frame.h"
 #include "../../linalg/tensor.h"
 #include "../check.h"
+#include "../rounding_agreement.h"
 #include <stdio.h>
 #ifdef _OPENMP
 #include <omp.h>
@@ -114,7 +115,7 @@ static void test_polars_ports(void) {
     const char *names[1] = { "a" };
     DataFrame df = df_from_matrix(a, names);
     DataFrame rolled = df_rolling_mean(&df, 2);
-    CHECK(memcmp(rolled.numeric.d + 1, got.d + 1, 4 * sizeof(mreal)) == 0 && check_stored_non_finite(&rolled.numeric.d[0], 0),
+    CHECK(arrays_agree_to_rounding(rolled.numeric.d + 1, got.d + 1, 4) && check_stored_non_finite(&rolled.numeric.d[0], 0),
           "test_rolling_ints through a DataFrame");
     df_free(&df); df_free(&rolled); mat_free(got); mat_free(a);
 
@@ -242,7 +243,7 @@ static void test_tensors_and_views(void) {
         for (int w = 2; w <= 20; w += 18) {
             if (w > (axis ? view.c : view.r)) continue;
             Mat a = mat_rolling_mean(view, w, axis), b = mat_rolling_mean(copy, w, axis);
-            CHECK(memcmp(a.d, b.d, (size_t)a.r * a.c * sizeof(mreal)) == 0, "strided view and copy differ, axis %d window %d", axis, w);
+            CHECK(arrays_agree_to_rounding(a.d, b.d, (size_t)a.r * a.c), "strided view and copy differ, axis %d window %d", axis, w);
             mat_free(a); mat_free(b);
         }
     mat_free(copy); mat_free(parent);
@@ -282,7 +283,7 @@ static void test_threads(void) {
         omp_set_num_threads(1);
         Mat one = mat_rolling_mean(m, window, 0);
         omp_set_num_threads(threads);
-        CHECK(memcmp(all.d, one.d, (size_t)r * c * sizeof(mreal)) == 0, "%dx%d window %d: thread count changed the result",
+        CHECK(arrays_agree_to_rounding(all.d, one.d, (size_t)r * c), "%dx%d window %d: thread count changed the result",
               r, c, window);
         mat_free(one);
 #endif

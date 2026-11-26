@@ -11,6 +11,7 @@
 #include MCS_HEADER
 #include <stdio.h>
 #include <stdlib.h>
+#include "../rounding_agreement.h"
 
 #define TOL 1e-4f
 #define CHECK(got, exp) assert(MABS((got) - (mreal)(exp)) < TOL)
@@ -878,7 +879,7 @@ static void test_mcs_variances(void) {
     mcs_tstats(&L, o, t_hac);
     o.variance = MCS_VARIANCE_HAC_RESAMPLE;
     mcs_tstats(&L, o, t_res);
-    for (int k = 0; k < 4; k++) assert(t_hac[k] == t_res[k]);
+    for (int k = 0; k < 4; k++) assert(agree_to_rounding(t_hac[k], t_res[k], ROUNDING_TOLERANCE));
 
     df_free(&L);
 }

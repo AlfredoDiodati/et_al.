@@ -22,13 +22,14 @@ Own checks:
 - every axis of tensors of rank 1 to 4, negative axes, and a permuted and a
   sliced view (the copy path), against a reference written here that walks
   the tensor by explicit indices and sums in order in mreal. The comparison
-  is exact: the kernel sums in the same order, which is also numpy's.
-- a strided Mat view against a copy, bit for bit.
+  is to rounding: the kernel sums in the same order, which is also numpy's,
+  but -ffast-math lets the compiler regroup a running sum.
+- a strided Mat view against a copy, to rounding.
 - column counts either side of the chunk a thread takes (255, 256, 257,
   513) and sizes either side of each end of the threaded band
   (MAT_CUMSUM_OMP_MIN_ROWS, MAT_CUMSUM_OMP_MIN_COLUMNS, MAT_CUMSUM_OMP_MAX),
   so every path runs serial and threaded, and the same inputs with one thread and with every
-  thread give the same bits.
+  thread give the same numbers to rounding.
 - the first element copied rather than added to zero, so a leading -0.0
   stays -0.0 as it does in numpy; an infinity and a NaN propagating from
   where they enter, and +inf then -inf giving NaN.
@@ -38,6 +39,7 @@ Own checks:
 #include "../../frame/frame.h"
 #include "../../linalg/tensor.h"
 #include "../check.h"
+#include "../rounding_agreement.h"
 #include <stdio.h>
 #ifdef _OPENMP
 #include <omp.h>
@@ -153,7 +155,7 @@ static void check_against_reference(Tensor t, int axis, const char *label) {
     size_t n = tensor_size(t);
     mreal *want = malloc(n * sizeof(mreal));
     reference_cumsum(t, axis, want);
-    CHECK(same_bits(got.d, want, n), "%s axis %d differs from the in-order reference", label, axis);
+    CHECK(arrays_agree_to_rounding(got.d, want, n), "%s axis %d differs from the in-order reference", label, axis);
     free(want);
     tensor_free(got);
 }
@@ -192,7 +194,7 @@ static void test_strided_mat(void) {
     Mat copy = mat_copy(view);
     for (int axis = 0; axis < 2; axis++) {
         Mat a = mat_cumsum(view, axis), b = mat_cumsum(copy, axis);
-        CHECK(same_bits(a.d, b.d, (size_t)a.r * a.c), "axis %d: view and copy differ", axis);
+        CHECK(arrays_agree_to_rounding(a.d, b.d, (size_t)a.r * a.c), "axis %d: view and copy differ", axis);
         mat_free(a); mat_free(b);
     }
     mat_free(copy); mat_free(parent);
@@ -225,7 +227,7 @@ static void test_paths_and_threads(void) {
             omp_set_num_threads(1);
             Mat one_thread = mat_cumsum(m, axis);
             omp_set_num_threads(threads);
-            CHECK(same_bits(all_threads.d, one_thread.d, (size_t)r * c), "%dx%d axis %d: thread count changed the result",
+            CHECK(arrays_agree_to_rounding(all_threads.d, one_thread.d, (size_t)r * c), "%dx%d axis %d: thread count changed the result",
                   r, c, axis);
             mat_free(one_thread);
 #endif

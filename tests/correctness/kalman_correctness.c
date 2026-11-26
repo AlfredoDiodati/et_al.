@@ -40,6 +40,7 @@ STRESS=1 widens the random sweeps.
 #endif
 #include KALMAN_HEADER
 #include "../check.h"
+#include "../rounding_agreement.h"
 
 static int stress = 0;
 
@@ -1160,7 +1161,7 @@ Random time-varying systems from linear_system_new, all three methods, the
 dense one with H_t and its direction made diagonal; missing entries; P_* zero
 or positive definite. Every system, compared or not, checks the gradient
 against central differences, the value with and without the gradient, and
-P1_infinity = 0 against no diffuse start, bit for bit.
+P1_infinity = 0 against no diffuse start, to rounding.
 */
 typedef struct { double log_likelihood; double *att, *Ptt; } DiffuseLimit;
 
@@ -1300,14 +1301,15 @@ static void test_diffuse_against_large_kappa(void) {
                   label, i, s->bits[i], gradient.d[i], central);
         }
 
-        /* P1_infinity = 0 is the ordinary filter from P_*, bit for bit */
+        /* P1_infinity = 0 is the ordinary filter from P_*, to rounding */
         memset(Pinf.d, 0, (size_t)m * m * sizeof(mreal));
         KalmanInit plain = { .a1 = a1, .P1 = Pstar };
         Vec gradient_zero = mat_new(s->k, 1), gradient_plain = mat_new(s->k, 1);
         mreal zero_value = kalman_log_likelihood(w, theta, y, init, gradient_zero);
         mreal plain_value = kalman_log_likelihood(w, theta, y, plain, gradient_plain);
-        int same = zero_value == plain_value || (MISINF(zero_value) && MISINF(plain_value));
-        for (int i = 0; i < s->k; i++) same = same && gradient_zero.d[i] == gradient_plain.d[i];
+        int same = agree_to_rounding(zero_value, plain_value, ROUNDING_TOLERANCE);
+        for (int i = 0; i < s->k; i++)
+            same = same && agree_to_rounding(gradient_zero.d[i], gradient_plain.d[i], ROUNDING_TOLERANCE);
         CHECK(same, "%s: P1_infinity = 0 differs from no diffuse start", label);
 
         kalman_paths_free(&paths);

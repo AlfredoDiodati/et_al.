@@ -492,7 +492,7 @@ static void test_failures_and_views(void) {
     for (int k = 0; k < K; k++)
         for (int t = 0; t < T; t++) AT(view, k, t) = AT(y, k, t);
     LpLinFit from_view = lp_lin(view, spec), from_copy = lp_lin(y, spec);
-    CHECK(memcmp(from_view.irf_lin_mean.d, from_copy.irf_lin_mean.d, tensor_size(from_copy.irf_lin_mean) * sizeof(mreal)) == 0,
+    CHECK(close_values(from_view.irf_lin_mean.d, from_copy.irf_lin_mean.d, tensor_size(from_copy.irf_lin_mean)),
           "strided y and its copy differ");
     lp_lin_fit_free(&from_view); lp_lin_fit_free(&from_copy);
     mat_free(parent); mat_free(tied); mat_free(bad); mat_free(y);

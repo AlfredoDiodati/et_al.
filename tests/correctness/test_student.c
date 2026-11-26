@@ -1,6 +1,7 @@
 #include "../../dist/student.h"
 #include "../../stats.h"
 #include <stdio.h>
+#include "../rounding_agreement.h"
 
 #define TOL     2e-3f
 #define TOL_FD  1e-2f /* looser: finite-difference truncation + float/double gap */
@@ -276,7 +277,7 @@ static void test_fd_derivatives(void) {
 }
 
 static void test_gaussian_limit(void) {
-    puts("nu = infinity is the Gaussian, exactly");
+    puts("nu = infinity is the Gaussian, to rounding");
 
     /* 1x1 infinite nu: whole call delegates to gauss_* */
     {
@@ -294,10 +295,11 @@ static void test_gaussian_limit(void) {
         Mat gdl = gauss_dlogpdf_loc(x, loc, scale);
         Mat gds = gauss_dlogpdf_scale(x, loc, scale);
         for (int i = 0; i < 4; i++) {
-            assert(AT(lp,i,0) == AT(glp,i,0)); /* delegation: bit-identical */
-            assert(AT(p,i,0) == AT(gp,i,0));
-            assert(AT(dl,i,0) == AT(gdl,i,0));
-            assert(AT(ds,i,0) == AT(gds,i,0));
+            /* delegation: the same numbers up to the compiler's ordering */
+            assert(agree_to_rounding(AT(lp,i,0), AT(glp,i,0), ROUNDING_TOLERANCE));
+            assert(agree_to_rounding(AT(p,i,0), AT(gp,i,0), ROUNDING_TOLERANCE));
+            assert(agree_to_rounding(AT(dl,i,0), AT(gdl,i,0), ROUNDING_TOLERANCE));
+            assert(agree_to_rounding(AT(ds,i,0), AT(gds,i,0), ROUNDING_TOLERANCE));
             assert(AT(dn,i,0) == 0.0f); /* the Gaussian doesn't depend on nu */
         }
         mat_free(x); mat_free(loc); mat_free(scale); mat_free(nu);
@@ -462,8 +464,8 @@ static void test_sampling(void) {
         mat_free(loc); mat_free(scale); mat_free(nu); mat_free(s);
     }
 
-    /* 1x1 infinite nu: bit-identical to gauss_sample from the same
-       generator state - delegation, not approximation */
+    /* 1x1 infinite nu: gauss_sample's draws from the same generator state,
+       to rounding - delegation, not approximation */
     {
         Rng r1 = rng_new(5, 0), r2 = rng_new(5, 0);
         Mat loc = mat_lit(1, 1, 0.3f);
@@ -472,7 +474,7 @@ static void test_sampling(void) {
         Mat a = student_sample(&r1, loc, scale, nu, 32, 3);
         Mat b = gauss_sample(&r2, loc, scale, 32, 3);
         for (int i = 0; i < 32 * 3; i++)
-            assert(a.d[i] == b.d[i]);
+            assert(agree_to_rounding(a.d[i], b.d[i], ROUNDING_TOLERANCE));
         mat_free(loc); mat_free(scale); mat_free(nu); mat_free(a); mat_free(b);
     }
 

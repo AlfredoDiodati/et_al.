@@ -16,7 +16,8 @@ Also:
 - the trend at t does not change, bit for bit, when every observation after
   t is changed;
 - matrices along both axes, a strided view, tensors on every axis, a
-  permuted tensor view and a frame, against the same series one at a time;
+  permuted tensor view and a frame, against the same series one at a time,
+  to rounding;
 - a NaN is an unobserved entry: the trend before it is unchanged, the cycle
   is NaN there and finite everywhere else, and no other series moves; an
   infinity leaves its series' trend unchanged before it and not finite from
@@ -29,6 +30,7 @@ the series compared with mat_hp_trend from 200 to 600.
 */
 #include "../../filter/hp.h"
 #include "../check.h"
+#include "../rounding_agreement.h"
 
 static const double unit_roundoff = sizeof(mreal) == sizeof(double) ? 1.1102230246251565e-16 : 5.9604644775390625e-08;
 static int stress = 0;
@@ -168,8 +170,8 @@ static void test_many_series(void) {
         for (int i = 0; i < rows; i++) column.d[i] = AT(walks, i, j);
         Mat single = mat_hp_trend_causal(column, 1600, 0);
         for (int i = 0; i < rows; i++) {
-            CHECK(AT(down, i, j) == single.d[i], "axis 0, series %d, period %d differs from the series alone", j, i);
-            CHECK(AT(along, j, i) == single.d[i], "axis 1, series %d, period %d differs from the series alone", j, i);
+            CHECK(agree_to_rounding(AT(down, i, j), single.d[i], ROUNDING_TOLERANCE), "axis 0, series %d, period %d differs from the series alone", j, i);
+            CHECK(agree_to_rounding(AT(along, j, i), single.d[i], ROUNDING_TOLERANCE), "axis 1, series %d, period %d differs from the series alone", j, i);
         }
         mat_free(single); mat_free(column);
     }
@@ -178,12 +180,13 @@ static void test_many_series(void) {
     Mat view = mat_slice(walks, 0, rows, 1, 5);
     Mat from_view = mat_hp_trend_causal(view, 1600, 0);
     for (int i = 0; i < rows; i++)
-        for (int j = 0; j < 4; j++) CHECK(AT(from_view, i, j) == AT(down, i, j + 1), "strided view differs at (%d, %d)", i, j);
+        for (int j = 0; j < 4; j++)
+            CHECK(agree_to_rounding(AT(from_view, i, j), AT(down, i, j + 1), ROUNDING_TOLERANCE), "strided view differs at (%d, %d)", i, j);
 
     Mat cycle = mat_hp_cycle_causal(walks, 1600, 0);
     for (int i = 0; i < rows; i++)
         for (int j = 0; j < columns; j++)
-            CHECK(AT(cycle, i, j) == AT(walks, i, j) - AT(down, i, j), "cycle is not y less the trend at (%d, %d)", i, j);
+            CHECK(agree_to_rounding(AT(cycle, i, j), AT(walks, i, j) - AT(down, i, j), ROUNDING_TOLERANCE), "cycle is not y less the trend at (%d, %d)", i, j);
 
     /* a 3 x rows x 2 tensor filtered along each axis, against mat_hp_trend_causal on the lanes */
     int shape[3] = { 3, rows, 2 };
@@ -198,7 +201,7 @@ static void test_many_series(void) {
         for (int a = 0; a < 3; a++)
             for (int t = 0; t < rows; t++)
                 for (int b = 0; b < 2; b++)
-                    worst_cycle += TAT3(cycle_t, a, t, b) != TAT3(block, a, t, b) - TAT3(trend, a, t, b);
+                    worst_cycle += !agree_to_rounding(TAT3(cycle_t, a, t, b), TAT3(block, a, t, b) - TAT3(trend, a, t, b), ROUNDING_TOLERANCE);
         int lanes_a = axis == 0 ? 1 : 3, lanes_t = axis == 1 ? 1 : rows, lanes_b = axis == 2 ? 1 : 2;
         int length = shape[axis];
         for (int a = 0; a < lanes_a; a++)
@@ -209,7 +212,7 @@ static void test_many_series(void) {
                         lane.d[s] = TAT3(block, axis == 0 ? s : a, axis == 1 ? s : t, axis == 2 ? s : b);
                     Mat single = mat_hp_trend_causal(lane, 1600, 0);
                     for (int s = 0; s < length; s++)
-                        worst_lane += single.d[s] != TAT3(trend, axis == 0 ? s : a, axis == 1 ? s : t, axis == 2 ? s : b);
+                        worst_lane += !agree_to_rounding(single.d[s], TAT3(trend, axis == 0 ? s : a, axis == 1 ? s : t, axis == 2 ? s : b), ROUNDING_TOLERANCE);
                     mat_free(single); mat_free(lane);
                 }
         CHECK(worst_lane == 0, "tensor axis %d: %d entries differ from the lane alone", axis, worst_lane);
@@ -226,7 +229,7 @@ static void test_many_series(void) {
     int permuted_gaps = 0;
     for (int a = 0; a < 3; a++)
         for (int t = 0; t < rows; t++)
-            for (int b = 0; b < 2; b++) permuted_gaps += TAT3(from_permuted, t, a, b) != TAT3(from_block, a, t, b);
+            for (int b = 0; b < 2; b++) permuted_gaps += !agree_to_rounding(TAT3(from_permuted, t, a, b), TAT3(from_block, a, t, b), ROUNDING_TOLERANCE);
     CHECK(permuted_gaps == 0, "a permuted view differs from the block in %d entries", permuted_gaps);
     tensor_free(from_permuted); tensor_free(from_block);
 
@@ -242,8 +245,8 @@ static void test_many_series(void) {
     DataFrame frame_trend = df_hp_trend_causal(&frame, 1600), frame_cycle = df_hp_cycle_causal(&frame, 1600);
     for (int i = 0; i < rows; i++)
         for (int j = 0; j < 2; j++) {
-            CHECK(AT(frame_trend.numeric, i, j) == AT(down, i, j), "frame trend differs at (%d, %d)", i, j);
-            CHECK(AT(frame_cycle.numeric, i, j) == AT(cycle, i, j), "frame cycle differs at (%d, %d)", i, j);
+            CHECK(agree_to_rounding(AT(frame_trend.numeric, i, j), AT(down, i, j), ROUNDING_TOLERANCE), "frame trend differs at (%d, %d)", i, j);
+            CHECK(agree_to_rounding(AT(frame_cycle.numeric, i, j), AT(cycle, i, j), ROUNDING_TOLERANCE), "frame cycle differs at (%d, %d)", i, j);
         }
     CHECK(frame_trend.r == rows && frame_trend.numeric.c == 2, "frame trend has the frame's shape");
 

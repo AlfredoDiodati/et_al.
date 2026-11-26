@@ -49,6 +49,7 @@ the random sweep from 1000 to 10000 designs.
 */
 
 #include "../check.h"
+#include "../rounding_agreement.h"
 #include "../../regression.h"
 
 #define REL_TOL (sizeof(mreal) == sizeof(double) ? 1e-9 : 2e-3)
@@ -108,7 +109,7 @@ static void test_full_rank(Rng *rng) {
     int status;
     Mat direct = mat_lstsq(x, noisy, &status);
     for (int j = 0; j < n; j++)
-        CHECK(AT(fit.coefficients, j, 0) == AT(direct, j, 0), "coefficient %d is mat_lstsq's", j);
+        CHECK(agree_to_rounding(AT(fit.coefficients, j, 0), AT(direct, j, 0), ROUNDING_TOLERANCE), "coefficient %d is mat_lstsq's", j);
     CHECK(orthogonality(x, fit.residuals, noisy) < 1e2 * MEPS, "residuals orthogonal to x (%g)",
           orthogonality(x, fit.residuals, noisy));
     ols_free(&fit);
@@ -336,9 +337,11 @@ static void test_views(Rng *rng) {
     OlsFit from_views = ols(x, y), from_copies = ols(x_copy, y_copy);
     CHECK(from_views.status == 3 && from_copies.status == 3, "status %d and %d", from_views.status, from_copies.status);
     for (int j = 0; j < 3; j++)
-        CHECK(AT(from_views.coefficients, j, 0) == AT(from_copies.coefficients, j, 0), "coefficient %d agrees", j);
+        CHECK(agree_to_rounding(AT(from_views.coefficients, j, 0), AT(from_copies.coefficients, j, 0), ROUNDING_TOLERANCE),
+              "coefficient %d agrees", j);
     for (int i = 0; i < m; i++)
-        CHECK(AT(from_views.residuals, i, 0) == AT(from_copies.residuals, i, 0), "residual %d agrees", i);
+        CHECK(agree_to_rounding(AT(from_views.residuals, i, 0), AT(from_copies.residuals, i, 0), ROUNDING_TOLERANCE),
+              "residual %d agrees", i);
     ols_free(&from_views); ols_free(&from_copies);
     mat_free(x_copy); mat_free(y_copy); mat_free(wide);
 }

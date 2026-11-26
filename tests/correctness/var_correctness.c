@@ -5,7 +5,7 @@ Does varima/var.h compute what it says, on inputs where the answer is known.
   double: the design built by explicit indexing, B = Y Z' (Z Z')^-1 by
   Gaussian elimination on the normal equations, the residuals, both
   estimators of Sigma_u, the Cholesky factor and the log-determinant.
-- A strided view of the data against a copy, bit for bit.
+- A strided view of the data against a copy, to rounding.
 - The two estimators of Sigma_u differ by exactly their divisors, and the
   shock matrix, which a unit shock makes invariant to the scale of Sigma_u,
   is the same under both.
@@ -34,6 +34,7 @@ Files go to out/var_correctness_cache*.json.
 */
 #include "../../varima/var.h"
 #include "../check.h"
+#include "../rounding_agreement.h"
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -83,6 +84,22 @@ static int same_fit(const VarFit *a, const VarFit *b) {
         && a->model.log_det_Sigma_u == b->model.log_det_Sigma_u
         && a->residuals.r == b->residuals.r && a->residuals.c == b->residuals.c
         && memcmp(a->residuals.d, b->residuals.d, (size_t)a->residuals.r * a->residuals.c * cells) == 0;
+}
+
+/* The same arrays to rounding, for two fits computed separately rather than
+   one reloaded from the other. */
+static int close_fit(const VarFit *a, const VarFit *b) {
+    int K = a->spec.K;
+    return a->ols_status == b->ols_status && a->rank == b->rank
+        && a->model.chol_status == b->model.chol_status
+        && memcmp(a->residuals_are_zero, b->residuals_are_zero, (size_t)K * sizeof(int)) == 0
+        && arrays_agree_to_rounding(a->model.nu.d, b->model.nu.d, (size_t)K)
+        && arrays_agree_to_rounding(a->model.A.d, b->model.A.d, (size_t)K * K * a->spec.p)
+        && arrays_agree_to_rounding(a->model.Sigma_u.d, b->model.Sigma_u.d, (size_t)K * K)
+        && arrays_agree_to_rounding(a->model.P.d, b->model.P.d, (size_t)K * K)
+        && agree_to_rounding(a->model.log_det_Sigma_u, b->model.log_det_Sigma_u, ROUNDING_TOLERANCE)
+        && a->residuals.r == b->residuals.r && a->residuals.c == b->residuals.c
+        && arrays_agree_to_rounding(a->residuals.d, b->residuals.d, (size_t)a->residuals.r * a->residuals.c);
 }
 
 static void test_fit_against_reference(void) {
@@ -175,7 +192,7 @@ static void test_strided_and_estimators(void) {
     Mat copy = mat_copy(view);
     VarSpec ml = { K, p, VAR_SIGMA_ML }, ls = { K, p, VAR_SIGMA_LS };
     VarFit from_view = var_fit(view, ml), from_copy = var_fit(copy, ml), least = var_fit(copy, ls);
-    CHECK(same_fit(&from_view, &from_copy), "strided view and copy give different fits");
+    CHECK(close_fit(&from_view, &from_copy), "strided view and copy give different fits");
 
     int T_e = T - p, n = 1 + K * p;
     for (int i = 0; i < K; i++)

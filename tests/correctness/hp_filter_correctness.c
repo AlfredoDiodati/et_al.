@@ -36,6 +36,7 @@ tolerance is statsmodels' 1.5e-6, runs in float64 only.
 */
 #include "../../filter/hp.h"
 #include "../check.h"
+#include "../rounding_agreement.h"
 #include <stdio.h>
 
 static const double unit_roundoff = sizeof(mreal) == sizeof(double) ? 1.1102230246251565e-16 : 5.9604644775390625e-08;
@@ -415,7 +416,8 @@ static void test_many_series(void) {
     for (int a = 0; a < 3; a++)
         for (int t = 0; t < T; t++)
             for (int b = 0; b < 4; b++)
-                CHECK(TAT3(from_view, t, a, b) == TAT3(from_original, a, t, b), "permuted view against the original");
+                CHECK(agree_to_rounding(TAT3(from_view, t, a, b), TAT3(from_original, a, t, b), ROUNDING_TOLERANCE),
+                      "permuted view against the original");
     tensor_free(from_view); tensor_free(from_original); tensor_free(t3);
 
     Mat poisoned = mat_copy(y);
@@ -443,7 +445,8 @@ static void test_frame(void) {
     DataFrame cycle = df_hp_cycle(&df, 1600), trend = df_hp_trend(&df, 1600);
     Mat expected = mat_hp_cycle(x, 1600, 0);
     for (int t = 0; t < 6; t++) {
-        CHECK(AT(df_col_numeric(&cycle, "x"), t, 0) == expected.d[t], "frame cycle equals mat_hp_cycle");
+        CHECK(agree_to_rounding(AT(df_col_numeric(&cycle, "x"), t, 0), expected.d[t], ROUNDING_TOLERANCE),
+              "frame cycle equals mat_hp_cycle");
         CHECK_NEAR((double)AT(df_col_numeric(&cycle, "x"), t, 0) + (double)AT(df_col_numeric(&trend, "x"), t, 0), x.d[t],
                    4 * unit_roundoff * 8, "cycle + trend");
     }

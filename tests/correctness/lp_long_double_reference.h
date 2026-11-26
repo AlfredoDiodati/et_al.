@@ -11,6 +11,7 @@ weight is the state-dependent one, without a weight the linear one.
 #pragma once
 #include "../../lp/lp.h"
 #include "../check.h"
+#include "../rounding_agreement.h"
 
 static const double unit_roundoff = sizeof(mreal) == sizeof(double) ? 1.1102230246251565e-16 : 5.9604644775390625e-08;
 
@@ -370,6 +371,10 @@ static inline int same_notes(const LpNotes *a, const LpNotes *b, int K, int hor)
 }
 
 static inline int same_values(const mreal *a, const mreal *b, size_t count) { return memcmp(a, b, count * sizeof(mreal)) == 0; }
+
+/* Two routes to the same numbers agree only to rounding; same_values is for a
+   copy or a reload, where no arithmetic separates the two. */
+static inline int close_values(const mreal *a, const mreal *b, size_t count) { return arrays_agree_to_rounding(a, b, count); }
 
 static inline int file_exists(const char *path) {
     FILE *probe = fopen(path, "r");

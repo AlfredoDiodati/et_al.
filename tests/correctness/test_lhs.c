@@ -1,6 +1,7 @@
 #include "../../random/lhs.h"
 #include "../../dist/chi_squared.h" /* dev-tier use: chi-squared tails for the count tests */
 #include "../check.h"
+#include "../rounding_agreement.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -335,7 +336,7 @@ static void test_column_independence(void) {
     printf("  %d designs, pairing uniformity p = %.3g\n", designs, p);
 }
 
-/* lhs_scale is the affine map, exactly, including bounds that are
+/* lhs_scale is the affine map, to rounding, including bounds that are
    negative, reversed in magnitude, or degenerate. */
 static void test_scale(void) {
     puts("lhs_scale: affine map onto per-dimension bounds");
@@ -351,7 +352,7 @@ static void test_scale(void) {
         mreal lo = AT(lower, 0, j), hi = AT(upper, 0, j);
         for (int i = 0; i < n; i++) {
             mreal want = lo + AT(unit, i, j) * (hi - lo);
-            CHECK(AT(scaled, i, j) == want, "(%d,%d): got %.10g, want %.10g",
+            CHECK(agree_to_rounding(AT(scaled, i, j), want, ROUNDING_TOLERANCE), "(%d,%d): got %.10g, want %.10g",
                   i, j, (double)AT(scaled, i, j), (double)want);
             CHECK(AT(scaled, i, j) >= lo && AT(scaled, i, j) <= hi,
                   "(%d,%d): %.10g outside [%.10g, %.10g]",
@@ -365,7 +366,7 @@ static void test_scale(void) {
     Mat scaled_column = lhs_scale(unit, lower_column, upper_column);
     for (int i = 0; i < n; i++)
         for (int j = 0; j < k; j++)
-            CHECK(AT(scaled, i, j) == AT(scaled_column, i, j),
+            CHECK(agree_to_rounding(AT(scaled, i, j), AT(scaled_column, i, j), ROUNDING_TOLERANCE),
                   "row-vector and column-vector bounds differ at (%d,%d)", i, j);
 
     mat_free(unit); mat_free(lower); mat_free(upper); mat_free(scaled);

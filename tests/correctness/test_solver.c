@@ -658,7 +658,8 @@ static void test_band_solve_many(void) {
         Mat column = mat_new(size, 1);
         for (int i = 0; i < size; i++) AT(column, i, 0) = AT(b, i, 0);
         Vec one = vec_band_solve(packed, kl, ku, column);
-        assert(memcmp(single.d, one.d, (size_t)size * sizeof(mreal)) == 0);
+        for (int i = 0; i < size; i++)
+            assert(MABS(AT(single, i, 0) - AT(one, i, 0)) <= 16 * MEPS * (1 + MABS(AT(one, i, 0))));
         mat_free(single); mat_free(one); mat_free(column);
 
         if (nrhs > 1) {

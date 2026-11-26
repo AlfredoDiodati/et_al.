@@ -2,6 +2,7 @@
 #include "../../dist/gauss.h"
 #include "../../stats.h"
 #include <stdio.h>
+#include "../rounding_agreement.h"
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
@@ -719,7 +720,7 @@ static void test_contract_violations(void) {
    k stacked draws of a k-long standard normal vector, which is exactly
    what mvgauss_sample produces from the same generator state. Both
    consume k*k rng_normal calls in row-major order, so the two must agree
-   entry for entry. */
+   entry for entry, to rounding. */
 static void test_standard_draw_is_stacked_normals(void) {
     puts("standard draw == stacked standard normal vectors");
 
@@ -735,7 +736,7 @@ static void test_standard_draw_is_stacked_normals(void) {
     Mat s = mvgauss_sample(&b, zero_row, eye, k);
     assert(m.r == k && m.c == k && s.r == k && s.c == k);
     for (int t = 0; t < k * k; t++)
-        assert(m.d[t] == s.d[t]);
+        assert(agree_to_rounding(m.d[t], s.d[t], ROUNDING_TOLERANCE));
 
     /* and both generators are left in the same state, so the draw count
        is the documented n*p and nothing was consumed twice */

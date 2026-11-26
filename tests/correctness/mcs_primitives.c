@@ -437,9 +437,10 @@ static void compare_to_manual(const DataFrame *losses, MCSOptions opt, const cha
           label, got.n_surviving, want.n_surviving);
     CHECK(got.n_eliminated == want.n_eliminated, "%s: %d eliminated, want %d",
           label, got.n_eliminated, want.n_eliminated);
-    /* Bit equality, not a tolerance: the two run the same arithmetic in
-       the same order off the same stream, so anything but an exact match
-       is a difference in behaviour rather than in rounding. */
+    /* Bit equality, not a tolerance: a p-value is a count over the same
+       bootstrap draws divided by their number, and the final one a maximum
+       of those, so neither carries rounding and anything but an exact match
+       is a difference in behaviour. */
     CHECK(got.final_pvalue == want.final_pvalue, "%s: final p-value %.17g, want %.17g",
           label, got.final_pvalue, want.final_pvalue);
     for (int i = 0; i < got.n_surviving && i < want.n_surviving; i++)

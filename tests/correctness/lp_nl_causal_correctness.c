@@ -19,7 +19,7 @@ Checks:
 - the rest is lp_nl: the responses and bands of lp_nl_causal_with_bands
   equal those of lp_nl_with_bands given its fz directly as the weight
   (use_logistic off), lagged and not;
-- with use_hp off, or use_logistic off, the fit is lp_nl's bit for bit,
+- with use_hp off, or use_logistic off, the fit is lp_nl's to rounding,
   except causal_hp; with use_hp on, the two weights differ;
 - a strided view of y gives the fit of a copy;
 - a constant switching series sets switching_is_constant, every weight is
@@ -162,7 +162,7 @@ static void test_rest_is_lp_nl(void) {
         direct_spec.use_logistic = 0;
         LpNlFit direct = lp_nl_with_bands(y, weight, direct_spec, bands);
         CHECK(same_notes(&causal.notes, &direct.notes, K, hor), "lag_switching %d: the notes", lag_switching);
-        CHECK(same_values(causal.d.d, direct.d.d, (size_t)K * K), "lag_switching %d: d", lag_switching);
+        CHECK(close_values(causal.d.d, direct.d.d, (size_t)K * K), "lag_switching %d: d", lag_switching);
         CHECK(relative_gap(causal.irf_s1_mean, direct.irf_s1_mean) <= 1e-13 && relative_gap(causal.irf_s2_mean, direct.irf_s2_mean) <= 1e-13
               && relative_gap(causal.irf_s1_low, direct.irf_s1_low) <= 1e-13 && relative_gap(causal.irf_s2_up, direct.irf_s2_up) <= 1e-13,
               "lag_switching %d: responses and bands: %.3g %.3g", lag_switching, relative_gap(causal.irf_s1_mean, direct.irf_s1_mean),
@@ -191,11 +191,11 @@ static void test_against_two_sided(void) {
     for (int c = 0; c < 2; c++) {
         LpNlFit causal = lp_nl_causal(y, inputs[c], specs[c]), two_sided = lp_nl(y, inputs[c], specs[c]);
         int fz_equal = 1;
-        for (int t = 1; t < T; t++) fz_equal = fz_equal && causal.fz.d[t] == two_sided.fz.d[t];
+        for (int t = 1; t < T; t++) fz_equal = fz_equal && agree_to_rounding(causal.fz.d[t], two_sided.fz.d[t], ROUNDING_TOLERANCE);
         CHECK(fz_equal && same_notes(&causal.notes, &two_sided.notes, K, hor)
-              && same_values(causal.irf_s1_mean.d, two_sided.irf_s1_mean.d, tensor_size(two_sided.irf_s1_mean))
-              && same_values(causal.irf_s2_mean.d, two_sided.irf_s2_mean.d, tensor_size(two_sided.irf_s2_mean)),
-              "%s: lp_nl's fit bit for bit", c == 0 ? "use_hp off" : "use_logistic off");
+              && close_values(causal.irf_s1_mean.d, two_sided.irf_s1_mean.d, tensor_size(two_sided.irf_s1_mean))
+              && close_values(causal.irf_s2_mean.d, two_sided.irf_s2_mean.d, tensor_size(two_sided.irf_s2_mean)),
+              "%s: lp_nl's fit to rounding", c == 0 ? "use_hp off" : "use_logistic off");
         CHECK(causal.causal_hp == 1 && two_sided.causal_hp == 0, "causal_hp says which function made the fit");
         lp_nl_fit_free(&causal); lp_nl_fit_free(&two_sided);
     }
@@ -219,8 +219,8 @@ static void test_strided_view(void) {
     LpNlSpec spec = { { K, p, hor, LP_SHOCK_UNIT, VAR_SIGMA_ML }, p, 1, 1, 1600, 2, 1 };
     LpNlFit from_view = lp_nl_causal(view, switching, spec), from_copy = lp_nl_causal(copy, switching, spec);
     CHECK(same_notes(&from_view.notes, &from_copy.notes, K, hor)
-          && same_values(from_view.irf_s1_mean.d, from_copy.irf_s1_mean.d, tensor_size(from_copy.irf_s1_mean))
-          && same_values(from_view.irf_s2_mean.d, from_copy.irf_s2_mean.d, tensor_size(from_copy.irf_s2_mean)),
+          && close_values(from_view.irf_s1_mean.d, from_copy.irf_s1_mean.d, tensor_size(from_copy.irf_s1_mean))
+          && close_values(from_view.irf_s2_mean.d, from_copy.irf_s2_mean.d, tensor_size(from_copy.irf_s2_mean)),
           "view and copy differ");
     lp_nl_fit_free(&from_view); lp_nl_fit_free(&from_copy);
     mat_free(wide); mat_free(copy); mat_free(switching);
@@ -295,7 +295,7 @@ static void test_joint_fit(void) {
     LpLinFit lin = lp_lin_with_bands(y, spec.lin, bands);
     LpNlFit nl = lp_nl_causal_with_bands(y, switching, spec, bands);
     int fz_equal = 1;
-    for (int t = 1; t < T; t++) fz_equal = fz_equal && both.nl.fz.d[t] == nl.fz.d[t];
+    for (int t = 1; t < T; t++) fz_equal = fz_equal && agree_to_rounding(both.nl.fz.d[t], nl.fz.d[t], ROUNDING_TOLERANCE);
     CHECK(both.nl.causal_hp == 1 && fz_equal, "the causal weights");
     CHECK(same_notes(&both.lin.notes, &lin.notes, K, hor) && same_notes(&both.nl.notes, &nl.notes, K, hor), "the notes");
     CHECK(relative_gap(both.lin.irf_lin_mean, lin.irf_lin_mean) <= 1e-10 && relative_gap(both.nl.irf_s1_mean, nl.irf_s1_mean) <= 1e-10

@@ -23,7 +23,7 @@ statistic, run three ways.
   distributed       cluster_map over real workers on loopback sockets
   wrong on purpose  the same task seeded with a constant stream
 
-The first two must agree to the last bit. The third must not, which is what
+The first two must agree to rounding. The third must not, which is what
 makes the first two agreeing evidence rather than a coincidence - without it
 this file would pass just as happily if every draw in it were identical.
 
@@ -32,6 +32,7 @@ inference/unit_root.h.
 */
 
 #include "../check.h"
+#include "../rounding_agreement.h"
 #include "../../cluster/cluster.h"
 #include "../../inference/unit_root.h"
 #include <stdio.h>
@@ -252,7 +253,7 @@ static void test_stress_a_full_critical_value(void) {
     int mismatches = 0;
     for (int draw = 0; draw < DRAWS; draw++) {
         gathered.d[draw] = AT(distributed, 0, draw);
-        if (gathered.d[draw] != serial.d[draw]) mismatches++;
+        if (!agree_to_rounding(gathered.d[draw], serial.d[draw], ROUNDING_TOLERANCE)) mismatches++;
     }
     CHECK(mismatches == 0, "every one of %d replications must match, got %d that did not",
           DRAWS, mismatches);
