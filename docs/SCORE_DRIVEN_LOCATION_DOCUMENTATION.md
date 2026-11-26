@@ -7,9 +7,9 @@
 A `K`-variable score-driven mean model under a Student-t shock, with no co-integration structure and no lag search:
 
     y_t = m_t + v_t,   v_t ~ t_K(0, Sigma, nu) i.i.d.,   Sigma = Omega_inv Omega_inv'
-    m_t = m0 (.) (1_K - b) + b (.) m_{t-1} + a (.) s_{t-1}
+    m_t = m0 (.) (1_K - b) + b (.) m_{t-1} + sum_{j=1}^{p} A_j s_{t-j}
 
-`(.)` is elementwise, `b` and `a` are the diagonals of the two matrices the model calls `B` and `A`, `m0` is the unconditional mean, and `s_t` is the scaled score.
+`(.)` is elementwise, `b` is the diagonal of the matrix the model calls `B`, `A_1 ... A_p` are the `K x K` matrices loading the lagged scaled scores, `m0` is the unconditional mean, and `s_t` is the scaled score. The location has one autoregressive lag. The number of score lags `p` and whether the `A_j` are all diagonal or all full are fields of `SdlocSpec`; see [The spec](#the-spec).
 
 Every entry point carries the `sdloc_` prefix and every type the `Sdloc` one, because a header-only library has a single flat namespace and `sd/qvarma.h` would otherwise export a second `fit` and a second `Params`. The prefix is a short tag rather than the full header noun, which would put `score_driven_location_` at every call site.
 
@@ -24,6 +24,8 @@ Both are the expressions Blazsek, Escribano and Licht's equations 6 and 7 give, 
 
     s_t = I(m)^-1/2 score_t = sqrt((nu+K)(nu+2)) / (nu+q_t) * Sigma^-1/2 v_t
 
+The score is a property of the density at one period, so the expression above is the same for every `p`; only the recursion that consumes it changes.
+
 ### Which square root
 
 `Sigma^-1/2` is not unique. The choice made here is `Omega_inv'^-1`, the upper-triangular factor satisfying `Omega_inv'^-1 (Omega_inv'^-1)' = Sigma^-1`. It is the natural one given `Sigma` is already Cholesky-parametrized as `Omega_inv Omega_inv'`: it costs one triangular solve and no new factorization.
@@ -37,7 +39,7 @@ Computing `Sigma^-1/2 v_t` as a differentiable node needs a one-sided triangular
 The recursion is implemented twice, and both compute the same log-likelihood and gradient.
 
 - `_sdloc_filter` builds it on an `ad.h` tape and is differentiated by reverse mode. `sdloc_traced_log_likelihood` wraps it with the sentinel checks.
-- `sdloc_analytic_log_likelihood` runs it on plain arrays, with the gradient derived by hand from the recursion and evaluated in a backward pass over the stored path. It allocates nothing between the first period and the last; `sdloc_analytic_new(K, T)` builds the workspace once. `sdloc_fit`, `sdloc_log_likelihood_at`, `sdloc_negative_log_likelihood` and the standard errors' Hessian all use it.
+- `sdloc_analytic_log_likelihood` runs it on plain arrays, with the gradient derived by hand from the recursion and evaluated in a backward pass over the stored path. It allocates nothing between the first period and the last; `sdloc_analytic_new(spec, T)` builds the workspace once. `sdloc_fit`, `sdloc_log_likelihood_at`, `sdloc_negative_log_likelihood` and the standard errors' Hessian all use it.
 
 The traced filter stays because a hand derivation can be wrong in a way reverse mode cannot; the test compares the two.
 
@@ -52,36 +54,54 @@ Nothing about the Student t density is written in this file. Both filters take i
 
 ### Speed
 
-`make bench-score_driven_location_gradient_cost` writes `out/score_driven_location_gradient_cost_report.txt`. It times both filters, value and gradient at the true parameters, and a full fit from the truth with each, over 10 alternating rounds. The setup is in the file's header. On the development machine (AMD Ryzen 7 4800H, float64):
+`make bench-score_driven_location_gradient_cost` writes `out/score_driven_location_gradient_cost_report.txt`. It times both filters, value and gradient at the true parameters, and a full fit from the truth with each, over 10 alternating rounds. The setup, including the true parameters of every spec, is in the file's header. On an Intel Core i5-7400 (4 hardware threads, none lowered), float64:
 
 | case | traced evaluation | analytic evaluation | traced fit | analytic fit |
 |---|---|---|---|---|
-| `K = 2, T = 400` | 681 us | 38 us | 23.1 ms | 1.3 ms |
-| `K = 3, T = 1000` | 736 us | 89 us | 16.8 ms | 2.7 ms |
-| `K = 5, T = 1000` | 782 us | 150 us | 26.9 ms | 5.0 ms |
+| `K = 2, T = 400`, one diagonal lag | 692 us | 35 us | 19.8 ms | 1.2 ms |
+| `K = 3, T = 1000`, one diagonal lag | 1015 us | 123 us | 28.1 ms | 3.7 ms |
+| `K = 5, T = 1000`, one diagonal lag | 905 us | 195 us | 29.6 ms | 6.6 ms |
+| `K = 5, T = 1000`, two diagonal lags | 1112 us | 217 us | 113.9 ms | 23.2 ms |
+| `K = 5, T = 1000`, two full lags | 1137 us | 309 us | 186.2 ms | 51.6 ms |
 
-These are best times. The two fits take the same number of iterations and reach the same log-likelihood to ten decimals. At `K = 3` the median ratio of fit times was 8.8 with the traced arm run first and 13.5 with the analytic arm first, a spread the other two cases did not show.
+These are best times. In the three one-lag cases and the two-diagonal-lag case the two fits take the same number of iterations and reach the same log-likelihood to nine decimals; with two full lags the traced fit took 153 iterations and the analytic one 157, with log-likelihoods agreeing to `6e-10`. At `K = 3` the median ratio of fit times was 8.0 with the traced arm run first and 12.0 with the analytic arm first, a spread the other cases did not show.
+
+**What `p` costs the one-lag model.** The header before `p` existed and this one, each built with `STAT_CFLAGS` into its own binary from the same harness, alternated six times in both orders on the machine above: value and gradient at `K = 5, T = 1000`, one diagonal lag, best of 5 batches of 2000 evaluations each. Before: 190 us per evaluation, 82 us for the value alone. Now: 200 us and 86 us. The 5% that remains is not explained: removing the integer modulo on the ring indices, marking the location step's pointers `restrict`, writing the one-lag step as the old single loop, and hoisting the workspace fields into locals each changed it by less than the spread between repetitions. Storing the loadings as the `K x pK` matrix and adding every lag in a second pass over the series cost 228 us and 100 us; storing them in `theta`'s order and adding the first lag inside the main loop is what brought it to 200. Outputs at 75 inputs (`K = 1..5`, `T` in {2, 3, 40, 150, 1000}, three draws each) and one fit differ from the old header's in the last bits only: at most `4e-16` relative in the value and `1.5e-13` in a gradient coordinate, with the fit taking the same 23 iterations.
 
 ## Initialization
 
-`m_1 = m0`: the filter starts at its unconditional mean, and **that first observation still contributes to the likelihood** rather than being dropped as a warm-up period the way a longer lag structure needs.
+`m_1 = m0`, and every score dated before the first period is zero, which is the score's expectation under the model. The filter therefore starts at its unconditional mean whatever `p` is, and **every period contributes to the likelihood, the first included**; none is dropped as a warm-up period. The simulator starts the same way.
 
-## Three types, kept distinct
+## The spec
 
-`SdlocParams` holds the constrained parameters the maths consumes, plus the quantities derived from them once per parameter set:
+```c
+typedef enum { SDLOC_SCORE_DIAGONAL, SDLOC_SCORE_FULL } SdlocScoreMatrices;
+typedef struct { int K; int p; SdlocScoreMatrices score_matrices; } SdlocSpec;
+SdlocSpec sdloc_spec(int K, int p, SdlocScoreMatrices score_matrices);
+```
+
+`p >= 1` is the number of score lags. `SDLOC_SCORE_DIAGONAL` makes every `A_j` diagonal, with each diagonal entry mapped into `(-1, 1)` by `tanh`, the link the one-lag model always had. `SDLOC_SCORE_FULL` makes every `A_j` a full `K x K` matrix whose entries are free parameters on the identity link: no constraint is imposed on them yet. With `K = 1` the two modes describe the same model through different links.
+
+Stationarity of the location needs `|b_k| < 1` only, which the `tanh` link on `b` imposes. The scaled score is bounded, `||s_t|| <= sqrt((nu+K)(nu+2)) / (2 sqrt(nu))`, so the `A_j` do not enter the stationarity condition, in either mode. Invertibility of the filter, whether the filtered location forgets a wrong starting point, does depend on the `A_j`. Nothing here imposes it; see [Known limitations](#known-limitations-and-future-work).
+
+## The types, kept distinct
+
+`SdlocParams` holds the spec and the constrained parameters the maths consumes, plus the quantities derived from them once per parameter set:
 
 ```c
 typedef struct {
-    int   K;
-    Mat   m0;                  /* K x 1, free */
-    Mat   a;                   /* K x 1, diagonal of A, in (-1, 1) */
-    Mat   b;                   /* K x 1, diagonal of B, in (-1, 1) */
-    Mat   Omega_inv;           /* K x K, lower triangular, positive diagonal */
+    SdlocSpec spec;
+    Mat m0;                    /* K x 1, free */
+    Mat A;                     /* K x pK, [A_1 ... A_p] */
+    Mat b;                     /* K x 1, diagonal of B, in (-1, 1) */
+    Mat Omega_inv;             /* K x K, lower triangular, positive diagonal */
     mreal nu;
-    Mat   Sigma;               /* K x K, derived: Omega_inv Omega_inv' */
+    Mat Sigma;                 /* K x K, derived: Omega_inv Omega_inv' */
     mreal half_log_det_Sigma;  /* derived: sum of log of Omega_inv's diagonal */
 } SdlocParams;
 ```
+
+`A` holds the blocks side by side: entry `(k, l)` of `A_j` is `AT(A, k, (j-1)K + l)`. In diagonal mode the off-diagonal entries are zero and are not parameters; `_sdloc_unlink` asserts on a nonzero one rather than dropping it.
 
 `Sigma` and `half_log_det_Sigma` are derived, never set by hand. A `SdlocParams` filled in field by field reaches the link — and so gets them — by a round trip through `theta`: `_sdloc_unlink` then `sdloc_params_from_theta`. Every other entry point (`sdloc_simulate`, `sdloc_fit`, `sdloc_params_from_theta`) already does this on its way in.
 
@@ -91,20 +111,22 @@ typedef struct {
 
 ## Parameter layout
 
-`theta` is one flat vector of `sdloc_n_theta(K) = 4K + K(K-1)/2 + 1` entries, in this order:
+`theta` is one flat vector of `sdloc_n_theta(spec) = 3K + p c + K(K-1)/2 + 1` entries, with `c = K` diagonal and `c = K^2` full, in this order:
 
 | block | count | transform |
 |---|---|---|
 | `m0` | `K` | none |
-| `a` | `K` | `tanh`, into `(-1, 1)` |
+| `A_1 ... A_p` | `p c` | diagonal: each `A_j`'s diagonal, `tanh`, into `(-1, 1)`; full: each `A_j` row by row, none |
 | `b` | `K` | `tanh`, into `(-1, 1)` |
 | diagonal of `Omega_inv` | `K` | `exp`, into `(0, inf)` |
 | strict lower triangle of `Omega_inv` | `K(K-1)/2` | none |
 | `nu` | 1 | `exp` plus two, into `(2, inf)` |
 
+`sdloc_layout(spec)` returns where each block starts, generated from the spec; nothing indexes `theta` by a hardcoded position. With `p = 1` and diagonal loadings this is the layout the model had before `p` existed, so `sdloc_n_theta` is `4K + K(K-1)/2 + 1` there as before.
+
 A quasi-Newton method needs the whole vector at once — it builds an inverse Hessian across all of it — so a per-tensor layout is not an option. Blocks are carved out with `ad_slice` and shaped with `ad_reshape`.
 
-**`a` is bounded as well as `b`**, though only `b`'s bound is a stationarity requirement of the recursion. `a` is bounded by choice, not by necessity; a caller who needs `|a| > 1` has to change the link.
+**Diagonal `A_j` are bounded as well as `b`**, though only `b`'s bound is a stationarity requirement of the recursion. The bound on a diagonal loading is a choice, not a necessity; a caller who needs `|A_j[k,k]| > 1` uses the full mode.
 
 `nu` is transformed to stay above 2 so the shock's covariance exists at all — `Var(v_t) = Sigma nu/(nu-2)`, and `Sigma` is the scale matrix, not the covariance.
 
@@ -113,23 +135,27 @@ A quasi-Newton method needs the whole vector at once — it builds an inverse He
 ## API reference
 
 ```c
-int          sdloc_n_theta(int K);
-SdlocParams  sdloc_params_new(int K);
+SdlocSpec    sdloc_spec(int K, int p, SdlocScoreMatrices score_matrices);
+int          sdloc_spec_equal(SdlocSpec left, SdlocSpec right);
+SdlocLayout  sdloc_layout(SdlocSpec spec);
+int          sdloc_n_theta(SdlocSpec spec);
+SdlocParams  sdloc_params_new(SdlocSpec spec);
 void         sdloc_params_free(SdlocParams *m);
-void         sdloc_params_from_theta(Vec theta, SdlocParams *m);
+void         sdloc_params_from_theta(Vec theta, SdlocParams *m);   /* m->spec says the layout */
 
 Node *_sdloc_filter(Tape *tape, const SdlocLinked *linked, Mat y, Node **v_out);
-mreal sdloc_traced_log_likelihood(Vec theta, Mat y, Vec gradient);
+mreal sdloc_traced_log_likelihood(SdlocSpec spec, Vec theta, Mat y, Vec gradient);
 
-SdlocAnalytic *sdloc_analytic_new(int K, int T);
+SdlocAnalytic *sdloc_analytic_new(SdlocSpec spec, int T);
 void sdloc_analytic_free(SdlocAnalytic *f);
 mreal sdloc_analytic_log_likelihood(SdlocAnalytic *f, Vec theta, Mat y, Vec gradient);
 
-mreal sdloc_log_likelihood_at(Vec theta, Mat y);
+mreal sdloc_log_likelihood_at(SdlocSpec spec, Vec theta, Mat y);
 mreal sdloc_negative_log_likelihood(Vec theta, Vec gradient, void *context); /* context: SdlocFitContext */
 
 SdlocFitOptions sdloc_default_fit_options(void);
 SdlocFitResult  sdloc_fit(Mat y, const SdlocParams *initial_guess, SdlocFitOptions options);
+SdlocFitResult  sdloc_fit_result_new(SdlocSpec spec);
 SdlocFitResult  sdloc_fit_cached(Mat y, const SdlocParams *initial_guess,
                                  SdlocFitOptions options, const char *cache_path, int force_refit);
 void            sdloc_fit_result_free(SdlocFitResult *result);
@@ -149,9 +175,9 @@ int        sdloc_load_fit(SdlocFitResult *result, Mat y, const char *path);
 
 `y` is `K x T`, one column per period, matching `dist/mv/`'s convention that a column is one observation of a vector-valued variable. `T > 1` is required.
 
-`sdloc_fit` builds the optimizer itself. Its signature takes the data, an initial guess and the fit options, and nothing else — a caller never assembles an `LbfgsOptions`, and whatever it legitimately needs to tune is a field of `SdlocFitOptions`. The lower-level pieces (`_sdloc_filter`, `sdloc_analytic_log_likelihood`, `sdloc_negative_log_likelihood`, `sdloc_params_from_theta`) stay public so a custom loop is possible. `SdlocFitContext` is `{ observations, workspace }`; a `workspace` left `NULL` makes each call build and release its own.
+`sdloc_fit` builds the optimizer itself, and fits the spec its initial guess carries. Its signature takes the data, an initial guess and the fit options, and nothing else — a caller never assembles an `LbfgsOptions`, and whatever it legitimately needs to tune is a field of `SdlocFitOptions`. The lower-level pieces (`_sdloc_filter`, `sdloc_analytic_log_likelihood`, `sdloc_negative_log_likelihood`, `sdloc_params_from_theta`) stay public so a custom loop is possible. `SdlocFitContext` is `{ observations, spec, workspace }`; a `workspace` left `NULL` makes each call build and release its own, and one that is given must have been built for `spec`.
 
-`sdloc_simulate` runs the recursion through the analytic filter's own kernels, `mvgauss_chol_quadform`, `_trsv_lower_reciprocal` and `_sdloc_location_step`, and reads the same fields, so their conventions cannot silently diverge; the test checks the residual path rebuilt by hand agrees with the traced filter's to `2.2e-16` over 200 periods.
+`sdloc_simulate` runs the recursion through the analytic filter's own kernels, `mvgauss_chol_quadform`, `_trsv_lower_reciprocal` and `_sdloc_location_step`, and reads the same fields, so their conventions cannot silently diverge; the test checks the residual path rebuilt by hand agrees with the traced filter's to `8.9e-16` over 200 periods, for each of the six specs in the test.
 
 ### Infeasible points return a sentinel, they do not abort
 
@@ -169,7 +195,7 @@ Both checks are written with `MISNAN`/`MISINF` rather than a comparison against 
 
 `LbfgsStatus` separates five outcomes and `is_converged` collapses them to two, losing the distinction that decides what to do next: a run that hit its cap wants more iterations, one whose line search could not move wants a different starting point, and one whose objective stopped being finite wants neither. So the reason is kept for every run in `run_status`, oldest first and `nruns` long, with `status` the last of them. `status_is_known` is 0 only for a cache written before the reasons were recorded, and then neither may be read; a fit always knows why it stopped.
 
-`sdloc_fit_result_new(K)` makes an empty result ready for `sdloc_load_fit` to fill in and safe to pass to `sdloc_fit_result_free` whether the load succeeded or not. A result owns `run_status` as well as its parameters, so one declared without it holds a pointer that was never set.
+`sdloc_fit_result_new(spec)` makes an empty result of that spec ready for `sdloc_load_fit` to fill in and safe to pass to `sdloc_fit_result_free` whether the load succeeded or not. A result owns `run_status` as well as its parameters, so one declared without it holds a pointer that was never set.
 
 `is_converged` is true for exactly the two `LbfgsStatus` values that are convergence, so it cannot disagree with `status` — the test checks that. Note `gradient_norm` is the Euclidean norm while the solver's stopping test uses the largest component; see `docs/LBFGS_DOCUMENTATION.md`.
 
@@ -191,11 +217,13 @@ A parameter whose error cannot be computed is a result: it says the sample does 
 
 ## The parameter cache
 
-`sdloc_save_fit` writes the parameters and the diagnostics together with a fingerprint of the data they were fitted on; `sdloc_load_fit` refuses a file whose fingerprint, shape or diagnostics do not match, returning 0 rather than aborting so a caller can just refit. A diagnostics block missing a field is refused too: a cache is something a user can truncate or hand-edit, so an incomplete one is a refusal to load rather than programmer error. A refusal leaves the caller's model untouched, which is why the diagnostics are read before the parameters. Without the fingerprint a stored log-likelihood silently describes a different sample. A truncated file, a file that is not valid JSON, and one whose root, fields or `theta` entries have the wrong type are refused the same way; `test_cache_refuses_a_damaged_file` checks each. Until `json_parse` returned `NULL` on malformed text, a truncated cache stopped the program inside the parser, and a value of the wrong type stopped it inside the JSON accessors.
+`sdloc_save_fit` writes the spec, the parameters and the diagnostics together with a fingerprint of the data they were fitted on; `sdloc_load_fit` refuses a file whose fingerprint, spec or diagnostics do not match the result it loads into, returning 0 rather than aborting so a caller can just refit. A diagnostics block missing a field is refused too: a cache is something a user can truncate or hand-edit, so an incomplete one is a refusal to load rather than programmer error. A refusal leaves the caller's model untouched, which is why the diagnostics are read before the parameters. Without the fingerprint a stored log-likelihood silently describes a different sample. A truncated file, a file that is not valid JSON, and one whose root, fields or `theta` entries have the wrong type are refused the same way; `test_cache_refuses_a_damaged_file` checks each. Until `json_parse` returned `NULL` on malformed text, a truncated cache stopped the program inside the parser, and a value of the wrong type stopped it inside the JSON accessors.
 
 `sdloc_fit_cached` is the loop a script wants. It loads a fit the solver finished with, and **resumes** one that stopped at its iteration cap: the cached parameters become the starting point of a new run, which is then written back. Returning a capped fit as it stands would mean a script could be rerun for ever without the estimate moving. Only the cap is resumed from — a run that stalled or went non-finite did not run short of iterations, and starting the same search from the same point spends a whole fit to arrive back where it was. That is what the stored `status` is for; `is_converged` alone cannot tell a capped run from a stalled one.
 
 The iterations of the runs in a chain are summed into `total_niter` and the runs counted in `nruns`, so a chain of three runs of four thousand iterations reports `nruns` 3 and `total_niter` 12000 rather than `niter` 4000 three times over. Why each run stopped is kept beside them in `run_status`, so the chain says what every run did rather than only the last, and `sdloc_write_report` prints it run by run. `force_refit` abandons a chain and starts the count again from `initial_guess`.
+
+A file is written with `K`, `p` and `score_matrices` (`"diagonal"` or `"full"`). The spec is compared field by field, not inferred from the length of `theta`: at `K = 1` one full lag and one diagonal lag have the same parameter count. A file without `p` and `score_matrices` was written when the model had exactly one diagonal score loading, and loads as that spec and as no other.
 
 ### A cache from before these fields existed
 
@@ -209,22 +237,27 @@ A `run_status` whose length disagrees with `nruns`, or one carrying a number tha
 
 `tests/correctness/score_driven_location_correctness.c`, built with `-DMAT_DOUBLE` unconditionally. `sd/qvarma.h` no longer is: it chooses per script, and `docs/QVARMA_DOCUMENTATION.md`'s Building section measures what each precision costs there.
 
-The failure this file is built against is a filter that returns a plausible log-likelihood from the wrong recursion, so the checks are identities rather than numbers copied from somewhere:
+The failure this file is built against is a filter that returns a plausible log-likelihood from the wrong recursion, so the checks are identities rather than numbers copied from somewhere. Every check that depends on the structure of the model runs over six specs: `p` in {1, 2, 3}, each with diagonal and with full loadings. The loadings of the test's parameters shrink and alternate in sign with the lag, and in full mode differ above and below the diagonal, so a transposed index or a swapped lag shows.
 
-- **The parameter count** against the blocks it is made of, at `K = 1..5`.
-- **The link round trips** in both directions, and imposes what it claims: `a` and `b` inside `(-1,1)`, a positive `Omega_inv` diagonal, a structurally zero upper triangle, `nu > 2`. `Sigma` and `half_log_det_Sigma` are checked against the factor they are derived from.
-- **The static case against `dist/mv/student.h`.** With `a = b = 0` the recursion is `m_t = m0` for every `t`, so the log-likelihood must be the sum of `T` i.i.d. multivariate-t log densities — a completely independent implementation sharing no code with the filter. A wrong constant term or a wrong quadratic form cannot survive this.
-- **The analytic gradient against central differences**, at `K = 1, 2, 3` and at a parameter vector deliberately off the truth, since a gradient near zero hides a scale error. Worst relative error `1.0e-06`.
-- **The analytic filter against the traced one**, value and every gradient coordinate, over `K = 1..4`, `T` in {2, 3, 40, 150}, `nu` in {2.5, 7.5, 1e3, 1e6, 1e10} and five random parameter vectors each: 400 cases, tolerance `1e-9` relative to the larger of the traced value and 1. Worst value gap `8.9e-15`, worst gradient gap `5.6e-12`.
-- **The `nu` gradient at a light tail** against a central difference of a long double reference written in the test from the recursion, with a stable `log Gamma` difference: `K = 1, 2`, `T = 150`, `nu` in {1e6, 1e10, 1e14}, five draws each. The analytic gradient must sit within `1e-8`; its worst gap was `2.1e-9`, at `K = 1, nu = 1e14`, where the traced gradient's was `6.1e-9` and the gap between the two `3.9e-9`. That is more than the agreement test's `1e-9`, which is why that test stops at `nu = 1e10`.
-- **The simulator against the filter**: the residual path rebuilt by hand from the simulated series matches the one the traced filter reports to `2.2e-16` over 200 periods.
-- **Infeasible points return the sentinel** and zero the gradient, rather than aborting, at three diagonal `theta` values covering both routes: `-800` and `800`, where the factor underflows to zero or overflows and the check on the parameters catches it, and `-400`, where the factor is an ordinary number and only the check on the computed value can. Asserted through `MISNAN`/`MISINF`, never a comparison against a large number.
-- **The reported diagnostics describe the returned parameters**, not the point before the last step: the log-likelihood and gradient are recomputed at the returned `theta` and compared, the three information criteria against their definitions, and `is_converged` against `status`.
+- **The parameter count and the layout** against the blocks they are made of, at `K = 1..5`: the blocks tile `theta`, and every parameter entry of every `A_j` has its own coordinate.
+- **The link round trips** in both directions, and imposes what it claims: diagonal loadings and `b` inside `(-1,1)` and off-diagonal loadings structurally zero in diagonal mode, full loadings equal to `theta` itself, a positive `Omega_inv` diagonal, a structurally zero upper triangle, `nu > 2`. `Sigma` and `half_log_det_Sigma` are checked against the factor they are derived from.
+- **The static case against `dist/mv/student.h`.** With every `A_j = 0` and `b = 0` the recursion is `m_t = m0` for every `t`, so the log-likelihood must be the sum of `T` i.i.d. multivariate-t log densities, from an implementation sharing no code with the filter.
+- **The value against a long double reference written in the test from the equations**, the layout, the link, the lagged scores and the density, sharing no code with either filter: `K = 1..4`, `T` in {2, 3, 4, 60}, three draws each, 288 cases at `1e-11`. `T = 2` and `3` are shorter than the longest lag plus one, so the zero pre-sample scores are what is tested there. Worst gap `4.9e-15`.
+- **The larger models nest the smaller.** `p + 1` lags with a zero last loading reproduce `p` lags, value and the gradient on every shared coordinate; full loadings that happen to be diagonal reproduce the diagonal model, the gradient through the derivative of `tanh`.
+- **The analytic gradient against central differences**, at `K = 1, 2, 3`, at a parameter vector deliberately off the truth. Worst relative error `3.2e-06`, over 18 cases.
+- **The analytic filter against the traced one**, value and every gradient coordinate, over `K = 1..4`, `T` in {2, 3, 40, 150}, `nu` in {2.5, 7.5, 1e3, 1e6, 1e10}, five random parameter vectors for one diagonal lag and two for every other spec: 1200 cases. A full loading moves off the truth by `0.3 / sqrt(K p)`, so each row of the loadings moves about as much as in the diagonal case. 1111 cases agree to `1e-9` relative to the larger of the traced value and 1, worst value gap `8.8e-15`, worst gradient gap `3.2e-11`. The other 89 land where the filter is not invertible and the location diverges, recognized by a log-likelihood below -100 per period: one at `K = 1`, two full lags, `nu = 1e10` reached `-2.0e5` with `q_t` up to `1.7e5`. There the likelihood is a sum of terms far larger than its derivatives, and the two filters are compared at `1e-7`; worst gradient gap `1.5e-9`.
+- **The `nu` gradient at a light tail** against a central difference of the long double reference: one diagonal lag and two full lags, `K = 1, 2`, `T = 150`, `nu` in {1e6, 1e10, 1e14}, five draws each, the loadings held at the test's values and every other coordinate moved by 0.3. The analytic gradient must sit within `1e-8`; its worst gap was `1.2e-11`, the traced gradient's `1.2e-11`. Moving the loadings too can leave the filter non-invertible: one such draw at `nu = 1e14` had a log-likelihood of `-1.1e8`, and the long double reference itself moved by `1.8e-8` between the full and the diagonal way of writing the same parameters.
+- **The simulator against the filter**: the residual path rebuilt by hand from the simulated series, with the lagged scores in a plain history, matches the one the traced filter reports to `8.9e-16` over 200 periods, for each of the six specs.
+- **Infeasible points return the sentinel** and zero the gradient, rather than aborting, for one diagonal lag and for two full lags, at three diagonal `theta` values covering both routes: `-800` and `800`, where the factor underflows to zero or overflows and the check on the parameters catches it, and `-400`, where the factor is an ordinary number and only the check on the computed value can. Asserted through `MISNAN`/`MISINF`, never a comparison against a large number.
+- **The reported diagnostics describe the returned parameters**, for one diagonal lag and two full lags: the log-likelihood and gradient are recomputed at the returned `theta` and compared, the three information criteria against their definitions, and `is_converged` against `status`.
 - **The cache round trips** and refuses a fit written on a different sample, and returns 0 rather than aborting on a missing file. It refuses a diagnostics block missing a field rather than reading past it, and a refused load leaves the caller's model untouched.
-- **A chain of three capped runs** against one cache reports three runs and the sum of their iterations, and the likelihood rises from run to run, which is what says each run continued from the cache rather than restarting. A fourth run with a budget it can finish inside puts two different reasons in the chain rather than one repeated. A fit the solver finished is loaded rather than resumed, and the reasons survive the cache.
+- **A cache is refused by another spec**, including one with the same parameter count, and a file from before `p` existed loads as one diagonal lag and as nothing else. A `p` or `score_matrices` of the wrong type, or a `score_matrices` naming no mode, is refused.
+- **A chain of three capped runs** against one cache reports three runs and the sum of their iterations, and the likelihood rises from run to run, which is what says each run continued from the cache rather than restarting. A fourth run with a budget it can finish inside puts two different reasons in the chain rather than one repeated. A fit the solver finished is loaded rather than resumed, the reasons survive the cache, and a fit of another spec does not pick the chain up.
 - **A cache in the format that shipped before any of these fields existed** loads, reports what it recorded, reports no reason rather than a guessed one, and is handed back by `sdloc_fit_cached` untouched under either convergence flag and over two consecutive reruns. A `run_status` carrying a value outside the five outcomes, or one whose length disagrees with `nruns`, reads as no reason recorded rather than making the file unreadable.
-- **Standard errors** at a fit: none negative, the condition number at least one, the flat-direction count in range, and the point estimates beside them being the fitted ones.
-- **`STRESS=1` adds recovery**: 4 draws at `T = 4000` from a start perturbed by 0.2 per coordinate on the unconstrained scale. 4 of 4 converge with a worst unconstrained coordinate error of 0.193.
+- **Standard errors** at a fit, for one diagonal lag and two full lags: none negative, the condition number at least one, the flat-direction count in range, and the point estimates beside them being the fitted ones.
+- **`STRESS=1` adds recovery**: 4 draws at `T = 4000` from a start perturbed by 0.2 per coordinate on the unconstrained scale, for `K = 2` with one diagonal lag and with two full lags. 4 of 4 converge in each, with a worst unconstrained coordinate error of 0.193 and 0.246.
+
+The suite is also clean under AddressSanitizer and UndefinedBehaviorSanitizer at `-O1`.
 
 ## A large `nu`
 
@@ -242,7 +275,7 @@ Both filters now take the density from `dist/mv/student.h` and its traced
 counterpart, which evaluate the kernel as `log1p(q_t/nu)` and the normalization
 through `special_lgamma_diff`, and `test_light_tail_stays_computable` in
 `tests/correctness/score_driven_location_correctness.c` pins it against an
-elementary closed form - `a = 0` makes `m_t = m_0` for every period, so the
+elementary closed form - `A = 0` makes `m_t = m_0` for every period, so the
 sample is iid t about a fixed location, and `K = 2` makes the normalization the
 constant `-log(2 pi)` with no Gamma function in the reference at all.
 
@@ -252,6 +285,10 @@ a fitted `nu` above roughly `1e6` should be read as "not distinguishable from
 Gaussian" rather than as an estimate.
 
 ## Known limitations and future work
+
+- **One autoregressive lag only.** More lags of `m_t` are future work, and need care about stationarity: with `q > 1` lags a bound on each `b` coefficient no longer keeps the recursion stationary, since that takes every root of `1 - b_{k,1} z - ... - b_{k,q} z^q` outside the unit circle for each series. The map that covers exactly that region is the partial autocorrelation link (`tanh` into `(-1, 1)`, then the Durbin-Levinson recursion; O. Barndorff-Nielsen and G. Schou, "On the parametrization of autoregressive models by partial autocorrelations", Journal of Multivariate Analysis 3(4), 1973, 408-419). It is a general transform, so it would go into et_al. core rather than into this file; it is not there yet.
+
+- **Full score loadings are unconstrained.** In full mode every entry of every `A_j` is free. Nothing keeps the filter invertible, and the test above meets draws where the location diverges; an optimizer can probe such points, where the sentinel catches an overflow but a finite, very low likelihood is returned as it is.
 
 - **No forecast function.** `sdloc_simulate` draws from the model and `_sdloc_filter` reports residuals, but there is no `sdloc_forecast` producing conditional means at horizon `h`.
 

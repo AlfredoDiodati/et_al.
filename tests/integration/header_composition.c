@@ -248,8 +248,8 @@ static int touch_every_module(void) {
     if (qvarma_n_theta(&qvarma_shape) < 1) problems++;
     qvarma_params_free(&qvarma_shape);
 
-    SdlocParams sdloc_shape = sdloc_params_new(2);
-    if (sdloc_n_theta(2) < 1) problems++;
+    SdlocParams sdloc_shape = sdloc_params_new(sdloc_spec(2, 2, SDLOC_SCORE_FULL));
+    if (sdloc_n_theta(sdloc_shape.spec) < 1) problems++;
     sdloc_params_free(&sdloc_shape);
 
     Mat hp_series = mat_lit(4, 1, 1.f, 2.f, 3.f, 4.f);

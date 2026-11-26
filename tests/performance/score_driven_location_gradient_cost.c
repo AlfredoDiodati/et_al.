@@ -10,10 +10,13 @@ analytic one. Correctness is tests/correctness/score_driven_location_correctness
 job; nothing here checks a number beyond printing the two fits' results side by
 side.
 
-Setup. Truth: m0_k = 0.5 + 0.3k, a_k = 0.20 + 0.05k, b_k = 0.85 - 0.07k,
-Omega_inv diagonal 0.7 + 0.1k and below-diagonal entries 0.10 - 0.03j,
-nu = 7.5. One series per case from sdloc_simulate, seed 90210. Cases:
-(K, T) = (2, 400), (3, 1000), (5, 1000).
+Setup. Truth: m0_k = 0.5 + 0.3k, b_k = 0.85 - 0.07k, Omega_inv diagonal
+0.7 + 0.1k and below-diagonal entries 0.10 - 0.03j, nu = 7.5. The score
+loadings: A_j[k,k] = (-1)^(j-1) (0.20 + 0.05k) / j, and in full mode
+A_j[k,l] = (-1)^(j-1) (0.03(k+1) - 0.02l) / j off the diagonal. One series per
+case from sdloc_simulate, seed 90210. Cases, as (K, T, p, score matrices):
+(2, 400, 1, diagonal), (3, 1000, 1, diagonal), (5, 1000, 1, diagonal),
+(5, 1000, 2, diagonal), (5, 1000, 2, full).
 
 Per evaluation: value and gradient at the true theta, 200 evaluations per arm
 per round. Per fit: an L-BFGS fit from the truth with sdloc_default_fit_options,
@@ -54,26 +57,37 @@ static double median(double *values, int n) {
     return n % 2 ? values[n / 2] : 0.5 * (values[n / 2 - 1] + values[n / 2]);
 }
 
-static SdlocParams truth(int K) {
-    SdlocParams m = sdloc_params_new(K);
+static SdlocParams truth(SdlocSpec spec) {
+    int K = spec.K;
+    SdlocParams m = sdloc_params_new(spec);
     for (int k = 0; k < K; k++) {
         AT(m.m0, k, 0) = (mreal)(0.5 + 0.3 * k);
-        AT(m.a, k, 0) = (mreal)(0.20 + 0.05 * k);
         AT(m.b, k, 0) = (mreal)(0.85 - 0.07 * k);
         AT(m.Omega_inv, k, k) = (mreal)(0.7 + 0.1 * k);
         for (int j = 0; j < k; j++) AT(m.Omega_inv, k, j) = (mreal)(0.10 - 0.03 * j);
     }
+    for (int j = 0; j < spec.p; j++) {
+        double sign = j % 2 ? -1.0 : 1.0;
+        for (int k = 0; k < K; k++) {
+            AT(m.A, k, j * K + k) = (mreal)(sign * (0.20 + 0.05 * k) / (j + 1));
+            if (spec.score_matrices == SDLOC_SCORE_FULL)
+                for (int l = 0; l < K; l++)
+                    if (l != k) AT(m.A, k, j * K + l) = (mreal)(sign * (0.03 * (k + 1) - 0.02 * l) / (j + 1));
+        }
+    }
     m.nu = (mreal)7.5;
-    Vec theta = mat_new(sdloc_n_theta(K), 1);
+    Vec theta = mat_new(sdloc_n_theta(spec), 1);
     _sdloc_unlink(&m, theta);
     sdloc_params_from_theta(theta, &m);
     mat_free(theta);
     return m;
 }
 
+typedef struct { Mat y; SdlocSpec spec; } TracedContext;
+
 static mreal traced_objective(Vec theta, Vec gradient, void *context) {
-    Mat y = *(Mat *)context;
-    mreal value = sdloc_traced_log_likelihood(theta, y, gradient);
+    TracedContext *traced = (TracedContext *)context;
+    mreal value = sdloc_traced_log_likelihood(traced->spec, theta, traced->y, gradient);
     if (gradient.d) for (int i = 0; i < theta.r; i++) gradient.d[i] = -gradient.d[i];
     return -value;
 }
@@ -99,9 +113,10 @@ static FitTiming fit_with(int analytic, Mat y, const SdlocParams *start) {
     solver.function_tolerance = defaults.function_tolerance;
     solver.memory = defaults.memory;
     solver.initial_step = defaults.initial_step;
-    Vec theta = mat_new(sdloc_n_theta(start->K), 1);
+    Vec theta = mat_new(sdloc_n_theta(start->spec), 1);
     _sdloc_unlink(start, theta);
-    LbfgsResult r = lbfgs(traced_objective, &y, theta, solver);
+    TracedContext context = { y, start->spec };
+    LbfgsResult r = lbfgs(traced_objective, &context, theta, solver);
     out.seconds = now() - begin;
     out.log_likelihood = -(double)r.value;
     out.gradient_norm = (double)r.gradient_norm;
@@ -116,7 +131,7 @@ static double evaluate_with(int analytic, Mat y, Vec theta, Vec gradient, SdlocA
     double begin = now();
     for (int i = 0; i < EVALUATIONS; i++)
         sink += analytic ? (double)sdloc_analytic_log_likelihood(f, theta, y, gradient)
-                         : (double)sdloc_traced_log_likelihood(theta, y, gradient);
+                         : (double)sdloc_traced_log_likelihood(f->spec, theta, y, gradient);
     (void)sink;
     return now() - begin;
 }
@@ -128,15 +143,18 @@ int main(void) {
     fprintf(report, "score-driven location model: traced against analytic gradient\n");
     fprintf(report, "%d kept rounds, traced first on odd rounds, analytic first on even ones\n\n", ROUNDS);
 
-    const int cases[][2] = { { 2, 400 }, { 3, 1000 }, { 5, 1000 } };
+    const int cases[][4] = { { 2, 400, 1, SDLOC_SCORE_DIAGONAL }, { 3, 1000, 1, SDLOC_SCORE_DIAGONAL },
+                             { 5, 1000, 1, SDLOC_SCORE_DIAGONAL }, { 5, 1000, 2, SDLOC_SCORE_DIAGONAL },
+                             { 5, 1000, 2, SDLOC_SCORE_FULL } };
     for (size_t c = 0; c < sizeof cases / sizeof cases[0]; c++) {
         int K = cases[c][0], T = cases[c][1];
-        SdlocParams m = truth(K);
+        SdlocSpec spec = sdloc_spec(K, cases[c][2], (SdlocScoreMatrices)cases[c][3]);
+        SdlocParams m = truth(spec);
         Rng rng = rng_new(90210u, 0);
         Mat y = sdloc_simulate(&rng, &m, T);
-        Vec theta = mat_new(sdloc_n_theta(K), 1), gradient = mat_new(sdloc_n_theta(K), 1);
+        Vec theta = mat_new(sdloc_n_theta(spec), 1), gradient = mat_new(sdloc_n_theta(spec), 1);
         _sdloc_unlink(&m, theta);
-        SdlocAnalytic *f = sdloc_analytic_new(K, T);
+        SdlocAnalytic *f = sdloc_analytic_new(spec, T);
 
         for (int unit = 0; unit < 2; unit++) {
             double best[2] = { 1e30, 1e30 }, ratio_traced_first[ROUNDS], ratio_analytic_first[ROUNDS];
@@ -163,7 +181,8 @@ int main(void) {
             const char *what = unit == 0 ? "evaluation (value and gradient)" : "fit";
             double scale = unit == 0 ? 1e6 / EVALUATIONS : 1e3;
             const char *units = unit == 0 ? "us" : "ms";
-            fprintf(report, "K = %d, T = %d, per %s\n", K, T, what);
+            fprintf(report, "K = %d, T = %d, p = %d, %s score matrices, per %s\n",
+                    K, T, spec.p, sdloc_score_matrices_text(spec.score_matrices), what);
             fprintf(report, "  best traced %.1f %s, best analytic %.1f %s\n",
                     best[0] * scale, units, best[1] * scale, units);
             fprintf(report, "  median traced/analytic: traced first %.2f, analytic first %.2f\n",
