@@ -55,12 +55,38 @@ at all) nor ad_chol_solve (the full Omega_inv Omega_inv' system) nor
 ad_chol_quadform (a scalar, not the vector) provide. ad.h's
 ad_triangular_solve is exactly that node.
 
-b is a free K-vector mapped into (-1, 1) by tanh, which is what keeps the
-location recursion stationary: the scaled score is bounded, its norm is at
-most sqrt((nu+K)(nu+2)) / (2 sqrt(nu)), so the A_j do not enter the
-stationarity condition. With diagonal A_j each diagonal entry is mapped into
-(-1, 1) by tanh, a bound chosen rather than required. With full A_j every
-entry is free.
+b and the A_j are restricted to the parameters at which the filter is
+invertible: started from any location, the filtered path converges to one
+that does not depend on the start, exponentially fast. The sufficient
+condition is C(theta) <= 1 - delta, delta in (0, 1) a field of the spec, with
+
+    C = || Phi~ - 7/16 Psi~_1 || + 9/16 || Psi~_1 || + sum_{j=2}^{p} || Psi~_j ||,
+    Phi~ = L^-1 diag(b) L,  Psi~_j = r L^-1 A_j L^-T L,  r = sqrt((nu+K)(nu+2)) / nu,
+
+||.|| the spectral norm and L = Omega_inv. This is a contraction condition
+derived for this model, summarized with its constants in
+docs/SCORE_DRIVEN_LOCATION_INVERTIBILITY_DOCUMENTATION.md; the derivation
+writes the update as Psi_j u(v) with u(v) = nu/(nu + q) v, which is this
+file's A_j s_t with Psi_j = r A_j L^-T, and this file's diagonal b is its
+Remark 2 with Phi_1 = diag(b). Invertibility is in the sense of F. Blasques
+(2019), Advanced Econometric Methods: A Guide to Estimation and Inference for
+Complex Dynamic Models, Definitions 5.1 and 5.2, through its Theorem 4.23.
+C(theta) < 1 also gives max_k |b_k| < 1, so the location is stationary as
+well.
+
+The condition is imposed by the link, a radial map of the derivation's
+Section 5 applied to (b, A) rather than to (phi, Psi~), so that a diagonal B
+and diagonal A_j stay diagonal: with b0 and A0_j the free coordinates of theta
+and C0 = C(b0, A0; L, nu),
+
+    lambda = (1 - delta) tanh(C0) / C0,   b = lambda b0,   A_j = lambda A0_j.
+
+C is positively homogeneous of degree one in (b, A) at fixed L and nu, so
+C(theta) = (1 - delta) tanh(C0) < 1 - delta, and the map is a bijection from
+the free coordinates onto the set where C < 1 - delta, inverted by
+(b0, A0) = atanh(C / (1 - delta)) / C (b, A). The bounds on L, L^-1 and nu that
+the derivation's uniform result also needs are not imposed;
+sdloc_invertibility_diagnostics reports them for a fitted model.
 
 The filter exists twice. The traced one, _sdloc_filter, builds the recursion on
 an ad.h tape and is differentiated by reverse mode. The analytic one,
@@ -73,26 +99,31 @@ two against each other.
 
 typedef enum { SDLOC_SCORE_DIAGONAL, SDLOC_SCORE_FULL } SdlocScoreMatrices;
 
-/* The structure of the model: K series, p lagged scores, and whether the A_j
-   are diagonal or full. Plain scalars, no allocation. */
+/* The structure of the model: K series, p lagged scores, whether the A_j are
+   diagonal or full, and delta, the margin of the invertibility condition
+   C(theta) <= 1 - delta. Plain scalars, no allocation. */
 typedef struct {
     int K;
     int p;
     SdlocScoreMatrices score_matrices;
+    mreal delta;
 } SdlocSpec;
 
-static inline SdlocSpec sdloc_spec(int K, int p, SdlocScoreMatrices score_matrices) {
+static inline SdlocSpec sdloc_spec(int K, int p, SdlocScoreMatrices score_matrices, mreal delta) {
     assert(K > 0 && p > 0);
     assert(score_matrices == SDLOC_SCORE_DIAGONAL || score_matrices == SDLOC_SCORE_FULL);
+    assert(delta > 0 && delta < 1);
     SdlocSpec spec;
     spec.K = K;
     spec.p = p;
     spec.score_matrices = score_matrices;
+    spec.delta = delta;
     return spec;
 }
 
 static inline int sdloc_spec_equal(SdlocSpec left, SdlocSpec right) {
-    return left.K == right.K && left.p == right.p && left.score_matrices == right.score_matrices;
+    return left.K == right.K && left.p == right.p && left.score_matrices == right.score_matrices
+           && left.delta == right.delta;
 }
 
 static inline const char *sdloc_score_matrices_text(SdlocScoreMatrices score_matrices) {
@@ -104,8 +135,8 @@ Where each block starts in theta, generated from the spec. The order is m0
 (K), the score loadings A_1 ... A_p, b (K), the diagonal of Omega_inv (K), its
 strict lower triangle (K(K-1)/2), nu (1). Each A_j takes A_per_lag
 coordinates: its K diagonal entries when diagonal, its K x K entries in
-row-major order when full. With p = 1 and diagonal A_1 this is the layout the
-model had before p existed, so a cache written then still reads.
+row-major order when full. The b and A blocks hold the free coordinates b0 and
+A0 of the radial map described at the top of this file.
 */
 typedef struct {
     int m0, A, A_per_lag, b, Omega_inv_diagonal, Omega_inv_below, nu, n_theta;
@@ -147,7 +178,7 @@ typedef struct {
     SdlocSpec spec;
     Mat m0;         /* K x 1, free */
     Mat A;          /* K x pK, [A_1 ... A_p] */
-    Mat b;          /* K x 1, diagonal of B, in (-1, 1) */
+    Mat b;          /* K x 1, diagonal of B */
     Mat Omega_inv;  /* K x K, lower triangular, positive diagonal */
     mreal nu;
     Mat Sigma;      /* K x K, derived: Omega_inv Omega_inv' */
@@ -180,10 +211,305 @@ static inline Node *sdloc_constant_node(Tape *tape, Mat value) {
     return n;
 }
 
+/* r = sqrt((nu+K)(nu+2)) / nu, the factor that turns this file's scaled score
+   into the derivation's u(v): A_j s_t = r A_j L^-T u(v_t). Written as
+   sqrt((1 + K/nu)(1 + 2/nu)) so that it does not overflow at a light tail. */
+static inline mreal _sdloc_score_ratio(int K, mreal nu) {
+    return (mreal)sqrt((1.0 + K / (double)nu) * (1.0 + 2.0 / (double)nu));
+}
+
+/* d log r / d nu = 1/(2(nu+K)) + 1/(2(nu+2)) - 1/nu, with the three terms,
+   each of size 1/nu, combined before they are added:
+   -((K+2) nu + 4K) / (2 nu (nu+K) (nu+2)). */
+static inline mreal _sdloc_score_ratio_log_derivative(int K, mreal nu) {
+    double n = nu;
+    return (mreal)(-((K + 2.0) * n + 4.0 * K) / (2.0 * n * (n + K) * (n + 2.0)));
+}
+
+/*
+The invertibility constant C of the comment at the top of this file, and its
+adjoint, on K x K row-major buffers. The intermediates of one evaluation are
+kept for the adjoint: Phi = L^-1 diag(b) L, P_j = L^-1 A_j L^-T L, so that
+Psi~_j = r P_j, M1 = Phi - 7/16 Psi~_1, and in G the derivative u v' of the
+spectral norm of M1 and of each P_j (see mat_spectral_norm). L^-1 is never
+formed: every product with it is a triangular solve, X L^-1 and X L^-T through
+the transpose.
+*/
+typedef struct {
+    int K, p, is_full;
+    mreal ratio, C;
+    mreal *Phi, *P, *M1, *G;
+    mreal *scratch;
+    mreal *u, *v;
+} SdlocInvertibility;
+
+#define SDLOC_INVERTIBILITY_SCRATCH 8
+
+static inline SdlocInvertibility *_sdloc_invertibility_new(SdlocSpec spec) {
+    int K = spec.K, p = spec.p;
+    size_t square = (size_t)K * K;
+    SdlocInvertibility *w = (SdlocInvertibility*)malloc(sizeof(SdlocInvertibility));
+    assert(w);
+    w->K = K;
+    w->p = p;
+    w->is_full = spec.score_matrices == SDLOC_SCORE_FULL;
+    w->ratio = 0;
+    w->C = 0;
+    w->Phi = (mreal*)malloc(square * sizeof(mreal));
+    w->P = (mreal*)malloc((size_t)p * square * sizeof(mreal));
+    w->M1 = (mreal*)malloc(square * sizeof(mreal));
+    w->G = (mreal*)malloc((size_t)(p + 1) * square * sizeof(mreal));
+    w->scratch = (mreal*)malloc(SDLOC_INVERTIBILITY_SCRATCH * square * sizeof(mreal));
+    w->u = (mreal*)malloc((size_t)K * sizeof(mreal));
+    w->v = (mreal*)malloc((size_t)K * sizeof(mreal));
+    assert(w->Phi && w->P && w->M1 && w->G && w->scratch && w->u && w->v);
+    return w;
+}
+
+static inline void _sdloc_invertibility_free(SdlocInvertibility *w) {
+    if (!w) return;
+    free(w->Phi); free(w->P); free(w->M1); free(w->G); free(w->scratch); free(w->u); free(w->v);
+    free(w);
+}
+
+/* c = op(a) op(b), K x K; c must not alias a or b. */
+static inline void _sdloc_square_product(int K, int transpose_a, const mreal *a, int transpose_b,
+                                         const mreal *b, mreal *c) {
+    mat_gemm(transpose_a, transpose_b, K, K, K, (mreal)1, a, K, b, K, (mreal)0, c, K);
+}
+
+/* X <- L^-1 X ('N') or L^-T X ('T'), in place. */
+static inline void _sdloc_solve_left(int K, const mreal *L, char trans, mreal *X) {
+    int info = _trtrs('L', trans, 'N', K, K, L, K, X, K);
+    assert(info == 0);
+    (void)info;
+}
+
+/* X <- X L^-1 ('N') or X L^-T ('T'), in place, through the transpose:
+   (X L^-1)' = L^-T X' and (X L^-T)' = L^-1 X'. */
+static inline void _sdloc_solve_right(int K, const mreal *L, char trans, mreal *X, mreal *scratch) {
+    for (int i = 0; i < K; i++)
+        for (int j = 0; j < K; j++) scratch[(size_t)j * K + i] = X[(size_t)i * K + j];
+    _sdloc_solve_left(K, L, trans == 'N' ? 'T' : 'N', scratch);
+    for (int i = 0; i < K; i++)
+        for (int j = 0; j < K; j++) X[(size_t)i * K + j] = scratch[(size_t)j * K + i];
+}
+
+/* A_{j+1} as a dense K x K matrix, from loadings in theta's order: lag by lag,
+   the diagonal when diagonal, the rows when full. */
+static inline void _sdloc_loading_block(const SdlocInvertibility *w, const mreal *A, int j, mreal *out) {
+    int K = w->K;
+    if (w->is_full) {
+        for (int i = 0; i < K * K; i++) out[i] = A[(size_t)j * K * K + i];
+        return;
+    }
+    for (int i = 0; i < K * K; i++) out[i] = 0;
+    for (int k = 0; k < K; k++) out[(size_t)k * K + k] = A[(size_t)j * K + k];
+}
+
+/* The spectral norm of the K x K matrix M, with u v' written to G. */
+static inline mreal _sdloc_norm_and_derivative(SdlocInvertibility *w, const mreal *M, mreal *G) {
+    int K = w->K;
+    Mat matrix = { K, K, K, (mreal*)M };
+    Vec u = { K, 1, 1, w->u }, v = { K, 1, 1, w->v };
+    mreal norm = mat_spectral_norm(matrix, u, v);
+    for (int i = 0; i < K; i++)
+        for (int j = 0; j < K; j++) G[(size_t)i * K + j] = w->u[i] * w->v[j];
+    return norm;
+}
+
+/* Whether every entry of a K x K buffer is a number, the precondition of
+   mat_spectral_norm's SVD. */
+static inline int _sdloc_square_is_finite(int K, const mreal *M) {
+    for (int i = 0; i < K * K; i++)
+        if (MISNAN(M[i]) || MISINF(M[i])) return 0;
+    return 1;
+}
+
+/* C(b, A; L, nu), keeping what the adjoint needs. L is the dense K x K lower
+   factor with a nonzero diagonal. An optimizer probes factors whose inverse
+   overflows; there one of the matrices whose norm C is made of is not finite,
+   and C is returned as plus infinity without computing any norm. */
+static inline mreal _sdloc_invertibility_constant(SdlocInvertibility *w, const mreal *L, mreal nu,
+                                                  const mreal *b, const mreal *A) {
+    int K = w->K, p = w->p;
+    size_t square = (size_t)K * K;
+    mreal *block = w->scratch, *transposed = w->scratch + square;
+    w->ratio = _sdloc_score_ratio(K, nu);
+
+    for (int i = 0; i < K; i++)
+        for (int j = 0; j < K; j++) w->Phi[(size_t)i * K + j] = b[i] * L[(size_t)i * K + j];
+    _sdloc_solve_left(K, L, 'N', w->Phi);
+    for (int j = 0; j < p; j++) {
+        mreal *P = w->P + (size_t)j * square;
+        _sdloc_loading_block(w, A, j, block);
+        _sdloc_solve_right(K, L, 'T', block, transposed);
+        _sdloc_square_product(K, 0, block, 0, L, P);
+        _sdloc_solve_left(K, L, 'N', P);
+    }
+    for (size_t i = 0; i < square; i++) w->M1[i] = w->Phi[i] - (mreal)(7.0 / 16.0) * w->ratio * w->P[i];
+    int finite = _sdloc_square_is_finite(K, w->M1);
+    for (int j = 0; j < p && finite; j++) finite = _sdloc_square_is_finite(K, w->P + (size_t)j * square);
+    if (!finite) {
+        w->C = (mreal)INFINITY;
+        return w->C;
+    }
+
+    mreal C = _sdloc_norm_and_derivative(w, w->M1, w->G);
+    for (int j = 0; j < p; j++) {
+        mreal norm = w->ratio * _sdloc_norm_and_derivative(w, w->P + (size_t)j * square,
+                                                          w->G + (size_t)(j + 1) * square);
+        C += j == 0 ? (mreal)(9.0 / 16.0) * norm : norm;
+    }
+    w->C = C;
+    return C;
+}
+
+/*
+Adds C_bar times the derivative of C to b_bar (K), A_bar (loadings in theta's
+order), L_bar (dense K x K, both triangles written, only the lower one a
+parameter) and nu_bar, at the point of the last _sdloc_invertibility_constant.
+
+With R = L^-T L, Q = L^-1 A and S = L^-T, P = L^-1 A S L gives
+
+    L_bar += -L^-T P_bar P' - R P_bar' Q S + L^-1 A' L^-T P_bar,
+    A_bar += L^-T P_bar R',
+
+and Phi = L^-1 D L, D = diag(b), gives
+
+    L_bar += -L^-T Phi_bar Phi' + D L^-T Phi_bar,  b_bar_k += (L^-T Phi_bar L')_kk.
+
+Psi~_j = r P_j adds <Psi~_j_bar, P_j> to r_bar, and r reaches nu through
+_sdloc_score_ratio_log_derivative. In diagonal mode only the diagonal of each
+A_j_bar is a parameter's adjoint.
+*/
+static inline void _sdloc_invertibility_adjoint(SdlocInvertibility *w, const mreal *L, const mreal *b,
+                                                const mreal *A, mreal nu, mreal C_bar, mreal *b_bar,
+                                                mreal *A_bar, mreal *L_bar, mreal *nu_bar) {
+    int K = w->K, p = w->p;
+    size_t square = (size_t)K * K;
+    mreal *P_bar = w->scratch, *T = w->scratch + square, *X = w->scratch + 2 * square;
+    mreal *Y = w->scratch + 3 * square, *Z = w->scratch + 4 * square;
+    mreal *transposed = w->scratch + 5 * square, *block = w->scratch + 6 * square;
+    mreal r = w->ratio, r_bar = 0;
+    const mreal *G_M1 = w->G;
+
+    for (int j = 0; j < p; j++) {
+        const mreal *P = w->P + (size_t)j * square, *G = w->G + (size_t)(j + 1) * square;
+        for (size_t i = 0; i < square; i++) {
+            mreal Psi_bar = j == 0 ? C_bar * ((mreal)(-7.0 / 16.0) * G_M1[i] + (mreal)(9.0 / 16.0) * G[i])
+                                   : C_bar * G[i];
+            r_bar += Psi_bar * P[i];
+            P_bar[i] = r * Psi_bar;
+        }
+        _sdloc_loading_block(w, A, j, block);
+
+        for (size_t i = 0; i < square; i++) T[i] = P_bar[i];
+        _sdloc_solve_left(K, L, 'T', T);
+        _sdloc_square_product(K, 0, T, 1, P, X);
+        for (size_t i = 0; i < square; i++) L_bar[i] -= X[i];
+
+        _sdloc_square_product(K, 0, T, 1, L, X);
+        _sdloc_solve_right(K, L, 'N', X, transposed);
+        if (w->is_full)
+            for (size_t i = 0; i < square; i++) A_bar[(size_t)j * square + i] += X[i];
+        else
+            for (int k = 0; k < K; k++) A_bar[(size_t)j * K + k] += X[(size_t)k * K + k];
+
+        _sdloc_square_product(K, 0, L, 1, P_bar, X);
+        _sdloc_solve_left(K, L, 'T', X);
+        for (size_t i = 0; i < square; i++) Y[i] = block[i];
+        _sdloc_solve_left(K, L, 'N', Y);
+        _sdloc_square_product(K, 0, X, 0, Y, Z);
+        _sdloc_solve_right(K, L, 'T', Z, transposed);
+        for (size_t i = 0; i < square; i++) L_bar[i] -= Z[i];
+
+        for (int i = 0; i < K; i++)
+            for (int l = 0; l < K; l++) X[(size_t)i * K + l] = block[(size_t)l * K + i];
+        _sdloc_solve_left(K, L, 'N', X);
+        _sdloc_solve_right(K, L, 'T', X, transposed);
+        _sdloc_square_product(K, 0, X, 0, P_bar, Z);
+        for (size_t i = 0; i < square; i++) L_bar[i] += Z[i];
+    }
+
+    for (size_t i = 0; i < square; i++) T[i] = C_bar * G_M1[i];
+    _sdloc_solve_left(K, L, 'T', T);
+    _sdloc_square_product(K, 0, T, 1, w->Phi, X);
+    for (size_t i = 0; i < square; i++) L_bar[i] -= X[i];
+    for (int k = 0; k < K; k++) {
+        mreal diagonal = 0;
+        for (int m = 0; m < K; m++) {
+            diagonal += T[(size_t)k * K + m] * L[(size_t)k * K + m];
+            L_bar[(size_t)k * K + m] += b[k] * T[(size_t)k * K + m];
+        }
+        b_bar[k] += diagonal;
+    }
+    *nu_bar += r_bar * r * _sdloc_score_ratio_log_derivative(K, nu);
+}
+
+/*
+tau(c) = tanh(c) / c, the radial factor lambda = (1 - delta) tau(C0), and its
+derivative tau'(c) = (c sech(c)^2 - tanh(c)) / c^2. The numerator of the
+derivative is a difference of two numbers that agree to order c^3, so it is
+evaluated as -(sinh(2c) - 2c) / (2 cosh(c)^2), with sinh(x) - x summed as its
+series below x = 1; past c = 20, cosh(c)^2 is beyond what the formula needs
+and tanh(c) = 1 to every digit, so tau' = -1/c^2 there.
+*/
+static inline void _sdloc_radial_factor(mreal C, mreal *tau, mreal *tau_derivative) {
+    double c = C;
+    if (c == 0) { *tau = 1; *tau_derivative = 0; return; }
+    if (c > 20) { *tau = (mreal)(1 / c); *tau_derivative = (mreal)(-1 / (c * c)); return; }
+    double x = 2 * c, excess;
+    if (x < 1) {
+        double term = x * x * x / 6, sum = 0;
+        for (int k = 1; k < 20 && term > 1e-20 * sum; k++) {
+            sum += term;
+            term *= x * x / ((2.0 * k + 2) * (2.0 * k + 3));
+        }
+        excess = sum;
+    } else {
+        excess = sinh(x) - x;
+    }
+    double hyperbolic_cosine = cosh(c);
+    *tau = (mreal)(tanh(c) / c);
+    *tau_derivative = (mreal)(-excess / (2 * hyperbolic_cosine * hyperbolic_cosine * c * c));
+}
+
+/*
+The loadings of m, a K x pK matrix with the blocks side by side, into theta's
+order, the order _sdloc_location_step reads. out holds p A_per_lag numbers.
+*/
+static inline void _sdloc_pack_loadings(const SdlocParams *m, mreal *out) {
+    SdlocSpec spec = m->spec;
+    int K = spec.K, first = sdloc_layout(spec).A;
+    for (int j = 0; j < spec.p; j++)
+        for (int k = 0; k < K; k++)
+            for (int l = 0; l < K; l++) {
+                int index = _sdloc_A_theta_index(spec, j, k, l);
+                if (index >= 0) out[index - first] = AT(m->A, k, j * K + l);
+            }
+}
+
+/* C(theta) for a model, the left-hand side of the invertibility condition
+   C <= 1 - delta. */
+static inline mreal sdloc_invertibility_constant(const SdlocParams *m) {
+    SdlocSpec spec = m->spec;
+    assert(m->Omega_inv.stride == spec.K && m->b.stride == 1);
+    SdlocInvertibility *w = _sdloc_invertibility_new(spec);
+    mreal *loadings = (mreal*)malloc((size_t)spec.p * sdloc_layout(spec).A_per_lag * sizeof(mreal));
+    assert(loadings);
+    _sdloc_pack_loadings(m, loadings);
+    mreal C = _sdloc_invertibility_constant(w, m->Omega_inv.d, m->nu, m->b.d, loadings);
+    free(loadings);
+    _sdloc_invertibility_free(w);
+    return C;
+}
+
 /* A[j] is A_{j+1}: a K x 1 node holding its diagonal when the spec says
    diagonal, a K x K node when full. */
 typedef struct {
     SdlocSpec spec;
+    int is_usable;   /* 0 where the radial map could not be evaluated */
     Node *m0;
     Node **A;
     Node *b;
@@ -200,15 +526,6 @@ static inline SdlocLinked _sdloc_link(Tape *tape, Node *theta, SdlocSpec spec) {
     linked.spec = spec;
 
     linked.m0 = ad_slice(tape, theta, layout.m0, layout.m0 + K, 0, 1);
-    linked.A = (Node**)malloc((size_t)spec.p * sizeof(Node*));
-    assert(linked.A);
-    for (int j = 0; j < spec.p; j++) {
-        int at = layout.A + j * layout.A_per_lag;
-        Node *block = ad_slice(tape, theta, at, at + layout.A_per_lag, 0, 1);
-        linked.A[j] = spec.score_matrices == SDLOC_SCORE_FULL ? ad_reshape(tape, block, K, K)
-                                                              : ad_tanh(tape, block);
-    }
-    linked.b = ad_tanh(tape, ad_slice(tape, theta, layout.b, layout.b + K, 0, 1));
 
     Node *diag_theta = ad_slice(tape, theta, layout.Omega_inv_diagonal,
                                 layout.Omega_inv_diagonal + K, 0, 1);
@@ -231,6 +548,75 @@ static inline SdlocLinked _sdloc_link(Tape *tape, Node *theta, SdlocSpec spec) {
 
     linked.nu = ad_add(tape, ad_exp(tape, ad_slice(tape, theta, layout.nu, layout.nu + 1, 0, 1)),
                        sdloc_constant_node(tape, mat_fill(1, 1, 2)));
+
+    /* The radial map of the comment at the top of this file, on the tape: C0
+       from b0 and A0, then lambda = (1 - delta) tanh(C0) / C0. Each A0_j enters
+       C0 as a dense K x K matrix; a diagonal one is spread onto the diagonal
+       by the same selection pick_diag does for Omega_inv. The derivative of
+       tanh(c)/c is the difference the analytic link evaluates in another form
+       (_sdloc_radial_factor), so this path loses digits as C0 approaches zero
+       and the analytic one does not. */
+    Node *L = linked.Omega_inv;
+    Node *b_zero = ad_slice(tape, theta, layout.b, layout.b + K, 0, 1);
+    linked.is_usable = 1;
+    for (int k = 0; k < K; k++) {
+        mreal diagonal = AT(L->val, k, k);
+        if (diagonal == 0 || MISINF(diagonal) || MISNAN(diagonal)) linked.is_usable = 0;
+    }
+    Node **A_zero = (Node**)malloc((size_t)spec.p * sizeof(Node*));
+    assert(A_zero);
+    Node *ratio = ad_ediv(tape,
+                          ad_pow(tape, ad_emul(tape, ad_add(tape, linked.nu, sdloc_constant_node(tape, mat_fill(1, 1, (mreal)K))),
+                                                     ad_add(tape, linked.nu, sdloc_constant_node(tape, mat_fill(1, 1, 2)))),
+                                 (mreal)0.5),
+                          linked.nu);
+    Mat spread = mat_new(K * K, K);
+    for (int k = 0; k < K; k++) AT(spread, k * K + k, k) = 1;
+    Node *spread_node = sdloc_constant_node(tape, spread);
+    for (int j = 0; j < spec.p; j++) {
+        int at = layout.A + j * layout.A_per_lag;
+        A_zero[j] = ad_slice(tape, theta, at, at + layout.A_per_lag, 0, 1);
+    }
+    Node *lambda = NULL;
+    if (linked.is_usable) {
+        Node *Phi = ad_triangular_solve(tape, L,
+                                        ad_matmul(tape, ad_reshape(tape, ad_matmul(tape, spread_node, b_zero), K, K), L),
+                                        'N');
+        Node **Psi = (Node**)malloc((size_t)spec.p * sizeof(Node*));
+        assert(Psi);
+        for (int j = 0; j < spec.p; j++) {
+            Node *dense = spec.score_matrices == SDLOC_SCORE_FULL
+                          ? ad_reshape(tape, A_zero[j], K, K)
+                          : ad_reshape(tape, ad_matmul(tape, spread_node, A_zero[j]), K, K);
+            /* A L^-T = (L^-1 A')' */
+            Node *A_L_inverse_t = ad_transpose(tape, ad_triangular_solve(tape, L, ad_transpose(tape, dense), 'N'));
+            Psi[j] = ad_broadcast_mul(tape, ad_triangular_solve(tape, L, ad_matmul(tape, A_L_inverse_t, L), 'N'),
+                                      ratio);
+            if (!_sdloc_square_is_finite(K, Psi[j]->val.d)) linked.is_usable = 0;
+        }
+        Node *M1 = ad_sub(tape, Phi, ad_scale(tape, Psi[0], (mreal)(7.0 / 16.0)));
+        if (!_sdloc_square_is_finite(K, M1->val.d)) linked.is_usable = 0;
+        if (linked.is_usable) {
+            Node *C_zero = ad_add(tape, ad_spectral_norm(tape, M1),
+                                  ad_scale(tape, ad_spectral_norm(tape, Psi[0]), (mreal)(9.0 / 16.0)));
+            for (int j = 1; j < spec.p; j++) C_zero = ad_add(tape, C_zero, ad_spectral_norm(tape, Psi[j]));
+            if (C_zero->val.d[0] != 0)
+                lambda = ad_scale(tape, ad_ediv(tape, ad_tanh(tape, C_zero), C_zero), 1 - spec.delta);
+        }
+        free(Psi);
+    }
+    /* At C0 = 0, lambda = 1 - delta and its derivative is zero, and at a point
+       the link cannot evaluate it is a placeholder the sentinel discards. */
+    if (!lambda) lambda = sdloc_constant_node(tape, mat_fill(1, 1, 1 - spec.delta));
+
+    linked.b = ad_broadcast_mul(tape, b_zero, lambda);
+    linked.A = (Node**)malloc((size_t)spec.p * sizeof(Node*));
+    assert(linked.A);
+    for (int j = 0; j < spec.p; j++) {
+        Node *block = ad_broadcast_mul(tape, A_zero[j], lambda);
+        linked.A[j] = spec.score_matrices == SDLOC_SCORE_FULL ? ad_reshape(tape, block, K, K) : block;
+    }
+    free(A_zero);
     return linked;
 }
 
@@ -242,11 +628,30 @@ static inline void sdloc_linked_free(SdlocLinked *linked) {
 /* The inverse of the link. In diagonal mode an off-diagonal entry of an A_j is
    not a parameter, so a nonzero one is programmer error rather than something
    to drop silently. */
+/*
+The radial map inverted: (b0, A0) = atanh(C / (1 - delta)) / C (b, A), with
+the factor 1 / (1 - delta) at C = 0. A model outside the invertible set,
+C(theta) > 1 - delta, has no theta, and handing one in is programmer error;
+sdloc_invertibility_constant is how a caller checks a starting point. At the
+edge of the set the map is not invertible in floating point: once C0 passes
+about 19, tanh(C0) rounds to 1 and C(theta) to 1 - delta exactly. Such a model
+is taken back to C / (1 - delta) = 1 - 4 MEPS, where atanh is finite, rather
+than to an infinite coordinate.
+*/
 static inline void _sdloc_unlink(const SdlocParams *m, Vec theta) {
     SdlocSpec spec = m->spec;
     int K = spec.K;
     SdlocLayout layout = sdloc_layout(spec);
     assert(theta.r == layout.n_theta && theta.c == 1);
+
+    mreal C = sdloc_invertibility_constant(m);
+    double margin = 1.0 - (double)spec.delta;
+    assert(C <= margin * (1 + 16 * (double)MEPS)
+           && "the model is outside the invertible set C(theta) <= 1 - delta");
+    double ratio = (double)C / margin, largest = 1 - 4 * (double)MEPS;
+    if (ratio > largest) ratio = largest;
+    double factor = C == 0 ? 1 / margin : atanh(ratio) / (double)C;
+
     for (int i = 0; i < K; i++) theta.d[layout.m0 + i] = AT(m->m0, i, 0);
     for (int j = 0; j < spec.p; j++)
         for (int k = 0; k < K; k++)
@@ -257,10 +662,9 @@ static inline void _sdloc_unlink(const SdlocParams *m, Vec theta) {
                     assert(value == 0 && "a diagonal A_j has no off-diagonal parameter");
                     continue;
                 }
-                theta.d[index] = spec.score_matrices == SDLOC_SCORE_FULL
-                                 ? value : (mreal)atanh((double)value);
+                theta.d[index] = (mreal)(factor * (double)value);
             }
-    for (int i = 0; i < K; i++) theta.d[layout.b + i] = (mreal)atanh((double)AT(m->b, i, 0));
+    for (int i = 0; i < K; i++) theta.d[layout.b + i] = (mreal)(factor * (double)AT(m->b, i, 0));
     for (int k = 0; k < K; k++)
         theta.d[layout.Omega_inv_diagonal + k] = (mreal)log((double)AT(m->Omega_inv, k, k));
     int at = layout.Omega_inv_below;
@@ -269,14 +673,14 @@ static inline void _sdloc_unlink(const SdlocParams *m, Vec theta) {
     theta.d[layout.nu] = (mreal)log((double)m->nu - 2.0);
 }
 
-/* One transform per coordinate of theta, in the layout _sdloc_link builds and
-   _sdloc_unlink inverts: the analytic link, its chain rule and the standard
-   errors all read this table, so none of them can drift from the others. */
-typedef enum { SDLOC_LINK_IDENTITY, SDLOC_LINK_TANH, SDLOC_LINK_EXP, SDLOC_LINK_EXP_PLUS_TWO } SdlocLink;
+/* One transform per coordinate of theta, the first of the link's two stages:
+   b0 and A0 come out of it unchanged and the radial map then acts on them. The
+   analytic link, its chain rule and the standard errors all read this table,
+   so none of them can drift from the others. */
+typedef enum { SDLOC_LINK_IDENTITY, SDLOC_LINK_EXP, SDLOC_LINK_EXP_PLUS_TWO } SdlocLink;
 
 static inline mreal sdloc_link_forward(SdlocLink kind, mreal theta) {
     switch (kind) {
-        case SDLOC_LINK_TANH: return (mreal)tanh((double)theta);
         case SDLOC_LINK_EXP: return (mreal)exp((double)theta);
         case SDLOC_LINK_EXP_PLUS_TWO: return (mreal)(exp((double)theta) + 2.0);
         default: return theta;
@@ -285,7 +689,6 @@ static inline mreal sdloc_link_forward(SdlocLink kind, mreal theta) {
 
 static inline mreal sdloc_link_derivative(SdlocLink kind, mreal constrained) {
     switch (kind) {
-        case SDLOC_LINK_TANH: return 1 - constrained * constrained;
         case SDLOC_LINK_EXP: return constrained;
         case SDLOC_LINK_EXP_PLUS_TWO: return constrained - 2;
         default: return 1;
@@ -295,13 +698,134 @@ static inline mreal sdloc_link_derivative(SdlocLink kind, mreal constrained) {
 static inline void _sdloc_link_kinds(SdlocSpec spec, SdlocLink *out) {
     int K = spec.K;
     SdlocLayout layout = sdloc_layout(spec);
-    SdlocLink A_kind = spec.score_matrices == SDLOC_SCORE_FULL ? SDLOC_LINK_IDENTITY : SDLOC_LINK_TANH;
     for (int i = 0; i < K; i++) out[layout.m0 + i] = SDLOC_LINK_IDENTITY;
-    for (int i = 0; i < spec.p * layout.A_per_lag; i++) out[layout.A + i] = A_kind;
-    for (int i = 0; i < K; i++) out[layout.b + i] = SDLOC_LINK_TANH;
+    for (int i = 0; i < spec.p * layout.A_per_lag; i++) out[layout.A + i] = SDLOC_LINK_IDENTITY;
+    for (int i = 0; i < K; i++) out[layout.b + i] = SDLOC_LINK_IDENTITY;
     for (int i = 0; i < K; i++) out[layout.Omega_inv_diagonal + i] = SDLOC_LINK_EXP;
     for (int i = 0; i < K * (K - 1) / 2; i++) out[layout.Omega_inv_below + i] = SDLOC_LINK_IDENTITY;
     out[layout.nu] = SDLOC_LINK_EXP_PLUS_TWO;
+}
+
+/*
+The analytic link, theta to the constrained parameters, in two stages: the
+per-coordinate table above, giving m0, b0, A0, Omega_inv and nu, then the
+radial map taking b0 and A0 to b and A. elementwise holds the first stage and
+constrained the second, both in theta's layout, and Omega_inv is the factor as
+a dense K x K matrix. _sdloc_link_map_adjoint is the chain rule of both stages:
+the gradient of the filters, and each row of the Jacobian the standard errors
+need, go through it.
+*/
+typedef struct {
+    SdlocSpec spec;
+    SdlocLayout layout;
+    SdlocLink *kinds;
+    mreal *elementwise, *constrained, *Omega_inv;
+    mreal *bar, *Omega_inv_bar;
+    mreal C_zero, lambda, tau_derivative;
+    SdlocInvertibility *invertibility;
+} SdlocLinkMap;
+
+static inline SdlocLinkMap *_sdloc_link_map_new(SdlocSpec spec) {
+    SdlocLinkMap *map = (SdlocLinkMap*)malloc(sizeof(SdlocLinkMap));
+    assert(map);
+    map->spec = spec;
+    map->layout = sdloc_layout(spec);
+    int n = map->layout.n_theta;
+    size_t square = (size_t)spec.K * spec.K;
+    map->kinds = (SdlocLink*)malloc((size_t)n * sizeof(SdlocLink));
+    map->elementwise = (mreal*)malloc((size_t)n * sizeof(mreal));
+    map->constrained = (mreal*)malloc((size_t)n * sizeof(mreal));
+    map->bar = (mreal*)malloc((size_t)n * sizeof(mreal));
+    map->Omega_inv = (mreal*)malloc(square * sizeof(mreal));
+    map->Omega_inv_bar = (mreal*)malloc(square * sizeof(mreal));
+    assert(map->kinds && map->elementwise && map->constrained && map->bar && map->Omega_inv
+           && map->Omega_inv_bar);
+    map->invertibility = _sdloc_invertibility_new(spec);
+    map->C_zero = map->lambda = map->tau_derivative = 0;
+    _sdloc_link_kinds(spec, map->kinds);
+    return map;
+}
+
+static inline void _sdloc_link_map_free(SdlocLinkMap *map) {
+    if (!map) return;
+    free(map->kinds); free(map->elementwise); free(map->constrained); free(map->bar);
+    free(map->Omega_inv); free(map->Omega_inv_bar);
+    _sdloc_invertibility_free(map->invertibility);
+    free(map);
+}
+
+/* Returns 0 when the radial map cannot be evaluated: the factor has a zero or
+   non-finite diagonal entry, or a matrix C is the norm of overflowed. */
+static inline int _sdloc_link_map_forward(SdlocLinkMap *map, const mreal *theta) {
+    SdlocLayout layout = map->layout;
+    int K = map->spec.K, n = layout.n_theta;
+    for (int i = 0; i < n; i++) {
+        map->elementwise[i] = sdloc_link_forward(map->kinds[i], theta[i]);
+        map->constrained[i] = map->elementwise[i];
+    }
+    for (int i = 0; i < K * K; i++) map->Omega_inv[i] = 0;
+    for (int k = 0; k < K; k++) map->Omega_inv[(size_t)k * K + k] = map->elementwise[layout.Omega_inv_diagonal + k];
+    int at = layout.Omega_inv_below;
+    for (int i = 1; i < K; i++)
+        for (int j = 0; j < i; j++) map->Omega_inv[(size_t)i * K + j] = map->elementwise[at++];
+    for (int k = 0; k < K; k++) {
+        mreal diagonal = map->Omega_inv[(size_t)k * K + k];
+        if (diagonal == 0 || MISINF(diagonal) || MISNAN(diagonal)) return 0;
+    }
+
+    map->C_zero = _sdloc_invertibility_constant(map->invertibility, map->Omega_inv,
+                                                map->elementwise[layout.nu],
+                                                map->elementwise + layout.b,
+                                                map->elementwise + layout.A);
+    if (MISINF(map->C_zero) || MISNAN(map->C_zero)) return 0;
+    mreal tau;
+    _sdloc_radial_factor(map->C_zero, &tau, &map->tau_derivative);
+    map->lambda = (1 - map->spec.delta) * tau;
+    for (int i = 0; i < K; i++) map->constrained[layout.b + i] = map->lambda * map->elementwise[layout.b + i];
+    for (int i = 0; i < layout.b - layout.A; i++)
+        map->constrained[layout.A + i] = map->lambda * map->elementwise[layout.A + i];
+    return 1;
+}
+
+/*
+The chain rule of the link at the point of the last forward call: given the
+derivative with respect to the constrained parameters, in theta's layout,
+writes the derivative with respect to theta. constrained_bar and theta_bar may
+be the same array.
+
+The radial map gives b0_bar = lambda b_bar and A0_bar = lambda A_bar, plus
+C0_bar = lambda_bar (1 - delta) tau'(C0) with lambda_bar = <b_bar, b0> +
+<A_bar, A0>, which _sdloc_invertibility_adjoint carries to b0, A0, Omega_inv
+and nu. The per-coordinate table then multiplies by each transform's
+derivative.
+*/
+static inline void _sdloc_link_map_adjoint(SdlocLinkMap *map, const mreal *constrained_bar,
+                                           mreal *theta_bar) {
+    SdlocLayout layout = map->layout;
+    int K = map->spec.K, n = layout.n_theta, n_loadings = layout.b - layout.A;
+    mreal *bar = map->bar;
+    for (int i = 0; i < n; i++) bar[i] = constrained_bar[i];
+
+    mreal lambda_bar = 0;
+    for (int i = 0; i < K; i++) lambda_bar += bar[layout.b + i] * map->elementwise[layout.b + i];
+    for (int i = 0; i < n_loadings; i++) lambda_bar += bar[layout.A + i] * map->elementwise[layout.A + i];
+    for (int i = 0; i < K; i++) bar[layout.b + i] *= map->lambda;
+    for (int i = 0; i < n_loadings; i++) bar[layout.A + i] *= map->lambda;
+    mreal C_zero_bar = lambda_bar * (1 - map->spec.delta) * map->tau_derivative;
+
+    for (int i = 0; i < K * K; i++) map->Omega_inv_bar[i] = 0;
+    mreal nu_bar = 0;
+    _sdloc_invertibility_adjoint(map->invertibility, map->Omega_inv, map->elementwise + layout.b,
+                                 map->elementwise + layout.A, map->elementwise[layout.nu], C_zero_bar,
+                                 bar + layout.b, bar + layout.A, map->Omega_inv_bar, &nu_bar);
+    for (int k = 0; k < K; k++) bar[layout.Omega_inv_diagonal + k] += map->Omega_inv_bar[(size_t)k * K + k];
+    int at = layout.Omega_inv_below;
+    for (int i = 1; i < K; i++)
+        for (int j = 0; j < i; j++) bar[at++] += map->Omega_inv_bar[(size_t)i * K + j];
+    bar[layout.nu] += nu_bar;
+
+    for (int i = 0; i < n; i++)
+        theta_bar[i] = bar[i] * sdloc_link_derivative(map->kinds[i], map->elementwise[i]);
 }
 
 static inline void sdloc_params_from_theta(Vec theta, SdlocParams *m) {
@@ -310,6 +834,7 @@ static inline void sdloc_params_from_theta(Vec theta, SdlocParams *m) {
     Tape *tape = tape_new();
     Node *theta_node = ad_leaf(tape, theta);
     SdlocLinked linked = _sdloc_link(tape, theta_node, spec);
+    assert(linked.is_usable && "theta's factor has a zero or non-finite diagonal entry");
 
     for (int i = 0; i < K; i++) AT(m->m0, i, 0) = linked.m0->val.d[i];
     for (int j = 0; j < spec.p; j++)
@@ -495,7 +1020,8 @@ static inline int _sdloc_scale_is_usable(const mreal *Omega_inv, int K, mreal nu
 }
 
 static inline int sdloc_scale_is_usable(const SdlocLinked *linked) {
-    return _sdloc_scale_is_usable(linked->Omega_inv->val.d, linked->spec.K, linked->nu->val.d[0]);
+    return linked->is_usable
+           && _sdloc_scale_is_usable(linked->Omega_inv->val.d, linked->spec.K, linked->nu->val.d[0]);
 }
 
 /*
@@ -585,33 +1111,33 @@ the quadratic form carries q_bar to v_bar and L_bar, and v_t = y_t - m_t
 subtracts v_bar from the adjoint of m_t, which completes m_bar_t. At the first
 period m_1 = m0 adds m_bar_1 to m0_bar.
 
-The constrained adjoints reach theta through the same link table _sdloc_link
-and _sdloc_unlink use, and half_log_det_Sigma, the sum of the raw diagonal
-coordinates, adds -T to each of them directly.
+The constrained adjoints reach theta through _sdloc_link_map_adjoint, the
+chain rule of the radial map and of the per-coordinate table, and
+half_log_det_Sigma, the sum of the raw diagonal coordinates, adds -T to each
+of them directly.
 */
 typedef struct {
     SdlocSpec spec;
     SdlocLayout layout;
     int K, T, p, n_theta, path_stride;
-    mreal *m0, *b, *Omega_inv, *Omega_inv_reciprocal;
-    const mreal *A;
+    SdlocLinkMap *link;
+    const mreal *m0, *b, *A, *Omega_inv;
+    mreal *Omega_inv_reciprocal;
     mreal nu, half_log_det_Sigma, log_sum, score_scale;
     mreal *path;
     mreal *scores;
     mreal *m0_bar, *A_bar, *b_bar, *Omega_inv_bar;
     mreal *m_bar_ring, *m_bar, *v, *v_bar, *x_bar, *w;
-    mreal *constrained;
-    SdlocLink *link_kinds;
 } SdlocAnalytic;
 
 /* Build the workspace for a spec and T periods. Free with
    sdloc_analytic_free.
 
-   A and A_bar hold the loadings and their adjoints in theta's own order, the
+   m0, b, A and Omega_inv point into the link map, which the link fills. A and
+   A_bar hold the loadings and their adjoints in theta's own order, the
    p A_per_lag coordinates of the A block of SdlocLayout: lag by lag, the
-   diagonal of each A_j when diagonal, its rows when full. A points into
-   constrained, so the link fills it with nothing to copy, and in diagonal mode
-   the loop over the K series reads each lag's loadings contiguously. */
+   diagonal of each A_j when diagonal, its rows when full, so that in diagonal
+   mode the loop over the K series reads each lag's loadings contiguously. */
 static inline SdlocAnalytic *sdloc_analytic_new(SdlocSpec spec, int T) {
     int K = spec.K, p = spec.p;
     assert(K > 0 && p > 0 && T > 1);
@@ -624,9 +1150,11 @@ static inline SdlocAnalytic *sdloc_analytic_new(SdlocSpec spec, int T) {
     f->n_theta = f->layout.n_theta;
     f->path_stride = 3 * K + 1;
     size_t square = (size_t)K * K, loadings = (size_t)p * f->layout.A_per_lag;
-    f->m0 = (mreal*)malloc((size_t)K * sizeof(mreal));
-    f->b = (mreal*)malloc((size_t)K * sizeof(mreal));
-    f->Omega_inv = (mreal*)malloc(square * sizeof(mreal));
+    f->link = _sdloc_link_map_new(spec);
+    f->m0 = f->link->constrained + f->layout.m0;
+    f->b = f->link->constrained + f->layout.b;
+    f->A = f->link->constrained + f->layout.A;
+    f->Omega_inv = f->link->Omega_inv;
     f->Omega_inv_reciprocal = (mreal*)malloc((size_t)K * sizeof(mreal));
     f->path = (mreal*)malloc((size_t)T * f->path_stride * sizeof(mreal));
     f->scores = (mreal*)malloc((size_t)p * K * sizeof(mreal));
@@ -640,66 +1168,32 @@ static inline SdlocAnalytic *sdloc_analytic_new(SdlocSpec spec, int T) {
     f->v_bar = (mreal*)malloc((size_t)K * sizeof(mreal));
     f->x_bar = (mreal*)malloc((size_t)K * sizeof(mreal));
     f->w = (mreal*)malloc((size_t)K * sizeof(mreal));
-    f->constrained = (mreal*)malloc((size_t)f->n_theta * sizeof(mreal));
-    f->link_kinds = (SdlocLink*)malloc((size_t)f->n_theta * sizeof(SdlocLink));
-    assert(f->m0 && f->b && f->Omega_inv && f->Omega_inv_reciprocal && f->path
-           && f->scores && f->m0_bar && f->A_bar && f->b_bar && f->Omega_inv_bar
-           && f->m_bar_ring && f->m_bar && f->v && f->v_bar && f->x_bar && f->w
-           && f->constrained && f->link_kinds);
-    f->A = f->constrained + f->layout.A;
-    _sdloc_link_kinds(spec, f->link_kinds);
+    assert(f->Omega_inv_reciprocal && f->path && f->scores && f->m0_bar && f->A_bar && f->b_bar
+           && f->Omega_inv_bar && f->m_bar_ring && f->m_bar && f->v && f->v_bar && f->x_bar && f->w);
     return f;
 }
 
 static inline void sdloc_analytic_free(SdlocAnalytic *f) {
     if (!f) return;
-    free(f->m0); free(f->b); free(f->Omega_inv); free(f->Omega_inv_reciprocal);
+    _sdloc_link_map_free(f->link);
+    free(f->Omega_inv_reciprocal);
     free(f->path); free(f->scores);
     free(f->m0_bar); free(f->A_bar); free(f->b_bar); free(f->Omega_inv_bar);
     free(f->m_bar_ring); free(f->m_bar); free(f->v); free(f->v_bar); free(f->x_bar); free(f->w);
-    free(f->constrained); free(f->link_kinds);
     free(f);
 }
 
-/* theta to the constrained parameters, the map _sdloc_link builds on the tape,
-   read off the same link table. The constrained values go into f->constrained
-   too, since the chain rule is written in terms of them, and the loadings are
-   read from there directly. */
-static inline void _sdloc_analytic_link(SdlocAnalytic *f, Vec theta) {
-    SdlocLayout layout = f->layout;
-    int K = f->K;
+/* theta to the constrained parameters through the link map, the map
+   _sdloc_link builds on the tape. Returns 0 when the factor has a zero or
+   non-finite diagonal entry, where neither the radial map nor the filter can
+   run. */
+static inline int _sdloc_analytic_link(SdlocAnalytic *f, Vec theta) {
     assert(theta.r == f->n_theta && theta.c == 1);
-    for (int i = 0; i < f->n_theta; i++)
-        f->constrained[i] = sdloc_link_forward(f->link_kinds[i], theta.d[i]);
-
-    for (int k = 0; k < K; k++) f->m0[k] = f->constrained[layout.m0 + k];
-    for (int k = 0; k < K; k++) f->b[k] = f->constrained[layout.b + k];
-    for (size_t i = 0; i < (size_t)K * K; i++) f->Omega_inv[i] = 0;
+    int usable = _sdloc_link_map_forward(f->link, theta.d);
+    f->nu = f->link->constrained[f->layout.nu];
     f->half_log_det_Sigma = 0;
-    for (int k = 0; k < K; k++) {
-        int at = layout.Omega_inv_diagonal + k;
-        f->Omega_inv[(size_t)k * K + k] = f->constrained[at];
-        f->half_log_det_Sigma += theta.d[at];
-    }
-    int at = layout.Omega_inv_below;
-    for (int i = 1; i < K; i++)
-        for (int j = 0; j < i; j++) f->Omega_inv[(size_t)i * K + j] = f->constrained[at++];
-    f->nu = f->constrained[layout.nu];
-}
-
-/*
-The loadings of m, a K x pK matrix with the blocks side by side, into theta's
-order, the order _sdloc_location_step reads. out holds p A_per_lag numbers.
-*/
-static inline void _sdloc_pack_loadings(const SdlocParams *m, mreal *out) {
-    SdlocSpec spec = m->spec;
-    int K = spec.K, first = sdloc_layout(spec).A;
-    for (int j = 0; j < spec.p; j++)
-        for (int k = 0; k < K; k++)
-            for (int l = 0; l < K; l++) {
-                int index = _sdloc_A_theta_index(spec, j, k, l);
-                if (index >= 0) out[index - first] = AT(m->A, k, j * K + l);
-            }
+    for (int k = 0; k < f->K; k++) f->half_log_det_Sigma += theta.d[f->layout.Omega_inv_diagonal + k];
+    return usable;
 }
 
 /*
@@ -928,8 +1422,7 @@ static inline void _sdloc_analytic_backward(SdlocAnalytic *f, Vec gradient) {
         for (int j = 0; j < i; j++) g[at++] = f->Omega_inv_bar[(size_t)i * K + j];
     g[layout.nu] = nu_bar;
 
-    for (int i = 0; i < f->n_theta; i++)
-        g[i] *= sdloc_link_derivative(f->link_kinds[i], f->constrained[i]);
+    _sdloc_link_map_adjoint(f->link, g, g);
     for (int k = 0; k < K; k++) g[layout.Omega_inv_diagonal + k] += -(mreal)T;
 }
 
@@ -943,8 +1436,8 @@ cannot be evaluated at.
 static inline mreal sdloc_analytic_log_likelihood(SdlocAnalytic *f, Vec theta, Mat y,
                                                   Vec gradient) {
     assert(y.r == f->K && y.c == f->T);
-    _sdloc_analytic_link(f, theta);
-    if (!_sdloc_scale_is_usable(f->Omega_inv, f->K, f->nu)) {
+    int linked = _sdloc_analytic_link(f, theta);
+    if (!linked || !_sdloc_scale_is_usable(f->Omega_inv, f->K, f->nu)) {
         if (gradient.d) for (int i = 0; i < f->n_theta; i++) gradient.d[i] = 0;
         return -(mreal)INFINITY;
     }
@@ -1133,6 +1626,7 @@ static inline JsonValue *sdloc_params_to_json(const SdlocParams *m) {
     json_object_set(root, "p", json_number(m->spec.p));
     json_object_set(root, "score_matrices",
                     json_string(sdloc_score_matrices_text(m->spec.score_matrices)));
+    json_object_set(root, "delta", json_number((double)m->spec.delta));
     Vec theta = mat_new(sdloc_n_theta(m->spec), 1);
     _sdloc_unlink(m, theta);
     JsonValue *values = json_array();
@@ -1152,9 +1646,16 @@ static inline void sdloc_save_params(const SdlocParams *m, const char *path) {
 Whether the spec stored in a parameter file is the one being loaded into. A
 file without p or score_matrices was written before either existed, when the
 model had exactly one diagonal score loading, so it is read as p = 1 and
-diagonal and matches only that spec.
+diagonal and matches only that spec. A file without delta was written before
+the invertibility condition was imposed: its theta is in the parametrization
+of that time, and *is_previous says so.
 */
-static inline int _sdloc_stored_spec_matches(const JsonValue *root, SdlocSpec spec) {
+static inline int _sdloc_stored_spec_matches(const JsonValue *root, SdlocSpec spec, int *is_previous) {
+    JsonValue *stored_delta = json_object_get(root, "delta");
+    *is_previous = stored_delta == NULL;
+    if (stored_delta && (stored_delta->type != JSON_NUMBER
+                         || json_as_number(stored_delta) != (double)spec.delta))
+        return 0;
     JsonValue *stored_K = json_object_get(root, "K");
     if (!stored_K || stored_K->type != JSON_NUMBER || json_as_number(stored_K) != (double)spec.K)
         return 0;
@@ -1174,8 +1675,56 @@ static inline int _sdloc_stored_spec_matches(const JsonValue *root, SdlocSpec sp
     return strcmp(kind, sdloc_score_matrices_text(spec.score_matrices)) == 0;
 }
 
+/*
+A theta written before the invertibility condition was imposed, when b and a
+diagonal A_j went through tanh and a full A_j was theta itself, the other
+blocks as now. Read into a model of the loading spec, and accepted only if that
+model satisfies C(theta) <= 1 - delta, since outside that set the current
+parametrization has no point for it; then m holds it and the return is 1.
+Otherwise m is untouched and the return is 0.
+*/
+static inline int _sdloc_params_from_previous_theta(Vec theta, SdlocParams *m) {
+    SdlocSpec spec = m->spec;
+    int K = spec.K;
+    SdlocLayout layout = sdloc_layout(spec);
+    SdlocParams candidate = sdloc_params_new(spec);
+    for (int k = 0; k < K; k++) AT(candidate.m0, k, 0) = theta.d[layout.m0 + k];
+    for (int j = 0; j < spec.p; j++)
+        for (int k = 0; k < K; k++)
+            for (int l = 0; l < K; l++) {
+                int index = _sdloc_A_theta_index(spec, j, k, l);
+                if (index < 0) continue;
+                AT(candidate.A, k, j * K + l) = spec.score_matrices == SDLOC_SCORE_FULL
+                                                ? theta.d[index] : (mreal)tanh((double)theta.d[index]);
+            }
+    for (int k = 0; k < K; k++) AT(candidate.b, k, 0) = (mreal)tanh((double)theta.d[layout.b + k]);
+    int usable = 1;
+    for (int k = 0; k < K; k++) {
+        mreal diagonal = (mreal)exp((double)theta.d[layout.Omega_inv_diagonal + k]);
+        AT(candidate.Omega_inv, k, k) = diagonal;
+        if (diagonal == 0 || MISINF(diagonal)) usable = 0;
+    }
+    int at = layout.Omega_inv_below;
+    for (int i = 1; i < K; i++)
+        for (int j = 0; j < i; j++) AT(candidate.Omega_inv, i, j) = theta.d[at++];
+    candidate.nu = (mreal)(exp((double)theta.d[layout.nu]) + 2.0);
+    if (usable) {
+        mreal C = sdloc_invertibility_constant(&candidate);
+        usable = !MISNAN(C) && C <= 1 - spec.delta;
+    }
+    if (usable) {
+        Vec current = mat_new(layout.n_theta, 1);
+        _sdloc_unlink(&candidate, current);
+        sdloc_params_from_theta(current, m);
+        mat_free(current);
+    }
+    sdloc_params_free(&candidate);
+    return usable;
+}
+
 /* Loads into m, whose spec says what the file must hold. Returns 0 without
-   touching m when the file is missing, damaged, or of another spec. */
+   touching m when the file is missing, damaged, of another spec, or written
+   before the invertibility condition with parameters outside it. */
 static inline int sdloc_load_params(SdlocParams *m, const char *path) {
     FILE *probe = fopen(path, "r");
     if (!probe) return 0;
@@ -1184,7 +1733,8 @@ static inline int sdloc_load_params(SdlocParams *m, const char *path) {
     if (!root) return 0;
     /* A cache is a file a user can edit, so a value of the wrong type is a
        refusal like a missing one, not an assert in the accessors. */
-    if (root->type != JSON_OBJECT || !_sdloc_stored_spec_matches(root, m->spec)) {
+    int is_previous = 0;
+    if (root->type != JSON_OBJECT || !_sdloc_stored_spec_matches(root, m->spec, &is_previous)) {
         json_free(root);
         return 0;
     }
@@ -1198,10 +1748,12 @@ static inline int sdloc_load_params(SdlocParams *m, const char *path) {
     }
     Vec theta = mat_new(n, 1);
     for (int i = 0; i < n; i++) theta.d[i] = (mreal)json_as_number(json_array_get(values, i));
-    sdloc_params_from_theta(theta, m);
+    int loaded = 1;
+    if (is_previous) loaded = _sdloc_params_from_previous_theta(theta, m);
+    else sdloc_params_from_theta(theta, m);
     mat_free(theta);
     json_free(root);
-    return 1;
+    return loaded;
 }
 
 static inline double sdloc_data_fingerprint(Mat y) { return mat_fingerprint(y); }
@@ -1485,11 +2037,24 @@ static inline SdlocStandardErrors sdloc_standard_errors(const SdlocParams *m, Ma
         else if (eigenvalues.d[k] <= floor_value) e.n_flat++;
     }
 
-    SdlocLink *kinds = (SdlocLink*)malloc((size_t)n * sizeof(SdlocLink));
-    _sdloc_link_kinds(spec, kinds);
+    /* The delta method with the whole Jacobian J of the link, one row per
+       constrained parameter from the link's own chain rule: b and A depend on
+       every coordinate of b0 and A0 and on Omega_inv and nu through lambda, so
+       a parameter's error needs the covariance across coordinates, not only
+       its own variance. Var(constrained_i) = sum_k (J_i . e_k)^2 / lambda_k
+       over the eigenpairs of H; a flat direction that J_i loads on, by the
+       same rule as the unconstrained errors applied to J_i / ||J_i||, leaves
+       the error unreported. */
+    SdlocLinkMap *link = _sdloc_link_map_new(spec);
+    int linked = _sdloc_link_map_forward(link, theta.d);
+    assert(linked);
+    (void)linked;
+    mreal *unit = (mreal*)malloc((size_t)n * sizeof(mreal));
+    mreal *row = (mreal*)malloc((size_t)n * sizeof(mreal));
+    assert(unit && row);
+    for (int i = 0; i < n; i++) e.estimate.d[i] = link->constrained[i];
+
     for (int i = 0; i < n; i++) {
-        mreal value = sdloc_link_forward(kinds[i], theta.d[i]);
-        e.estimate.d[i] = value;
         mreal variance = 0;
         int usable = e.is_maximum;
         for (int k = 0; k < n && usable; k++) {
@@ -1500,19 +2065,84 @@ static inline SdlocStandardErrors sdloc_standard_errors(const SdlocParams *m, Ma
                 variance += weight / eigenvalues.d[k];
             }
         }
-        if (usable && variance > 0 && !MISINF(variance) && !MISNAN(variance)) {
+        if (usable && variance > 0 && !MISINF(variance) && !MISNAN(variance))
             e.unconstrained.d[i] = (mreal)sqrt((double)variance);
-            e.constrained.d[i] = MABS(sdloc_link_derivative(kinds[i], value)) * e.unconstrained.d[i];
-        } else {
+        else
             e.unconstrained.d[i] = (mreal)NAN;
-            e.constrained.d[i] = (mreal)NAN;
+
+        for (int c = 0; c < n; c++) unit[c] = c == i ? 1 : 0;
+        _sdloc_link_map_adjoint(link, unit, row);
+        mreal row_size = 0;
+        for (int c = 0; c < n; c++) row_size += row[c] * row[c];
+        mreal constrained_variance = 0;
+        usable = e.is_maximum && row_size > 0;
+        for (int k = 0; k < n && usable; k++) {
+            mreal projection = 0;
+            for (int c = 0; c < n; c++) projection += row[c] * AT(eigenvectors, c, k);
+            mreal weight = projection * projection;
+            if (eigenvalues.d[k] <= floor_value) {
+                if (weight > floor_value * row_size) usable = 0;
+            } else {
+                constrained_variance += weight / eigenvalues.d[k];
+            }
         }
+        if (usable && constrained_variance > 0 && !MISINF(constrained_variance) && !MISNAN(constrained_variance))
+            e.constrained.d[i] = (mreal)sqrt((double)constrained_variance);
+        else
+            e.constrained.d[i] = (mreal)NAN;
     }
 
-    free(kinds);
+    free(unit); free(row);
+    _sdloc_link_map_free(link);
     mat_free(eigenvalues); mat_free(eigenvectors);
     mat_free(H); mat_free(theta);
     return e;
+}
+
+/*
+What the invertibility result rests on, at a model. C is C(theta), below
+1 - delta by construction of the link. The derivation's uniform bound also
+needs ||L||, ||L^-1|| and nu bounded over the parameter set, which the link
+does not impose: they are reported here so that the assumption that the
+estimates lie in such a set can be judged. B is the derivation's (39),
+(1/2) sqrt(nu) sum_j ||Psi~_j||, the bound on the filter's innovation that
+grows without limit as nu does.
+*/
+typedef struct {
+    mreal C;
+    mreal margin;           /* 1 - delta */
+    mreal norm_L;           /* ||Omega_inv||, spectral */
+    mreal norm_L_inverse;   /* ||Omega_inv^-1||, the reciprocal of its smallest singular value */
+    mreal nu;
+    mreal B;
+} SdlocInvertibilityDiagnostics;
+
+static inline SdlocInvertibilityDiagnostics sdloc_invertibility_diagnostics(const SdlocParams *m) {
+    SdlocSpec spec = m->spec;
+    int K = spec.K;
+    SdlocInvertibilityDiagnostics d;
+    SdlocInvertibility *w = _sdloc_invertibility_new(spec);
+    mreal *loadings = (mreal*)malloc((size_t)spec.p * sdloc_layout(spec).A_per_lag * sizeof(mreal));
+    assert(loadings);
+    _sdloc_pack_loadings(m, loadings);
+    d.C = _sdloc_invertibility_constant(w, m->Omega_inv.d, m->nu, m->b.d, loadings);
+    mreal psi_sum = 0;
+    if (!MISINF(d.C))
+        for (int j = 0; j < spec.p; j++)
+            psi_sum += w->ratio * _sdloc_norm_and_derivative(w, w->P + (size_t)j * K * K, w->scratch);
+    free(loadings);
+    _sdloc_invertibility_free(w);
+
+    Mat left, right_t;
+    Vec singular;
+    mat_svd(m->Omega_inv, &left, &singular, &right_t);
+    d.norm_L = singular.d[0];
+    d.norm_L_inverse = (mreal)1 / singular.d[K - 1];
+    mat_free(left); mat_free(singular); mat_free(right_t);
+    d.margin = 1 - spec.delta;
+    d.nu = m->nu;
+    d.B = (mreal)(0.5 * sqrt((double)m->nu)) * psi_sum;
+    return d;
 }
 
 static inline void sdloc_write_report(const SdlocFitResult *result, Mat y, const char *path) {
@@ -1524,8 +2154,8 @@ static inline void sdloc_write_report(const SdlocFitResult *result, Mat y, const
 
     fprintf(out, "score-driven vector location model, kappa = 1/2 scaled score, "
                  "Student-t shock\n");
-    fprintf(out, "K %d, score lags p %d, score matrices %s\n",
-            K, spec.p, sdloc_score_matrices_text(spec.score_matrices));
+    fprintf(out, "K %d, score lags p %d, score matrices %s, invertibility margin delta %.6g\n",
+            K, spec.p, sdloc_score_matrices_text(spec.score_matrices), (double)spec.delta);
     fprintf(out, "iterations %d, converged %s, gradient_norm %.6g\n",
             result->niter, result->is_converged ? "yes" : "no", (double)result->gradient_norm);
     if (result->status_is_known)
@@ -1544,6 +2174,14 @@ static inline void sdloc_write_report(const SdlocFitResult *result, Mat y, const
             (double)result->log_likelihood, (double)result->log_likelihood / y.c, n);
     fprintf(out, "aic %.6f, bic %.6f, hannan_quinn %.6f\n",
             (double)result->aic, (double)result->bic, (double)result->hannan_quinn);
+
+    SdlocInvertibilityDiagnostics invertibility = sdloc_invertibility_diagnostics(m);
+    fprintf(out, "\nfilter invertibility\n");
+    fprintf(out, "C(theta) %.6g, imposed bound 1 - delta %.6g\n",
+            (double)invertibility.C, (double)invertibility.margin);
+    fprintf(out, "not imposed, assumed bounded: ||Omega_inv|| %.6g, ||Omega_inv^-1|| %.6g, nu %.6g\n",
+            (double)invertibility.norm_L, (double)invertibility.norm_L_inverse, (double)invertibility.nu);
+    fprintf(out, "innovation bound B = sqrt(nu)/2 sum_j ||Psi~_j|| %.6g\n", (double)invertibility.B);
 
     SdlocStandardErrors errors = sdloc_standard_errors(m, y);
     fprintf(out, "\nstandard errors\n");

@@ -10,10 +10,11 @@ analytic one. Correctness is tests/correctness/score_driven_location_correctness
 job; nothing here checks a number beyond printing the two fits' results side by
 side.
 
-Setup. Truth: m0_k = 0.5 + 0.3k, b_k = 0.85 - 0.07k, Omega_inv diagonal
+Setup. Truth: m0_k = 0.5 + 0.3k, b_k = 0.55 - 0.05k, Omega_inv diagonal
 0.7 + 0.1k and below-diagonal entries 0.10 - 0.03j, nu = 7.5. The score
-loadings: A_j[k,k] = (-1)^(j-1) (0.20 + 0.05k) / j, and in full mode
-A_j[k,l] = (-1)^(j-1) (0.03(k+1) - 0.02l) / j off the diagonal. One series per
+loadings: A_j[k,k] = (-1)^(j-1) (0.12 + 0.02k) / j^2, and in full mode
+A_j[k,l] = (-1)^(j-1) (0.02(k+1) - 0.015l) / j^2 off the diagonal. The
+invertibility margin delta is 0.05, and every truth here is inside it. One series per
 case from sdloc_simulate, seed 90210. Cases, as (K, T, p, score matrices):
 (2, 400, 1, diagonal), (3, 1000, 1, diagonal), (5, 1000, 1, diagonal),
 (5, 1000, 2, diagonal), (5, 1000, 2, full).
@@ -62,17 +63,18 @@ static SdlocParams truth(SdlocSpec spec) {
     SdlocParams m = sdloc_params_new(spec);
     for (int k = 0; k < K; k++) {
         AT(m.m0, k, 0) = (mreal)(0.5 + 0.3 * k);
-        AT(m.b, k, 0) = (mreal)(0.85 - 0.07 * k);
+        AT(m.b, k, 0) = (mreal)(0.55 - 0.05 * k);
         AT(m.Omega_inv, k, k) = (mreal)(0.7 + 0.1 * k);
         for (int j = 0; j < k; j++) AT(m.Omega_inv, k, j) = (mreal)(0.10 - 0.03 * j);
     }
     for (int j = 0; j < spec.p; j++) {
         double sign = j % 2 ? -1.0 : 1.0;
         for (int k = 0; k < K; k++) {
-            AT(m.A, k, j * K + k) = (mreal)(sign * (0.20 + 0.05 * k) / (j + 1));
+            AT(m.A, k, j * K + k) = (mreal)(sign * (0.12 + 0.02 * k) / ((j + 1) * (j + 1)));
             if (spec.score_matrices == SDLOC_SCORE_FULL)
                 for (int l = 0; l < K; l++)
-                    if (l != k) AT(m.A, k, j * K + l) = (mreal)(sign * (0.03 * (k + 1) - 0.02 * l) / (j + 1));
+                    if (l != k)
+                        AT(m.A, k, j * K + l) = (mreal)(sign * (0.02 * (k + 1) - 0.015 * l) / ((j + 1) * (j + 1)));
         }
     }
     m.nu = (mreal)7.5;
@@ -148,7 +150,7 @@ int main(void) {
                              { 5, 1000, 2, SDLOC_SCORE_FULL } };
     for (size_t c = 0; c < sizeof cases / sizeof cases[0]; c++) {
         int K = cases[c][0], T = cases[c][1];
-        SdlocSpec spec = sdloc_spec(K, cases[c][2], (SdlocScoreMatrices)cases[c][3]);
+        SdlocSpec spec = sdloc_spec(K, cases[c][2], (SdlocScoreMatrices)cases[c][3], (mreal)0.05);
         SdlocParams m = truth(spec);
         Rng rng = rng_new(90210u, 0);
         Mat y = sdloc_simulate(&rng, &m, T);

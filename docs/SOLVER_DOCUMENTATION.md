@@ -18,6 +18,7 @@ Vec vec_solve_sym(Mat a, Vec b)
 Vec vec_lu_solve(Mat lu, MatPivot *piv, Vec b)
 Vec vec_chol_solve(Mat l, Vec b)
 Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char diag)
+Mat mat_triangular_solve(Mat a, Mat b, char uplo, char trans, char diag)
 Vec vec_band_solve(Mat band, int kl, int ku, Vec b)
 Mat mat_band_solve(Mat band, int kl, int ku, Mat b)
 Vec vec_band_chol_solve(Mat factor, Vec b)
@@ -67,6 +68,10 @@ Factor and solve together are `scipy.linalg.solveh_banded`: `mat_band_chol` foll
 ### `vec_triangular_solve`
 
 Solve `op(a)*x = b` for `x`, where `a` is triangular and already in hand - no `mat_chol`/`mat_lu` step at all, one `?trtrs`. This is one level below `vec_chol_solve`: that one starts from a full matrix, factors it, and solves against the factor; this one is for a matrix that is already triangular by construction and was never a full matrix to begin with, e.g. a covariance parameterized directly by its Cholesky factor rather than assembled and then factored. `uplo` is `'L'` or `'U'` for which triangle of `a` holds the data, `trans` `'N'` or `'T'` for `op(a) = a` or `a^T`, `diag` `'N'` for a stored diagonal or `'U'` for an implicit unit one. `a` is `n x n`; `b` is a single right-hand-side column vector with `b.r == a.r`. Returns a new owner; neither `a` nor `b` is modified. A singular `a` (`diag == 'N'` and a zero on the diagonal) is a contract violation, same `assert(info == 0)` convention as the rest of this file.
+
+### `mat_triangular_solve`
+
+`vec_triangular_solve` for an `n x k` right-hand side, every column against the same `a` in one `?trtrs`; `vec_triangular_solve` is its `k = 1` case. The same arguments and contract, a new `n x k` owner, `b` may be a strided view. `ad.h`'s `ad_triangular_solve` takes several right-hand sides through it, and `sd/score_driven_location.h`'s traced invertibility constant, a product `L^-1 M` of a factor with a matrix, is the first caller. `test_mat_triangular_solve` in `tests/correctness/test_solver.c` checks a hand-solved system, the residual in all four triangle and transpose cases on a strided right-hand side, agreement with `vec_triangular_solve` column by column, and a `1 x 1`.
 
 ### `mat_lstsq`
 

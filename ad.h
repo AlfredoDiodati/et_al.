@@ -918,24 +918,35 @@ static inline Node *ad_chol_solve(Tape *t, Node *L, Node *b) {
    may need. */
 static void ad_triangular_solve_backward(Node *self) {
     Node *L = self->parents[0], *b = self->parents[1];
-    int n = L->val.r;
+    int n = L->val.r, columns = self->val.c;
     char trans = self->aux > (mreal)0.5 ? 'T' : 'N';
     char z_trans = trans == 'T' ? 'N' : 'T';
-    Vec z = vec_triangular_solve(L->val, self->grad, 'L', z_trans, 'N');
-    Vec x = self->val;
+    Mat z = mat_triangular_solve(L->val, self->grad, 'L', z_trans, 'N');
+    Mat x = self->val;
 
     if (trans == 'N')
         for (int i = 0; i < n; i++)
-            for (int j = 0; j <= i; j++) AT(L->grad, i, j) += -z.d[i] * x.d[j];
+            for (int j = 0; j <= i; j++) {
+                mreal sum = 0;
+                for (int c = 0; c < columns; c++) sum += AT(z, i, c) * AT(x, j, c);
+                AT(L->grad, i, j) += -sum;
+            }
     else
         for (int i = 0; i < n; i++)
-            for (int j = 0; j <= i; j++) AT(L->grad, i, j) += -x.d[i] * z.d[j];
+            for (int j = 0; j <= i; j++) {
+                mreal sum = 0;
+                for (int c = 0; c < columns; c++) sum += AT(x, i, c) * AT(z, j, c);
+                AT(L->grad, i, j) += -sum;
+            }
 
     ad_accum(b->grad, z);
     mat_free(z);
 }
+/* b may have several columns, each solved against the same L: X = L^-1 B, and
+   the rule above summed over the columns, Lbar += tril(-Z X^T) or
+   tril(-X Z^T). */
 static inline Node *ad_triangular_solve(Tape *t, Node *L, Node *b, char trans) {
-    Node *n = ad_node_new(t, vec_triangular_solve(L->val, b->val, 'L', trans, 'N'),
+    Node *n = ad_node_new(t, mat_triangular_solve(L->val, b->val, 'L', trans, 'N'),
                           ad_triangular_solve_backward);
     n->parents[0] = L; n->parents[1] = b; n->n_parents = 2;
     n->aux = (trans == 'T') ? (mreal)1 : (mreal)0;
@@ -1017,6 +1028,43 @@ static inline Node *ad_chol_quadform(Tape *t, Node *L, Node *b) {
     node->val.d[0] = q;
     node->parents[0] = L; node->parents[1] = b; node->n_parents = 2;
     return node;
+}
+
+/* B = A^T. Abar += Bbar^T. */
+static void ad_transpose_backward(Node *self) {
+    Node *A = self->parents[0];
+    for (int i = 0; i < A->val.r; i++)
+        for (int j = 0; j < A->val.c; j++) AT(A->grad, i, j) += AT(self->grad, j, i);
+}
+static inline Node *ad_transpose(Tape *t, Node *A) {
+    Node *n = ad_node_new_pooled(t, A->val.c, A->val.r, ad_transpose_backward);
+    for (int i = 0; i < A->val.r; i++)
+        for (int j = 0; j < A->val.c; j++) AT(n->val, j, i) = AT(A->val, i, j);
+    n->parents[0] = A; n->n_parents = 1;
+    return n;
+}
+
+/* sigma = ||A||_2 -> 1x1, the largest singular value, from mat_spectral_norm.
+   Abar += sigma_bar * u v^T with u, v the singular vectors of sigma; where
+   sigma is repeated or zero that is one subgradient, as mat_spectral_norm
+   says. The singular vectors are recomputed in the backward pass, since a
+   Node has nowhere to keep them. */
+static void ad_spectral_norm_backward(Node *self) {
+    Node *A = self->parents[0];
+    mreal seed = self->grad.d[0];
+    Vec u = mat_new(A->val.r, 1), v = mat_new(A->val.c, 1);
+    mat_spectral_norm(A->val, u, v);
+    for (int i = 0; i < A->val.r; i++)
+        for (int j = 0; j < A->val.c; j++) AT(A->grad, i, j) += seed * u.d[i] * v.d[j];
+    mat_free(u); mat_free(v);
+}
+static inline Node *ad_spectral_norm(Tape *t, Node *A) {
+    Vec none = { 0, 0, 0, NULL };
+    mreal sigma = mat_spectral_norm(A->val, none, none);
+    Node *n = ad_node_new_pooled(t, 1, 1, ad_spectral_norm_backward);
+    n->val.d[0] = sigma;
+    n->parents[0] = A; n->n_parents = 1;
+    return n;
 }
 
 /* beta = det(A) -> 1x1. Abar += beta_bar*beta*A^-T (table 7 "determinant") */

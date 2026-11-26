@@ -474,6 +474,87 @@ static void test_svd(void) {
     }
 }
 
+/*
+The spectral norm and its singular pair. Known outputs: a diagonal matrix,
+where the norm is the largest absolute entry and the pair the matching unit
+vectors with opposite signs for a negative entry, and a 1x1. Invariants on
+random rectangular input: a v = sigma u, sigma^2 is the largest eigenvalue of
+a'a from mat_eig_sym, and no pair of unit vectors gives |x'a y| above sigma.
+Adversarial: the zero matrix, and the identity, where the largest singular
+value is repeated and u v' is one subgradient among many but must still
+satisfy a v = sigma u. A strided view takes the mat_copy path inside mat_svd.
+*/
+static void test_spectral_norm(void) {
+    puts("spectral norm");
+    {
+        Mat a = mat_lit(3, 3, 3,0,0, 0,-5,0, 0,0,2);
+        Vec u = mat_new(3, 1), v = mat_new(3, 1);
+        CHECK(mat_spectral_norm(a, u, v), 5.0f);
+        CHECK(MABS(AT(u,1,0)), 1.0f);
+        CHECK(MABS(AT(v,1,0)), 1.0f);
+        CHECK(AT(u,1,0) * AT(v,1,0), -1.0f);
+        mat_free(a); mat_free(u); mat_free(v);
+    }
+    {
+        Mat a = mat_lit(1, 1, -4.0f);
+        Vec none = { 0, 0, 0, NULL };
+        CHECK(mat_spectral_norm(a, none, none), 4.0f);
+        mat_free(a);
+    }
+    srand(2611);
+    for (int trial = 0; trial < 20; trial++) {
+        int m = 1 + trial % 4, n = 1 + (trial / 4) % 5;
+        Mat a = rand_mat(m, n);
+        Vec u = mat_new(m, 1), v = mat_new(n, 1);
+        mreal sigma = mat_spectral_norm(a, u, v);
+        Mat av = mat_mul(a, v);
+        for (int i = 0; i < m; i++) assert(MABS(AT(av,i,0) - sigma * AT(u,i,0)) < TOL);
+        Mat at = mat_T(a);
+        Mat gram = mat_mul(at, a);
+        Vec w;
+        Mat vectors;
+        mat_eig_sym(gram, &w, &vectors);
+        mreal largest = w.d[0];
+        for (int i = 1; i < n; i++) if (w.d[i] > largest) largest = w.d[i];
+        check_close_rel(sigma * sigma, largest, 1e-4f);
+        for (int probe = 0; probe < 10; probe++) {
+            Mat x = rand_mat(m, 1), y = rand_mat(n, 1);
+            mreal xn = 0, yn = 0, form = 0;
+            for (int i = 0; i < m; i++) xn += AT(x,i,0) * AT(x,i,0);
+            for (int j = 0; j < n; j++) yn += AT(y,j,0) * AT(y,j,0);
+            for (int i = 0; i < m; i++)
+                for (int j = 0; j < n; j++) form += AT(x,i,0) * AT(a,i,j) * AT(y,j,0);
+            if (xn > 0 && yn > 0) assert(MABS(form) / MSQRT(xn * yn) <= sigma + TOL);
+            mat_free(x); mat_free(y);
+        }
+        mat_free(a); mat_free(u); mat_free(v); mat_free(av); mat_free(at); mat_free(gram);
+        mat_free(w); mat_free(vectors);
+    }
+    {
+        Mat a = mat_new(3, 2);
+        Vec u = mat_new(3, 1), v = mat_new(2, 1);
+        CHECK(mat_spectral_norm(a, u, v), 0.0f);
+        mat_free(a); mat_free(u); mat_free(v);
+    }
+    {
+        Mat a = mat_lit(3, 3, 1,0,0, 0,1,0, 0,0,1);
+        Vec u = mat_new(3, 1), v = mat_new(3, 1);
+        CHECK(mat_spectral_norm(a, u, v), 1.0f);
+        Mat av = mat_mul(a, v);
+        for (int i = 0; i < 3; i++) CHECK(AT(av,i,0), AT(u,i,0));
+        mat_free(a); mat_free(u); mat_free(v); mat_free(av);
+    }
+    {
+        Mat parent = mat_lit(4, 4, 1,2,0,9, 0,3,1,9, 2,0,1,9, 9,9,9,9);
+        Mat slice = mat_slice(parent, 0, 3, 0, 3);
+        assert(slice.stride != slice.c);
+        Mat copy = mat_copy(slice);
+        Vec none = { 0, 0, 0, NULL };
+        CHECK(mat_spectral_norm(slice, none, none), mat_spectral_norm(copy, none, none));
+        mat_free(parent); mat_free(copy);
+    }
+}
+
 static void test_det(void) {
     puts("det");
 
@@ -778,6 +859,7 @@ int main(void) {
     test_qr();
     test_eig_sym();
     test_svd();
+    test_spectral_norm();
     test_det();
     test_inv();
     test_cond_rank();

@@ -85,7 +85,9 @@ Node *ad_huber_error(Tape *t, Node *pred, Node *target, mreal delta)  /* not lit
 Node *ad_logcosh_error(Tape *t, Node *pred, Node *target)  /* Criterion */
 Node *ad_solve(Tape *t, Node *A, Node *b)
 Node *ad_chol_solve(Tape *t, Node *L, Node *b)
-Node *ad_triangular_solve(Tape *t, Node *L, Node *b, char trans)  /* L lower; trans 'N' or 'T' */
+Node *ad_triangular_solve(Tape *t, Node *L, Node *b, char trans)  /* L lower; trans 'N' or 'T'; b n x k */
+Node *ad_transpose(Tape *t, Node *A)
+Node *ad_spectral_norm(Tape *t, Node *A)  /* 1x1, the largest singular value */
 Node *ad_chol_quadform(Tape *t, Node *L, Node *b)
 Node *ad_det(Tape *t, Node *A)
 Node *ad_inv(Tape *t, Node *A)
@@ -178,6 +180,12 @@ The Student-t log-normalization in `sd/qvarma.h` and `sd/score_driven_location.h
 Backward is Table 7's `getrs` row restricted to a triangular parametrization: with `z = vec_triangular_solve(L, xbar, 'L', opposite trans, 'N')`, `bbar += z` and `Lbar += tril(-z*x^T)` for `trans == 'N'`, `tril(-x*z^T)` for `trans == 'T'`. Only the lower triangle is accumulated, the same restriction `ad_chol_solve` applies for the same reason: the upper triangle is structurally zero, not a parameter. `trans` rides on the node's `aux` field.
 
 Checked in `tests/correctness/test_ad.c` against central finite differences of an independently written reference loss, in both transposes and on a `3x3` rather than a `2x2` (where an off-by-one transpose in the outer product is far easier to pass by accident); on the invariant that the strict upper triangle of `L`'s gradient stays exactly zero; on the forward residual `L*x - b` and `L^T*x - b`; and — the check that is not a restatement of the formula — against `ad_chol_solve` itself, since `ad_triangular_solve(L, ad_triangular_solve(L, b, 'N'), 'T')` solves `(L*L^T) x = b`, and the two ops derive their adjoints separately.
+
+`b` may have several columns, each solved against the same `L`: `X = L^-1 B` or `L^-T B` through `linalg/solver.h`'s `mat_triangular_solve`, and the backward rule is the one above summed over the columns, `Lbar += tril(-Z X^T)` or `tril(-X Z^T)`. `test_triangular_solve_matrix_rhs` checks a `3x3` against a `3x2` right-hand side in both transposes against central differences of a loss weighting every entry of `X` differently, and against the one-column op applied to each column, whose `L` gradients must add up to the two-column one.
+
+### `ad_transpose` / `ad_spectral_norm`
+
+`ad_transpose(t, A)` is `A^T`, with `Abar += Bbar^T`; it exists so that a right multiplication by `L^-T` can be written as `(L^-1 A^T)^T` with `ad_triangular_solve`. `ad_spectral_norm(t, A)` is `||A||_2`, the largest singular value, a `1x1` from `linalg/decomp.h`'s `mat_spectral_norm`; its backward rule is `Abar += sigma_bar u v^T` with `u`, `v` the singular vectors, recomputed in the backward pass because a `Node` has nowhere to keep them. Where the largest singular value is repeated or zero the norm has no derivative, and `u v^T` is one subgradient, the same one the forward call's SVD picks. `test_transpose` checks the value and the gradient of `sum(W .* A^T)`, and `test_spectral_norm_fd` checks a `3x2` with well separated singular values against central differences of `sqrt` of the largest eigenvalue of `A^T A` written out in closed form, and that the norm and its gradient are unchanged through a transpose. `sd/score_driven_location.h`'s traced invertibility constant is the first caller of both.
 
 ### `ad_det` / `ad_inv`
 

@@ -730,6 +730,52 @@ static void test_trsv_lower_reciprocal(void) {
                 }
 }
 
+/* mat_triangular_solve: a hand-solved lower system with two right-hand
+   sides, the residual op(a) x - b in all four triangle and transpose cases,
+   agreement with vec_triangular_solve column by column, a strided view of
+   the right-hand side, and a single element. */
+static void test_mat_triangular_solve(void) {
+    puts("mat_triangular_solve");
+    {
+        Mat a = mat_lit(2, 2, 2,0, 1,4);
+        Mat b = mat_lit(2, 2, 4,2, 6,9);
+        Mat x = mat_triangular_solve(a, b, 'L', 'N', 'N');
+        /* 2 x0 = 4 -> 2; x0 + 4 x1 = 6 -> 1. 2 y0 = 2 -> 1; y0 + 4 y1 = 9 -> 2 */
+        CHECK(AT(x,0,0), 2); CHECK(AT(x,1,0), 1);
+        CHECK(AT(x,0,1), 1); CHECK(AT(x,1,1), 2);
+        mat_free(a); mat_free(b); mat_free(x);
+    }
+    Mat lower = mat_lit(3, 3, 2,0,0, -1,3,0, 0.5f,1,4);
+    Mat upper = mat_T(lower);
+    Mat parent = mat_lit(3, 4, 4,1,9,0, 3,-2,9,1, -2,0.5f,9,2);
+    Mat b = mat_slice(parent, 0, 3, 0, 2);
+    assert(b.stride != b.c);
+    char uplos[2] = { 'L', 'U' }, transposes[2] = { 'N', 'T' };
+    for (int u = 0; u < 2; u++)
+        for (int t = 0; t < 2; t++) {
+            Mat a = uplos[u] == 'L' ? lower : upper;
+            Mat x = mat_triangular_solve(a, b, uplos[u], transposes[t], 'N');
+            Mat at = mat_T(a);
+            Mat product = mat_mul(transposes[t] == 'N' ? a : at, x);
+            for (int i = 0; i < 3; i++)
+                for (int c = 0; c < 2; c++) assert(MABS(AT(product,i,c) - AT(b,i,c)) < TOL);
+            for (int c = 0; c < 2; c++) {
+                Mat column = mat_copy(mat_slice(b, 0, 3, c, c + 1));
+                Vec single = vec_triangular_solve(a, column, uplos[u], transposes[t], 'N');
+                for (int i = 0; i < 3; i++) CHECK(AT(single,i,0), AT(x,i,c));
+                mat_free(column); mat_free(single);
+            }
+            mat_free(x); mat_free(at); mat_free(product);
+        }
+    {
+        Mat a = mat_lit(1, 1, -4.0f), one = mat_lit(1, 3, 8.0f, -2.0f, 1.0f);
+        Mat x = mat_triangular_solve(a, one, 'L', 'N', 'N');
+        CHECK(AT(x,0,0), -2.0f); CHECK(AT(x,0,1), 0.5f); CHECK(AT(x,0,2), -0.25f);
+        mat_free(a); mat_free(one); mat_free(x);
+    }
+    mat_free(lower); mat_free(upper); mat_free(parent);
+}
+
 int main(void) {
     test_band_solve();
     test_band_solve_many();
@@ -739,6 +785,7 @@ int main(void) {
     test_lstsq();
     test_lstsq_rd();
     test_trsv_lower_reciprocal();
+    test_mat_triangular_solve();
     puts("test_solver: all passed");
     return 0;
 }

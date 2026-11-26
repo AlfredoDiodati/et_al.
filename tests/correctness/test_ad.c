@@ -1078,6 +1078,147 @@ static void test_triangular_solve_fd(void) {
     mat_free(L); mat_free(b);
 }
 
+/* The matrix right-hand side of ad_triangular_solve: X = L^-1 B or L^-T B for a
+   3 x 2 B, against central differences of a loss weighting every entry of X
+   differently, and against the one-column op applied to each column, whose
+   gradients with respect to L must add up to the two-column one. */
+static mreal ref_triangular_solve_matrix_loss(Mat L, Mat B, char trans) {
+    Mat X = mat_triangular_solve(L, B, 'L', trans, 'N');
+    mreal s = 0;
+    for (int i = 0; i < X.r; i++)
+        for (int c = 0; c < X.c; c++) s += AT(X,i,c) * AT(X,i,c) * (mreal)(1 + i + 3 * c);
+    mat_free(X);
+    return s;
+}
+
+static void test_triangular_solve_matrix_rhs(void) {
+    puts("ad_triangular_solve with several right-hand sides");
+    Mat L = mat_lit(3, 3, 2.f,0.f,0.f, -1.f,3.f,0.f, 0.5f,1.f,4.f);
+    Mat B = mat_lit(3, 2, 4.f,1.f, 3.f,-2.f, -2.f,0.5f);
+    Mat weight = mat_lit(3, 2, 1.f,4.f, 2.f,5.f, 3.f,6.f);
+    char transposes[2] = { 'N', 'T' };
+    for (int which = 0; which < 2; which++) {
+        char trans = transposes[which];
+        Tape *t = tape_new();
+        Node *Ln = ad_leaf(t, L), *Bn = ad_leaf(t, B);
+        Node *X = ad_triangular_solve(t, Ln, Bn, trans);
+        Node *loss = ad_sum(t, ad_emul(t, ad_emul(t, X, X), ad_leaf(t, weight)));
+        tape_backward(t, loss);
+
+        mreal h = 1e-3f;
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j <= i; j++) {
+                Mat Lp = mat_copy(L), Lm = mat_copy(L);
+                AT(Lp,i,j) += h; AT(Lm,i,j) -= h;
+                mreal fd = (ref_triangular_solve_matrix_loss(Lp,B,trans)
+                            - ref_triangular_solve_matrix_loss(Lm,B,trans)) / (2*h);
+                CHECK_REL(AT(Ln->grad,i,j), fd);
+                mat_free(Lp); mat_free(Lm);
+            }
+        for (int i = 0; i < 3; i++)
+            for (int j = i + 1; j < 3; j++) assert(AT(Ln->grad,i,j) == 0);
+        for (int i = 0; i < 3; i++)
+            for (int c = 0; c < 2; c++) {
+                Mat Bp = mat_copy(B), Bm = mat_copy(B);
+                AT(Bp,i,c) += h; AT(Bm,i,c) -= h;
+                mreal fd = (ref_triangular_solve_matrix_loss(L,Bp,trans)
+                            - ref_triangular_solve_matrix_loss(L,Bm,trans)) / (2*h);
+                CHECK_REL(AT(Bn->grad,i,c), fd);
+                mat_free(Bp); mat_free(Bm);
+            }
+
+        /* column by column through the one-column op */
+        Mat summed = mat_new(3, 3);
+        for (int c = 0; c < 2; c++) {
+            Tape *tc = tape_new();
+            Mat column = mat_copy(mat_slice(B, 0, 3, c, c + 1));
+            Mat column_weight = mat_copy(mat_slice(weight, 0, 3, c, c + 1));
+            Node *Lc = ad_leaf(tc, L);
+            Node *x = ad_triangular_solve(tc, Lc, ad_leaf(tc, column), trans);
+            Node *column_loss = ad_sum(tc, ad_emul(tc, ad_emul(tc, x, x), ad_leaf(tc, column_weight)));
+            tape_backward(tc, column_loss);
+            for (int i = 0; i < 3; i++) {
+                CHECK(AT(x->val,i,0), AT(X->val,i,c));
+                for (int j = 0; j < 3; j++) AT(summed,i,j) += AT(Lc->grad,i,j);
+            }
+            mat_free(column); mat_free(column_weight);
+            tape_free(tc);
+        }
+        for (int i = 0; i < 9; i++) CHECK_REL(summed.d[i], Ln->grad.d[i]);
+        mat_free(summed);
+        tape_free(t);
+    }
+    mat_free(L); mat_free(B); mat_free(weight);
+}
+
+/* ad_transpose: the value, and the gradient of sum(W .* A^T), which is W^T. */
+static void test_transpose(void) {
+    puts("ad_transpose");
+    Mat A = mat_lit(2, 3, 1.f,2.f,3.f, 4.f,5.f,6.f);
+    Mat W = mat_lit(3, 2, 1.f,-1.f, 2.f,0.5f, -3.f,7.f);
+    Tape *t = tape_new();
+    Node *An = ad_leaf(t, A);
+    Node *At = ad_transpose(t, An);
+    assert(At->val.r == 3 && At->val.c == 2);
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < 3; j++) CHECK(AT(At->val,j,i), AT(A,i,j));
+    Node *loss = ad_sum(t, ad_emul(t, At, ad_leaf(t, W)));
+    tape_backward(t, loss);
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < 3; j++) CHECK(AT(An->grad,i,j), AT(W,j,i));
+    tape_free(t);
+    mat_free(A); mat_free(W);
+}
+
+/* ad_spectral_norm against central differences on a 3 x 2 matrix whose two
+   singular values are well apart, where the norm is differentiable, and on
+   its transpose; and the value against sqrt of the largest eigenvalue of
+   A'A written out for 2 x 2. */
+static mreal ref_spectral_norm_2(Mat A) {
+    mreal g00 = 0, g01 = 0, g11 = 0;
+    for (int i = 0; i < A.r; i++) {
+        g00 += AT(A,i,0) * AT(A,i,0);
+        g01 += AT(A,i,0) * AT(A,i,1);
+        g11 += AT(A,i,1) * AT(A,i,1);
+    }
+    mreal half_trace = (g00 + g11) / 2, gap = (g00 - g11) / 2;
+    return MSQRT(half_trace + MSQRT(gap * gap + g01 * g01));
+}
+
+static void test_spectral_norm_fd(void) {
+    puts("ad_spectral_norm (finite-difference)");
+    Mat A = mat_lit(3, 2, 2.f,0.5f, -1.f,1.f, 0.3f,-0.4f);
+    Tape *t = tape_new();
+    Node *An = ad_leaf(t, A);
+    Node *sigma = ad_spectral_norm(t, An);
+    CHECK_REL(sigma->val.d[0], ref_spectral_norm_2(A));
+    tape_backward(t, sigma);
+    mreal h = 1e-3f;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 2; j++) {
+            Mat Ap = mat_copy(A), Am = mat_copy(A);
+            AT(Ap,i,j) += h; AT(Am,i,j) -= h;
+            mreal fd = (ref_spectral_norm_2(Ap) - ref_spectral_norm_2(Am)) / (2*h);
+            CHECK_REL(AT(An->grad,i,j), fd);
+            mat_free(Ap); mat_free(Am);
+        }
+    tape_free(t);
+
+    /* through a transpose: ||A^T|| = ||A||, gradient the same */
+    Tape *t2 = tape_new();
+    Node *A2 = ad_leaf(t2, A);
+    Node *sigma2 = ad_spectral_norm(t2, ad_transpose(t2, A2));
+    tape_backward(t2, sigma2);
+    CHECK_REL(sigma2->val.d[0], ref_spectral_norm_2(A));
+    Tape *t3 = tape_new();
+    Node *A3 = ad_leaf(t3, A);
+    tape_backward(t3, ad_spectral_norm(t3, A3));
+    for (int i = 0; i < 6; i++) CHECK_REL(A2->grad.d[i], A3->grad.d[i]);
+    tape_free(t2);
+    tape_free(t3);
+    mat_free(A);
+}
+
 static mreal ref_det_loss(Mat A) {
     mreal d = mat_det(A);
     return d * d;
@@ -1456,6 +1597,9 @@ int main(void) {
     test_solve_fd();
     test_chol_solve_fd();
     test_triangular_solve_fd();
+    test_triangular_solve_matrix_rhs();
+    test_transpose();
+    test_spectral_norm_fd();
     test_chol_quadform();
     test_det_fd();
     test_inv_fd();

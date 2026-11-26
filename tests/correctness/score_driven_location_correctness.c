@@ -25,6 +25,10 @@ adds the parameter recovery check, which fits repeatedly and is slow.
 #include <stdlib.h>
 #include <string.h>
 
+/* The margin of the invertibility condition C(theta) <= 1 - delta in every
+   spec here. */
+#define TEST_DELTA ((mreal)0.05)
+
 static const int lags_under_test[] = { 1, 2, 3 };
 static const SdlocScoreMatrices kinds_under_test[] = { SDLOC_SCORE_DIAGONAL, SDLOC_SCORE_FULL };
 #define N_LAGS_UNDER_TEST 3
@@ -33,7 +37,31 @@ static const SdlocScoreMatrices kinds_under_test[] = { SDLOC_SCORE_DIAGONAL, SDL
 
 static SdlocSpec spec_under_test(int K, int which) {
     return sdloc_spec(K, lags_under_test[which / N_KINDS_UNDER_TEST],
-                      kinds_under_test[which % N_KINDS_UNDER_TEST]);
+                      kinds_under_test[which % N_KINDS_UNDER_TEST], TEST_DELTA);
+}
+
+/* theta in the parametrization used before the invertibility condition was
+   imposed, which a cache written then holds: b and a diagonal A_j through
+   tanh, a full A_j as theta itself, the other blocks as now. Written out here
+   rather than taken from the header, which keeps only the reading side. */
+static void previous_theta(const SdlocParams *m, Vec theta) {
+    SdlocSpec spec = m->spec;
+    int K = spec.K, at = 0;
+    for (int k = 0; k < K; k++) theta.d[at++] = AT(m->m0, k, 0);
+    for (int j = 0; j < spec.p; j++) {
+        if (spec.score_matrices == SDLOC_SCORE_FULL) {
+            for (int k = 0; k < K; k++)
+                for (int l = 0; l < K; l++) theta.d[at++] = AT(m->A, k, j * K + l);
+        } else {
+            for (int k = 0; k < K; k++) theta.d[at++] = (mreal)atanh((double)AT(m->A, k, j * K + k));
+        }
+    }
+    for (int k = 0; k < K; k++) theta.d[at++] = (mreal)atanh((double)AT(m->b, k, 0));
+    for (int k = 0; k < K; k++) theta.d[at++] = (mreal)log((double)AT(m->Omega_inv, k, k));
+    for (int i = 1; i < K; i++)
+        for (int j = 0; j < i; j++) theta.d[at++] = AT(m->Omega_inv, i, j);
+    theta.d[at++] = (mreal)log((double)m->nu - 2.0);
+    assert(at == theta.r);
 }
 
 /* Element by element, so a strided view on either side is copied correctly. */
@@ -48,30 +76,34 @@ static void spec_label(SdlocSpec spec, char *out, int size) {
              sdloc_score_matrices_text(spec.score_matrices));
 }
 
-/* A parameter set that is stationary, well scaled and not symmetric in any
-   coordinate, so a transposed index, a swapped lag or a swapped A/b shows up.
-   The loadings shrink and alternate in sign with the lag, and in full mode
-   the off-diagonal entries are nonzero and differ above and below the
-   diagonal. */
+/* A parameter set that is stationary, invertible, well scaled and not
+   symmetric in any coordinate, so a transposed index, a swapped lag or a
+   swapped A/b shows up. The loadings shrink and alternate in sign with the lag,
+   and in full mode the off-diagonal entries are nonzero and differ above and
+   below the diagonal. C(theta) is between 0.58 and 0.78 over every spec here,
+   inside the bound 1 - TEST_DELTA = 0.95 with room for draws around it; the
+   helper checks that rather than relying on it. */
 static SdlocParams plausible_params(SdlocSpec spec) {
     int K = spec.K;
     SdlocParams m = sdloc_params_new(spec);
     for (int k = 0; k < K; k++) {
         AT(m.m0, k, 0) = (mreal)(0.5 + 0.3 * k);
-        AT(m.b, k, 0) = (mreal)(0.85 - 0.07 * k);
+        AT(m.b, k, 0) = (mreal)(0.55 - 0.05 * k);
         AT(m.Omega_inv, k, k) = (mreal)(0.7 + 0.1 * k);
         for (int j = 0; j < k; j++) AT(m.Omega_inv, k, j) = (mreal)(0.10 - 0.03 * j);
     }
     for (int j = 0; j < spec.p; j++) {
         double sign = j % 2 ? -1.0 : 1.0;
         for (int k = 0; k < K; k++) {
-            AT(m.A, k, j * K + k) = (mreal)(sign * (0.20 + 0.05 * k) / (j + 1));
+            AT(m.A, k, j * K + k) = (mreal)(sign * (0.12 + 0.02 * k) / ((j + 1) * (j + 1)));
             if (spec.score_matrices == SDLOC_SCORE_FULL)
                 for (int l = 0; l < K; l++)
-                    if (l != k) AT(m.A, k, j * K + l) = (mreal)(sign * (0.03 * (k + 1) - 0.02 * l) / (j + 1));
+                    if (l != k)
+                        AT(m.A, k, j * K + l) = (mreal)(sign * (0.02 * (k + 1) - 0.015 * l) / ((j + 1) * (j + 1)));
         }
     }
     m.nu = (mreal)7.5;
+    assert(sdloc_invertibility_constant(&m) < (mreal)0.8);
     /* Sigma and half_log_det_Sigma are derived, and the round trip through
        theta is how a params filled in by hand reaches the link that sets
        them - the same route sdloc_fit's own result takes. */
@@ -123,9 +155,9 @@ static void test_parameter_count(void) {
                   K, spec.p, seen, spec.p * per_lag);
         }
     /* the one-lag diagonal model keeps the count it had before p existed */
-    CHECK(sdloc_n_theta(sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL)) == 5, "K=1 p=1 diagonal is 5 parameters");
-    CHECK(sdloc_n_theta(sdloc_spec(3, 1, SDLOC_SCORE_DIAGONAL)) == 16, "K=3 p=1 diagonal is 16 parameters");
-    CHECK(sdloc_n_theta(sdloc_spec(3, 2, SDLOC_SCORE_FULL)) == 31, "K=3 p=2 full is 31 parameters");
+    CHECK(sdloc_n_theta(sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA)) == 5, "K=1 p=1 diagonal is 5 parameters");
+    CHECK(sdloc_n_theta(sdloc_spec(3, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA)) == 16, "K=3 p=1 diagonal is 16 parameters");
+    CHECK(sdloc_n_theta(sdloc_spec(3, 2, SDLOC_SCORE_FULL, TEST_DELTA)) == 31, "K=3 p=2 full is 31 parameters");
     printf("  ok\n");
 }
 
@@ -155,11 +187,35 @@ static void test_link_round_trip(void) {
             }
             CHECK_NEAR(back.nu, m.nu, 1e-7, "nu round trip");
 
-            /* unconstrained -> constrained -> unconstrained, at values large
-               enough that a full A_j put through tanh by mistake would not
-               come back */
+            /* unconstrained -> constrained -> unconstrained. b0 and A0 are rescaled so that C0 = 3, which C's homogeneity
+               allows: past C0 of about 10, tanh(C0) is within 1e-8 of 1 and the
+               radial coordinate is no longer recoverable in floating point. That
+               region is checked separately below. The factor of these draws is
+               ill-conditioned enough that b0 alone, unscaled, reaches C0 = 14. */
             Vec other = mat_new(n, 1);
+            SdlocLayout other_layout = sdloc_layout(spec);
             for (int i = 0; i < n; i++) other.d[i] = (mreal)(0.7 * ((i % 5) - 2) + 0.11);
+            {
+                SdlocParams probe = sdloc_params_new(spec);
+                for (int k = 0; k < K; k++) {
+                    AT(probe.b, k, 0) = other.d[other_layout.b + k];
+                    AT(probe.Omega_inv, k, k) = (mreal)exp((double)other.d[other_layout.Omega_inv_diagonal + k]);
+                }
+                int at = other_layout.Omega_inv_below;
+                for (int i = 1; i < K; i++)
+                    for (int j = 0; j < i; j++) AT(probe.Omega_inv, i, j) = other.d[at++];
+                probe.nu = (mreal)(exp((double)other.d[other_layout.nu]) + 2);
+                for (int j = 0; j < spec.p; j++)
+                    for (int k = 0; k < K; k++)
+                        for (int l = 0; l < K; l++) {
+                            int index = _sdloc_A_theta_index(spec, j, k, l);
+                            if (index >= 0) AT(probe.A, k, j * K + l) = other.d[index];
+                        }
+                mreal C_zero = sdloc_invertibility_constant(&probe);
+                for (int i = other_layout.A; i < other_layout.Omega_inv_diagonal; i++)
+                    other.d[i] *= 3 / C_zero;
+                sdloc_params_free(&probe);
+            }
             SdlocParams from_theta = sdloc_params_new(spec);
             sdloc_params_from_theta(other, &from_theta);
             Vec again = mat_new(n, 1);
@@ -167,25 +223,42 @@ static void test_link_round_trip(void) {
             for (int i = 0; i < n; i++)
                 CHECK_NEAR(again.d[i], other.d[i], 1e-6, "theta round trip");
 
-            /* the constraints the link exists to impose, and the absence of
-               one where the spec says the loadings are free */
+            /* the constraint the link exists to impose: b and every A_j are
+               b0 and A0_j scaled by one common positive factor, the scaled
+               point satisfies C(theta) = (1 - delta) tanh(C0) with C0 the same
+               constant at b0 and A0, and so lies inside the invertible set */
+            SdlocLayout layout = sdloc_layout(spec);
+            SdlocParams unscaled = sdloc_params_new(spec);
+            copy_into(unscaled.m0, from_theta.m0);
+            copy_into(unscaled.Omega_inv, from_theta.Omega_inv);
+            unscaled.nu = from_theta.nu;
+            for (int k = 0; k < K; k++) AT(unscaled.b, k, 0) = other.d[layout.b + k];
             for (int j = 0; j < spec.p; j++)
                 for (int k = 0; k < K; k++)
                     for (int l = 0; l < K; l++) {
-                        mreal value = AT(from_theta.A, k, j * K + l);
                         int index = _sdloc_A_theta_index(spec, j, k, l);
-                        if (spec.score_matrices == SDLOC_SCORE_FULL) {
-                            CHECK_NEAR(value, other.d[index], 0, "a full A_j entry is theta itself");
-                        } else if (k == l) {
-                            CHECK(value > -1 && value < 1, "diagonal A_%d[%d,%d] inside (-1,1)", j + 1, k, k);
-                            CHECK_NEAR(value, tanh((double)other.d[index]), 1e-12, "diagonal A_j is tanh of theta");
-                        } else {
-                            CHECK(value == 0, "a diagonal A_j has structural zeros off the diagonal");
-                        }
+                        if (index >= 0) AT(unscaled.A, k, j * K + l) = other.d[index];
                     }
+            double C_zero = (double)sdloc_invertibility_constant(&unscaled);
+            double lambda = (1 - (double)TEST_DELTA) * tanh(C_zero) / C_zero;
+            double C = (double)sdloc_invertibility_constant(&from_theta);
+            CHECK_CLOSE(C, (1 - (double)TEST_DELTA) * tanh(C_zero), 1e-12, "C(theta) = (1 - delta) tanh(C0)");
+            CHECK(C < 1 - (double)TEST_DELTA, "the link must land inside C <= 1 - delta, got %.6g", C);
+            for (int k = 0; k < K; k++)
+                CHECK_NEAR(AT(from_theta.b, k, 0), lambda * AT(unscaled.b, k, 0), 1e-12, "b = lambda b0");
+            for (int k = 0; k < K; k++)
+                for (int c = 0; c < width; c++)
+                    CHECK_NEAR(AT(from_theta.A, k, c), lambda * AT(unscaled.A, k, c), 1e-12, "A = lambda A0");
+            for (int j = 0; j < spec.p; j++)
+                for (int k = 0; k < K; k++)
+                    for (int l = 0; l < K; l++)
+                        if (_sdloc_A_theta_index(spec, j, k, l) < 0)
+                            CHECK(AT(from_theta.A, k, j * K + l) == 0,
+                                  "a diagonal A_j has structural zeros off the diagonal");
+            sdloc_params_free(&unscaled);
             for (int k = 0; k < K; k++) {
                 CHECK(AT(from_theta.b, k, 0) > -1 && AT(from_theta.b, k, 0) < 1,
-                      "b[%d] must land inside (-1,1)", k);
+                      "b[%d] must land inside (-1,1), which C < 1 implies", k);
                 CHECK(AT(from_theta.Omega_inv, k, k) > 0,
                       "the diagonal of Omega_inv must stay positive");
                 for (int j = k + 1; j < K; j++)
@@ -208,6 +281,26 @@ static void test_link_round_trip(void) {
             mat_free(theta); mat_free(other); mat_free(again);
             sdloc_params_free(&m); sdloc_params_free(&back); sdloc_params_free(&from_theta);
         }
+
+    /* Free coordinates far out, where C0 is in the hundreds and tanh(C0)
+       rounds to 1: the model lands on the edge of the set, never past it, and
+       unlinking it gives a finite theta. */
+    for (int which = 0; which < N_SPECS_UNDER_TEST; which++) {
+        SdlocSpec spec = spec_under_test(3, which);
+        SdlocLayout layout = sdloc_layout(spec);
+        Vec far = mat_new(layout.n_theta, 1);
+        for (int i = 0; i < layout.n_theta; i++) far.d[i] = (mreal)(0.2 * ((i % 3) - 1));
+        for (int i = layout.A; i < layout.Omega_inv_diagonal; i++) far.d[i] = (mreal)(60.0 * (i % 2 ? 1 : -1));
+        SdlocParams edge = sdloc_params_new(spec);
+        sdloc_params_from_theta(far, &edge);
+        double C = (double)sdloc_invertibility_constant(&edge);
+        CHECK(C <= (1 - (double)TEST_DELTA) * (1 + 1e-12), "far coordinates: C %.17g past the bound", C);
+        Vec back = mat_new(layout.n_theta, 1);
+        _sdloc_unlink(&edge, back);
+        for (int i = 0; i < layout.n_theta; i++)
+            CHECK(!MISNAN(back.d[i]) && !MISINF(back.d[i]), "far coordinates unlink to a finite theta");
+        mat_free(far); mat_free(back); sdloc_params_free(&edge);
+    }
     printf("  ok\n");
 }
 
@@ -255,30 +348,12 @@ static void test_static_case_against_mvstudent(void) {
     printf("  ok\n");
 }
 
-/*
-Moves every coordinate of theta but nu by a normal draw, so a gradient is
-checked away from the truth: the score loadings by loading_size times a
-standard normal, every other coordinate by size times one.
-*/
-static void perturb_off_the_truth(SdlocSpec spec, Vec theta, Rng *rng, double size, double loading_size) {
+/* Moves every coordinate of theta but nu by size times a standard normal
+   draw, so a gradient is checked away from the truth. Wherever b0 and A0 land,
+   the link keeps the model inside the invertible set. */
+static void perturb_off_the_truth(SdlocSpec spec, Vec theta, Rng *rng, double size) {
     SdlocLayout layout = sdloc_layout(spec);
-    for (int i = 0; i < layout.nu; i++) {
-        int is_loading = i >= layout.A && i < layout.b;
-        if (is_loading && loading_size == 0) continue;
-        theta.d[i] += (mreal)((is_loading ? loading_size : size) * rng_normal(rng));
-    }
-}
-
-/*
-A full A_j has K entries per row on the identity scale where a diagonal one
-has a single entry through tanh, so its entries move by size / sqrt(K p): each
-row of the loadings then moves by about as much as in the diagonal case.
-Without that, K = 4 and p = 3 put 48 loadings off by 0.3 each, the filter is no
-longer invertible, and at nu = 1e6 the location path diverges, with a
-log-likelihood of -1.6e8 and gradient coordinates of 1e10.
-*/
-static double loading_perturbation(SdlocSpec spec, double size) {
-    return spec.score_matrices == SDLOC_SCORE_FULL ? size / sqrt((double)(spec.K * spec.p)) : size;
+    for (int i = 0; i < layout.nu; i++) theta.d[i] += (mreal)(size * rng_normal(rng));
 }
 
 /* log Gamma(x + a) - log Gamma(x) in long double, by its asymptotic series
@@ -294,72 +369,205 @@ static long double reference_lgamma_shift(long double x, long double a) {
 #define REFERENCE_MAX_K 4
 #define REFERENCE_MAX_P 3
 
+/* The largest eigenvalue of a symmetric n x n matrix by cyclic Jacobi
+   rotations, in long double: a method sharing nothing with the SVD the header
+   takes its norms from. */
+static long double reference_largest_eigenvalue(long double *S, int n) {
+    for (int sweep = 0; sweep < 100; sweep++) {
+        long double off = 0;
+        for (int i = 0; i < n; i++)
+            for (int j = i + 1; j < n; j++) off += S[i * n + j] * S[i * n + j];
+        if (off < 1e-36L) break;
+        for (int i = 0; i < n; i++)
+            for (int j = i + 1; j < n; j++) {
+                if (fabsl(S[i * n + j]) < 1e-300L) continue;
+                long double angle = (S[j * n + j] - S[i * n + i]) / (2 * S[i * n + j]);
+                long double t = (angle >= 0 ? 1 : -1) / (fabsl(angle) + sqrtl(1 + angle * angle));
+                long double c = 1 / sqrtl(1 + t * t), s = t * c;
+                for (int k = 0; k < n; k++) {
+                    long double a = S[k * n + i], b = S[k * n + j];
+                    S[k * n + i] = c * a - s * b;
+                    S[k * n + j] = s * a + c * b;
+                }
+                for (int k = 0; k < n; k++) {
+                    long double a = S[i * n + k], b = S[j * n + k];
+                    S[i * n + k] = c * a - s * b;
+                    S[j * n + k] = s * a + c * b;
+                }
+            }
+    }
+    long double largest = S[0];
+    for (int i = 1; i < n; i++) if (S[i * n + i] > largest) largest = S[i * n + i];
+    return largest;
+}
+
+/* ||M||, the square root of the largest eigenvalue of M'M. */
+static long double reference_spectral_norm(const long double *M, int n) {
+    long double S[REFERENCE_MAX_K * REFERENCE_MAX_K] = { 0 };
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++) {
+            long double sum = 0;
+            for (int k = 0; k < n; k++) sum += M[k * n + i] * M[k * n + j];
+            S[i * n + j] = sum;
+        }
+    long double largest = reference_largest_eigenvalue(S, n);
+    return largest > 0 ? sqrtl(largest) : 0;
+}
+
+/* c = a b for n x n, long double. */
+static void reference_product(const long double *a, const long double *b, long double *c, int n) {
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++) {
+            long double sum = 0;
+            for (int k = 0; k < n; k++) sum += a[i * n + k] * b[k * n + j];
+            c[i * n + j] = sum;
+        }
+}
+
+typedef struct {
+    int K, p;
+    long double m0[REFERENCE_MAX_K], b[REFERENCE_MAX_K];
+    long double A[REFERENCE_MAX_P][REFERENCE_MAX_K][REFERENCE_MAX_K];
+    long double L[REFERENCE_MAX_K * REFERENCE_MAX_K], half_logdet, nu, C;
+} ReferenceModel;
+
 /*
-The log-likelihood at theta in long double, from the model's equations in this
-file's own words rather than from the header: the layout, the link, both
-substitutions, the location recursion with p lagged scores, and the density
-written out, sharing no code with either filter.
+theta to the model in long double, written from the model's definition rather
+than from the header. The free coordinates m0, b0, A0, the factor and nu, then
+the radial map
 
-    m_1 = m0, s_r = 0 for r < 1,
-    m_{t+1} = m0 (1 - b) + b m_t + sum_{j=1}^{p} A_j s_{t+1-j},
-    s_t = sqrt((nu+K)(nu+2)) / (nu + q_t) * L^-T (y_t - m_t).
+    C0 = || L^-1 diag(b0) L - 7/16 Psi_1 || + 9/16 || Psi_1 || + sum_{j>=2} || Psi_j ||,
+    Psi_j = r L^-1 A0_j L^-T L,  r = sqrt((nu+K)(nu+2)) / nu,
+    b = lambda b0,  A_j = lambda A0_j,  lambda = (1 - delta) tanh(C0) / C0,
 
-K <= REFERENCE_MAX_K, p <= REFERENCE_MAX_P.
+with L^-1 formed by forward substitution and every norm from
+reference_spectral_norm. C is the constant at the scaled point.
 */
-static long double reference_log_likelihood(const mreal *theta, SdlocSpec spec, Mat y) {
-    int K = spec.K, p = spec.p, T = y.c, at = 0;
+static void reference_model(const mreal *theta, SdlocSpec spec, ReferenceModel *r) {
+    int K = spec.K, p = spec.p, at = 0;
     int full = spec.score_matrices == SDLOC_SCORE_FULL;
     assert(K <= REFERENCE_MAX_K && p <= REFERENCE_MAX_P);
-    long double m0[REFERENCE_MAX_K], b[REFERENCE_MAX_K];
-    long double A[REFERENCE_MAX_P][REFERENCE_MAX_K][REFERENCE_MAX_K] = { { { 0 } } };
-    long double L[REFERENCE_MAX_K * REFERENCE_MAX_K] = { 0 }, half_logdet = 0;
-    for (int k = 0; k < K; k++) m0[k] = theta[at++];
+    memset(r, 0, sizeof *r);
+    r->K = K;
+    r->p = p;
+    for (int k = 0; k < K; k++) r->m0[k] = theta[at++];
     for (int j = 0; j < p; j++) {
         if (full) {
             for (int k = 0; k < K; k++)
-                for (int l = 0; l < K; l++) A[j][k][l] = theta[at++];
+                for (int l = 0; l < K; l++) r->A[j][k][l] = theta[at++];
         } else {
-            for (int k = 0; k < K; k++) A[j][k][k] = tanhl(theta[at++]);
+            for (int k = 0; k < K; k++) r->A[j][k][k] = theta[at++];
         }
     }
-    for (int k = 0; k < K; k++) b[k] = tanhl(theta[at++]);
-    for (int k = 0; k < K; k++) { L[k * K + k] = expl(theta[at]); half_logdet += theta[at]; at++; }
+    for (int k = 0; k < K; k++) r->b[k] = theta[at++];
+    for (int k = 0; k < K; k++) { r->L[k * K + k] = expl(theta[at]); r->half_logdet += theta[at]; at++; }
     for (int i = 1; i < K; i++)
-        for (int j = 0; j < i; j++) L[i * K + j] = theta[at++];
-    long double nu = expl(theta[at]) + 2;
+        for (int j = 0; j < i; j++) r->L[i * K + j] = theta[at++];
+    r->nu = expl(theta[at]) + 2;
+
+    long double inverse[REFERENCE_MAX_K * REFERENCE_MAX_K] = { 0 };
+    for (int c = 0; c < K; c++)
+        for (int i = 0; i < K; i++) {
+            long double acc = i == c ? 1 : 0;
+            for (int j = 0; j < i; j++) acc -= r->L[i * K + j] * inverse[j * K + c];
+            inverse[i * K + c] = acc / r->L[i * K + i];
+        }
+    long double inverse_t[REFERENCE_MAX_K * REFERENCE_MAX_K];
+    for (int i = 0; i < K; i++)
+        for (int j = 0; j < K; j++) inverse_t[i * K + j] = inverse[j * K + i];
+    long double ratio = sqrtl((r->nu + K) * (r->nu + 2)) / r->nu;
+
+    for (int pass = 0; pass < 2; pass++) {
+        long double D[REFERENCE_MAX_K * REFERENCE_MAX_K] = { 0 }, first[REFERENCE_MAX_K * REFERENCE_MAX_K];
+        long double Phi[REFERENCE_MAX_K * REFERENCE_MAX_K];
+        for (int k = 0; k < K; k++) D[k * K + k] = r->b[k];
+        reference_product(inverse, D, first, K);
+        reference_product(first, r->L, Phi, K);
+        long double C = 0;
+        for (int j = 0; j < p; j++) {
+            long double Psi[REFERENCE_MAX_K * REFERENCE_MAX_K], one[REFERENCE_MAX_K * REFERENCE_MAX_K];
+            long double two[REFERENCE_MAX_K * REFERENCE_MAX_K], block[REFERENCE_MAX_K * REFERENCE_MAX_K];
+            for (int k = 0; k < K; k++)
+                for (int l = 0; l < K; l++) block[k * K + l] = r->A[j][k][l];
+            reference_product(inverse, block, one, K);
+            reference_product(one, inverse_t, two, K);
+            reference_product(two, r->L, Psi, K);
+            for (int i = 0; i < K * K; i++) Psi[i] *= ratio;
+            if (j == 0) {
+                long double M1[REFERENCE_MAX_K * REFERENCE_MAX_K];
+                for (int i = 0; i < K * K; i++) M1[i] = Phi[i] - 7.0L / 16 * Psi[i];
+                C += reference_spectral_norm(M1, K) + 9.0L / 16 * reference_spectral_norm(Psi, K);
+            } else {
+                C += reference_spectral_norm(Psi, K);
+            }
+        }
+        if (pass == 1) { r->C = C; break; }
+        long double lambda = C == 0 ? 1 - (long double)spec.delta
+                                    : (1 - (long double)spec.delta) * tanhl(C) / C;
+        for (int k = 0; k < K; k++) r->b[k] *= lambda;
+        for (int j = 0; j < p; j++)
+            for (int k = 0; k < K; k++)
+                for (int l = 0; l < K; l++) r->A[j][k][l] *= lambda;
+    }
+}
+
+/*
+The location recursion of a reference model on y, started from m_1 = start,
+with every score before the first period zero:
+
+    m_{t+1} = m0 (1 - b) + b m_t + sum_{j=1}^{p} A_j s_{t+1-j},
+    s_t = sqrt((nu+K)(nu+2)) / (nu + q_t) * L^-T (y_t - m_t).
+
+Writes m_t into path (T x K) when path is not NULL, and returns the
+log-likelihood.
+*/
+static long double reference_filter(const ReferenceModel *r, Mat y, const long double *start,
+                                    long double *path) {
+    int K = r->K, p = r->p, T = y.c;
+    long double nu = r->nu;
     long double c = sqrtl((nu + K) * (nu + 2)), m[REFERENCE_MAX_K], total = 0;
     long double constant = reference_lgamma_shift(nu / 2, K / 2.0L)
-                         - K / 2.0L * logl(nu * 3.141592653589793238462643383279L) - half_logdet;
+                         - K / 2.0L * logl(nu * 3.141592653589793238462643383279L) - r->half_logdet;
     /* history[j] is the score j + 1 periods before the location being built */
     long double history[REFERENCE_MAX_P][REFERENCE_MAX_K] = { { 0 } };
-    for (int k = 0; k < K; k++) m[k] = m0[k];
+    for (int k = 0; k < K; k++) m[k] = start[k];
     for (int t = 0; t < T; t++) {
+        if (path) for (int k = 0; k < K; k++) path[t * K + k] = m[k];
         long double v[REFERENCE_MAX_K], z[REFERENCE_MAX_K], x[REFERENCE_MAX_K], q = 0;
         for (int k = 0; k < K; k++) v[k] = (long double)AT(y, k, t) - m[k];
         for (int i = 0; i < K; i++) {
             long double acc = v[i];
-            for (int j = 0; j < i; j++) acc -= L[i * K + j] * z[j];
-            z[i] = acc / L[i * K + i];
+            for (int j = 0; j < i; j++) acc -= r->L[i * K + j] * z[j];
+            z[i] = acc / r->L[i * K + i];
             q += z[i] * z[i];
         }
         total += constant - (nu + K) / 2 * log1pl(q / nu);
         for (int i = K - 1; i >= 0; i--) {
             long double acc = v[i];
-            for (int j = i + 1; j < K; j++) acc -= L[j * K + i] * x[j];
-            x[i] = acc / L[i * K + i];
+            for (int j = i + 1; j < K; j++) acc -= r->L[j * K + i] * x[j];
+            x[i] = acc / r->L[i * K + i];
         }
         long double shrink = c / (nu + q);
         for (int j = p - 1; j > 0; j--)
             for (int k = 0; k < K; k++) history[j][k] = history[j - 1][k];
         for (int k = 0; k < K; k++) history[0][k] = shrink * x[k];
+        long double next[REFERENCE_MAX_K];
         for (int k = 0; k < K; k++) {
-            long double next = m0[k] * (1 - b[k]) + b[k] * m[k];
+            next[k] = r->m0[k] * (1 - r->b[k]) + r->b[k] * m[k];
             for (int j = 0; j < p; j++)
-                for (int l = 0; l < K; l++) next += A[j][k][l] * history[j][l];
-            m[k] = next;
+                for (int l = 0; l < K; l++) next[k] += r->A[j][k][l] * history[j][l];
         }
+        for (int k = 0; k < K; k++) m[k] = next[k];
     }
     return total;
+}
+
+/* The log-likelihood at theta in long double, through reference_model and
+   reference_filter from m_1 = m0, sharing no code with either filter. */
+static long double reference_log_likelihood(const mreal *theta, SdlocSpec spec, Mat y) {
+    ReferenceModel r;
+    reference_model(theta, spec, &r);
+    return reference_filter(&r, y, r.m0, NULL);
 }
 
 /*
@@ -414,19 +622,18 @@ value and gradient on every shared coordinate: the score at lag p + 1 still
 reaches the gradient of the zero block, and nowhere else.
 
 A full model whose loadings happen to be diagonal is the diagonal model, value
-and gradient. The two parametrize the diagonal differently, identity against
-tanh, so the diagonal model's gradient on a diagonal entry a must be the full
-model's times 1 - a^2, the derivative of tanh. That compares the full model's
-gradient assembly with the diagonal model's through the chain rule rather than
-coordinate by coordinate.
+and gradient: the same C0 and so the same lambda, and the full model's
+gradient on a diagonal entry equal to the diagonal model's. The off-diagonal
+gradient of the full model, which the diagonal one has no coordinate for, is
+not compared.
 */
 static void test_the_larger_models_nest_the_smaller(void) {
     printf("an extra zero lag, and diagonal full loadings, reproduce the smaller model\n");
     for (int K = 1; K <= 3; K++)
         for (int kind = 0; kind < N_KINDS_UNDER_TEST; kind++)
             for (int p = 1; p <= 2; p++) {
-                SdlocSpec small = sdloc_spec(K, p, kinds_under_test[kind]);
-                SdlocSpec large = sdloc_spec(K, p + 1, kinds_under_test[kind]);
+                SdlocSpec small = sdloc_spec(K, p, kinds_under_test[kind], TEST_DELTA);
+                SdlocSpec large = sdloc_spec(K, p + 1, kinds_under_test[kind], TEST_DELTA);
                 SdlocParams small_params = plausible_params(small);
                 SdlocParams large_params = sdloc_params_new(large);
                 copy_into(large_params.m0, small_params.m0);
@@ -471,8 +678,8 @@ static void test_the_larger_models_nest_the_smaller(void) {
 
     for (int K = 1; K <= 3; K++)
         for (int p = 1; p <= 3; p++) {
-            SdlocSpec diagonal = sdloc_spec(K, p, SDLOC_SCORE_DIAGONAL);
-            SdlocSpec full = sdloc_spec(K, p, SDLOC_SCORE_FULL);
+            SdlocSpec diagonal = sdloc_spec(K, p, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
+            SdlocSpec full = sdloc_spec(K, p, SDLOC_SCORE_FULL, TEST_DELTA);
             SdlocParams diagonal_params = plausible_params(diagonal);
             SdlocParams full_params = sdloc_params_new(full);
             copy_into(full_params.m0, diagonal_params.m0);
@@ -500,11 +707,10 @@ static void test_the_larger_models_nest_the_smaller(void) {
 
             for (int j = 0; j < p; j++)
                 for (int k = 0; k < K; k++) {
-                    mreal a = AT(diagonal_params.A, k, j * K + k);
                     int full_index = _sdloc_A_theta_index(full, j, k, k);
                     int diagonal_index = _sdloc_A_theta_index(diagonal, j, k, k);
-                    CHECK_CLOSE(full_gradient.d[full_index] * (1 - a * a), diagonal_gradient.d[diagonal_index],
-                                1e-11, "the diagonal gradient is the full one through tanh");
+                    CHECK_CLOSE(full_gradient.d[full_index], diagonal_gradient.d[diagonal_index],
+                                1e-11, "the diagonal gradient is the full one's diagonal");
                 }
             SdlocLayout diagonal_layout = sdloc_layout(diagonal), full_layout = sdloc_layout(full);
             for (int k = 0; k < K; k++)
@@ -599,24 +805,13 @@ and 3 the longer lags reach before the first period. At nu = 1e14 the two nu
 gradients differ by more than 1e-9 in some draws, so past 1e10 each is
 compared against a long double reference instead, in
 test_nu_gradient_at_a_light_tail.
-
-Some draws land where the filter is not invertible and the location path
-diverges. One at K = 1, two full lags, nu = 1e10 had a_1 = -0.11, a_2 = -0.20,
-b = 0.91 and a scale of 0.65: with the score close to v_t / 0.65 at that nu,
-the residual recursion has characteristic polynomial z^2 - 1.08 z - 0.31, with
-a root at 1.32, and the log-likelihood was -2.0e5 with q_t up to 1.7e5. There
-the likelihood is a sum of terms far larger than its derivatives, and the two
-filters agree only to about 2e-9. Such a draw is recognized by a log-likelihood
-below -100 per period, which no model the sweep simulates from comes near, and
-is compared at 1e-7 instead; the two kinds of draw are counted and reported
-separately.
 */
 static void test_analytic_against_traced(void) {
     printf("the analytic filter against the traced one\n");
     const int lengths[] = { 2, 3, 40, 150 };
     const double nus[] = { 2.5, 7.5, 1e3, 1e6, 1e10 };
-    double worst_value = 0, worst_gradient = 0, worst_diverged_value = 0, worst_diverged_gradient = 0;
-    int cases = 0, diverged_cases = 0;
+    double worst_value = 0, worst_gradient = 0;
+    int cases = 0;
     for (int which = 0; which < N_SPECS_UNDER_TEST; which++)
         for (int K = 1; K <= 4; K++)
             for (size_t l = 0; l < sizeof lengths / sizeof lengths[0]; l++)
@@ -633,7 +828,7 @@ static void test_analytic_against_traced(void) {
                         int n = sdloc_n_theta(spec);
                         Vec theta = mat_new(n, 1);
                         _sdloc_unlink(&m, theta);
-                        perturb_off_the_truth(spec, theta, &rng, 0.3, loading_perturbation(spec, 0.3));
+                        perturb_off_the_truth(spec, theta, &rng, 0.3);
 
                         Vec analytic = mat_new(n, 1), traced = mat_new(n, 1);
                         SdlocAnalytic *f = sdloc_analytic_new(spec, T);
@@ -643,34 +838,27 @@ static void test_analytic_against_traced(void) {
 
                         char label[64];
                         spec_label(spec, label, sizeof label);
-                        int diverged = (double)reference / T < -100;
-                        double tolerance = diverged ? 1e-7 : 1e-9;
-                        double *value_worst = diverged ? &worst_diverged_value : &worst_value;
-                        double *gradient_worst = diverged ? &worst_diverged_gradient : &worst_gradient;
                         double scale = fabs((double)reference) > 1 ? fabs((double)reference) : 1;
                         double value_error = fabs((double)value - (double)reference) / scale;
-                        if (value_error > *value_worst) *value_worst = value_error;
-                        CHECK(value_error < tolerance, "%s T=%d nu=%g: value %.17g against traced %.17g",
+                        if (value_error > worst_value) worst_value = value_error;
+                        CHECK(value_error < 1e-9, "%s T=%d nu=%g: value %.17g against traced %.17g",
                               label, T, nus[v], (double)value, (double)reference);
                         for (int i = 0; i < n; i++) {
                             double size = fabs((double)traced.d[i]) > 1 ? fabs((double)traced.d[i]) : 1;
                             double error = fabs((double)analytic.d[i] - (double)traced.d[i]) / size;
-                            if (error > *gradient_worst) *gradient_worst = error;
+                            if (error > worst_gradient) worst_gradient = error;
                             char name[64];
                             _sdloc_theta_name(spec, i, name, sizeof name);
-                            CHECK(error < tolerance, "%s T=%d nu=%g %s: analytic %.17g against traced %.17g",
+                            CHECK(error < 1e-9, "%s T=%d nu=%g %s: analytic %.17g against traced %.17g",
                                   label, T, nus[v], name, (double)analytic.d[i], (double)traced.d[i]);
                         }
-                        if (diverged) diverged_cases++;
-                        else cases++;
+                        cases++;
                         mat_free(analytic); mat_free(traced); mat_free(theta); mat_free(y);
                         sdloc_params_free(&m);
                     }
                 }
     printf("  %d cases, worst relative error: value %.2e, gradient %.2e\n",
            cases, worst_value, worst_gradient);
-    printf("  %d further cases with a diverging filter, worst relative error: value %.2e, gradient %.2e\n",
-           diverged_cases, worst_diverged_value, worst_diverged_gradient);
     printf("  ok\n");
 }
 
@@ -697,8 +885,8 @@ writing the same parameters, more than the tolerance under test.
 static void test_nu_gradient_at_a_light_tail(void) {
     printf("the nu gradient at a light tail, against a long double reference\n");
     const double nus[] = { 1e6, 1e10, 1e14 };
-    const SdlocSpec specs[] = { sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL), sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL),
-                                sdloc_spec(1, 2, SDLOC_SCORE_FULL), sdloc_spec(2, 2, SDLOC_SCORE_FULL) };
+    const SdlocSpec specs[] = { sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA), sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA),
+                                sdloc_spec(1, 2, SDLOC_SCORE_FULL, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA) };
     for (size_t which = 0; which < sizeof specs / sizeof specs[0]; which++)
         for (size_t v = 0; v < sizeof nus / sizeof nus[0]; v++) {
             SdlocSpec spec = specs[which];
@@ -714,7 +902,7 @@ static void test_nu_gradient_at_a_light_tail(void) {
                 int n = sdloc_n_theta(spec);
                 Vec theta = mat_new(n, 1);
                 _sdloc_unlink(&m, theta);
-                perturb_off_the_truth(spec, theta, &rng, 0.3, 0);
+                perturb_off_the_truth(spec, theta, &rng, 0.3);
 
                 Vec analytic = mat_new(n, 1), traced = mat_new(n, 1);
                 SdlocAnalytic *f = sdloc_analytic_new(spec, T);
@@ -761,6 +949,169 @@ static void test_nu_gradient_at_a_light_tail(void) {
    from the simulated series by hand, with the lagged scores kept in a plain
    history, and confirm the mean it implies is the one the simulated series
    was built around. */
+/*
+The property the link exists to impose, checked on the recursion itself rather
+than on C. At C(theta) <= 1 - delta the derivation's Lemma 3 makes one step of
+the filter a contraction with factor gamma in its weighted norm, for every
+realization of the data, so two runs of the filter on the same series that
+start from m_1 and m_1' differ at period t by at most
+
+    || L^-1 (m_t - m_t') || <= gamma^(t-1) || L^-1 (m_1 - m_1') ||,
+
+gamma = max((1 - delta) / (1 - delta/2), rho), rho = (1 - delta/2)^(1/(p-1)),
+and gamma = 1 - delta for p = 1. Both runs set the scores before the first
+period to zero, which is the derivation's filter with the same pre-sample
+state in both, so only the first block of the state differs.
+
+The runs are reference_filter, in long double, at parameters drawn far from the
+plausible set, 1.5 per coordinate on the unconstrained scale, so that many
+land near the edge of the set, on a series simulated from the plausible
+parameters; 20 draws per spec, T = 300, starting 5 apart in the L norm.
+
+The negative control is the model a draw of the earlier sweep had before the
+condition existed, K = 1 with two full lags: a_1 = -0.11, a_2 = -0.20, b = 0.91,
+a scale of 0.65 and nu = 1e10. It has C = 1.39, the bound fails there, and the
+two runs must not contract at that rate, or the check could not fail.
+*/
+static void test_the_filter_forgets_its_start(void) {
+    printf("two runs of the filter from different starts contract at the derivation's rate\n");
+    double worst_ratio = 0;
+    int runs = 0;
+    for (int which = 0; which < N_SPECS_UNDER_TEST; which++)
+        for (int K = 1; K <= 3; K++) {
+            SdlocSpec spec = spec_under_test(K, which);
+            int p = spec.p, T = 300;
+            double delta = (double)spec.delta;
+            double rho = p == 1 ? 1 : pow(1 - delta / 2, 1.0 / (p - 1));
+            double gamma = p == 1 ? 1 - delta : fmax((1 - delta) / (1 - delta / 2), rho);
+            SdlocParams truth = plausible_params(spec);
+            Rng rng = rng_new(60606u + 10u * (unsigned)K, (uint64_t)which);
+            Mat y = sdloc_simulate(&rng, &truth, T);
+            int n = sdloc_n_theta(spec);
+            for (int draw = 0; draw < 20; draw++) {
+                Vec theta = mat_new(n, 1);
+                _sdloc_unlink(&truth, theta);
+                perturb_off_the_truth(spec, theta, &rng, 1.5);
+                ReferenceModel r;
+                reference_model(theta.d, spec, &r);
+                CHECK(r.C <= (1 - delta) * (1 + 1e-12), "the reference model is inside the set, C %.6g", (double)r.C);
+
+                long double start[REFERENCE_MAX_K], other[REFERENCE_MAX_K], offset[REFERENCE_MAX_K];
+                for (int k = 0; k < K; k++) offset[k] = (long double)rng_normal(&rng);
+                long double size = 0;
+                for (int k = 0; k < K; k++) size += offset[k] * offset[k];
+                for (int k = 0; k < K; k++) offset[k] *= 5 / sqrtl(size);
+                /* offset is L z for a z of norm 5 */
+                for (int i = 0; i < K; i++) {
+                    long double sum = 0;
+                    for (int j = 0; j <= i; j++) sum += r.L[i * K + j] * offset[j];
+                    start[i] = r.m0[i];
+                    other[i] = r.m0[i] + sum;
+                }
+                long double *first = (long double*)malloc((size_t)T * K * sizeof(long double));
+                long double *second = (long double*)malloc((size_t)T * K * sizeof(long double));
+                reference_filter(&r, y, start, first);
+                reference_filter(&r, y, other, second);
+                for (int t = 0; t < T; t++) {
+                    long double gap[REFERENCE_MAX_K], z[REFERENCE_MAX_K], norm = 0;
+                    for (int k = 0; k < K; k++) gap[k] = second[t * K + k] - first[t * K + k];
+                    for (int i = 0; i < K; i++) {
+                        long double acc = gap[i];
+                        for (int j = 0; j < i; j++) acc -= r.L[i * K + j] * z[j];
+                        z[i] = acc / r.L[i * K + i];
+                        norm += z[i] * z[i];
+                    }
+                    double bound = 5 * pow(gamma, t);
+                    double ratio = (double)sqrtl(norm) / bound;
+                    if (t > 0 && ratio > worst_ratio) worst_ratio = ratio;
+                    if (bound > 1e-280)
+                        CHECK(ratio <= 1 + 1e-9, "spec %d K=%d draw %d t=%d: distance %.6g above the bound %.6g",
+                              which, K, draw, t, (double)sqrtl(norm), bound);
+                }
+                runs++;
+                free(first); free(second);
+                mat_free(theta);
+            }
+            mat_free(y); sdloc_params_free(&truth);
+        }
+    printf("  %d pairs of runs, largest distance over its bound after the first period %.3f\n", runs, worst_ratio);
+
+    /* the negative control */
+    ReferenceModel outside;
+    memset(&outside, 0, sizeof outside);
+    outside.K = 1;
+    outside.p = 2;
+    outside.m0[0] = 0.4L;
+    outside.b[0] = 0.91L;
+    outside.A[0][0][0] = -0.11L;
+    outside.A[1][0][0] = -0.20L;
+    outside.L[0] = 0.65L;
+    outside.half_logdet = logl(0.65L);
+    outside.nu = 1e10L;
+    SdlocParams source = plausible_params(spec_under_test(1, 2));
+    Rng rng = rng_new(70707u, 0);
+    Mat y = sdloc_simulate(&rng, &source, 300);
+    long double start[1] = { 0.4L }, other[1] = { 0.4L + 5 * 0.65L };
+    long double first[300], second[300];
+    reference_filter(&outside, y, start, first);
+    reference_filter(&outside, y, other, second);
+    double rho = 1 - 0.05 / 2, gamma = fmax(0.95 / (1 - 0.05 / 2), rho);
+    double last = (double)(fabsl(second[299] - first[299]) / 0.65L);
+    printf("  outside the set: distance after 300 periods %.3g, against the bound %.3g\n",
+           last, 5 * pow(gamma, 299));
+    CHECK(last > 5 * pow(gamma, 299), "the negative control must break the bound, or the check cannot fail");
+    mat_free(y); sdloc_params_free(&source);
+    printf("  ok\n");
+}
+
+/* sdloc_invertibility_diagnostics against the long double reference: C, the
+   spectral norms of the factor and of its inverse, and B = sqrt(nu)/2
+   sum_j ||Psi~_j||, at the plausible parameters of every spec. */
+static void test_invertibility_diagnostics(void) {
+    printf("the invertibility diagnostics against the reference\n");
+    for (int which = 0; which < N_SPECS_UNDER_TEST; which++)
+        for (int K = 1; K <= 4; K++) {
+            SdlocSpec spec = spec_under_test(K, which);
+            SdlocParams m = plausible_params(spec);
+            Vec theta = mat_new(sdloc_n_theta(spec), 1);
+            _sdloc_unlink(&m, theta);
+            ReferenceModel r;
+            reference_model(theta.d, spec, &r);
+            SdlocInvertibilityDiagnostics d = sdloc_invertibility_diagnostics(&m);
+            CHECK_CLOSE(d.C, r.C, 1e-11, "C against the reference");
+            CHECK_CLOSE(d.margin, 1 - TEST_DELTA, 1e-15, "the margin is 1 - delta");
+            CHECK_CLOSE(d.nu, m.nu, 1e-15, "nu");
+
+            long double inverse[REFERENCE_MAX_K * REFERENCE_MAX_K] = { 0 };
+            for (int c = 0; c < K; c++)
+                for (int i = 0; i < K; i++) {
+                    long double acc = i == c ? 1 : 0;
+                    for (int j = 0; j < i; j++) acc -= r.L[i * K + j] * inverse[j * K + c];
+                    inverse[i * K + c] = acc / r.L[i * K + i];
+                }
+            CHECK_CLOSE(d.norm_L, (double)reference_spectral_norm(r.L, K), 1e-12, "||Omega_inv||");
+            CHECK_CLOSE(d.norm_L_inverse, (double)reference_spectral_norm(inverse, K), 1e-11, "||Omega_inv^-1||");
+
+            long double ratio = sqrtl((r.nu + K) * (r.nu + 2)) / r.nu, psi_sum = 0;
+            long double inverse_t[REFERENCE_MAX_K * REFERENCE_MAX_K];
+            for (int i = 0; i < K; i++)
+                for (int j = 0; j < K; j++) inverse_t[i * K + j] = inverse[j * K + i];
+            for (int j = 0; j < spec.p; j++) {
+                long double block[REFERENCE_MAX_K * REFERENCE_MAX_K], one[REFERENCE_MAX_K * REFERENCE_MAX_K];
+                long double two[REFERENCE_MAX_K * REFERENCE_MAX_K], Psi[REFERENCE_MAX_K * REFERENCE_MAX_K];
+                for (int k = 0; k < K; k++)
+                    for (int l = 0; l < K; l++) block[k * K + l] = r.A[j][k][l];
+                reference_product(inverse, block, one, K);
+                reference_product(one, inverse_t, two, K);
+                reference_product(two, r.L, Psi, K);
+                psi_sum += ratio * reference_spectral_norm(Psi, K);
+            }
+            CHECK_CLOSE(d.B, (double)(0.5L * sqrtl(r.nu) * psi_sum), 1e-11, "B, the derivation's (39)");
+            mat_free(theta); sdloc_params_free(&m);
+        }
+    printf("  ok\n");
+}
+
 static void test_simulator_matches_the_filter(void) {
     printf("the simulator and the filter agree on the recursion\n");
     for (int which = 0; which < N_SPECS_UNDER_TEST; which++) {
@@ -863,7 +1214,7 @@ failure.
 */
 static void test_infeasible_points_return_a_sentinel(void) {
     printf("an unusable scale returns infinity rather than aborting\n");
-    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL), sdloc_spec(2, 2, SDLOC_SCORE_FULL) };
+    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA) };
     for (size_t which = 0; which < sizeof specs / sizeof specs[0]; which++) {
         SdlocSpec spec = specs[which];
         int K = spec.K, T = 40;
@@ -926,7 +1277,7 @@ static void test_infeasible_points_return_a_sentinel(void) {
    before the last step. */
 static void test_fit_diagnostics_describe_the_result(void) {
     printf("the reported likelihood and gradient belong to the returned parameters\n");
-    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL), sdloc_spec(2, 2, SDLOC_SCORE_FULL) };
+    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA) };
     for (size_t which = 0; which < sizeof specs / sizeof specs[0]; which++) {
         SdlocSpec spec = specs[which];
         int T = 400;
@@ -991,7 +1342,7 @@ static void test_fit_diagnostics_describe_the_result(void) {
    another sample is worse than no cache. */
 static void test_parameter_cache(void) {
     printf("the JSON cache round trips and refuses a different sample\n");
-    SdlocSpec spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL);
+    SdlocSpec spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA);
     int K = spec.K, T = 150;
     SdlocParams truth = plausible_params(spec);
     Rng rng = rng_new(1357u, 0);
@@ -1043,7 +1394,7 @@ header had then, one diagonal lag, and must load as that and as nothing else.
 static void test_cache_refuses_another_spec(void) {
     printf("a cache is refused by a model of another spec\n");
     int T = 100;
-    SdlocSpec written_spec = sdloc_spec(1, 2, SDLOC_SCORE_DIAGONAL);
+    SdlocSpec written_spec = sdloc_spec(1, 2, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
     SdlocParams truth = plausible_params(written_spec);
     Rng rng = rng_new(1122u, 0);
     Mat y = sdloc_simulate(&rng, &truth, T);
@@ -1054,8 +1405,8 @@ static void test_cache_refuses_another_spec(void) {
     SdlocFitResult fit = sdloc_fit(y, &truth, capped);
     sdloc_save_fit(&fit, y, path);
 
-    const SdlocSpec others[] = { sdloc_spec(1, 2, SDLOC_SCORE_FULL), sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL),
-                                 sdloc_spec(1, 3, SDLOC_SCORE_DIAGONAL), sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL) };
+    const SdlocSpec others[] = { sdloc_spec(1, 2, SDLOC_SCORE_FULL, TEST_DELTA), sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA),
+                                 sdloc_spec(1, 3, SDLOC_SCORE_DIAGONAL, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL, TEST_DELTA) };
     CHECK(sdloc_n_theta(others[0]) == sdloc_n_theta(written_spec),
           "the setup needs a mismatch of the same parameter count");
     for (size_t i = 0; i < sizeof others / sizeof others[0]; i++) {
@@ -1071,11 +1422,12 @@ static void test_cache_refuses_another_spec(void) {
     CHECK(sdloc_load_fit(&accepted, y, path) == 1, "the cache loads for its own spec");
     sdloc_fit_result_free(&accepted);
 
-    /* the format from before p existed: K and theta, nothing else */
-    SdlocSpec one_lag = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL);
+    /* the format from before p existed: K and theta, nothing else, theta in
+       the parametrization of that time */
+    SdlocSpec one_lag = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
     SdlocParams old_model = plausible_params(one_lag);
     Vec theta = mat_new(sdloc_n_theta(one_lag), 1);
-    _sdloc_unlink(&old_model, theta);
+    previous_theta(&old_model, theta);
     JsonValue *root = json_object();
     json_object_set(root, "K", json_number(2));
     JsonValue *values = json_array();
@@ -1086,12 +1438,41 @@ static void test_cache_refuses_another_spec(void) {
 
     SdlocParams reloaded = sdloc_params_new(one_lag);
     CHECK(sdloc_load_params(&reloaded, path) == 1, "a file without p loads as one diagonal lag");
-    for (int k = 0; k < 2; k++)
+    for (int k = 0; k < 2; k++) {
         CHECK_NEAR(AT(reloaded.A, k, k), AT(old_model.A, k, k), 1e-12, "the old file's loading");
-    SdlocParams as_full = sdloc_params_new(sdloc_spec(2, 1, SDLOC_SCORE_FULL));
+        CHECK_NEAR(AT(reloaded.b, k, 0), AT(old_model.b, k, 0), 1e-12, "the old file's b");
+        CHECK_NEAR(AT(reloaded.Omega_inv, k, k), AT(old_model.Omega_inv, k, k), 1e-12, "the old file's factor");
+    }
+    CHECK_NEAR(reloaded.nu, old_model.nu, 1e-10, "the old file's nu");
+    SdlocParams as_full = sdloc_params_new(sdloc_spec(2, 1, SDLOC_SCORE_FULL, TEST_DELTA));
     CHECK(sdloc_load_params(&as_full, path) == 0, "a file without score_matrices is not a full model");
-    SdlocParams as_two_lags = sdloc_params_new(sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL));
+    SdlocParams as_two_lags = sdloc_params_new(sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL, TEST_DELTA));
     CHECK(sdloc_load_params(&as_two_lags, path) == 0, "a file without p is not a two-lag model");
+    SdlocParams other_margin = sdloc_params_new(sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, (mreal)0.3));
+    CHECK(sdloc_load_params(&other_margin, path) == 1,
+          "a file without delta loads for any margin its parameters satisfy, C = %.3f here",
+          (double)sdloc_invertibility_constant(&old_model));
+
+    /* A file from before the condition whose parameters violate it has no
+       point in the current parametrization, and a refusal leaves the model
+       alone. b = 0.95 for both series and one diagonal loading of 0.5 put
+       C well above 0.95. */
+    SdlocParams outside = plausible_params(one_lag);
+    for (int k = 0; k < 2; k++) { AT(outside.b, k, 0) = (mreal)0.95; AT(outside.A, k, k) = (mreal)0.5; }
+    CHECK(sdloc_invertibility_constant(&outside) > 1 - TEST_DELTA, "the setup must violate the condition");
+    previous_theta(&outside, theta);
+    root = json_object();
+    json_object_set(root, "K", json_number(2));
+    values = json_array();
+    for (int i = 0; i < theta.r; i++) json_array_push(values, json_number((double)theta.d[i]));
+    json_object_set(root, "theta", values);
+    json_write_file(root, path);
+    json_free(root);
+    SdlocParams untouched = plausible_params(one_lag);
+    mreal before = AT(untouched.b, 0, 0);
+    CHECK(sdloc_load_params(&untouched, path) == 0, "an old file outside the invertible set is refused");
+    CHECK(AT(untouched.b, 0, 0) == before, "a refused old file leaves the model alone");
+    sdloc_params_free(&outside); sdloc_params_free(&untouched); sdloc_params_free(&other_margin);
 
     sdloc_params_free(&reloaded); sdloc_params_free(&as_full); sdloc_params_free(&as_two_lags);
     sdloc_params_free(&old_model); mat_free(theta);
@@ -1114,7 +1495,7 @@ first run's number every time.
 */
 static void test_a_resumed_chain_accumulates(void) {
     printf("a chain of resumed fits accumulates its iterations and its runs\n");
-    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL);
+    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
     int T = 150;
     SdlocParams truth = plausible_params(spec);
     Rng rng = rng_new(2468u, 0);
@@ -1213,7 +1594,7 @@ static void test_a_resumed_chain_accumulates(void) {
           lbfgs_status_text(reloaded.status), lbfgs_status_text(finished.status));
 
     /* A model of another spec does not pick up this chain. */
-    SdlocParams other_start = plausible_params(sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL));
+    SdlocParams other_start = plausible_params(sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL, TEST_DELTA));
     SdlocFitResult other = sdloc_fit_cached(y, &other_start, capped, path, 0);
     CHECK(other.nruns == 1 && other.params.spec.p == 2,
           "a cache of one lag must not be resumed by a two-lag fit, got %d runs", other.nruns);
@@ -1234,7 +1615,7 @@ static void test_a_resumed_chain_accumulates(void) {
    the wrong type aborted inside the accessors. */
 static void test_cache_refuses_a_damaged_file(void) {
     printf("a truncated cache, and one whose values have the wrong type, are refused\n");
-    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL);
+    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
     int T = 120;
     SdlocParams truth = plausible_params(spec);
     Rng rng = rng_new(4242u, 0);
@@ -1290,7 +1671,7 @@ written into the model and then reported as not loaded.
 */
 static void test_cache_refuses_a_file_it_cannot_use(void) {
     printf("an incomplete cache is refused, and a refused load changes nothing\n");
-    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL);
+    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
     int T = 120;
     SdlocParams truth = plausible_params(spec);
     Rng rng = rng_new(3690u, 0);
@@ -1371,7 +1752,7 @@ static void write_sdloc_cache_in_the_original_format(const SdlocFitResult *fit, 
     JsonValue *root = json_object();
     json_object_set(root, "K", json_number(fit->params.spec.K));
     Vec theta = mat_new(sdloc_n_theta(fit->params.spec), 1);
-    _sdloc_unlink(&fit->params, theta);
+    previous_theta(&fit->params, theta);
     JsonValue *values = json_array();
     for (int i = 0; i < theta.r; i++) json_array_push(values, json_number((double)theta.d[i]));
     json_object_set(root, "theta", values);
@@ -1392,7 +1773,7 @@ static void write_sdloc_cache_in_the_original_format(const SdlocFitResult *fit, 
 
 static void test_a_cache_from_before_the_reasons_were_recorded(void) {
     printf("a cache in the original format still loads, and is not refitted\n");
-    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL);
+    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
     int T = 150;
     SdlocParams truth = plausible_params(spec);
     Rng rng = rng_new(9753u, 0);
@@ -1418,6 +1799,9 @@ static void test_a_cache_from_before_the_reasons_were_recorded(void) {
               flags[k], legacy.is_converged);
         CHECK_NEAR(legacy.log_likelihood, source.log_likelihood, 1e-6,
                    "the log-likelihood it recorded");
+        for (int k = 0; k < spec.K; k++)
+            CHECK_NEAR(AT(legacy.params.b, k, 0), AT(source.params.b, k, 0), 1e-10,
+                       "the parameters it recorded, read through the parametrization of its time");
         CHECK(legacy.nruns == 1, "is_converged %d: it is one run, got %d", flags[k], legacy.nruns);
         CHECK(legacy.total_niter == legacy.niter,
               "is_converged %d: its total is its own niter, got %d against %d",
@@ -1487,7 +1871,7 @@ static void test_a_cache_from_before_the_reasons_were_recorded(void) {
 
 static void test_standard_errors(void) {
     printf("standard errors at a fit, and the curvature they rest on\n");
-    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL), sdloc_spec(2, 2, SDLOC_SCORE_FULL) };
+    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA) };
     for (size_t which = 0; which < sizeof specs / sizeof specs[0]; which++) {
         SdlocSpec spec = specs[which];
         int K = spec.K, T = 800;
@@ -1527,6 +1911,64 @@ static void test_standard_errors(void) {
                                    "the estimate beside the error is the fitted A_j entry");
                 }
 
+        /* The constrained errors are the delta method with the whole Jacobian
+           of the link. Here J comes from central differences of
+           sdloc_params_from_theta instead of the link's chain rule, and
+           J H^-1 J' from an explicit inverse of the same Hessian; every
+           error the header reports must match its diagonal. */
+        if (errors.is_maximum && errors.n_flat == 0) {
+            SdlocLayout layout = sdloc_layout(spec);
+            Vec theta = mat_new(n, 1);
+            _sdloc_unlink(&result.params, theta);
+            Mat J = mat_new(n, n);
+            mreal step = (mreal)1e-6;
+            for (int c = 0; c < n; c++) {
+                mreal values[2][64];
+                for (int side = 0; side < 2; side++) {
+                    Vec moved = mat_copy(theta);
+                    moved.d[c] += side ? -step : step;
+                    SdlocParams at = sdloc_params_new(spec);
+                    sdloc_params_from_theta(moved, &at);
+                    mreal *v = values[side];
+                    for (int k = 0; k < K; k++) v[layout.m0 + k] = AT(at.m0, k, 0);
+                    for (int j = 0; j < spec.p; j++)
+                        for (int k = 0; k < K; k++)
+                            for (int l = 0; l < K; l++) {
+                                int index = _sdloc_A_theta_index(spec, j, k, l);
+                                if (index >= 0) v[index] = AT(at.A, k, j * K + l);
+                            }
+                    for (int k = 0; k < K; k++) v[layout.b + k] = AT(at.b, k, 0);
+                    for (int k = 0; k < K; k++) v[layout.Omega_inv_diagonal + k] = AT(at.Omega_inv, k, k);
+                    int below = layout.Omega_inv_below;
+                    for (int a = 1; a < K; a++)
+                        for (int b = 0; b < a; b++) v[below++] = AT(at.Omega_inv, a, b);
+                    v[layout.nu] = at.nu;
+                    sdloc_params_free(&at);
+                    mat_free(moved);
+                }
+                for (int i = 0; i < n; i++) AT(J, i, c) = (values[0][i] - values[1][i]) / (2 * step);
+            }
+            Mat H = _sdloc_hessian(spec, theta, y);
+            Mat H_inverse = mat_inv(H);
+            Mat J_t = mat_T(J);
+            Mat left = mat_mul(J, H_inverse);
+            Mat covariance = mat_mul(left, J_t);
+            double worst = 0;
+            for (int i = 0; i < n; i++) {
+                double want = sqrt((double)AT(covariance, i, i));
+                double gap = fabs((double)errors.constrained.d[i] - want) / want;
+                if (gap > worst) worst = gap;
+                char name[64];
+                _sdloc_theta_name(spec, i, name, sizeof name);
+                CHECK(gap < 1e-4, "%s: standard error %.10g against the delta method %.10g", name,
+                      (double)errors.constrained.d[i], want);
+            }
+            printf("  %s: constrained errors against J H^-1 J' from a finite-difference Jacobian, worst relative gap %.2e\n",
+                   label, worst);
+            mat_free(theta); mat_free(J); mat_free(H); mat_free(H_inverse); mat_free(J_t);
+            mat_free(left); mat_free(covariance);
+        }
+
         sdloc_standard_errors_free(&errors);
         sdloc_fit_result_free(&result);
         mat_free(y); sdloc_params_free(&truth);
@@ -1534,20 +1976,60 @@ static void test_standard_errors(void) {
     printf("  ok\n");
 }
 
-/* Slow: does fitting recover the parameters that generated the data. Run
-   under STRESS=1 only. */
+/*
+A two-full-lag truth whose dynamics are strong enough to be identified at
+T = 4000: b = (0.7, 0.6), A_1 with diagonal (0.30, 0.25) and off-diagonal
+entries 0.01 and 0.03, A_2 with diagonal 0.03 and off-diagonal entries -0.01
+and 0.01, the rest as plausible_params. C = 0.833. At plausible_params' own
+two-full-lag point, whose loadings are near 0.12, the location barely moves
+and b is not identified at this length: four fits from the truth landed at b_2
+from -0.48 to 0.72 against a true 0.50, each with a higher likelihood than the
+truth's.
+*/
+static SdlocParams identified_two_full_lags(void) {
+    SdlocSpec spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA);
+    SdlocParams m = plausible_params(spec);
+    for (int k = 0; k < 2; k++) {
+        AT(m.b, k, 0) = (mreal)(0.7 - 0.1 * k);
+        for (int l = 0; l < 2; l++) {
+            AT(m.A, k, l) = (mreal)(k == l ? 0.3 - 0.05 * k : 0.03 * (k + 1) - 0.02 * l);
+            AT(m.A, k, 2 + l) = (mreal)(k == l ? 0.03 : 0.01 * (k - l));
+        }
+    }
+    assert(sdloc_invertibility_constant(&m) < (mreal)0.85);
+    Vec theta = mat_new(sdloc_n_theta(spec), 1);
+    _sdloc_unlink(&m, theta);
+    sdloc_params_from_theta(theta, &m);
+    mat_free(theta);
+    return m;
+}
+
+/*
+Slow: does fitting recover the parameters that generated the data. Run under
+STRESS=1 only. 4 draws at T = 4000 per spec, from a start moved by 0.2 per
+coordinate on the unconstrained scale.
+
+b and the loadings are compared on the constrained scale: their free
+coordinates are a radial map's, and near the edge of the invertible set the
+radial coordinate is not identified even when b and A are, since tanh(C0)
+barely moves there. Every other coordinate is compared on the unconstrained
+scale, where its link is unchanged. The fitted C is printed beside the errors:
+the estimate's C sits above the truth's, and with full loadings a fit can land
+on the edge C = 1 - delta.
+*/
 static void test_recovery(void) {
     printf("parameter recovery from a perturbed start\n");
-    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL), sdloc_spec(2, 2, SDLOC_SCORE_FULL) };
-    for (size_t which = 0; which < sizeof specs / sizeof specs[0]; which++) {
-        SdlocSpec spec = specs[which];
-        int T = 4000, draws = 4;
+    for (int which = 0; which < 2; which++) {
+        SdlocParams truth = which == 0 ? plausible_params(sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA))
+                                       : identified_two_full_lags();
+        SdlocSpec spec = truth.spec;
+        SdlocLayout layout = sdloc_layout(spec);
+        int K = spec.K, T = 4000, draws = 4;
         int n = sdloc_n_theta(spec);
-        SdlocParams truth = plausible_params(spec);
         Vec true_theta = mat_new(n, 1);
         _sdloc_unlink(&truth, true_theta);
 
-        double worst = 0;
+        double worst_loading = 0, worst_other = 0, largest_C = 0;
         int converged = 0;
         for (int draw = 0; draw < draws; draw++) {
             Rng rng = rng_new(1000u + (unsigned)draw, (uint64_t)which);
@@ -1562,12 +2044,17 @@ static void test_recovery(void) {
             SdlocFitResult result = sdloc_fit(y, &start, sdloc_default_fit_options());
             if (result.is_converged) {
                 converged++;
+                for (int k = 0; k < K; k++) {
+                    worst_loading = fmax(worst_loading, fabs((double)(AT(result.params.b, k, 0) - AT(truth.b, k, 0))));
+                    for (int c = 0; c < spec.p * K; c++)
+                        worst_loading = fmax(worst_loading, fabs((double)(AT(result.params.A, k, c) - AT(truth.A, k, c))));
+                }
                 Vec fitted = mat_new(n, 1);
                 _sdloc_unlink(&result.params, fitted);
-                for (int i = 0; i < n; i++) {
-                    double error = fabs((double)(fitted.d[i] - true_theta.d[i]));
-                    if (error > worst) worst = error;
-                }
+                for (int i = 0; i < n; i++)
+                    if (i < layout.A || i >= layout.Omega_inv_diagonal)
+                        worst_other = fmax(worst_other, fabs((double)(fitted.d[i] - true_theta.d[i])));
+                largest_C = fmax(largest_C, (double)sdloc_invertibility_constant(&result.params));
                 mat_free(fitted);
             }
             sdloc_fit_result_free(&result);
@@ -1575,10 +2062,14 @@ static void test_recovery(void) {
         }
         char label[64];
         spec_label(spec, label, sizeof label);
-        printf("  %s: %d of %d fits converged, worst unconstrained error %.3f at T=%d\n",
-               label, converged, draws, worst, T);
+        printf("  %s: %d of %d fits converged at T=%d; worst error on b and A %.3f, on the other"
+               " coordinates' unconstrained scale %.3f; true C %.3f, largest fitted C %.3f\n",
+               label, converged, draws, T, worst_loading, worst_other,
+               (double)sdloc_invertibility_constant(&truth), largest_C);
         CHECK(converged >= draws - 1, "at least %d of %d fits should converge", draws - 1, draws);
-        CHECK(worst < 1.0, "worst unconstrained coordinate error %.3f, expected below 1", worst);
+        CHECK(worst_loading < 0.15, "worst error on b and A %.3f, expected below 0.15", worst_loading);
+        CHECK(worst_other < 1.0, "worst unconstrained error on m0, Omega_inv and nu %.3f, expected below 1",
+              worst_other);
 
         mat_free(true_theta); sdloc_params_free(&truth);
     }
@@ -1611,7 +2102,7 @@ static void test_light_tail_stays_computable(void) {
     const int K = 2, T = 30;
     const double pi = 3.14159265358979323846, omega = 1.2;
     const double m0[2] = { 0.3, -0.15 };
-    SdlocSpec spec = sdloc_spec(K, 1, SDLOC_SCORE_DIAGONAL);
+    SdlocSpec spec = sdloc_spec(K, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
     SdlocLayout layout = sdloc_layout(spec);
 
     Rng rng = rng_new(20260831u, 11u);
@@ -1675,6 +2166,8 @@ int main(void) {
     test_analytic_against_traced();
     test_nu_gradient_at_a_light_tail();
     test_simulator_matches_the_filter();
+    test_the_filter_forgets_its_start();
+    test_invertibility_diagnostics();
     test_infeasible_points_return_a_sentinel();
     test_fit_diagnostics_describe_the_result();
     test_parameter_cache();

@@ -248,7 +248,7 @@ static int touch_every_module(void) {
     if (qvarma_n_theta(&qvarma_shape) < 1) problems++;
     qvarma_params_free(&qvarma_shape);
 
-    SdlocParams sdloc_shape = sdloc_params_new(sdloc_spec(2, 2, SDLOC_SCORE_FULL));
+    SdlocParams sdloc_shape = sdloc_params_new(sdloc_spec(2, 2, SDLOC_SCORE_FULL, (mreal)0.05));
     if (sdloc_n_theta(sdloc_shape.spec) < 1) problems++;
     sdloc_params_free(&sdloc_shape);
 

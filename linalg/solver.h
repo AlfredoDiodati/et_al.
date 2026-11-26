@@ -212,6 +212,17 @@ static inline Vec vec_chol_solve(Mat l, Vec b) {
    For a parameter that is itself a triangular factor rather than derived
    from one by mat_chol - a Cholesky-parameterized covariance, say - this
    is the reuse this family exists for, one level below vec_chol_solve. */
+/* op(a) x = b for triangular a and an n x k right-hand side b, every column
+   at once; vec_triangular_solve is the k = 1 case. Returns a new n x k
+   matrix; caller must mat_free. */
+static inline Mat mat_triangular_solve(Mat a, Mat b, char uplo, char trans, char diag) {
+    assert(a.r == a.c && b.r == a.r && b.c > 0);
+    Mat x = mat_copy(b);
+    int info = _trtrs(uplo, trans, diag, a.r, b.c, a.d, a.stride, x.d, x.stride);
+    assert(info == 0);
+    return x;
+}
+
 static inline Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char diag) {
     assert(a.r == a.c && b.r == a.r && b.c == 1);
     Vec x = mat_copy(b);

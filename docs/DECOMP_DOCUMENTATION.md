@@ -56,6 +56,7 @@ Mat   mat_band_pack(Mat a, int kl, int ku)
 void  mat_qr(Mat a, Mat *q_out, Mat *r_out)
 void  mat_eig_sym(Mat a, Vec *eigvals_out, Mat *eigvecs_out)
 void  mat_svd(Mat a, Mat *u_out, Vec *s_out, Mat *vt_out)
+mreal mat_spectral_norm(Mat a, Vec u, Vec v)
 mreal mat_det(Mat a)
 Mat   mat_inv(Mat a)
 mreal mat_cond(Mat a)
@@ -129,6 +130,12 @@ Which entry point to call is a question about where the bad matrix came from. A 
 Reduced (economy) SVD of `a` (`m`x`n`): `a == U * diag(s) * Vt`, with `k = min(m,n)`. `*u_out` is `m`x`k` with orthonormal columns, `*s_out` is `k`x`1` (descending, always non-negative), `*vt_out` is `k`x`n` with orthonormal rows. Caller must `mat_free()` all three. `mat_cond` and `mat_rank` are both built directly on this.
 
 Calls `linalg/factor.h`'s `_gesdd`, which is CBLAS-only: bidiagonal reduction, then divide and conquer on the bidiagonal, then the reduction's reflectors applied back to the vectors. It runs 1.10x to 3.74x ahead of the `LAPACKE_?gesdd` it replaced, worst case 1.10x at 384x384 — see `docs/FACTOR_DOCUMENTATION.md` and `out/svd_lapack_removal_report.txt`. The bidiagonal is never squared into `B^T*B`, which would square the condition number and destroy exactly the small singular values `mat_cond` and `mat_rank` exist to look at.
+
+### `mat_spectral_norm`
+
+The largest singular value `sigma_1` of `a`, `m`x`n`, from `mat_svd`. When `u.d` and `v.d` are not `NULL`, `u` (`m`x`1`) and `v` (`n`x`1`) receive the singular vectors of `sigma_1`, so that `a v = sigma_1 u`; a `Vec` with a `NULL` buffer skips either. `u v'` is the derivative of `sigma_1` with respect to `a` wherever `sigma_1` is simple and positive, `d sigma_1 = u' (da) v`. Where it is repeated (the identity, any multiple of an orthogonal matrix) or zero the norm is not differentiable, and `u v'` is one element of the subdifferential, the one of the pair `mat_svd` returns first. The signs of `u` and `v` are each arbitrary; `u v'` is not. `ad.h`'s `ad_spectral_norm` differentiates through it, and `sd/score_driven_location.h`'s invertibility condition is the first caller.
+
+`test_spectral_norm` in `tests/correctness/test_decomp.c` checks a diagonal matrix with a negative entry, where the norm, the vectors and the sign of `u v'` are known by hand, and a `1x1`; on 20 random matrices from `1x1` to `4x5`, `a v = sigma_1 u`, `sigma_1^2` against the largest eigenvalue of `a'a` from `mat_eig_sym`, and no pair of unit vectors giving `|x'a y|` above `sigma_1`; the zero matrix; the identity, where the largest singular value is repeated and `a v = sigma_1 u` must still hold; and a strided view against its copy.
 
 ### `mat_det`
 

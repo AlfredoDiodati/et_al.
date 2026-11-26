@@ -387,6 +387,33 @@ static inline void mat_svd(Mat a, Mat *u_out, Vec *s_out, Mat *vt_out) {
     *vt_out = vt;
 }
 
+/*
+Spectral norm of a (m x n), its largest singular value sigma_1, from mat_svd.
+When u.d and v.d are not NULL, u (m x 1) and v (n x 1) receive the left and
+right singular vectors of sigma_1, so a v = sigma_1 u. Pass a Vec with a NULL
+buffer for either to skip it.
+
+u v' is the derivative of sigma_1 with respect to a wherever sigma_1 is a
+simple singular value and positive: d sigma_1 = u' (da) v. Where sigma_1 is
+repeated, as for the identity or any multiple of an orthogonal matrix, or is
+zero, the norm is not differentiable, and u v' is one element of its
+subdifferential, the one belonging to the pair mat_svd returns first. The
+signs of u and v are each arbitrary and their product u v' is not.
+*/
+static inline mreal mat_spectral_norm(Mat a, Vec u, Vec v) {
+    assert(a.r > 0 && a.c > 0);
+    assert(!u.d || (u.r == a.r && u.c == 1));
+    assert(!v.d || (v.r == a.c && v.c == 1));
+    Mat left, right_t;
+    Vec singular;
+    mat_svd(a, &left, &singular, &right_t);
+    mreal norm = singular.d[0];
+    if (u.d) for (int i = 0; i < a.r; i++) AT(u, i, 0) = AT(left, i, 0);
+    if (v.d) for (int j = 0; j < a.c; j++) AT(v, j, 0) = AT(right_t, 0, j);
+    mat_free(left); mat_free(singular); mat_free(right_t);
+    return norm;
+}
+
 /* Determinant of square a, via the diagonal of an LU factorization (no
    extra factorization beyond mat_lu). Sign follows the parity of the row
    interchanges the pivoting performed. a must be nonsingular - same
