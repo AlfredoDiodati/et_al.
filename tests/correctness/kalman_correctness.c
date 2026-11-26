@@ -498,7 +498,7 @@ static void check_system_against_reference(Rng *rng, LinearSystem *s, const char
     Vec none = { 0, 0, 0, NULL };
     mreal with = kalman_log_likelihood(w, theta, y, init, gradient);
     mreal without = kalman_log_likelihood(w, theta, y, init, none);
-    CHECK(with == without, "%s: value with gradient %.17g, without %.17g", label, with, without);
+    CHECK(relative_gap(with, without) < 1e-13, "%s: value with gradient %.17g, without %.17g", label, with, without);
     CHECK(relative_gap(with, paths.log_likelihood) < 1e-12, "%s: kalman_log_likelihood %.15g, kalman_filter %.15g",
           label, with, paths.log_likelihood);
     double path_sum = 0;
@@ -1286,7 +1286,7 @@ static void test_diffuse_against_large_kappa(void) {
         Vec none = { 0, 0, 0, NULL };
         mreal with = kalman_log_likelihood(w, theta, y, init, gradient);
         mreal without = kalman_log_likelihood(w, theta, y, init, none);
-        CHECK(with == without, "%s: value with gradient %.17g, without %.17g", label, with, without);
+        CHECK(relative_gap(with, without) < 1e-13, "%s: value with gradient %.17g, without %.17g", label, with, without);
         CHECK(relative_gap(with, paths.log_likelihood) < 1e-12, "%s: kalman_log_likelihood %.15g, kalman_filter %.15g",
               label, with, paths.log_likelihood);
         double path_sum = 0;

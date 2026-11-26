@@ -861,12 +861,15 @@ static void test_score_jacobian(void) {
     Mat D = qvarma_mean_score_jacobian(&m, y);
     Mat *D_path = qvarma_score_jacobian(&m, y);
 
-    /* The average must be exactly the mean of the path, since it is computed
-       from it in period order. */
+    /* The average is the mean of the path up to rounding: under -ffast-math
+       the compiler may order the two sums differently. */
     for (int i = 0; i < m.K * m.K; i++) {
         mreal sum = 0;
         for (int t = 0; t < T; t++) sum += D_path[t].d[i];
-        CHECK(D.d[i] == sum / (mreal)T, "D must be the mean of D_t bit for bit");
+        double mean = (double)(sum / (mreal)T);
+        double scale = fabs(mean) > 1 ? fabs(mean) : 1;
+        CHECK(fabs((double)D.d[i] - mean) / scale < 1e-12, "D must be the mean of D_t: got %.17g, want %.17g",
+              (double)D.d[i], mean);
     }
 
     /* D is symmetric by construction, since its off-diagonal entry is
