@@ -58,13 +58,24 @@ Nothing about the Student t density is written in this file. Both filters take i
 
 | case | traced evaluation | analytic evaluation | traced fit | analytic fit |
 |---|---|---|---|---|
-| `K = 2, T = 400`, one diagonal lag | 605 us | 38 us | 26.7 ms | 1.8 ms |
-| `K = 3, T = 1000`, one diagonal lag | 1678 us | 128 us | 37.5 ms | 5.5 ms |
-| `K = 5, T = 1000`, one diagonal lag | 1189 us | 207 us | 72.4 ms | 12.9 ms |
-| `K = 5, T = 1000`, two diagonal lags | 1324 us | 234 us | 543.5 ms | 93.9 ms |
-| `K = 5, T = 1000`, two full lags | 1320 us | 307 us | 511.2 ms | 212.7 ms |
+| `K = 2, T = 400`, one diagonal lag | 609 us | 31 us | 27.3 ms | 1.5 ms |
+| `K = 3, T = 1000`, one diagonal lag | 1695 us | 112 us | 37.9 ms | 4.8 ms |
+| `K = 5, T = 1000`, one diagonal lag | 1088 us | 192 us | 67.3 ms | 11.7 ms |
+| `K = 5, T = 1000`, two diagonal lags | 1382 us | 221 us | 524.6 ms | 84.3 ms |
+| `K = 5, T = 1000`, two full lags | 1501 us | 287 us | 575.6 ms | 198.1 ms |
 
-These are best times, with `delta = 0.05` and the edge restarts off in the analytic arm, since the traced arm runs the solver without them. In the three one-lag cases the two fits take the same number of iterations and reach the same log-likelihood to ten decimals. Both two-lag fits end at the edge of the invertible set, `C(theta) = 0.9497` and `0.9499999996` against truths of `0.68` and `0.81`, and take 368 and 369 iterations with two diagonal lags, 276 (traced) and 475 (analytic) with two full lags, where the two stop at log-likelihoods `0.019` apart with gradient norms of `2.2` and `0.61`, at a kink of the edge where the largest singular value of one matrix in `C` is repeated: see the invertibility file. The true parameters are not the ones of the previous version of this table, whose two-lag truths lay outside the invertible set, so the fit times are not comparable with it.
+These are best times, with `delta = 0.05` and the edge restarts off in the analytic arm, since the traced arm runs the solver without them. In the three one-lag cases the two fits take the same number of iterations and reach the same log-likelihood to ten decimals. Both two-lag fits end at the edge of the invertible set, against truths with `C = 0.68` and `0.81`. With two diagonal lags they take 368 (traced) and 353 (analytic) iterations to log-likelihoods `1.5e-5` apart; with two full lags 276 and 469, `0.019` apart, with gradient norms of `2.2` and `1.08`, at a point of the edge the invertibility file discusses. On the flat edge the two paths part at rounding level: before the `log1p` change the analytic arm took 369 and 475 iterations here. The true parameters are not the ones of the previous version of this table, whose two-lag truths lay outside the invertible set, so the fit times are not comparable with it.
+
+**Optimization pass, and what was rejected.** Harness `out/sdloc_evaluation_timing.c` with `out/sdloc_compare.sh`, not in the repository: the header before a change and after it, each built into its own binary with `-O3 -march=native -ffast-math -DMAT_DOUBLE`, alternated over 6 to 8 rounds in both orders, single thread; per case the best of 9 batches of 1000 value-and-gradient evaluations at the benchmark's truth and seed, imposed. With the same header in both binaries the median ratios fell between `0.995` and `1.029`, so a change was kept only if its ratio was below `0.97` in both orders on the cases it targets, no case slowed beyond that noise, and the correctness suite passed. In each evaluation the link took 3 to 5%, the forward pass 35 to 40% and the backward pass 50 to 60%.
+
+| candidate | `K = 2`, one diagonal lag | `K = 5`, one diagonal lag | `K = 5`, two full lags | `K = 8`, one diagonal lag | kept |
+|---|---|---|---|---|---|
+| the reciprocal of `nu + q_t` stored in the path, no division by it in the backward pass | `0.99` | `0.98` | `0.99` to `1.00` | `0.98` | no, within noise |
+| one `log1p` per 16 periods, `special.h`'s `special_log1p_sum` | `0.81` | `0.92` | `0.94` | `0.95` | yes |
+| the factor adjoint's score term accumulated after the backward pass, as dot products over `t` | `1.06` | `0.97` | `0.99` | `0.97` | no, slower at small `K` |
+| `L^-T z_t` solved in the forward pass and stored, not in the quadratic form's adjoint | `0.97` | `1.01` | `0.96` to `0.97` | `1.02` | no, slower at `K = 5` and `8` diagonal |
+
+The ratios are new time over old, the first two rows against the original header and the last two against the header with the second row in. The header shipped against the original, 8 rounds: `37.8` to `30.6` us at `K = 2, T = 400`, `208` to `192` us at `K = 5, T = 1000` with one diagonal lag, `236` to `218` with two diagonal lags, `314` to `296` with two full lags, `376` to `359` at `K = 8` with one diagonal lag, `523` to `505` with two full lags. Values and gradients agree with the original's to `1.4e-12` relative, the order of a different summation of the same log terms, and the long double reference check is unchanged at `1.0e-15`. `perf` was not available on the machine (`perf_event_paranoid = 4`), so where the time goes inside each pass was not measured, only the passes' shares.
 
 **What the invertibility link costs.** The header before the condition and this one, built into two binaries from the same harness and alternated six times in both orders: value and gradient at `K = 5, T = 1000`, best of 5 batches of 2000 evaluations, at the same constrained parameters. One diagonal lag: 200 to 206 us before, 210 to 217 us now. Two full lags: 222 to 231 us before, 243 to 252 us now. The difference is the link, `p + 1` SVDs and the triangular solves of the invertibility constant and its adjoint, once per evaluation rather than once per period.
 

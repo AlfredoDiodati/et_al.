@@ -4,7 +4,7 @@
 
 **Installation tier:** core (see README's [Installation tiers](../README.md#installation-tiers) policy) — a general-purpose math utility, usable independently of any distribution or model, the analogue of `scipy.special`.
 
-`special.h` holds scalar special functions: general math tools that are not linear algebra (so they don't belong in `linalg/`) and not tied to any one distribution (so they don't belong in a `dist/` file). It is a standalone root-level header like `json.h` — it includes only `<assert.h>` and `<math.h>`, with no dependency on `linalg/mat.h` — and follows the root-header naming pattern (`<noun>.h`, functions prefixed `special_`). It currently contains six entry points: digamma, added because `dist/student.h`/`dist/mv/student.h` needed it for their `_dlogpdf_nu` scores; `special_lgamma_diff` and `special_digamma_diff`, the two *differences* those same distributions need at a light tail, added when the plain subtractions they replace were found to return no correct digits at a `nu` a fit actually reaches; `special_log1p`; and the regularized incomplete gamma function `P` and its complement `Q`, which `dist/chi_squared.h`'s tail is built on. The standard normal CDF and the chi-squared tail lived here too and are now `dist/gauss.h`'s `gauss_standard_cdf` and `dist/chi_squared.h`'s `chi_squared_sf`: a function that is one distribution's CDF or tail belongs with that distribution, and this file keeps the general functions those are built from. Future special functions (trigamma, incomplete beta, ...) belong here when something concretely needs them, not before.
+`special.h` holds scalar special functions: general math tools that are not linear algebra (so they don't belong in `linalg/`) and not tied to any one distribution (so they don't belong in a `dist/` file). It is a standalone root-level header like `json.h` — it includes only `<assert.h>` and `<math.h>`, with no dependency on `linalg/mat.h` — and follows the root-header naming pattern (`<noun>.h`, functions prefixed `special_`). It currently contains seven entry points: digamma, added because `dist/student.h`/`dist/mv/student.h` needed it for their `_dlogpdf_nu` scores; `special_lgamma_diff` and `special_digamma_diff`, the two *differences* those same distributions need at a light tail, added when the plain subtractions they replace were found to return no correct digits at a `nu` a fit actually reaches; `special_log1p`; `special_log1p_sum`, a running sum of `log1p` terms with one logarithm per block, added for the per-period kernel of `sd/score_driven_location.h`'s filter; and the regularized incomplete gamma function `P` and its complement `Q`, which `dist/chi_squared.h`'s tail is built on. The standard normal CDF and the chi-squared tail lived here too and are now `dist/gauss.h`'s `gauss_standard_cdf` and `dist/chi_squared.h`'s `chi_squared_sf`: a function that is one distribution's CDF or tail belongs with that distribution, and this file keeps the general functions those are built from. Future special functions (trigamma, incomplete beta, ...) belong here when something concretely needs them, not before.
 
 ## Differences, not terms
 
@@ -25,6 +25,9 @@ double special_digamma(double x)                /* psi(x) = d/dx log(Gamma(x)), 
 double special_lgamma_diff(double x, double a)  /* log Gamma(x+a) - log Gamma(x), x > 0, a >= 0 */
 double special_digamma_diff(double x, double a) /* psi(x+a) - psi(x), x > 0, a >= 0 */
 double special_log1p(double x)                  /* log(1 + x), x > -1 */
+SpecialLog1pSum special_log1p_sum_new(void)     /* an empty sum of log1p terms */
+void   special_log1p_sum_add(SpecialLog1pSum *a, double x)   /* add log1p(x), x >= 0 */
+double special_log1p_sum_total(const SpecialLog1pSum *a)     /* the sum so far */
 double special_gammainc_p(double a, double x)   /* P(a,x), regularized lower incomplete gamma */
 double special_gammainc_q(double a, double x)   /* Q(a,x) = 1 - P(a,x) */
 ```
@@ -72,6 +75,14 @@ The method is Kahan's: `1 + x` rounds to some `u`, and the rounding error is und
 **The `volatile` is load-bearing.** Under this project's `-ffast-math` the compiler may simplify `(1 + x) - 1` back to `x` and cancel the correction to nothing: measured, an unguarded version returns `0` at `x = 1e-20` where the answer is `1e-20`. Forcing the sum through memory stops it — the same defence `linalg/mat.h`'s `MISNAN`/`MISINF` make against the same flag. One `volatile` suffices; a second on `u - 1.0` changed neither the result nor the time.
 
 Accuracy against libm's `log1p`, over 600,000 log-uniform magnitudes from `1e-18` to `1e2` of both signs: **worst 2 ulps**. A crossover-plus-Mercator-series alternative was measured beside it at 8 ulps and slower, and was not adopted.
+
+### `special_log1p_sum`
+
+The sum of `log1p(x_i)` over a stream of `x_i >= 0`, with one logarithm per `SPECIAL_LOG1P_SUM_BLOCK = 16` terms. Within a block it carries `y = prod (1 + x_i) - 1` by `y <- y + x (1 + y)`, which never forms `1 + x` and so keeps a term of `1e-20` that a naive product would round away, and adds `special_log1p(y)` to the sum when the block fills. A term above `1e100` goes through `special_log1p` on its own and a block closes early once `y` passes `1e100`, so the product stays below `1e201`. A negative `x` is outside the domain and is not checked; a NaN propagates.
+
+It exists for the per-period log kernel of a Student-t filter, where the logarithm is a large share of a period's work. In `sd/score_driven_location.h`'s forward pass it made one value-and-gradient evaluation 18% faster at `K = 2, T = 400` and 7% at `K = 5, T = 1000` (Intel i5-7400, the measurement in that model's documentation). Block lengths of 4, 8, 16 and 32 measured ratios to the per-term version of `0.85`, `0.82`, `0.80` and `0.79` at `K = 2`; 16 was taken, the gain past it being within noise and the product's range growing with the length.
+
+Accuracy, `test_log1p_sum` in `tests/correctness/test_special.c`: 200 streams of about 1000 terms in each of four regimes (terms of `1e-18` to `1e-12`, `1e-3` to `1`, `1` to `1e6`, and a mix of those with terms above `1e100` and runs near `1e50`), against a long double sum of `log1pl`. Worst relative error `1.1e-15`, against `1.9e-15` to `2.4e-15` for the sum of separately rounded `special_log1p` values: fewer roundings reach the total.
 
 ### A NaN argument is not caught, in this build
 

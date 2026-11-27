@@ -255,6 +255,67 @@ static void test_log1p_survives_fast_math(void) {
     printf("  log(1 + 1e-20) is 0, special_log1p(1e-20) is 1e-20\n");
 }
 
+
+/*
+special_log1p_sum against a long double sum of log1pl, and against the double
+sum of separately rounded log1p values the accumulator replaces. Streams of
+1000 terms in four regimes: x from 1e-18 to 1e-12, where 1 + x is 1 in double
+and a product formed naively loses every term; x from 1e-3 to 1, the regime
+of a fitted Student-t; x from 1 to 1e6, a heavy tail; and a mix of all three
+with terms above 1e100, which go through special_log1p alone, and runs of
+terms near 1e50, which close a block early. The accumulator must be within 4
+times the per-term sum's worst error, and never off by more than 1e-13
+relative to the total, over 200 streams per regime. Counts that are not a
+multiple of the block, and an empty accumulator, are checked too.
+*/
+static void test_log1p_sum(void) {
+    srand(7);
+    const char *regimes[] = { "tiny", "moderate", "heavy", "mixed" };
+    for (int regime = 0; regime < 4; regime++) {
+        double worst_accumulated = 0, worst_per_term = 0;
+        for (int stream = 0; stream < 200; stream++) {
+            int n = 1000 + stream % 23;
+            SpecialLog1pSum accumulator = special_log1p_sum_new();
+            long double exact = 0;
+            double per_term = 0;
+            for (int i = 0; i < n; i++) {
+                double u = (double)rand() / RAND_MAX, x;
+                if (regime == 0) x = pow(10, -18 + 6 * u);
+                else if (regime == 1) x = pow(10, -3 + 3 * u);
+                else if (regime == 2) x = pow(10, 6 * u);
+                else {
+                    int kind = rand() % 10;
+                    x = kind < 3 ? pow(10, -18 + 6 * u) : kind < 6 ? pow(10, -3 + 3 * u)
+                      : kind < 8 ? pow(10, 6 * u) : kind < 9 ? pow(10, 100 + 200 * u) : pow(10, 49 + 2 * u);
+                }
+                special_log1p_sum_add(&accumulator, x);
+                exact += log1pl((long double)x);
+                per_term += special_log1p(x);
+            }
+            double total = special_log1p_sum_total(&accumulator);
+            double scale = fabs((double)exact);
+            double accumulated_error = fabs((double)((long double)total - exact)) / scale;
+            double per_term_error = fabs((double)((long double)per_term - exact)) / scale;
+            if (accumulated_error > worst_accumulated) worst_accumulated = accumulated_error;
+            if (per_term_error > worst_per_term) worst_per_term = per_term_error;
+        }
+        printf("  log1p sum, %s terms: worst relative error %.2e accumulated, %.2e per term\n",
+               regimes[regime], worst_accumulated, worst_per_term);
+        assert(worst_accumulated <= 4 * worst_per_term + 4e-16);
+        assert(worst_accumulated < 1e-13);
+    }
+
+    SpecialLog1pSum empty = special_log1p_sum_new();
+    assert(special_log1p_sum_total(&empty) == 0);
+    SpecialLog1pSum three = special_log1p_sum_new();
+    for (int i = 0; i < 3; i++) special_log1p_sum_add(&three, 1.0);
+    assert(fabs(special_log1p_sum_total(&three) - 3 * 0.69314718055994530942) < 1e-15);
+    assert(fabs(special_log1p_sum_total(&three) - 3 * 0.69314718055994530942) < 1e-15);
+    SpecialLog1pSum tiny = special_log1p_sum_new();
+    for (int i = 0; i < 40; i++) special_log1p_sum_add(&tiny, 1e-20);
+    assert(fabs(special_log1p_sum_total(&tiny) - 4e-19) < 1e-33);
+}
+
 static void test_log1p_edges(void) {
     /* x = -1 is log(0); a finite x below it is outside the domain.
 
@@ -427,6 +488,7 @@ int main(void) {
     test_log1p_against_libm();
     test_log1p_survives_fast_math();
     test_log1p_edges();
+    test_log1p_sum();
     test_lgamma_diff_against_exact_shift();
     test_lgamma_diff_half_integer_and_composition();
     test_digamma_diff();

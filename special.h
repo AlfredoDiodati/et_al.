@@ -106,6 +106,55 @@ static inline double special_log1p(double x) {
 }
 
 /*
+The sum of log1p(x_i) over a stream of x_i >= 0, with one logarithm per
+SPECIAL_LOG1P_SUM_BLOCK terms instead of one per term: within a block it
+carries y = prod (1 + x_i) - 1 by y <- y + x (1 + y), which forms no 1 + x and
+so loses nothing when the x_i are small, and adds special_log1p(y) to the sum
+when the block is full. Each step's rounding is relative to 1 + y, so a block
+of n terms is accurate to about n ulps of its log, the order a sum of n
+separately rounded log1p values has.
+
+A term above 1e100 is taken through special_log1p on its own, and a block is
+closed early once y passes 1e100, so y stays below 1e201 and the product cannot
+overflow.
+
+Start with special_log1p_sum_new, add with special_log1p_sum_add, read with
+special_log1p_sum_total, which does not consume the accumulator. A negative x
+is outside the domain and is not checked, since the callers add terms in a
+per-period loop; a NaN propagates into the sum.
+*/
+#define SPECIAL_LOG1P_SUM_BLOCK 16
+
+typedef struct {
+    double sum;
+    double product_minus_one;
+    int count;
+} SpecialLog1pSum;
+
+static inline SpecialLog1pSum special_log1p_sum_new(void) {
+    SpecialLog1pSum accumulator = { 0, 0, 0 };
+    return accumulator;
+}
+
+static inline void special_log1p_sum_add(SpecialLog1pSum *accumulator, double x) {
+    if (x > 1e100) {
+        accumulator->sum += special_log1p(x);
+        return;
+    }
+    accumulator->product_minus_one += x * (1 + accumulator->product_minus_one);
+    if (++accumulator->count == SPECIAL_LOG1P_SUM_BLOCK || accumulator->product_minus_one > 1e100) {
+        accumulator->sum += special_log1p(accumulator->product_minus_one);
+        accumulator->product_minus_one = 0;
+        accumulator->count = 0;
+    }
+}
+
+static inline double special_log1p_sum_total(const SpecialLog1pSum *accumulator) {
+    if (accumulator->count == 0) return accumulator->sum;
+    return accumulator->sum + special_log1p(accumulator->product_minus_one);
+}
+
+/*
 yi^n - xi^n where xi = 1/x and yi = 1/(x+a), from the factorization
 
     yi^n - xi^n = (yi - xi) sum_{j<n} yi^j xi^{n-1-j}

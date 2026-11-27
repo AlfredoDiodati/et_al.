@@ -6,6 +6,7 @@
 #include "../random/random.h"
 #include "../dist/mv/student_traced.h"
 #include "../solver/lbfgs.h"
+#include "../special.h"
 #include <string.h>
 
 /*
@@ -1389,7 +1390,7 @@ static inline mreal _sdloc_analytic_forward(SdlocAnalytic *f, Mat y) {
     for (int k = 0; k < K; k++)
         f->Omega_inv_reciprocal[k] = (mreal)1 / f->Omega_inv[(size_t)k * K + k];
 
-    mreal log_sum = 0;
+    SpecialLog1pSum log_sum = special_log1p_sum_new();
     int latest = 0;
     for (int k = 0; k < K; k++) _sdloc_analytic_slot(f, 0)[k] = f->m0[k];
     for (int t = 0; t < T; t++) {
@@ -1400,7 +1401,9 @@ static inline mreal _sdloc_analytic_forward(SdlocAnalytic *f, Mat y) {
         mreal quadratic = mvgauss_chol_quadform(K, f->Omega_inv, f->Omega_inv_reciprocal, f->v, z);
         mreal s = nu + quadratic;
         slot[3 * K] = s;
-        log_sum += mvstudent_log_kernel(quadratic, nu_reciprocal);
+        /* mvstudent_log_kernel(quadratic, nu_reciprocal), log1p(q_t / nu), summed with one
+           logarithm per SPECIAL_LOG1P_SUM_BLOCK periods */
+        special_log1p_sum_add(&log_sum, (double)(quadratic * nu_reciprocal));
 
         if (t + 1 < T) {
             _trsv_lower_reciprocal('T', K, f->Omega_inv, K, f->Omega_inv_reciprocal, f->v, x);
@@ -1412,8 +1415,8 @@ static inline mreal _sdloc_analytic_forward(SdlocAnalytic *f, Mat y) {
             latest = latest + 1 == p ? 0 : latest + 1;
         }
     }
-    f->log_sum = log_sum;
-    return mvstudent_loglik_from_log_sum(T, nu, K, f->half_log_det_Sigma, log_sum);
+    f->log_sum = (mreal)special_log1p_sum_total(&log_sum);
+    return mvstudent_loglik_from_log_sum(T, nu, K, f->half_log_det_Sigma, f->log_sum);
 }
 
 /* The adjoint of the recursion above, walked backwards over the stored path;
