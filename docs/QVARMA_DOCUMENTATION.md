@@ -706,6 +706,7 @@ stops changing.
     make tests/correctness/qvarma_identification    which parameters the data can pin down
     make examples/qvarma_example                    a tour of the API
     make tests/correctness/qvarma_fixed_parameter_fit   fitting with parameters held
+    make tests/correctness/qvarma_float32_accuracy      the float32 build against float64
     make examples/qvarma_fixed_parameters_example   nu chosen by hand, a profile over it
     make study-qvarma_recovery                      the Monte Carlo recovery study
     make study-qvarma_consistency_rate              how fast each estimate's spread and bias shrink with T
@@ -722,7 +723,8 @@ there, so the Makefile builds a script that only estimates, forecasts or times
 the model with `MODEL_CFLAGS` (`float32`) and one whose result depends on the
 curvature of the likelihood with `STAT_CFLAGS` (`float64`). Each target says
 which it uses and why. As things stand `qvarma_identification` and
-`qvarma_performance` are `float32`; `qvarma_correctness`,
+`qvarma_performance` are `float32`, `qvarma_float32_accuracy` is `float32` checked
+against a `float64` copy of the model linked into it; `qvarma_correctness`,
 `qvarma_fixed_parameter_fit`, the recovery study and both examples are
 `float64`.
 
@@ -985,6 +987,16 @@ checks, including a mean statistic of 32.7 for `nu` held at the truth.
 Not covered: shapes with an I(1) block in the Monte Carlo, where the
 unrestricted fits are the unreliable part (see Known gaps), and any sample other
 than `T = 1000`.
+
+### `tests/correctness/qvarma_float32_accuracy.c`
+
+The one qvarma suite built at float32 (`MODEL_CFLAGS`), since the model tier's estimating and timing scripts run that build. Its reference is the same header at float64: `tests/correctness/qvarma_float32_accuracy_float64.c` is compiled with `STAT_CFLAGS` and linked into the same binary, the two meeting through the plain doubles of `qvarma_float32_accuracy.h`; every et_al. function is `static inline`, so the two precisions link without a collision. Three groups, each against float64 at the same inputs:
+
+- **The ten shapes of `qvarma_analytic_agreement`** at random `theta` (0.5 standard normal per coordinate) and standard normal data, three draws each from `rng_new(4242, shape)`: the analytic value, the gradient, the `v` and `u` paths, and the traced float32 value. 30 cases; worst relative value error `1.6e-7`, gradient `2.1e-6` (largest coordinate gap over the float64 gradient's largest coordinate), paths `2.3e-6` (largest entry gap over the path's largest entry), traced value `2.3e-7`.
+- **The ABM pipeline's shape** (`K = 5, K_star = 3, p = q = 1, r = 2, R = 1, T = 400`) on a sample simulated from `tests/performance/qvarma_analytic_filter.c`'s truth on `rng_new(20260829, 0)`, at `nu` = 9, 1e3, 1e6 and 1e9: worst value `1.1e-7`, gradient `1.7e-6`, paths `1.4e-6`. The negative control evaluates the float32 side with the `nu` coordinate of `theta` moved by `1e-3` and must fail both checks: value `8.3e-6`, gradient `5.1e-4`.
+- **A fit**: that shape at float32 and at float64 from the truth, on samples `rng_new(seed, 0)` for seeds 1 to 8. A sample counts only when its float64 fit reports convergence and stops at a gradient norm below `0.1`, and at least four must count: `is_converged` alone is not enough, since built at `-O1` the float64 fit of seed 2 stops on the function tolerance at a gradient norm of `160` and reports convergence. At `-O3` seeds 2 and 6 are skipped (gradient norms `5.9e6` and `1.2e7`, not converged); on the other six the float32 estimate's log-likelihood evaluated at float64 is `0.0004` to `0.014` below the float64 maximum, and at `-O1` with the sanitizers `0.0002` to `0.010`. The float32 fit reports its own likelihood to `1e-6` relative. Those float32 fits report convergence at gradient norms of `0.17` to `4.1`, against `0.0015` to `0.009` at float64, which is the behavior the Building section describes.
+
+Tolerances: value `3e-6`, gradient and paths `3e-5`, about ten times the worst measured; the fit's gap `0.1`, seven times the worst, since where a float32 fit stops depends on the build.
 
 ### `tests/correctness/lbfgs_correctness.c`
 
