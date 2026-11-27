@@ -519,17 +519,23 @@ static inline void _sdloc_pack_loadings(const SdlocParams *m, mreal *out) {
             }
 }
 
-/* C(theta) for a model, the left-hand side of the invertibility condition
-   C <= 1 - delta. */
-static inline mreal sdloc_invertibility_constant(const SdlocParams *m) {
+/* C(theta) for a model, computed in w, which keeps the intermediates. */
+static inline mreal _sdloc_model_invertibility_constant(SdlocInvertibility *w, const SdlocParams *m) {
     SdlocSpec spec = m->spec;
     assert(m->Omega_inv.stride == spec.K && m->b.stride == 1);
-    SdlocInvertibility *w = _sdloc_invertibility_new(spec);
     mreal *loadings = (mreal*)malloc((size_t)spec.p * sdloc_layout(spec).A_per_lag * sizeof(mreal));
     assert(loadings);
     _sdloc_pack_loadings(m, loadings);
     mreal C = _sdloc_invertibility_constant(w, m->Omega_inv.d, m->nu, m->b.d, loadings);
     free(loadings);
+    return C;
+}
+
+/* C(theta) for a model, the left-hand side of the invertibility condition
+   C <= 1 - delta. */
+static inline mreal sdloc_invertibility_constant(const SdlocParams *m) {
+    SdlocInvertibility *w = _sdloc_invertibility_new(m->spec);
+    mreal C = _sdloc_model_invertibility_constant(w, m);
     _sdloc_invertibility_free(w);
     return C;
 }
@@ -577,9 +583,13 @@ static inline SdlocLinked _sdloc_link(Tape *tape, Node *theta, SdlocSpec spec) {
     Node *diag_theta = ad_slice(tape, theta, layout.Omega_inv_diagonal,
                                 layout.Omega_inv_diagonal + K, 0, 1);
     int n_below = K * (K - 1) / 2;
-    Mat pick_diag = mat_new(K * K, K);
-    for (int k = 0; k < K; k++) AT(pick_diag, k * K + k, k) = 1;
-    Node *omega_vec = ad_matmul(tape, sdloc_constant_node(tape, pick_diag), ad_exp(tape, diag_theta));
+    /* spread maps a K-vector onto the diagonal of a K x K matrix, row-major:
+       the diagonal of Omega_inv here, and b0 and a diagonal A0_j in the radial
+       map below. */
+    Mat spread = mat_new(K * K, K);
+    for (int k = 0; k < K; k++) AT(spread, k * K + k, k) = 1;
+    Node *spread_node = sdloc_constant_node(tape, spread);
+    Node *omega_vec = ad_matmul(tape, spread_node, ad_exp(tape, diag_theta));
     if (n_below > 0) {
         Node *below_theta = ad_slice(tape, theta, layout.Omega_inv_below,
                                      layout.Omega_inv_below + n_below, 0, 1);
@@ -617,8 +627,8 @@ static inline SdlocLinked _sdloc_link(Tape *tape, Node *theta, SdlocSpec spec) {
 
     /* The radial map of the comment at the top of this file, on the tape: C0
        from b0 and A0, then lambda = (1 - delta) tanh(C0) / C0. Each A0_j enters
-       C0 as a dense K x K matrix; a diagonal one is spread onto the diagonal
-       by the same selection pick_diag does for Omega_inv. The derivative of
+       C0 as a dense K x K matrix; a diagonal one is put on the diagonal by
+       spread_node. The derivative of
        tanh(c)/c is the difference the analytic link evaluates in another form
        (_sdloc_radial_factor), so this path loses digits as C0 approaches zero
        and the analytic one does not. */
@@ -636,9 +646,6 @@ static inline SdlocLinked _sdloc_link(Tape *tape, Node *theta, SdlocSpec spec) {
                                                      ad_add(tape, linked.nu, sdloc_constant_node(tape, mat_fill(1, 1, 2)))),
                                  (mreal)0.5),
                           linked.nu);
-    Mat spread = mat_new(K * K, K);
-    for (int k = 0; k < K; k++) AT(spread, k * K + k, k) = 1;
-    Node *spread_node = sdloc_constant_node(tape, spread);
     for (int j = 0; j < spec.p; j++) {
         int at = layout.A + j * layout.A_per_lag;
         A_zero[j] = ad_slice(tape, theta, at, at + layout.A_per_lag, 0, 1);
@@ -1831,18 +1838,15 @@ _sdloc_params_from_previous_theta, which *is_previous asks for.
 static inline int _sdloc_stored_spec_matches(const JsonValue *root, SdlocSpec spec, int *is_previous) {
     JsonValue *stored_delta = json_object_get(root, "delta");
     JsonValue *stored_mode = json_object_get(root, "invertibility");
-    int is_checked = spec.invertibility == SDLOC_INVERTIBILITY_CHECKED;
-    *is_previous = stored_delta == NULL && !is_checked;
     if (stored_delta && (stored_delta->type != JSON_NUMBER
                          || json_as_number(stored_delta) != (double)spec.delta))
         return 0;
-    if (stored_mode) {
-        if (stored_mode->type != JSON_STRING
-            || strcmp(json_as_string(stored_mode), sdloc_invertibility_mode_text(spec.invertibility)) != 0)
-            return 0;
-    } else if (stored_delta && is_checked) {
-        return 0;
-    }
+    if (stored_mode && stored_mode->type != JSON_STRING) return 0;
+    /* the mode the file's theta was written in; none for a file from before
+       the condition, whose theta is in the checked parametrization */
+    const char *mode = stored_mode ? json_as_string(stored_mode) : stored_delta ? "imposed" : NULL;
+    if (mode && strcmp(mode, sdloc_invertibility_mode_text(spec.invertibility)) != 0) return 0;
+    *is_previous = !mode && spec.invertibility == SDLOC_INVERTIBILITY_IMPOSED;
     JsonValue *stored_K = json_object_get(root, "K");
     if (!stored_K || stored_K->type != JSON_NUMBER || json_as_number(stored_K) != (double)spec.K)
         return 0;
@@ -1863,47 +1867,31 @@ static inline int _sdloc_stored_spec_matches(const JsonValue *root, SdlocSpec sp
 }
 
 /*
-A theta written before the invertibility condition was imposed, when b and a
-diagonal A_j went through tanh and a full A_j was theta itself, the other
-blocks as now. Read into a model of the loading spec, and accepted only if that
-model satisfies C(theta) <= 1 - delta, since outside that set the current
-parametrization has no point for it; then m holds it and the return is 1.
-Otherwise m is untouched and the return is 0.
+A theta written before the invertibility condition was imposed, which is in the
+checked mode's parametrization, read into a model of the loading spec, which is
+imposed. Accepted only if the model satisfies C(theta) <= 1 - delta, since
+outside that set the imposed parametrization has no point for it; then m holds
+it and the return is 1. Otherwise m is untouched and the return is 0, as it is
+for a factor whose diagonal coordinate overflows or underflows.
 */
 static inline int _sdloc_params_from_previous_theta(Vec theta, SdlocParams *m) {
-    SdlocSpec spec = m->spec;
-    int K = spec.K;
+    SdlocSpec spec = m->spec, checked = spec;
+    checked.invertibility = SDLOC_INVERTIBILITY_CHECKED;
     SdlocLayout layout = sdloc_layout(spec);
-    SdlocParams candidate = sdloc_params_new(spec);
-    for (int k = 0; k < K; k++) AT(candidate.m0, k, 0) = theta.d[layout.m0 + k];
-    for (int j = 0; j < spec.p; j++)
-        for (int k = 0; k < K; k++)
-            for (int l = 0; l < K; l++) {
-                int index = _sdloc_A_theta_index(spec, j, k, l);
-                if (index < 0) continue;
-                AT(candidate.A, k, j * K + l) = spec.score_matrices == SDLOC_SCORE_FULL
-                                                ? theta.d[index] : (mreal)tanh((double)theta.d[index]);
-            }
-    for (int k = 0; k < K; k++) AT(candidate.b, k, 0) = (mreal)tanh((double)theta.d[layout.b + k]);
-    int usable = 1;
-    for (int k = 0; k < K; k++) {
+    for (int k = 0; k < spec.K; k++) {
         mreal diagonal = (mreal)exp((double)theta.d[layout.Omega_inv_diagonal + k]);
-        AT(candidate.Omega_inv, k, k) = diagonal;
-        if (diagonal == 0 || MISINF(diagonal)) usable = 0;
+        if (diagonal == 0 || MISINF(diagonal)) return 0;
     }
-    int at = layout.Omega_inv_below;
-    for (int i = 1; i < K; i++)
-        for (int j = 0; j < i; j++) AT(candidate.Omega_inv, i, j) = theta.d[at++];
-    candidate.nu = (mreal)(exp((double)theta.d[layout.nu]) + 2.0);
+    SdlocParams candidate = sdloc_params_new(checked);
+    sdloc_params_from_theta(theta, &candidate);
+    mreal C = sdloc_invertibility_constant(&candidate);
+    int usable = !MISNAN(C) && C <= 1 - spec.delta;
     if (usable) {
-        mreal C = sdloc_invertibility_constant(&candidate);
-        usable = !MISNAN(C) && C <= 1 - spec.delta;
-    }
-    if (usable) {
-        Vec current = mat_new(layout.n_theta, 1);
-        _sdloc_unlink(&candidate, current);
-        sdloc_params_from_theta(current, m);
-        mat_free(current);
+        candidate.spec = spec;
+        Vec imposed = mat_new(layout.n_theta, 1);
+        _sdloc_unlink(&candidate, imposed);
+        sdloc_params_from_theta(imposed, m);
+        mat_free(imposed);
     }
     sdloc_params_free(&candidate);
     return usable;
@@ -2314,15 +2302,11 @@ static inline SdlocInvertibilityDiagnostics sdloc_invertibility_diagnostics(cons
     int K = spec.K;
     SdlocInvertibilityDiagnostics d;
     SdlocInvertibility *w = _sdloc_invertibility_new(spec);
-    mreal *loadings = (mreal*)malloc((size_t)spec.p * sdloc_layout(spec).A_per_lag * sizeof(mreal));
-    assert(loadings);
-    _sdloc_pack_loadings(m, loadings);
-    d.C = _sdloc_invertibility_constant(w, m->Omega_inv.d, m->nu, m->b.d, loadings);
+    d.C = _sdloc_model_invertibility_constant(w, m);
     mreal psi_sum = 0;
     if (!MISINF(d.C))
         for (int j = 0; j < spec.p; j++)
             psi_sum += w->ratio * _sdloc_norm_and_derivative(w, w->P + (size_t)j * K * K, w->scratch);
-    free(loadings);
     _sdloc_invertibility_free(w);
 
     Mat left, right_t;

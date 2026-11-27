@@ -48,27 +48,14 @@ static SdlocSpec spec_under_test(int K, int which) {
 static int is_checked(SdlocSpec spec) { return spec.invertibility == SDLOC_INVERTIBILITY_CHECKED; }
 
 /* theta in the parametrization used before the invertibility condition was
-   imposed, which a cache written then holds: b and a diagonal A_j through
-   tanh, a full A_j as theta itself, the other blocks as now. Written out here
-   rather than taken from the header, which keeps only the reading side. */
+   imposed, which a cache written then holds and which the checked mode keeps:
+   b and a diagonal A_j through tanh, a full A_j as theta itself, the other
+   blocks as now. test_link_round_trip checks that the checked link is that
+   map. */
 static void previous_theta(const SdlocParams *m, Vec theta) {
-    SdlocSpec spec = m->spec;
-    int K = spec.K, at = 0;
-    for (int k = 0; k < K; k++) theta.d[at++] = AT(m->m0, k, 0);
-    for (int j = 0; j < spec.p; j++) {
-        if (spec.score_matrices == SDLOC_SCORE_FULL) {
-            for (int k = 0; k < K; k++)
-                for (int l = 0; l < K; l++) theta.d[at++] = AT(m->A, k, j * K + l);
-        } else {
-            for (int k = 0; k < K; k++) theta.d[at++] = (mreal)atanh((double)AT(m->A, k, j * K + k));
-        }
-    }
-    for (int k = 0; k < K; k++) theta.d[at++] = (mreal)atanh((double)AT(m->b, k, 0));
-    for (int k = 0; k < K; k++) theta.d[at++] = (mreal)log((double)AT(m->Omega_inv, k, k));
-    for (int i = 1; i < K; i++)
-        for (int j = 0; j < i; j++) theta.d[at++] = AT(m->Omega_inv, i, j);
-    theta.d[at++] = (mreal)log((double)m->nu - 2.0);
-    assert(at == theta.r);
+    SdlocParams as_checked = *m;
+    as_checked.spec.invertibility = SDLOC_INVERTIBILITY_CHECKED;
+    _sdloc_unlink(&as_checked, theta);
 }
 
 /* Element by element, so a strided view on either side is copied correctly. */
