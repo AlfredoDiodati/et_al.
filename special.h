@@ -136,17 +136,27 @@ static inline SpecialLog1pSum special_log1p_sum_new(void) {
     return accumulator;
 }
 
-static inline void special_log1p_sum_add(SpecialLog1pSum *accumulator, double x) {
+/* The block close and the lone large term, out of line so that the
+   per-term path inlined into a caller's loop stays a multiply-add and a
+   compare. */
+static __attribute__((noinline, unused)) void _special_log1p_sum_close(SpecialLog1pSum *accumulator, double x) {
     if (x > 1e100) {
         accumulator->sum += special_log1p(x);
         return;
     }
-    accumulator->product_minus_one += x * (1 + accumulator->product_minus_one);
-    if (++accumulator->count == SPECIAL_LOG1P_SUM_BLOCK || accumulator->product_minus_one > 1e100) {
-        accumulator->sum += special_log1p(accumulator->product_minus_one);
-        accumulator->product_minus_one = 0;
-        accumulator->count = 0;
+    accumulator->sum += special_log1p(accumulator->product_minus_one);
+    accumulator->product_minus_one = 0;
+    accumulator->count = 0;
+}
+
+static inline void special_log1p_sum_add(SpecialLog1pSum *accumulator, double x) {
+    if (x > 1e100) {
+        _special_log1p_sum_close(accumulator, x);
+        return;
     }
+    accumulator->product_minus_one += x * (1 + accumulator->product_minus_one);
+    if (++accumulator->count == SPECIAL_LOG1P_SUM_BLOCK || accumulator->product_minus_one > 1e100)
+        _special_log1p_sum_close(accumulator, 0);
 }
 
 static inline double special_log1p_sum_total(const SpecialLog1pSum *accumulator) {

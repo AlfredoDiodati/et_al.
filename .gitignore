@@ -51,6 +51,7 @@ tests/correctness/qvarma_recovery_study
 tests/correctness/qvarma_consistency_rate_study
 tests/correctness/qvarma_parameter_space_study
 tests/correctness/mcs_settings_study
+tests/correctness/score_driven_location_invertibility_modes_study
 tests/correctness/qvarma_analytic_agreement
 tests/correctness/mvstudent_traced_agreement
 tests/correctness/qvarma_gaussian_limit

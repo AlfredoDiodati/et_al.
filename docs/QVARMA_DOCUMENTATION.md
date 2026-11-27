@@ -1404,6 +1404,19 @@ preconditioning (measured negative), and batching (1.2x to 1.5x for a second
 filter). What is left is the model's statistical behaviour rather than its
 speed - see "Where the model is unreliable".
 
+### One logarithm per 16 periods
+
+The forward pass sums its per-period kernel `log1p(q_t / nu)` through `special.h`'s `special_log1p_sum`, which carries `prod (1 + q_t / nu) - 1` over a block of 16 periods and takes one `log1p` per block; see `docs/SPECIAL_DOCUMENTATION.md`. Measured 2026-11-27 on an Intel Core i5-7400, gcc, `-O3 -march=native -ffast-math`, one thread: the header before and after, each built into its own binary of one harness (`out/qvarma_evaluation_timing.c` with `out/qvarma_compare.sh`, not in the repository) at the shapes and parameters of `tests/performance/qvarma_analytic_filter.c`, seed `20260829`, alternated over 8 rounds in both orders, per shape the best of 9 batches of 2000 evaluations. The same header in both binaries gave ratios from `0.995` to `1.003`. New time over old, the same in both orders to `0.006`:
+
+| shape | float32 value | float32 value and gradient | float64 value | float64 value and gradient |
+|---|---|---|---|---|
+| `K = 5, r = 2, T = 400`, the ABM pipeline's | `0.87` (41.6 to 36.3 us) | `0.96` (100.1 to 95.7 us) | `0.91` (42.0 to 38.3 us) | `0.96` (98.0 to 94.2 us) |
+| `K = 5, r = 4, T = 400` | `0.89` | `0.97` | `0.90` | `0.96` |
+| `K = 3, r = 1, T = 600` | `0.82` | `0.94` | `0.86` | `0.94` |
+| `K = 12, r = 2, T = 400` | `0.95` | `0.96` | `0.89` | `0.96` |
+
+With the block close inlined into the loop rather than out of line, float64 value and gradient was `1.00` at the ABM shape and `1.03` at `K = 12`, slower; the out-of-line close is what is shipped. Values change by a different summation of the same terms: at the printed twelve digits float64 is unchanged, and float32 log-likelihoods move by up to `1e-3` absolute at a total of `-4703`, the accumulator summing in double where the per-period sum was in float.
+
 ## Where the model is unreliable
 
 **Extracted to its own file: [`docs/QVARMA_RELIABILITY_DOCUMENTATION.md`](QVARMA_RELIABILITY_DOCUMENTATION.md).**

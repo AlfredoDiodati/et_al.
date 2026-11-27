@@ -8,6 +8,7 @@
 #include "../dist/gauss.h"
 #include "../dist/mv/student_traced.h"
 #include "../solver/lbfgs.h"
+#include "../special.h"
 
 /*
 t-QVARMA(p,q,r) of Blazsek, Escribano and Licht (2023), "Co-integration with
@@ -1037,7 +1038,7 @@ static inline mreal _qvarma_analytic_forward(QvarmaAnalytic *f, Mat y) {
     int K = f->K, T = f->T, stride = f->path_stride;
     mreal nu = f->nu;
     mreal nu_reciprocal = (mreal)1 / nu;
-    mreal log_sum = 0;
+    SpecialLog1pSum log_sum = special_log1p_sum_new();
 
     /* Both substitutions divide by the same K diagonal entries every period.
        The compiler cannot hoist the reciprocal itself, since the parameters
@@ -1107,11 +1108,13 @@ static inline mreal _qvarma_analytic_forward(QvarmaAnalytic *f, Mat y) {
            below a nu of 1e4 the line search stalls on two of the five draws of
            tests/correctness/qvarma_correctness.c's two-co-integration-lag case,
            for about two per cent of a filter evaluation. */
-        log_sum += mvstudent_log_kernel(quadratic, nu_reciprocal);
+        /* mvstudent_log_kernel(quadratic, nu_reciprocal), log1p(q_t / nu), summed with
+           one logarithm per SPECIAL_LOG1P_SUM_BLOCK periods */
+        special_log1p_sum_add(&log_sum, (double)(quadratic * nu_reciprocal));
     }
 
-    f->log_sum = log_sum;
-    return mvstudent_loglik_from_log_sum(T, nu, K, f->half_log_det_Sigma, log_sum);
+    f->log_sum = (mreal)special_log1p_sum_total(&log_sum);
+    return mvstudent_loglik_from_log_sum(T, nu, K, f->half_log_det_Sigma, f->log_sum);
 }
 
 /* Psi_dag_bar is an adjoint of a product, so it has to be pushed through the
