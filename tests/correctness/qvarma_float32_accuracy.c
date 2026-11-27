@@ -129,13 +129,13 @@ static double float32_evaluate(const AccuracyShape *shape, const double *theta, 
     return value;
 }
 
-static double largest_gap(const double *a, const double *b, int n, double *scale) {
+/* The largest entry gap between a and b over b's largest entry. */
+static double largest_gap(const double *a, const double *b, int n) {
     double gap = 0, size = 0;
     for (int i = 0; i < n; i++) {
         if (fabs(a[i] - b[i]) > gap) gap = fabs(a[i] - b[i]);
         if (fabs(b[i]) > size) size = fabs(b[i]);
     }
-    *scale = size;
     return size > 0 ? gap / size : gap;
 }
 
@@ -150,14 +150,14 @@ static int compare(const AccuracyShape *shape, const double *theta, const double
     double *g64 = (double*)malloc((size_t)n * sizeof(double)), *g32 = (double*)malloc((size_t)n * sizeof(double));
     double *v64 = (double*)malloc((size_t)cells * sizeof(double)), *v32 = (double*)malloc((size_t)cells * sizeof(double));
     double *u64 = (double*)malloc((size_t)cells * sizeof(double)), *u32 = (double*)malloc((size_t)cells * sizeof(double));
-    double traced = 0, scale;
+    double traced = 0;
     double reference = float64_evaluate(shape, theta, y, g64, v64, u64);
     int usable = isfinite(reference);
     if (usable) {
         double value = float32_evaluate(shape, theta_float32, y, g32, v32, u32, with_traced ? &traced : NULL);
         *value_error = fabs(value - reference) / fabs(reference);
-        *gradient_error = largest_gap(g32, g64, n, &scale);
-        double v_error = largest_gap(v32, v64, cells, &scale), u_error = largest_gap(u32, u64, cells, &scale);
+        *gradient_error = largest_gap(g32, g64, n);
+        double v_error = largest_gap(v32, v64, cells), u_error = largest_gap(u32, u64, cells);
         *path_error = v_error > u_error ? v_error : u_error;
         *traced_error = with_traced ? fabs(traced - reference) / fabs(reference) : 0;
     }
@@ -240,8 +240,6 @@ static void test_a_fit(void) {
     int n = float64_n_theta(&pipeline), cells = pipeline.K * pipeline.T;
     double *truth = (double*)malloc((size_t)n * sizeof(double)), *y = (double*)malloc((size_t)cells * sizeof(double));
     double *estimate64 = (double*)malloc((size_t)n * sizeof(double)), *estimate32 = (double*)malloc((size_t)n * sizeof(double));
-    double *gradient = (double*)malloc((size_t)n * sizeof(double));
-    double *v_path = (double*)malloc((size_t)cells * sizeof(double)), *u_path = (double*)malloc((size_t)cells * sizeof(double));
     int judged_samples = 0;
     for (unsigned seed = 1; seed <= 8; seed++) {
         float64_truth_and_sample(&pipeline, seed, truth, y);
@@ -263,7 +261,7 @@ static void test_a_fit(void) {
         QvarmaFitResult fit = qvarma_fit(y_matrix, &start, qvarma_default_fit_options());
         _qvarma_unlink(&fit.params, theta);
         for (int i = 0; i < n; i++) estimate32[i] = (double)theta.d[i];
-        double judged = float64_evaluate(&pipeline, estimate32, y, gradient, v_path, u_path);
+        double judged = float64_evaluate(&pipeline, estimate32, y, NULL, NULL, NULL);
         double reported_error = fabs((double)fit.log_likelihood - judged) / fabs(judged);
 
         printf("  seed %u: float64 fit %.6f (%s, gradient norm %.2g); float32 fit reports %.6f (%s, gradient"
@@ -281,7 +279,7 @@ static void test_a_fit(void) {
         qvarma_params_free(&start);
     }
     CHECK(judged_samples >= 4, "only %d of seeds 1 to 8 had a float64 fit that converged", judged_samples);
-    free(truth); free(y); free(estimate64); free(estimate32); free(gradient); free(v_path); free(u_path);
+    free(truth); free(y); free(estimate64); free(estimate32);
     printf("  ok\n");
 }
 

@@ -922,22 +922,14 @@ static void ad_triangular_solve_backward(Node *self) {
     char trans = self->aux > (mreal)0.5 ? 'T' : 'N';
     char z_trans = trans == 'T' ? 'N' : 'T';
     Mat z = mat_triangular_solve(L->val, self->grad, 'L', z_trans, 'N');
-    Mat x = self->val;
-
-    if (trans == 'N')
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j <= i; j++) {
-                mreal sum = 0;
-                for (int c = 0; c < columns; c++) sum += AT(z, i, c) * AT(x, j, c);
-                AT(L->grad, i, j) += -sum;
-            }
-    else
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j <= i; j++) {
-                mreal sum = 0;
-                for (int c = 0; c < columns; c++) sum += AT(x, i, c) * AT(z, j, c);
-                AT(L->grad, i, j) += -sum;
-            }
+    /* tril(-Z X^T) for 'N', tril(-X Z^T) for 'T' */
+    Mat first = trans == 'N' ? z : self->val, second = trans == 'N' ? self->val : z;
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j <= i; j++) {
+            mreal sum = 0;
+            for (int c = 0; c < columns; c++) sum += AT(first, i, c) * AT(second, j, c);
+            AT(L->grad, i, j) += -sum;
+        }
 
     ad_accum(b->grad, z);
     mat_free(z);

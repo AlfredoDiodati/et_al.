@@ -22,7 +22,8 @@ typedef struct {
 int float64_n_theta(const AccuracyShape *shape);
 
 /* qvarma_analytic_log_likelihood at theta, with its gradient and the v and u
-   paths the same evaluation leaves in the workspace. */
+   paths the same evaluation leaves in the workspace; gradient, or the two
+   paths together, may be NULL when not wanted. */
 double float64_evaluate(const AccuracyShape *shape, const double *theta, const double *y,
                         double *gradient, double *v_path, double *u_path);
 

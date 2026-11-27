@@ -155,6 +155,24 @@ static void test_parameter_count(void) {
     printf("  ok\n");
 }
 
+/* The model whose b and A are theta's own b and A coordinates, the free
+   coordinates b0 and A0 of the radial map, and whose other blocks are theta
+   linked: C at it is the C0 the link computes. */
+static SdlocParams free_coordinate_model(SdlocSpec spec, Vec theta) {
+    int K = spec.K;
+    SdlocLayout layout = sdloc_layout(spec);
+    SdlocParams m = sdloc_params_new(spec);
+    sdloc_params_from_theta(theta, &m);
+    for (int k = 0; k < K; k++) AT(m.b, k, 0) = theta.d[layout.b + k];
+    for (int j = 0; j < spec.p; j++)
+        for (int k = 0; k < K; k++)
+            for (int l = 0; l < K; l++) {
+                int index = _sdloc_A_theta_index(spec, j, k, l);
+                if (index >= 0) AT(m.A, k, j * K + l) = theta.d[index];
+            }
+    return m;
+}
+
 /* link and unlink must be exact inverses. Checked in both directions, since
    a transform that is wrong in one direction only fails one of them. */
 static void test_link_round_trip(void) {
@@ -191,21 +209,7 @@ static void test_link_round_trip(void) {
             SdlocLayout other_layout = sdloc_layout(spec);
             for (int i = 0; i < n; i++) other.d[i] = (mreal)(0.7 * ((i % 5) - 2) + 0.11);
             if (!is_checked(spec)) {
-                SdlocParams probe = sdloc_params_new(spec);
-                for (int k = 0; k < K; k++) {
-                    AT(probe.b, k, 0) = other.d[other_layout.b + k];
-                    AT(probe.Omega_inv, k, k) = (mreal)exp((double)other.d[other_layout.Omega_inv_diagonal + k]);
-                }
-                int at = other_layout.Omega_inv_below;
-                for (int i = 1; i < K; i++)
-                    for (int j = 0; j < i; j++) AT(probe.Omega_inv, i, j) = other.d[at++];
-                probe.nu = (mreal)(exp((double)other.d[other_layout.nu]) + 2);
-                for (int j = 0; j < spec.p; j++)
-                    for (int k = 0; k < K; k++)
-                        for (int l = 0; l < K; l++) {
-                            int index = _sdloc_A_theta_index(spec, j, k, l);
-                            if (index >= 0) AT(probe.A, k, j * K + l) = other.d[index];
-                        }
+                SdlocParams probe = free_coordinate_model(spec, other);
                 mreal C_zero = sdloc_invertibility_constant(&probe);
                 for (int i = other_layout.A; i < other_layout.Omega_inv_diagonal; i++)
                     other.d[i] *= 3 / C_zero;
@@ -240,17 +244,7 @@ static void test_link_round_trip(void) {
                b0 and A0_j scaled by one common positive factor, the scaled
                point satisfies C(theta) = (1 - delta) tanh(C0) with C0 the same
                constant at b0 and A0, and so lies inside the invertible set */
-            SdlocParams unscaled = sdloc_params_new(spec);
-            copy_into(unscaled.m0, from_theta.m0);
-            copy_into(unscaled.Omega_inv, from_theta.Omega_inv);
-            unscaled.nu = from_theta.nu;
-            for (int k = 0; k < K; k++) AT(unscaled.b, k, 0) = other.d[layout.b + k];
-            for (int j = 0; j < spec.p; j++)
-                for (int k = 0; k < K; k++)
-                    for (int l = 0; l < K; l++) {
-                        int index = _sdloc_A_theta_index(spec, j, k, l);
-                        if (index >= 0) AT(unscaled.A, k, j * K + l) = other.d[index];
-                    }
+            SdlocParams unscaled = free_coordinate_model(spec, other);
             if (!is_checked(spec)) {
                 double C_zero = (double)sdloc_invertibility_constant(&unscaled);
                 double lambda = (1 - (double)TEST_DELTA) * tanh(C_zero) / C_zero;

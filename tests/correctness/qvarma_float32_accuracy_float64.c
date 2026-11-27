@@ -37,13 +37,14 @@ double float64_evaluate(const AccuracyShape *shape, const double *theta, const d
                         double *gradient, double *v_path, double *u_path) {
     QvarmaParams m = shape_model(shape);
     int n = qvarma_n_theta(&m), K = shape->K, T = shape->T;
-    Vec theta_vector = mat_new(n, 1), gradient_vector = mat_new(n, 1);
+    Vec theta_vector = mat_new(n, 1), gradient_vector = mat_new(n, 1), no_gradient = { 0, 0, 0, NULL };
     for (int i = 0; i < n; i++) theta_vector.d[i] = (mreal)theta[i];
     Mat y_matrix = observations(shape, y);
     QvarmaAnalytic *f = qvarma_analytic_new(&m, T);
-    double value = (double)qvarma_analytic_log_likelihood(f, theta_vector, y_matrix, gradient_vector);
-    for (int i = 0; i < n; i++) gradient[i] = (double)gradient_vector.d[i];
-    for (int t = 0; t < T; t++) {
+    double value = (double)qvarma_analytic_log_likelihood(f, theta_vector, y_matrix,
+                                                          gradient ? gradient_vector : no_gradient);
+    if (gradient) for (int i = 0; i < n; i++) gradient[i] = (double)gradient_vector.d[i];
+    for (int t = 0; t < T && v_path; t++) {
         const mreal *v = qvarma_analytic_v(f, t), *u = qvarma_analytic_u(f, t);
         for (int k = 0; k < K; k++) {
             v_path[(size_t)t * K + k] = (double)v[k];

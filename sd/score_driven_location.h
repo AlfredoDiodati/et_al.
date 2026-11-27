@@ -606,50 +606,44 @@ static inline SdlocLinked _sdloc_link(Tape *tape, Node *theta, SdlocSpec spec) {
     linked.nu = ad_add(tape, ad_exp(tape, ad_slice(tape, theta, layout.nu, layout.nu + 1, 0, 1)),
                        sdloc_constant_node(tape, mat_fill(1, 1, 2)));
 
-    /* Checked: b and a diagonal A_j through tanh, a full A_j as theta. */
-    if (spec.invertibility == SDLOC_INVERTIBILITY_CHECKED) {
-        linked.is_usable = 1;
-        for (int k = 0; k < K; k++) {
-            mreal diagonal = AT(linked.Omega_inv->val, k, k);
-            if (diagonal == 0 || MISINF(diagonal) || MISNAN(diagonal)) linked.is_usable = 0;
-        }
-        linked.b = ad_tanh(tape, ad_slice(tape, theta, layout.b, layout.b + K, 0, 1));
-        linked.A = (Node**)malloc((size_t)spec.p * sizeof(Node*));
-        assert(linked.A);
-        for (int j = 0; j < spec.p; j++) {
-            int at = layout.A + j * layout.A_per_lag;
-            Node *block = ad_slice(tape, theta, at, at + layout.A_per_lag, 0, 1);
-            linked.A[j] = spec.score_matrices == SDLOC_SCORE_FULL ? ad_reshape(tape, block, K, K)
-                                                                  : ad_tanh(tape, block);
-        }
-        return linked;
-    }
-
-    /* The radial map of the comment at the top of this file, on the tape: C0
-       from b0 and A0, then lambda = (1 - delta) tanh(C0) / C0. Each A0_j enters
-       C0 as a dense K x K matrix; a diagonal one is put on the diagonal by
-       spread_node. The derivative of
-       tanh(c)/c is the difference the analytic link evaluates in another form
-       (_sdloc_radial_factor), so this path loses digits as C0 approaches zero
-       and the analytic one does not. */
     Node *L = linked.Omega_inv;
-    Node *b_zero = ad_slice(tape, theta, layout.b, layout.b + K, 0, 1);
     linked.is_usable = 1;
     for (int k = 0; k < K; k++) {
         mreal diagonal = AT(L->val, k, k);
         if (diagonal == 0 || MISINF(diagonal) || MISNAN(diagonal)) linked.is_usable = 0;
     }
+    Node *b_zero = ad_slice(tape, theta, layout.b, layout.b + K, 0, 1);
     Node **A_zero = (Node**)malloc((size_t)spec.p * sizeof(Node*));
     assert(A_zero);
+    for (int j = 0; j < spec.p; j++) {
+        int at = layout.A + j * layout.A_per_lag;
+        A_zero[j] = ad_slice(tape, theta, at, at + layout.A_per_lag, 0, 1);
+    }
+    linked.A = (Node**)malloc((size_t)spec.p * sizeof(Node*));
+    assert(linked.A);
+
+    /* Checked: b and a diagonal A_j through tanh, a full A_j as theta. */
+    if (spec.invertibility == SDLOC_INVERTIBILITY_CHECKED) {
+        linked.b = ad_tanh(tape, b_zero);
+        for (int j = 0; j < spec.p; j++)
+            linked.A[j] = spec.score_matrices == SDLOC_SCORE_FULL ? ad_reshape(tape, A_zero[j], K, K)
+                                                                  : ad_tanh(tape, A_zero[j]);
+        free(A_zero);
+        return linked;
+    }
+
+    /* Imposed: the radial map of the comment at the top of this file, on the
+       tape: C0 from b0 and A0, then lambda = (1 - delta) tanh(C0) / C0. Each
+       A0_j enters C0 as a dense K x K matrix; a diagonal one is put on the
+       diagonal by spread_node. The derivative of tanh(c)/c is the difference
+       the analytic link evaluates in another form (_sdloc_radial_factor), so
+       this path loses digits as C0 approaches zero and the analytic one does
+       not. */
     Node *ratio = ad_ediv(tape,
                           ad_pow(tape, ad_emul(tape, ad_add(tape, linked.nu, sdloc_constant_node(tape, mat_fill(1, 1, (mreal)K))),
                                                      ad_add(tape, linked.nu, sdloc_constant_node(tape, mat_fill(1, 1, 2)))),
                                  (mreal)0.5),
                           linked.nu);
-    for (int j = 0; j < spec.p; j++) {
-        int at = layout.A + j * layout.A_per_lag;
-        A_zero[j] = ad_slice(tape, theta, at, at + layout.A_per_lag, 0, 1);
-    }
     Node *lambda = NULL;
     if (linked.is_usable) {
         Node *Phi = ad_triangular_solve(tape, L,
@@ -683,8 +677,6 @@ static inline SdlocLinked _sdloc_link(Tape *tape, Node *theta, SdlocSpec spec) {
     if (!lambda) lambda = sdloc_constant_node(tape, mat_fill(1, 1, 1 - spec.delta));
 
     linked.b = ad_broadcast_mul(tape, b_zero, lambda);
-    linked.A = (Node**)malloc((size_t)spec.p * sizeof(Node*));
-    assert(linked.A);
     for (int j = 0; j < spec.p; j++) {
         Node *block = ad_broadcast_mul(tape, A_zero[j], lambda);
         linked.A[j] = spec.score_matrices == SDLOC_SCORE_FULL ? ad_reshape(tape, block, K, K) : block;
@@ -698,10 +690,11 @@ static inline void sdloc_linked_free(SdlocLinked *linked) {
     linked->A = NULL;
 }
 
-/* The inverse of the link. In diagonal mode an off-diagonal entry of an A_j is
-   not a parameter, so a nonzero one is programmer error rather than something
-   to drop silently. */
 /*
+The inverse of the link. In diagonal mode an off-diagonal entry of an A_j is
+not a parameter, so a nonzero one is programmer error rather than something to
+drop silently.
+
 Checked, b and a diagonal A_j go back through atanh, and a full A_j is copied.
 Imposed, the radial map is inverted: (b0, A0) = atanh(C / (1 - delta)) / C (b, A), with
 the factor 1 / (1 - delta) at C = 0. A model outside the invertible set,
@@ -802,6 +795,7 @@ static inline void _sdloc_link_kinds(SdlocSpec spec, SdlocLink *out) {
     for (int i = 0; i < K * (K - 1) / 2; i++) out[layout.Omega_inv_below + i] = SDLOC_LINK_IDENTITY;
     out[layout.nu] = SDLOC_LINK_EXP_PLUS_TWO;
 }
+
 
 /*
 The analytic link, theta to the constrained parameters, in two stages: the
@@ -2183,6 +2177,28 @@ static inline void sdloc_standard_errors_free(SdlocStandardErrors *e) {
     mat_free(e->unconstrained);
 }
 
+/* The standard error of w . theta, sqrt(sum_k (w . e_k)^2 / lambda_k) over the
+   eigenpairs of H, or NaN when w, normalized, loads on a direction whose
+   curvature is below floor_value, or when w is zero. */
+static inline mreal _sdloc_functional_error(const mreal *w, int n, Vec eigenvalues, Mat eigenvectors,
+                                            mreal floor_value) {
+    mreal size = 0, variance = 0;
+    for (int c = 0; c < n; c++) size += w[c] * w[c];
+    if (!(size > 0)) return (mreal)NAN;
+    for (int k = 0; k < n; k++) {
+        mreal projection = 0;
+        for (int c = 0; c < n; c++) projection += w[c] * AT(eigenvectors, c, k);
+        mreal weight = projection * projection;
+        if (eigenvalues.d[k] <= floor_value) {
+            if (weight > floor_value * size) return (mreal)NAN;
+        } else {
+            variance += weight / eigenvalues.d[k];
+        }
+    }
+    if (!(variance > 0) || MISINF(variance) || MISNAN(variance)) return (mreal)NAN;
+    return (mreal)sqrt((double)variance);
+}
+
 static inline SdlocStandardErrors sdloc_standard_errors(const SdlocParams *m, Mat y) {
     SdlocSpec spec = m->spec;
     int n = sdloc_n_theta(spec);
@@ -2235,41 +2251,12 @@ static inline SdlocStandardErrors sdloc_standard_errors(const SdlocParams *m, Ma
     for (int i = 0; i < n; i++) e.estimate.d[i] = link->constrained[i];
 
     for (int i = 0; i < n; i++) {
-        mreal variance = 0;
-        int usable = e.is_maximum;
-        for (int k = 0; k < n && usable; k++) {
-            mreal weight = AT(eigenvectors, i, k) * AT(eigenvectors, i, k);
-            if (eigenvalues.d[k] <= floor_value) {
-                if (weight > floor_value) usable = 0;
-            } else {
-                variance += weight / eigenvalues.d[k];
-            }
-        }
-        if (usable && variance > 0 && !MISINF(variance) && !MISNAN(variance))
-            e.unconstrained.d[i] = (mreal)sqrt((double)variance);
-        else
-            e.unconstrained.d[i] = (mreal)NAN;
-
         for (int c = 0; c < n; c++) unit[c] = c == i ? 1 : 0;
+        e.unconstrained.d[i] = e.is_maximum ? _sdloc_functional_error(unit, n, eigenvalues, eigenvectors, floor_value)
+                                            : (mreal)NAN;
         _sdloc_link_map_adjoint(link, unit, row);
-        mreal row_size = 0;
-        for (int c = 0; c < n; c++) row_size += row[c] * row[c];
-        mreal constrained_variance = 0;
-        usable = e.is_maximum && row_size > 0;
-        for (int k = 0; k < n && usable; k++) {
-            mreal projection = 0;
-            for (int c = 0; c < n; c++) projection += row[c] * AT(eigenvectors, c, k);
-            mreal weight = projection * projection;
-            if (eigenvalues.d[k] <= floor_value) {
-                if (weight > floor_value * row_size) usable = 0;
-            } else {
-                constrained_variance += weight / eigenvalues.d[k];
-            }
-        }
-        if (usable && constrained_variance > 0 && !MISINF(constrained_variance) && !MISNAN(constrained_variance))
-            e.constrained.d[i] = (mreal)sqrt((double)constrained_variance);
-        else
-            e.constrained.d[i] = (mreal)NAN;
+        e.constrained.d[i] = e.is_maximum ? _sdloc_functional_error(row, n, eigenvalues, eigenvectors, floor_value)
+                                          : (mreal)NAN;
     }
 
     free(unit); free(row);

@@ -202,19 +202,16 @@ static inline Vec vec_chol_solve(Mat l, Vec b) {
     return x;
 }
 
-/* Solve op(a)*x = b for x, where a is triangular and already in hand -
-   no factorization step at all, one ?trtrs. uplo is 'L' or 'U' for which
-   triangle of a holds the data, trans 'N' or 'T' for op(a) = a or a^T,
-   diag 'N' for a stored diagonal or 'U' for an implicit unit one. a is
-   n x n; b is a single right-hand-side column vector with b.r == a.r.
-   Returns a new owner; a and b are not modified.
+/* Solve op(a) X = B for X, where a is triangular and already in hand - no
+   factorization step at all, one ?trtrs. uplo is 'L' or 'U' for which
+   triangle of a holds the data, trans 'N' or 'T' for op(a) = a or a^T, diag
+   'N' for a stored diagonal or 'U' for an implicit unit one. a is n x n and
+   B is n x k, every column solved at once. Returns a new n x k owner; a and
+   B are not modified.
 
    For a parameter that is itself a triangular factor rather than derived
    from one by mat_chol - a Cholesky-parameterized covariance, say - this
    is the reuse this family exists for, one level below vec_chol_solve. */
-/* op(a) x = b for triangular a and an n x k right-hand side b, every column
-   at once; vec_triangular_solve is the k = 1 case. Returns a new n x k
-   matrix; caller must mat_free. */
 static inline Mat mat_triangular_solve(Mat a, Mat b, char uplo, char trans, char diag) {
     assert(a.r == a.c && b.r == a.r && b.c > 0);
     Mat x = mat_copy(b);
@@ -223,12 +220,10 @@ static inline Mat mat_triangular_solve(Mat a, Mat b, char uplo, char trans, char
     return x;
 }
 
+/* The single-column case of mat_triangular_solve. */
 static inline Vec vec_triangular_solve(Mat a, Vec b, char uplo, char trans, char diag) {
-    assert(a.r == a.c && b.r == a.r && b.c == 1);
-    Vec x = mat_copy(b);
-    int info = _trtrs(uplo, trans, diag, a.r, 1, a.d, a.stride, x.d, x.stride);
-    assert(info == 0);
-    return x;
+    assert(b.c == 1);
+    return mat_triangular_solve(a, b, uplo, trans, diag);
 }
 
 /* The rank rule of mat_lstsq on an upper triangular factor R of an m-row

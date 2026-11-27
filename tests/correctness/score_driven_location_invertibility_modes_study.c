@@ -78,9 +78,10 @@ static SdlocParams make_truth(int which, SdlocInvertibilityMode mode) {
     for (int k = 0; k < K; k++)
         for (int l = 0; l < K; l++) {
             if (which == 0) {
+                double first = k == l ? 0.12 + 0.02 * k : 0.02 * (k + 1) - 0.015 * l;
                 AT(m.b, k, 0) = (mreal)(0.55 - 0.05 * k);
-                AT(m.A, k, l) = (mreal)(k == l ? 0.12 + 0.02 * k : 0.02 * (k + 1) - 0.015 * l);
-                AT(m.A, k, K + l) = (mreal)(-(k == l ? 0.12 + 0.02 * k : 0.02 * (k + 1) - 0.015 * l) / 4);
+                AT(m.A, k, l) = (mreal)first;
+                AT(m.A, k, K + l) = (mreal)(-first / 4);
             } else {
                 AT(m.b, k, 0) = (mreal)(0.7 - 0.1 * k);
                 AT(m.A, k, l) = (mreal)(k == l ? 0.3 - 0.05 * k : 0.03 * (k + 1) - 0.02 * l);
@@ -95,18 +96,17 @@ static SdlocParams make_truth(int which, SdlocInvertibilityMode mode) {
     return m;
 }
 
+#define N_PARAMETERS 16
+
 /* The model's parameters in theta's order, each on its own scale. */
 static void constrained_values(const SdlocParams *m, double *out) {
     SdlocSpec spec = m->spec;
     SdlocLayout layout = sdloc_layout(spec);
     int K = spec.K;
     for (int k = 0; k < K; k++) out[layout.m0 + k] = (double)AT(m->m0, k, 0);
-    for (int j = 0; j < spec.p; j++)
-        for (int k = 0; k < K; k++)
-            for (int l = 0; l < K; l++) {
-                int index = _sdloc_A_theta_index(spec, j, k, l);
-                if (index >= 0) out[index] = (double)AT(m->A, k, j * K + l);
-            }
+    mreal loadings[N_PARAMETERS];
+    _sdloc_pack_loadings(m, loadings);
+    for (int i = 0; i < layout.b - layout.A; i++) out[layout.A + i] = (double)loadings[i];
     for (int k = 0; k < K; k++) out[layout.b + k] = (double)AT(m->b, k, 0);
     for (int k = 0; k < K; k++) out[layout.Omega_inv_diagonal + k] = (double)AT(m->Omega_inv, k, k);
     int at = layout.Omega_inv_below;
@@ -115,14 +115,17 @@ static void constrained_values(const SdlocParams *m, double *out) {
     out[layout.nu] = (double)m->nu;
 }
 
-#define N_PARAMETERS 16
-
 typedef struct {
     int is_converged, is_at_edge, satisfies, edge_restarts;
     double log_likelihood, gradient_norm, C;
     LbfgsStatus status;
     double values[N_PARAMETERS];
 } FitRecord;
+
+/* Whether both fits of a sample converged, the samples the comparisons use. */
+static int both_converged(const FitRecord *records, int draw) {
+    return records[draw * N_MODES].is_converged && records[draw * N_MODES + 1].is_converged;
+}
 
 static int compare_doubles(const void *a, const void *b) {
     double x = *(const double *)a, y = *(const double *)b;
@@ -230,7 +233,7 @@ int main(void) {
             double largest_inside_gap = 0, largest_ratio = 0;
             for (int draw = 0; draw < replications; draw++) {
                 const FitRecord *imposed = &records[draw * N_MODES], *checked = imposed + 1;
-                if (!imposed->is_converged || !checked->is_converged) continue;
+                if (!both_converged(records, draw)) continue;
                 double ratio = 2 * (checked->log_likelihood - imposed->log_likelihood);
                 if (ratio < -2e-6) n_lower++;
                 if (checked->satisfies) {
@@ -253,7 +256,7 @@ int main(void) {
 
             int n_used = 0;
             for (int draw = 0; draw < replications; draw++)
-                n_used += records[draw * N_MODES].is_converged && records[draw * N_MODES + 1].is_converged;
+                n_used += both_converged(records, draw);
             fprintf(report, "  parameters over the %d samples where both fits converged (%d excluded)\n",
                     n_used, replications - n_used);
             fprintf(report, "  %-16s %10s   %10s %10s %10s   %10s %10s %10s\n", "parameter", "truth",
@@ -264,8 +267,7 @@ int main(void) {
                     double sum = 0, squares = 0;
                     int n = 0;
                     for (int draw = 0; draw < replications; draw++) {
-                        if (!records[draw * N_MODES].is_converged || !records[draw * N_MODES + 1].is_converged)
-                            continue;
+                        if (!both_converged(records, draw)) continue;
                         double error = records[draw * N_MODES + mode].values[i] - truth_values[i];
                         sum += error;
                         squares += error * error;
