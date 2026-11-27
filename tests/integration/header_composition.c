@@ -58,6 +58,7 @@ the lot as unused.
 #include "../../inference/unit_root.h"
 #include "../../inference/cointegration.h"
 #include "../../inference/qlr_test.h"
+#include "../../inference/sign_restrictions.h"
 #include "../../dist/broadcast.h"
 #include "../../dist/gauss.h"
 #include "../../dist/chi_squared.h"
@@ -235,6 +236,10 @@ static int touch_every_module(void) {
 
     QlrCriticalValues qlr = qlr_critical_values_lookup(0, (mreal)0.99, 1);
     (void)qlr;
+
+    Mat rotation_identity = mat_eye(2), no_signs = mat_new(2, 2);
+    if (!sign_restrictions_hold(rotation_identity, rotation_identity, no_signs)) problems++;
+    mat_free(rotation_identity); mat_free(no_signs);
 
     ClusterOptions cluster_options = cluster_options_default();
     if (cluster_options.port <= 0) problems++;

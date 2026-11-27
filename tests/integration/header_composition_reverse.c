@@ -38,6 +38,7 @@ carries no checks of its own beyond compiling and linking.
 #include "../../dist/chi_squared.h"
 #include "../../dist/gauss.h"
 #include "../../dist/broadcast.h"
+#include "../../inference/sign_restrictions.h"
 #include "../../inference/qlr_test.h"
 #include "../../ss/dynamic_factor.h"
 #include "../../filter/kalman.h"

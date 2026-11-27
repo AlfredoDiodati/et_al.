@@ -7,6 +7,7 @@
 #include "../dist/mv/student_traced.h"
 #include "../solver/lbfgs.h"
 #include "../special.h"
+#include "../inference/sign_restrictions.h"
 #include <string.h>
 
 /*
@@ -2397,5 +2398,305 @@ static inline void sdloc_write_report(const SdlocFitResult *result, Mat y, const
     for (int a = 0; a < K; a++)
         for (int b = 0; b <= a; b++)
             fprintf(out, "%.6f%s", (double)AT(m->Omega_inv, a, b), b == a ? "\n" : " ");
+    fclose(out);
+}
+
+/*
+Impulse responses, the response of y_{t+h} to a structural shock at t with
+every other structural shock held fixed, as in Blazsek, Escribano and Licht's
+t-QVARMA, section 4. The structural form writes the reduced-form error as
+
+    v_t = (nu/(nu-2))^(1/2) Omega_inv e_t,    Var(e_t) = I,
+
+so q_t = nu/(nu-2) e_t'e_t and the scaled score of this file is
+
+    s_t = ((nu+K)(nu+2)(nu-2)/nu)^(1/2) L^-T L e_t / (nu - 2 + e_t'e_t),
+
+L = Omega_inv. s_t depends on e_t alone, so holding the other shocks fixed
+moves s_t and nothing else at period t, and its Jacobian is
+
+    G_t = d s_t / d e_t = ((nu+K)(nu+2)(nu-2)/nu)^(1/2) L^-T L D_t,
+
+D_t the paper's (21), the derivative of e_t / (nu - 2 + e_t'e_t): entry (j, k)
+is ((nu - 2 + e_t'e_t) 1{j=k} - 2 e_j e_k) / (nu - 2 + e_t'e_t)^2. The
+location recursion then gives, with R_h = d m_{t+h} / d e_t,
+
+    R_1 = A_1 G_t,    R_h = diag(b) R_{h-1} + 1{h <= p} A_h G_t,
+
+and d y_t / d e_t = (nu/(nu-2))^(1/2) Omega_inv at h = 0 only, since v_{t+h}
+for h >= 1 depends on e_{t+h}. D_t varies with t; as in the paper's 4.2 the
+responses are computed at a D the caller passes, its sample average
+(sdloc_mean_score_jacobian) being the paper's choice, and they are linear in
+D, so the responses at the average D are the average of the responses.
+
+The components are the paper's: contemporaneous, its IRF^v of (24), nonzero
+at h = 0 only; location, d m_{t+h} / d e_t, which a t-QVARMA without a
+co-integrated block calls IRF*, its stationary component; total, their sum;
+and cumulative, the running sum of total over the horizon, the response of the
+level of a series measured in differences. Entry (a, b) of every matrix is the
+response of series a to a shock in series b.
+*/
+
+static inline Mat *sdloc_new_mat_array(int count, int rows, int cols) {
+    Mat *a = (Mat*)malloc((size_t)count * sizeof(Mat));
+    assert(a);
+    for (int i = 0; i < count; i++) a[i] = mat_new(rows, cols);
+    return a;
+}
+
+static inline void sdloc_free_mat_array(Mat *a, int count) {
+    if (!a) return;
+    for (int i = 0; i < count; i++) mat_free(a[i]);
+    free(a);
+}
+
+/* D_t of the comment above, one K x K matrix per period of y, at the
+   parameters of m. The structural shock is e_t = ((nu-2)/nu)^(1/2) L^-1 v_t,
+   the z_t the analytic filter already solves for. Caller must free with
+   sdloc_free_mat_array(D, y.c). */
+static inline Mat *sdloc_score_jacobian(const SdlocParams *m, Mat y) {
+    SdlocSpec spec = m->spec;
+    int K = spec.K, T = y.c;
+    assert(y.r == K && T > 1 && m->nu > 2);
+    Vec theta = mat_new(sdloc_n_theta(spec), 1);
+    _sdloc_unlink(m, theta);
+    SdlocAnalytic *f = sdloc_analytic_new(spec, T);
+    int linked = _sdloc_analytic_link(f, theta);
+    assert(linked && _sdloc_scale_is_usable(f->Omega_inv, K, f->nu));
+    (void)linked;
+    _sdloc_analytic_forward(f, y);
+
+    mreal scale = (mreal)sqrt(((double)m->nu - 2.0) / (double)m->nu);
+    Mat *D = sdloc_new_mat_array(T, K, K);
+    for (int t = 0; t < T; t++) {
+        const mreal *z = _sdloc_analytic_slot(f, t) + K;
+        mreal squared = 0;
+        for (int k = 0; k < K; k++) squared += scale * z[k] * scale * z[k];
+        mreal denominator = m->nu - 2 + squared;
+        for (int j = 0; j < K; j++)
+            for (int k = 0; k < K; k++)
+                AT(D[t], j, k) = ((j == k ? denominator : 0) - 2 * scale * z[j] * scale * z[k])
+                                 / (denominator * denominator);
+    }
+    sdloc_analytic_free(f);
+    mat_free(theta);
+    return D;
+}
+
+/* The sample average of the D_t above, the D of the paper's 4.2. Caller must
+   mat_free. */
+static inline Mat sdloc_mean_score_jacobian(const SdlocParams *m, Mat y) {
+    int K = m->spec.K, T = y.c;
+    Mat *D_path = sdloc_score_jacobian(m, y);
+    Mat D = mat_new(K, K);
+    for (int t = 0; t < T; t++)
+        for (int i = 0; i < K * K; i++) D.d[i] += D_path[t].d[i];
+    for (int i = 0; i < K * K; i++) D.d[i] /= (mreal)T;
+    sdloc_free_mat_array(D_path, T);
+    return D;
+}
+
+typedef struct {
+    int horizon;
+} SdlocImpulseOptions;
+
+static inline SdlocImpulseOptions sdloc_default_impulse_options(void) {
+    SdlocImpulseOptions options;
+    options.horizon = 20;
+    return options;
+}
+
+#define SDLOC_N_IMPULSE_COMPONENTS 4
+
+/* horizon + 1 matrices per component, horizon 0 first. */
+typedef struct {
+    int horizon, K;
+    Mat *contemporaneous;
+    Mat *location;
+    Mat *total;
+    Mat *cumulative;
+} SdlocImpulseResponses;
+
+static inline void sdloc_impulse_responses_free(SdlocImpulseResponses *r) {
+    int count = r->horizon + 1;
+    sdloc_free_mat_array(r->contemporaneous, count);
+    sdloc_free_mat_array(r->location, count);
+    sdloc_free_mat_array(r->total, count);
+    sdloc_free_mat_array(r->cumulative, count);
+    r->contemporaneous = r->location = r->total = r->cumulative = NULL;
+}
+
+static inline SdlocImpulseResponses _sdloc_new_responses(int K, int H) {
+    SdlocImpulseResponses r;
+    r.horizon = H;
+    r.K = K;
+    r.contemporaneous = sdloc_new_mat_array(H + 1, K, K);
+    r.location = sdloc_new_mat_array(H + 1, K, K);
+    r.total = sdloc_new_mat_array(H + 1, K, K);
+    r.cumulative = sdloc_new_mat_array(H + 1, K, K);
+    return r;
+}
+
+/* The components of r in a fixed order, the order sdloc_impulse_bands lays
+   them out in. */
+static inline void _sdloc_response_components(const SdlocImpulseResponses *r,
+                                              Mat *components[SDLOC_N_IMPULSE_COMPONENTS]) {
+    components[0] = r->contemporaneous;
+    components[1] = r->location;
+    components[2] = r->total;
+    components[3] = r->cumulative;
+}
+
+/* The responses of the comment above at the score Jacobian D, K x K. */
+static inline SdlocImpulseResponses sdloc_impulse_responses(const SdlocParams *m, Mat D,
+                                                            SdlocImpulseOptions options) {
+    SdlocSpec spec = m->spec;
+    int K = spec.K, H = options.horizon, p = spec.p;
+    assert(H >= 0 && m->nu > 2);
+    assert(D.r == K && D.c == K);
+    SdlocImpulseResponses r = _sdloc_new_responses(K, H);
+
+    mreal nu = m->nu;
+    mreal impact_scale = (mreal)sqrt((double)nu / ((double)nu - 2.0));
+    for (int a = 0; a < K; a++)
+        for (int b = 0; b < K; b++) AT(r.contemporaneous[0], a, b) = impact_scale * AT(m->Omega_inv, a, b);
+
+    /* G = ((nu+K)(nu+2)(nu-2)/nu)^(1/2) L^-T L D, L^-T by a triangular solve. */
+    Mat LD = mat_mul(m->Omega_inv, D);
+    Mat G = mat_triangular_solve(m->Omega_inv, LD, 'L', 'T', 'N');
+    mat_free(LD);
+    mreal score_scale = (mreal)sqrt(((double)nu + K) * ((double)nu + 2) * ((double)nu - 2) / (double)nu);
+    for (int i = 0; i < K * K; i++) G.d[i] *= score_scale;
+
+    Mat previous = mat_new(K, K);
+    for (int h = 1; h <= H; h++) {
+        Mat R = r.location[h];
+        for (int a = 0; a < K; a++)
+            for (int c = 0; c < K; c++) AT(R, a, c) = AT(m->b, a, 0) * AT(previous, a, c);
+        if (h <= p) {
+            Mat A_h = mat_slice(m->A, 0, K, (h - 1) * K, h * K);
+            Mat term = mat_mul(A_h, G);
+            for (int i = 0; i < K * K; i++) R.d[i] += term.d[i];
+            mat_free(term);
+        }
+        for (int i = 0; i < K * K; i++) previous.d[i] = R.d[i];
+    }
+    mat_free(previous);
+    mat_free(G);
+
+    for (int h = 0; h <= H; h++)
+        for (int i = 0; i < K * K; i++) {
+            r.total[h].d[i] = r.contemporaneous[h].d[i] + r.location[h].d[i];
+            r.cumulative[h].d[i] = r.total[h].d[i] + (h > 0 ? r.cumulative[h - 1].d[i] : 0);
+        }
+    return r;
+}
+
+/*
+Sign-restricted bands for the responses, by inference/sign_restrictions.h.
+Every response matrix under a rotation Q is that matrix times Q: the rotated
+shock is Q' e_t, the impact matrix becomes Omega_inv Q, e_t'e_t is unchanged
+and D_t becomes Q' D_t Q, so the score Jacobian is
+((nu+K)(nu+2)(nu-2)/nu)^(1/2) L^-T L Q Q' D Q = G Q. The impact matrix the
+signs are read off is the h = 0 contemporaneous response. sign_restrictions is
+K x K, entry (a, b) restricting the impact of shock b on series a: positive,
+negative, or zero for unrestricted.
+
+lower, median and upper carry the components of sdloc_impulse_responses.
+When no rotation satisfied the restrictions n_accepted is zero and their
+component arrays are NULL.
+*/
+typedef struct {
+    SdlocImpulseResponses lower, median, upper;
+    int n_draws, n_accepted;
+} SdlocImpulseBands;
+
+static inline void sdloc_impulse_bands_free(SdlocImpulseBands *b) {
+    sdloc_impulse_responses_free(&b->lower);
+    sdloc_impulse_responses_free(&b->median);
+    sdloc_impulse_responses_free(&b->upper);
+}
+
+static inline SdlocImpulseBands sdloc_impulse_bands(Rng *rng, const SdlocParams *m, Mat D,
+                                                    Mat sign_restrictions, SdlocImpulseOptions options,
+                                                    SignRestrictionBandOptions band_options) {
+    int K = m->spec.K, H = options.horizon, per_component = H + 1;
+    int count = SDLOC_N_IMPULSE_COMPONENTS * per_component;
+    assert(sign_restrictions.r == K && sign_restrictions.c == K);
+    SdlocImpulseResponses base = sdloc_impulse_responses(m, D, options);
+    Mat *base_components[SDLOC_N_IMPULSE_COMPONENTS];
+    _sdloc_response_components(&base, base_components);
+    Mat *responses = (Mat*)malloc((size_t)count * sizeof(Mat));
+    assert(responses);
+    for (int c = 0; c < SDLOC_N_IMPULSE_COMPONENTS; c++)
+        for (int h = 0; h < per_component; h++) responses[c * per_component + h] = base_components[c][h];
+
+    SignRestrictionBands bands = sign_restriction_bands(rng, responses, count, base.contemporaneous[0],
+                                                        sign_restrictions, band_options);
+    free(responses);
+    sdloc_impulse_responses_free(&base);
+
+    SdlocImpulseBands out;
+    out.n_draws = bands.n_draws;
+    out.n_accepted = bands.n_accepted;
+    SdlocImpulseResponses *targets[3] = { &out.lower, &out.median, &out.upper };
+    const Mat *sources[3] = { bands.lower, bands.median, bands.upper };
+    for (int k = 0; k < 3; k++) {
+        targets[k]->horizon = H;
+        targets[k]->K = K;
+        Mat **fields[SDLOC_N_IMPULSE_COMPONENTS] = { &targets[k]->contemporaneous, &targets[k]->location,
+                                                    &targets[k]->total, &targets[k]->cumulative };
+        for (int c = 0; c < SDLOC_N_IMPULSE_COMPONENTS; c++) {
+            *fields[c] = NULL;
+            if (!sources[k]) continue;
+            *fields[c] = (Mat*)malloc((size_t)per_component * sizeof(Mat));
+            assert(*fields[c]);
+            for (int h = 0; h < per_component; h++) (*fields[c])[h] = mat_copy(sources[k][c * per_component + h]);
+        }
+    }
+    sign_restriction_bands_free(&bands);
+    return out;
+}
+
+/* One component, one row per horizon and one column per (shock, series)
+   pair, the layout of sd/qvarma.h's qvarma_write_impulse_responses. */
+static inline void sdloc_write_impulse_responses(const SdlocImpulseResponses *r, const Mat *component,
+                                                 const char *label, const char *path) {
+    FILE *out = fopen(path, "w");
+    assert(out && "cannot open impulse response path for writing");
+    fprintf(out, "%s\nhorizon", label);
+    for (int a = 0; a < r->K; a++)
+        for (int b = 0; b < r->K; b++) fprintf(out, ",shock%d_to_series%d", b + 1, a + 1);
+    fprintf(out, "\n");
+    for (int h = 0; h <= r->horizon; h++) {
+        fprintf(out, "%d", h);
+        for (int a = 0; a < r->K; a++)
+            for (int b = 0; b < r->K; b++) fprintf(out, ",%.8f", (double)AT(component[h], a, b));
+        fprintf(out, "\n");
+    }
+    fclose(out);
+}
+
+/* One component with its band, three columns per (shock, series) pair. A
+   band with no accepted rotation writes its header and the count only. */
+static inline void sdloc_write_impulse_bands(const SdlocImpulseBands *b, const Mat *lower, const Mat *median,
+                                             const Mat *upper, const char *label, const char *path) {
+    FILE *out = fopen(path, "w");
+    assert(out && "cannot open impulse band path for writing");
+    int K = b->lower.K, H = b->lower.horizon;
+    fprintf(out, "%s\naccepted %d of %d rotations\nhorizon", label, b->n_accepted, b->n_draws);
+    for (int a = 0; a < K; a++)
+        for (int c = 0; c < K; c++)
+            fprintf(out, ",shock%d_to_series%d_lower,shock%d_to_series%d_median,shock%d_to_series%d_upper",
+                    c + 1, a + 1, c + 1, a + 1, c + 1, a + 1);
+    fprintf(out, "\n");
+    for (int h = 0; lower && h <= H; h++) {
+        fprintf(out, "%d", h);
+        for (int a = 0; a < K; a++)
+            for (int c = 0; c < K; c++)
+                fprintf(out, ",%.8f,%.8f,%.8f", (double)AT(lower[h], a, c), (double)AT(median[h], a, c),
+                        (double)AT(upper[h], a, c));
+        fprintf(out, "\n");
+    }
     fclose(out);
 }

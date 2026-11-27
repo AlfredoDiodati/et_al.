@@ -1,47 +1,43 @@
-test run: Fri Nov 27 08:45:05 PM CET 2026
+test run: Fri Nov 27 09:16:37 PM CET 2026
 
 === tracked_build_output: PASS ===
 no build output is tracked
 
 === same_suites_as_make_test: PASS ===
-make test and check.sh run the same 108 suites
+make test and check.sh run the same 110 suites
 
 === paths_outside_repo: PASS ===
 no tracked source names a path outside the repository
 
 === build ===
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/poly_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/poly_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/spline_design_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/spline_design_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/spline_basis_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/spline_basis_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/spline_objects_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/spline_objects_correctness
+make: 'tests/correctness/poly_correctness' is up to date.
+make: 'tests/correctness/spline_design_correctness' is up to date.
+make: 'tests/correctness/spline_basis_correctness' is up to date.
+make: 'tests/correctness/spline_objects_correctness' is up to date.
 make: 'tests/correctness/test_mat' is up to date.
 make: 'tests/correctness/test_tensor' is up to date.
 make: 'tests/correctness/test_tensor_serial' is up to date.
 make: 'tests/correctness/cumsum_correctness' is up to date.
 make: 'tests/correctness/rolling_mean_correctness' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/hp_filter_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hp_filter_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hp_filter_recovery.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hp_filter_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/hp_filter_causal_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hp_filter_causal_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hp_filter_lambda_estimation.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hp_filter_lambda_estimation
+make: 'tests/correctness/hp_filter_correctness' is up to date.
+make: 'tests/correctness/hp_filter_recovery' is up to date.
+make: 'tests/correctness/hp_filter_causal_correctness' is up to date.
+make: 'tests/correctness/hp_filter_lambda_estimation' is up to date.
 make: 'tests/correctness/kalman_correctness' is up to date.
 make: 'tests/correctness/dynamic_factor_correctness' is up to date.
 make: 'tests/correctness/test_mat_special' is up to date.
 make: 'tests/correctness/test_decomp' is up to date.
 make: 'tests/correctness/test_solver' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/band_chol_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/band_chol_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/lstsq_rank_deficiency.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/lstsq_rank_deficiency
-tests/correctness/lstsq_rank_deficiency.c: In function ‘test_null_status_aborts’:
-tests/correctness/lstsq_rank_deficiency.c:418:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-  418 |         freopen("/dev/null", "w", stderr);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+make: 'tests/correctness/band_chol_correctness' is up to date.
+make: 'tests/correctness/lstsq_rank_deficiency' is up to date.
 make: 'tests/correctness/chol_singularity' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/singularity_rule_comparison.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/singularity_rule_comparison
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/ols_pseudo_inverse_fallback.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/ols_pseudo_inverse_fallback
+make: 'tests/correctness/singularity_rule_comparison' is up to date.
+make: 'tests/correctness/ols_pseudo_inverse_fallback' is up to date.
 make: 'tests/correctness/hac_covariance_correctness' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/ols_covariance_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/ols_covariance_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/ols_covariance_recovery.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/ols_covariance_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/lag_matrix_layout.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/lag_matrix_layout
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/rank_rule_consistency.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/rank_rule_consistency
+make: 'tests/correctness/ols_covariance_correctness' is up to date.
+make: 'tests/correctness/ols_covariance_recovery' is up to date.
+make: 'tests/correctness/lag_matrix_layout' is up to date.
+make: 'tests/correctness/rank_rule_consistency' is up to date.
 make: 'tests/correctness/test_special' is up to date.
 make: 'tests/correctness/test_stats' is up to date.
 make: 'tests/correctness/test_random' is up to date.
@@ -59,17 +55,17 @@ make: 'tests/correctness/chi_squared_tail_correctness' is up to date.
 make: 'tests/correctness/test_student' is up to date.
 make: 'tests/correctness/test_mvgauss' is up to date.
 make: 'tests/correctness/test_mvstudent' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/mvstudent_traced_agreement.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/mvstudent_traced_agreement
+make: 'tests/correctness/mvstudent_traced_agreement' is up to date.
 make: 'tests/correctness/test_matgauss' is up to date.
 make: 'tests/correctness/test_matgauss_recovery' is up to date.
 make: 'tests/correctness/mv_density_dispatch' is up to date.
 make: 'tests/correctness/test_ad' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -ftrivial-auto-var-init=pattern tests/correctness/ad_tensor_gradients.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/ad_tensor_gradients
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_tape_reset.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_tape_reset
+make: 'tests/correctness/ad_tensor_gradients' is up to date.
+make: 'tests/correctness/test_tape_reset' is up to date.
 make: 'tests/correctness/test_adam' is up to date.
 make: 'tests/correctness/test_optimizer' is up to date.
 make: 'tests/correctness/test_cluster' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   tests/correctness/test_mlp.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/test_mlp
+make: 'tests/correctness/test_mlp' is up to date.
 make: 'tests/correctness/test_frame' is up to date.
 make: 'tests/correctness/test_csv' is up to date.
 make: 'tests/correctness/csv_missing_values' is up to date.
@@ -83,195 +79,46 @@ make: 'tests/correctness/test_join' is up to date.
 make: 'tests/correctness/gzip_inflate' is up to date.
 make: 'tests/correctness/gzip_deflate' is up to date.
 make: 'tests/correctness/rdata_array_read' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/adf_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/adf_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/kpss_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/kpss_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/dfgls_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/dfgls_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/otto_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/otto_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hlt_union_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hlt_union_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hlt_break_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hlt_break_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/hhlt_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/hhlt_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/zivot_andrews_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/zivot_andrews_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/johansen_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/johansen_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/engle_granger_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/engle_granger_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/maki_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/maki_correctness
-In file included from tests/correctness/../../inference/../linalg/decomp.h:3,
-                 from tests/correctness/../../inference/../linalg/solver.h:2,
-                 from tests/correctness/../../inference/unit_root.h:2,
-                 from tests/correctness/../../inference/cointegration.h:2,
-                 from tests/correctness/maki_correctness.c:17:
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1921:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1943:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1855:47: warning: array subscript -1 is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1855 |             for (int i = 0; i < m; i++) s += x[i] * col[i];
-      |                                              ~^~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1936:25: note: at offset -8 into object of size 32 allocated by ‘malloc’
- 1936 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1921:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1943:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1856:14: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1856 |             b[row + (size_t)q * ldb] -= s;
-      |             ~^~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1937:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1937 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_dot’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1921:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1943:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1856:38: warning: array subscript -1 is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1856 |             b[row + (size_t)q * ldb] -= s;
-      |             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1937:25: note: at offset -8 into object of size 16 allocated by ‘malloc’
- 1937 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sy_sub_outer’,
-    inlined from ‘_sytrs’ at tests/correctness/../../inference/../linalg/factor.h:1881:13,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1943:20,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1837:19: warning: array subscript [-2147483645, -1] is outside array bounds of ‘mreal[2]’ {aka ‘double[2]’} [-Warray-bounds=]
- 1837 |             mreal f = b[row + (size_t)q * ldb];
-      |                   ^
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1937:25: note: at offset [-17179869160, -8] into object of size 16 allocated by ‘malloc’
- 1937 |     mreal *bv = (mreal*)malloc((size_t)n * nrhs * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1942:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1776:42: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1776 |                 mreal wk = d21 * (d11 * a[(size_t)k * lda + j]
-      |                                         ~^~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1936:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1936 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1942:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1783:40: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1783 |                 a[(size_t)k * lda + j] = wk;
-      |                 ~~~~~~~~~~~~~~~~~~~~~~~^~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1936:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1936 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In function ‘_sytf2’,
-    inlined from ‘_sysv’ at tests/correctness/../../inference/../linalg/factor.h:1942:16,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1781:48: warning: array subscript [-6442450936, -1] is outside array bounds of ‘mreal[4]’ {aka ‘double[4]’} [-Warray-bounds=]
- 1781 |                     a[(size_t)j * lda + i] -= a[(size_t)k * lda + i] * wk
-      |                                               ~^~~~~~~~~~~~~~~~~~~~~
-In function ‘_sysv’,
-    inlined from ‘vec_solve_sym’ at tests/correctness/../../inference/../linalg/solver.h:165:16,
-    inlined from ‘ols_unscaled_variance’ at tests/correctness/../../inference/../regression.h:202:18,
-    inlined from ‘adf_with_deterministic.constprop.isra’ at tests/correctness/../../inference/unit_root.h:181:52:
-tests/correctness/../../inference/../linalg/factor.h:1936:25: note: at offset [-51539607488, -8] into object of size 32 allocated by ‘malloc’
- 1936 |     mreal *av = (mreal*)malloc((size_t)n * n * sizeof(mreal));
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+make: 'tests/correctness/adf_correctness' is up to date.
+make: 'tests/correctness/kpss_correctness' is up to date.
+make: 'tests/correctness/dfgls_correctness' is up to date.
+make: 'tests/correctness/otto_correctness' is up to date.
+make: 'tests/correctness/hlt_union_correctness' is up to date.
+make: 'tests/correctness/hlt_break_correctness' is up to date.
+make: 'tests/correctness/hhlt_correctness' is up to date.
+make: 'tests/correctness/zivot_andrews_correctness' is up to date.
+make: 'tests/correctness/johansen_correctness' is up to date.
+make: 'tests/correctness/engle_granger_correctness' is up to date.
+make: 'tests/correctness/maki_correctness' is up to date.
 make: 'tests/correctness/qlr_test_correctness' is up to date.
 make: 'tests/correctness/kolmogorov_smirnov_correctness' is up to date.
+make: 'tests/correctness/sign_restrictions_correctness' is up to date.
 make: 'tests/correctness/lbfgs_correctness' is up to date.
 make: 'tests/correctness/brent_correctness' is up to date.
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/score_driven_location_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/score_driven_location_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/qvarma_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/qvarma_analytic_agreement.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_analytic_agreement
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/qvarma_gaussian_limit.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_gaussian_limit
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  tests/correctness/qvarma_identification.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_identification
-tests/correctness/qvarma_identification.c: In function ‘curvature_at’:
-tests/correctness/qvarma_identification.c:57:5: warning: missing initializer for field ‘workspace’ of ‘QvarmaFitContext’ [-Wmissing-field-initializers]
-   57 |     QvarmaFitContext context = { y, shape };
-      |     ^~~~~~~~~~~~~~~~
-In file included from tests/correctness/qvarma_identification.c:38:
-tests/correctness/../../sd/qvarma.h:1585:21: note: ‘workspace’ declared here
- 1585 |     QvarmaAnalytic *workspace;
-      |                     ^~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/qvarma_fixed_parameter_fit.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_fixed_parameter_fit
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -c tests/correctness/qvarma_float32_accuracy_float64.c -o tests/correctness/qvarma_float32_accuracy_float64.o
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  tests/correctness/qvarma_float32_accuracy.c tests/correctness/qvarma_float32_accuracy_float64.o -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/qvarma_float32_accuracy
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/var_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/var_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/var_recovery.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/var_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/lp_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/lp_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/lp_recovery.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/lp_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/lp_nl_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/lp_nl_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/lp_nl_recovery.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/lp_nl_recovery
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE tests/correctness/lp_nl_causal_correctness.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/correctness/lp_nl_causal_correctness
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/basis_to_regression.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/basis_to_regression
-In file included from tests/integration/basis_to_regression.c:45:
-tests/integration/../../inference/mcs.h: In function ‘_mcs_shared_tables’:
-tests/integration/../../inference/mcs.h:1074: warning: ignoring ‘#pragma GCC novector’ [-Wunknown-pragmas]
- 1074 | #pragma GCC novector
-      | 
-tests/integration/../../inference/mcs.h:1086: warning: ignoring ‘#pragma GCC novector’ [-Wunknown-pragmas]
- 1086 | #pragma GCC novector
-      | 
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/frame_to_model.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/frame_to_model
-In file included from tests/integration/frame_to_model.c:32:
-tests/integration/../../inference/mcs.h: In function ‘_mcs_shared_tables’:
-tests/integration/../../inference/mcs.h:1074: warning: ignoring ‘#pragma GCC novector’ [-Wunknown-pragmas]
- 1074 | #pragma GCC novector
-      | 
-tests/integration/../../inference/mcs.h:1086: warning: ignoring ‘#pragma GCC novector’ [-Wunknown-pragmas]
- 1086 | #pragma GCC novector
-      | 
+make: 'tests/correctness/score_driven_location_impulse_responses' is up to date.
+make: 'tests/correctness/qvarma_correctness' is up to date.
+make: 'tests/correctness/qvarma_analytic_agreement' is up to date.
+make: 'tests/correctness/qvarma_gaussian_limit' is up to date.
+make: 'tests/correctness/qvarma_identification' is up to date.
+make: 'tests/correctness/qvarma_fixed_parameter_fit' is up to date.
+make: 'tests/correctness/qvarma_float32_accuracy' is up to date.
+make: 'tests/correctness/var_correctness' is up to date.
+make: 'tests/correctness/var_recovery' is up to date.
+make: 'tests/correctness/lp_correctness' is up to date.
+make: 'tests/correctness/lp_recovery' is up to date.
+make: 'tests/correctness/lp_nl_correctness' is up to date.
+make: 'tests/correctness/lp_nl_recovery' is up to date.
+make: 'tests/correctness/lp_nl_causal_correctness' is up to date.
+make: 'tests/integration/basis_to_regression' is up to date.
+make: 'tests/integration/frame_to_model' is up to date.
 make: 'tests/integration/frame_to_tensor' is up to date.
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/tensor_to_optimizer.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/tensor_to_optimizer
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/join_missing_values.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/join_missing_values
-In file included from tests/integration/join_missing_values.c:57:
-tests/integration/../../inference/mcs.h: In function ‘_mcs_shared_tables’:
-tests/integration/../../inference/mcs.h:1074: warning: ignoring ‘#pragma GCC novector’ [-Wunknown-pragmas]
- 1074 | #pragma GCC novector
-      | 
-tests/integration/../../inference/mcs.h:1086: warning: ignoring ‘#pragma GCC novector’ [-Wunknown-pragmas]
- 1086 | #pragma GCC novector
-      | 
-tests/integration/join_missing_values.c: In function ‘expect_abort’:
-tests/integration/join_missing_values.c:81:9: warning: ignoring return value of ‘freopen’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
-   81 |         freopen("/dev/null", "w", stderr);
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/distributed_simulation.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/distributed_simulation
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. tests/integration/optimizer_swap.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/optimizer_swap
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/pipeline_ownership.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/pipeline_ownership
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/npz_to_statistics.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/npz_to_statistics
+make: 'tests/integration/tensor_to_optimizer' is up to date.
+make: 'tests/integration/join_missing_values' is up to date.
+make: 'tests/integration/distributed_simulation' is up to date.
+make: 'tests/integration/optimizer_swap' is up to date.
+make: 'tests/integration/pipeline_ownership' is up to date.
+make: 'tests/integration/npz_to_statistics' is up to date.
 cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. tests/integration/header_composition.c tests/integration/header_composition_reverse.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o tests/integration/header_composition
 In file included from tests/integration/header_composition.c:56:
 tests/integration/../../inference/mcs.h: In function ‘_mcs_shared_tables’:
@@ -282,7 +129,7 @@ tests/integration/../../inference/mcs.h:1086: warning: ignoring ‘#pragma GCC n
  1086 | #pragma GCC novector
       | 
 In file included from tests/integration/../../inference/fast_mcs.h:2,
-                 from tests/integration/header_composition_reverse.c:49:
+                 from tests/integration/header_composition_reverse.c:50:
 tests/integration/../../inference/mcs.h: In function ‘_mcs_shared_tables’:
 tests/integration/../../inference/mcs.h:1074: warning: ignoring ‘#pragma GCC novector’ [-Wunknown-pragmas]
  1074 | #pragma GCC novector
@@ -300,7 +147,7 @@ tests/integration/../../inference/mcs.h:1086: warning: ignoring ‘#pragma GCC n
  1086 | #pragma GCC novector
       | 
 In file included from tests/integration/../../inference/fast_mcs.h:2,
-                 from tests/integration/header_composition_reverse.c:49:
+                 from tests/integration/header_composition_reverse.c:50:
 tests/integration/../../inference/mcs.h: In function ‘_mcs_shared_tables’:
 tests/integration/../../inference/mcs.h:1074: warning: ignoring ‘#pragma GCC novector’ [-Wunknown-pragmas]
  1074 | #pragma GCC novector
@@ -308,27 +155,7 @@ tests/integration/../../inference/mcs.h:1074: warning: ignoring ‘#pragma GCC n
 tests/integration/../../inference/mcs.h:1086: warning: ignoring ‘#pragma GCC novector’ [-Wunknown-pragmas]
  1086 | #pragma GCC novector
       | 
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/band_solve_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/band_solve_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/basis_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/basis_example
-In file included from examples/basis_example.c:4:
-./basis/spline.h: In function ‘_periodic_spline.constprop’:
-./basis/spline.h:1143:16: warning: ‘sites’ may be used uninitialized [-Wmaybe-uninitialized]
- 1143 |     Mat full = _spline_design_raw(knots, nk, sites, n, ord, &none, 1, 0);
-      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-./basis/spline.h:271:19: note: by argument 3 of type ‘const mreal *’ {aka ‘const double *’} to ‘_spline_design_raw.constprop’ declared here
-  271 | static inline Mat _spline_design_raw(const mreal *knots, int nk, const mreal *x, int nx,
-      |                   ^~~~~~~~~~~~~~~~~~
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/encoder.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/encoder
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/hp_filter_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/hp_filter_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/lp_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/lp_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/lp_nl_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/lp_nl_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/   -I. examples/mlp_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/mlp_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/ols_covariance_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/ols_covariance_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/qvarma_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/qvarma_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/qvarma_fixed_parameters_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/qvarma_fixed_parameters_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/singular_draws_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/singular_draws_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/unit_root_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/unit_root_example
-cc -Wall -Wextra -O3 -march=native -ffast-math -fopenmp -I/usr/include/x86_64-linux-gnu/openblas-pthread/  -DMAT_DOUBLE -I. examples/var_example.c -lm -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas  -o examples/var_example
+make: Nothing to be done for 'examples'.
 
 === poly_correctness: PASS ===
 basis/poly.h correctness, float32 build
@@ -1657,6 +1484,30 @@ strided view, float64 build
 
 PASSED, 0 failures
 
+=== sign_restrictions_correctness: PASS ===
+sign restrictions, float64 build
+
+rotations are orthogonal and uniform over the orthogonal group
+  K=1: largest |mean entry| 0.0065 (standard error 0.0050), share of determinant +1 0.4968
+  K=2: largest |mean entry| 0.0052 (standard error 0.0035), share of determinant +1 0.4988
+  K=3: largest |mean entry| 0.0014 (standard error 0.0029), share of determinant +1 0.4969
+  K=4: largest |mean entry| 0.0022 (standard error 0.0025), share of determinant +1 0.4976
+  K=5: largest |mean entry| 0.0018 (standard error 0.0022), share of determinant +1 0.4978
+  K=6: largest |mean entry| 0.0015 (standard error 0.0020), share of determinant +1 0.5036
+  control, K=3 without the flip: mean of Q_11 -0.5017
+  largest |Q'Q - I| 1.55e-15
+  ok
+the 10 and 90 percent band of a uniform 2 x 2 rotation's entries
+  against cos(0.9 pi) = -0.9511, 0 and cos(0.1 pi) = 0.9511: worst gap 0.0100; standard errors 0.0015 in the tails, 0.0079 at the median
+  ok
+the sign check on hand-built cases
+  ok
+bands scale with the responses, repeat with the seed, and carry the restrictions
+  724 of 3000 rotations kept; band of 2.5 R against 2.5 times the band of R: worst gap 8.88e-16
+  ok
+
+PASSED, 0 failures
+
 === lbfgs_correctness: PASS ===
 lbfgs correctness, float64 build
 
@@ -1873,6 +1724,27 @@ standard errors at a fit, and the curvature they rest on
   K=2 p=2 full checked: constrained errors against J H^-1 J' from a finite-difference Jacobian, worst relative gap 1.64e-10
   ok
 slow checks skipped, run make test-stress
+
+PASSED, 0 failures
+
+=== score_driven_location_impulse_responses: PASS ===
+score-driven location model impulse responses, float64 build
+
+the responses against central differences of the model in its structural shocks
+  162 cases; worst gap 2.26e-11 of the responses' largest entry; D_t against the shock the path was built from 3.38e-16 of 1 / (nu - 2); the control at the next period's D misses by at least 3.39e-04
+  ok
+a t-QVARMA without a co-integrated block against the same model written here
+  K=2 q=1 bands, 3000 rotations, 725 kept: worst gap 2.05e-16
+  K=2 q=2 bands, 3000 rotations, 678 kept: worst gap 2.05e-16
+  K=2 q=3 bands, 3000 rotations, 711 kept: worst gap 3.85e-17
+  9 shapes, horizon 10; worst gap 2.31e-16 of the responses' largest entry
+  ok
+the structure of the responses
+  responses at the average D against the average of the responses: worst gap 1.11e-16
+  ok
+sign-restricted bands through the model and through inference/sign_restrictions.h
+  961 of 4000 rotations kept with impact (1,1) > 0 and (2,2) < 0
+  ok
 
 PASSED, 0 failures
 
@@ -2325,4 +2197,4 @@ PASSED, 0 failures
 
 
 === summary ===
-112 passed, 0 failed
+114 passed, 0 failed

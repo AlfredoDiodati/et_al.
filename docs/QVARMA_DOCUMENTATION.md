@@ -1540,6 +1540,15 @@ Both would sit naturally in `linalg/solver.h` or beside `ad.h`. Neither has a
 second caller yet, which is the usual bar here for promoting a helper out of the
 file that needs it.
 
+The sign-restricted bands of `qvarma_impulse_bands` are now also in core, as
+`inference/sign_restrictions.h`, which `sd/score_driven_location.h` uses. They draw
+the same rotations from the same stream: on a t-QVARMA without a co-integrated
+block and the equivalent score-driven location model,
+`tests/correctness/score_driven_location_impulse_responses.c` finds the two
+headers' bands equal to `2.1e-16`. `qvarma_impulse_bands` has not been moved
+onto the core header; it still writes not-a-number into its bands when no rotation
+is kept, where the core header leaves them `NULL`.
+
 The empirical quantile the confidence bands take was in this category and is not
 any more: it is `stats.h`'s `stats_quantile_inplace`, the same selection
 `stats_median` performs with `p` free.
