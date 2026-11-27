@@ -20,9 +20,10 @@ case from sdloc_simulate, seed 90210. Cases, as (K, T, p, score matrices):
 (5, 1000, 2, diagonal), (5, 1000, 2, full).
 
 Per evaluation: value and gradient at the true theta, 200 evaluations per arm
-per round. Per fit: an L-BFGS fit from the truth with sdloc_default_fit_options,
-once per arm per round, the traced arm running the same solver on an objective
-built from sdloc_traced_log_likelihood. Each round runs the two arms back to
+per round. Per fit: an L-BFGS fit from the truth with sdloc_default_fit_options
+and the edge restarts off, since the traced arm has none, once per arm per
+round, the traced arm running the same solver on an objective built from
+sdloc_traced_log_likelihood. Each round runs the two arms back to
 back, traced first on odd rounds and analytic first on even ones; round 0 is a
 discarded warm-up, and 10 rounds are kept. Reported per case: the best time of
 each arm and the median within-round ratio traced/analytic under each order.
@@ -100,7 +101,9 @@ static FitTiming fit_with(int analytic, Mat y, const SdlocParams *start) {
     FitTiming out;
     double begin = now();
     if (analytic) {
-        SdlocFitResult r = sdloc_fit(y, start, sdloc_default_fit_options());
+        SdlocFitOptions options = sdloc_default_fit_options();
+        options.max_edge_restarts = 0;
+        SdlocFitResult r = sdloc_fit(y, start, options);
         out.seconds = now() - begin;
         out.log_likelihood = (double)r.log_likelihood;
         out.gradient_norm = (double)r.gradient_norm;
@@ -150,7 +153,8 @@ int main(void) {
                              { 5, 1000, 2, SDLOC_SCORE_FULL } };
     for (size_t c = 0; c < sizeof cases / sizeof cases[0]; c++) {
         int K = cases[c][0], T = cases[c][1];
-        SdlocSpec spec = sdloc_spec(K, cases[c][2], (SdlocScoreMatrices)cases[c][3], (mreal)0.05);
+        SdlocSpec spec = sdloc_spec(K, cases[c][2], (SdlocScoreMatrices)cases[c][3],
+                                     SDLOC_INVERTIBILITY_IMPOSED, (mreal)0.05);
         SdlocParams m = truth(spec);
         Rng rng = rng_new(90210u, 0);
         Mat y = sdloc_simulate(&rng, &m, T);

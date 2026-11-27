@@ -991,6 +991,16 @@ tests/correctness/lbfgs_correctness: tests/correctness/lbfgs_correctness.c solve
 tests/correctness/score_driven_location_correctness: tests/correctness/score_driven_location_correctness.c $(SDLOC_DEPS) tests/check.h
 	$(CC) $(STAT_CFLAGS) tests/correctness/score_driven_location_correctness.c $(LDLIBS) -o tests/correctness/score_driven_location_correctness
 
+# Not a pass/fail test: the estimate with the invertibility condition imposed
+# against the one where it is only checked, on the same samples; see the file's
+# header. REPLICATIONS sets the samples per truth and length (default 20).
+# Writes out/score_driven_location_invertibility_modes_study.txt and .csv.
+tests/correctness/score_driven_location_invertibility_modes_study: tests/correctness/score_driven_location_invertibility_modes_study.c $(SDLOC_DEPS)
+	$(CC) $(STAT_CFLAGS) -fopenmp tests/correctness/score_driven_location_invertibility_modes_study.c $(LDLIBS) -o tests/correctness/score_driven_location_invertibility_modes_study
+
+study-score_driven_location_invertibility_modes: tests/correctness/score_driven_location_invertibility_modes_study
+	./tests/correctness/score_driven_location_invertibility_modes_study
+
 # float64: it checks standard errors against the sample size, which needs fits
 # that converge. At float32 one of its four fits does not.
 tests/correctness/qvarma_correctness: tests/correctness/qvarma_correctness.c $(QVARMA_DEPS)
@@ -1622,7 +1632,7 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: seri-runs-npz test-mutations bench-npz_read_stages test-hp-state-space-python bench-band_chol_block_threshold bench-band_chol_solve_threshold test-band-chol-python test-brent-python bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-lp-nl-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery study-qvarma_consistency_rate study-qvarma_parameter_space install-core install-model uninstall-core uninstall-model
+.PHONY: seri-runs-npz test-mutations bench-npz_read_stages test-hp-state-space-python bench-band_chol_block_threshold bench-band_chol_solve_threshold test-band-chol-python test-brent-python bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-lp-nl-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery study-qvarma_consistency_rate study-qvarma_parameter_space study-score_driven_location_invertibility_modes install-core install-model uninstall-core uninstall-model
 
 # Where one evaluation of the Woodbury Kalman filter spends its time, stage by
 # stage, on ss/dynamic_factor.h's systems; see the file's header. Writes

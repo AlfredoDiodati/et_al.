@@ -12,7 +12,7 @@ larger ones, and the simulator and the filter agree on the same recursion.
 
 Every check that depends on the structure of the model runs over the specs in
 specs_under_test: one, two and three score lags, with diagonal and with full
-score loadings.
+score loadings, with the invertibility condition imposed and only checked.
 
 Run with make tests/correctness/score_driven_location_correctness. STRESS=1
 adds the parameter recovery check, which fits repeatedly and is slow.
@@ -31,14 +31,21 @@ adds the parameter recovery check, which fits repeatedly and is slow.
 
 static const int lags_under_test[] = { 1, 2, 3 };
 static const SdlocScoreMatrices kinds_under_test[] = { SDLOC_SCORE_DIAGONAL, SDLOC_SCORE_FULL };
+static const SdlocInvertibilityMode modes_under_test[] = { SDLOC_INVERTIBILITY_IMPOSED,
+                                                          SDLOC_INVERTIBILITY_CHECKED };
 #define N_LAGS_UNDER_TEST 3
 #define N_KINDS_UNDER_TEST 2
-#define N_SPECS_UNDER_TEST (N_LAGS_UNDER_TEST * N_KINDS_UNDER_TEST)
+#define N_MODES_UNDER_TEST 2
+#define N_SPECS_UNDER_TEST (N_LAGS_UNDER_TEST * N_KINDS_UNDER_TEST * N_MODES_UNDER_TEST)
 
 static SdlocSpec spec_under_test(int K, int which) {
-    return sdloc_spec(K, lags_under_test[which / N_KINDS_UNDER_TEST],
-                      kinds_under_test[which % N_KINDS_UNDER_TEST], TEST_DELTA);
+    int per_mode = N_LAGS_UNDER_TEST * N_KINDS_UNDER_TEST, structure = which % per_mode;
+    return sdloc_spec(K, lags_under_test[structure / N_KINDS_UNDER_TEST],
+                      kinds_under_test[structure % N_KINDS_UNDER_TEST], modes_under_test[which / per_mode],
+                      TEST_DELTA);
 }
+
+static int is_checked(SdlocSpec spec) { return spec.invertibility == SDLOC_INVERTIBILITY_CHECKED; }
 
 /* theta in the parametrization used before the invertibility condition was
    imposed, which a cache written then holds: b and a diagonal A_j through
@@ -72,8 +79,8 @@ static void copy_into(Mat destination, Mat source) {
 }
 
 static void spec_label(SdlocSpec spec, char *out, int size) {
-    snprintf(out, size, "K=%d p=%d %s", spec.K, spec.p,
-             sdloc_score_matrices_text(spec.score_matrices));
+    snprintf(out, size, "K=%d p=%d %s %s", spec.K, spec.p,
+             sdloc_score_matrices_text(spec.score_matrices), sdloc_invertibility_mode_text(spec.invertibility));
 }
 
 /* A parameter set that is stationary, invertible, well scaled and not
@@ -155,9 +162,9 @@ static void test_parameter_count(void) {
                   K, spec.p, seen, spec.p * per_lag);
         }
     /* the one-lag diagonal model keeps the count it had before p existed */
-    CHECK(sdloc_n_theta(sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA)) == 5, "K=1 p=1 diagonal is 5 parameters");
-    CHECK(sdloc_n_theta(sdloc_spec(3, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA)) == 16, "K=3 p=1 diagonal is 16 parameters");
-    CHECK(sdloc_n_theta(sdloc_spec(3, 2, SDLOC_SCORE_FULL, TEST_DELTA)) == 31, "K=3 p=2 full is 31 parameters");
+    CHECK(sdloc_n_theta(sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA)) == 5, "K=1 p=1 diagonal is 5 parameters");
+    CHECK(sdloc_n_theta(sdloc_spec(3, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA)) == 16, "K=3 p=1 diagonal is 16 parameters");
+    CHECK(sdloc_n_theta(sdloc_spec(3, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA)) == 31, "K=3 p=2 full is 31 parameters");
     printf("  ok\n");
 }
 
@@ -187,7 +194,8 @@ static void test_link_round_trip(void) {
             }
             CHECK_NEAR(back.nu, m.nu, 1e-7, "nu round trip");
 
-            /* unconstrained -> constrained -> unconstrained. b0 and A0 are rescaled so that C0 = 3, which C's homogeneity
+            /* unconstrained -> constrained -> unconstrained. With the condition
+               imposed, b0 and A0 are rescaled so that C0 = 3, which C's homogeneity
                allows: past C0 of about 10, tanh(C0) is within 1e-8 of 1 and the
                radial coordinate is no longer recoverable in floating point. That
                region is checked separately below. The factor of these draws is
@@ -195,7 +203,7 @@ static void test_link_round_trip(void) {
             Vec other = mat_new(n, 1);
             SdlocLayout other_layout = sdloc_layout(spec);
             for (int i = 0; i < n; i++) other.d[i] = (mreal)(0.7 * ((i % 5) - 2) + 0.11);
-            {
+            if (!is_checked(spec)) {
                 SdlocParams probe = sdloc_params_new(spec);
                 for (int k = 0; k < K; k++) {
                     AT(probe.b, k, 0) = other.d[other_layout.b + k];
@@ -223,11 +231,28 @@ static void test_link_round_trip(void) {
             for (int i = 0; i < n; i++)
                 CHECK_NEAR(again.d[i], other.d[i], 1e-6, "theta round trip");
 
+            SdlocLayout layout = sdloc_layout(spec);
+            if (is_checked(spec)) {
+                /* checked: b and a diagonal A_j are tanh of theta, a full A_j
+                   is theta */
+                for (int k = 0; k < K; k++)
+                    CHECK_NEAR(AT(from_theta.b, k, 0), tanh((double)other.d[layout.b + k]), 1e-15, "b = tanh(theta)");
+                for (int j = 0; j < spec.p; j++)
+                    for (int k = 0; k < K; k++)
+                        for (int l = 0; l < K; l++) {
+                            int index = _sdloc_A_theta_index(spec, j, k, l);
+                            double expected = index < 0 ? 0
+                                              : spec.score_matrices == SDLOC_SCORE_FULL ? (double)other.d[index]
+                                              : tanh((double)other.d[index]);
+                            CHECK_NEAR(AT(from_theta.A, k, j * K + l), expected, 1e-15,
+                                       "A = tanh(theta) when diagonal, theta when full");
+                        }
+            }
+
             /* the constraint the link exists to impose: b and every A_j are
                b0 and A0_j scaled by one common positive factor, the scaled
                point satisfies C(theta) = (1 - delta) tanh(C0) with C0 the same
                constant at b0 and A0, and so lies inside the invertible set */
-            SdlocLayout layout = sdloc_layout(spec);
             SdlocParams unscaled = sdloc_params_new(spec);
             copy_into(unscaled.m0, from_theta.m0);
             copy_into(unscaled.Omega_inv, from_theta.Omega_inv);
@@ -239,16 +264,18 @@ static void test_link_round_trip(void) {
                         int index = _sdloc_A_theta_index(spec, j, k, l);
                         if (index >= 0) AT(unscaled.A, k, j * K + l) = other.d[index];
                     }
-            double C_zero = (double)sdloc_invertibility_constant(&unscaled);
-            double lambda = (1 - (double)TEST_DELTA) * tanh(C_zero) / C_zero;
-            double C = (double)sdloc_invertibility_constant(&from_theta);
-            CHECK_CLOSE(C, (1 - (double)TEST_DELTA) * tanh(C_zero), 1e-12, "C(theta) = (1 - delta) tanh(C0)");
-            CHECK(C < 1 - (double)TEST_DELTA, "the link must land inside C <= 1 - delta, got %.6g", C);
-            for (int k = 0; k < K; k++)
-                CHECK_NEAR(AT(from_theta.b, k, 0), lambda * AT(unscaled.b, k, 0), 1e-12, "b = lambda b0");
-            for (int k = 0; k < K; k++)
-                for (int c = 0; c < width; c++)
-                    CHECK_NEAR(AT(from_theta.A, k, c), lambda * AT(unscaled.A, k, c), 1e-12, "A = lambda A0");
+            if (!is_checked(spec)) {
+                double C_zero = (double)sdloc_invertibility_constant(&unscaled);
+                double lambda = (1 - (double)TEST_DELTA) * tanh(C_zero) / C_zero;
+                double C = (double)sdloc_invertibility_constant(&from_theta);
+                CHECK_CLOSE(C, (1 - (double)TEST_DELTA) * tanh(C_zero), 1e-12, "C(theta) = (1 - delta) tanh(C0)");
+                CHECK(C < 1 - (double)TEST_DELTA, "the link must land inside C <= 1 - delta, got %.6g", C);
+                for (int k = 0; k < K; k++)
+                    CHECK_NEAR(AT(from_theta.b, k, 0), lambda * AT(unscaled.b, k, 0), 1e-12, "b = lambda b0");
+                for (int k = 0; k < K; k++)
+                    for (int c = 0; c < width; c++)
+                        CHECK_NEAR(AT(from_theta.A, k, c), lambda * AT(unscaled.A, k, c), 1e-12, "A = lambda A0");
+            }
             for (int j = 0; j < spec.p; j++)
                 for (int k = 0; k < K; k++)
                     for (int l = 0; l < K; l++)
@@ -287,6 +314,7 @@ static void test_link_round_trip(void) {
        unlinking it gives a finite theta. */
     for (int which = 0; which < N_SPECS_UNDER_TEST; which++) {
         SdlocSpec spec = spec_under_test(3, which);
+        if (is_checked(spec)) continue;
         SdlocLayout layout = sdloc_layout(spec);
         Vec far = mat_new(layout.n_theta, 1);
         for (int i = 0; i < layout.n_theta; i++) far.d[i] = (mreal)(0.2 * ((i % 3) - 1));
@@ -441,11 +469,13 @@ the radial map
     b = lambda b0,  A_j = lambda A0_j,  lambda = (1 - delta) tanh(C0) / C0,
 
 with L^-1 formed by forward substitution and every norm from
-reference_spectral_norm. C is the constant at the scaled point.
+reference_spectral_norm. C is the constant at the scaled point. A checked spec
+has no radial map: b and a diagonal A_j are tanh of their coordinates, a full
+A_j is its coordinates, and C is the constant there.
 */
 static void reference_model(const mreal *theta, SdlocSpec spec, ReferenceModel *r) {
     int K = spec.K, p = spec.p, at = 0;
-    int full = spec.score_matrices == SDLOC_SCORE_FULL;
+    int full = spec.score_matrices == SDLOC_SCORE_FULL, checked = is_checked(spec);
     assert(K <= REFERENCE_MAX_K && p <= REFERENCE_MAX_P);
     memset(r, 0, sizeof *r);
     r->K = K;
@@ -456,10 +486,10 @@ static void reference_model(const mreal *theta, SdlocSpec spec, ReferenceModel *
             for (int k = 0; k < K; k++)
                 for (int l = 0; l < K; l++) r->A[j][k][l] = theta[at++];
         } else {
-            for (int k = 0; k < K; k++) r->A[j][k][k] = theta[at++];
+            for (int k = 0; k < K; k++) r->A[j][k][k] = checked ? tanhl(theta[at++]) : theta[at++];
         }
     }
-    for (int k = 0; k < K; k++) r->b[k] = theta[at++];
+    for (int k = 0; k < K; k++) r->b[k] = checked ? tanhl(theta[at++]) : theta[at++];
     for (int k = 0; k < K; k++) { r->L[k * K + k] = expl(theta[at]); r->half_logdet += theta[at]; at++; }
     for (int i = 1; i < K; i++)
         for (int j = 0; j < i; j++) r->L[i * K + j] = theta[at++];
@@ -501,7 +531,7 @@ static void reference_model(const mreal *theta, SdlocSpec spec, ReferenceModel *
                 C += reference_spectral_norm(Psi, K);
             }
         }
-        if (pass == 1) { r->C = C; break; }
+        if (pass == 1 || checked) { r->C = C; break; }
         long double lambda = C == 0 ? 1 - (long double)spec.delta
                                     : (1 - (long double)spec.delta) * tanhl(C) / C;
         for (int k = 0; k < K; k++) r->b[k] *= lambda;
@@ -632,8 +662,8 @@ static void test_the_larger_models_nest_the_smaller(void) {
     for (int K = 1; K <= 3; K++)
         for (int kind = 0; kind < N_KINDS_UNDER_TEST; kind++)
             for (int p = 1; p <= 2; p++) {
-                SdlocSpec small = sdloc_spec(K, p, kinds_under_test[kind], TEST_DELTA);
-                SdlocSpec large = sdloc_spec(K, p + 1, kinds_under_test[kind], TEST_DELTA);
+                SdlocSpec small = sdloc_spec(K, p, kinds_under_test[kind], SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
+                SdlocSpec large = sdloc_spec(K, p + 1, kinds_under_test[kind], SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
                 SdlocParams small_params = plausible_params(small);
                 SdlocParams large_params = sdloc_params_new(large);
                 copy_into(large_params.m0, small_params.m0);
@@ -678,8 +708,8 @@ static void test_the_larger_models_nest_the_smaller(void) {
 
     for (int K = 1; K <= 3; K++)
         for (int p = 1; p <= 3; p++) {
-            SdlocSpec diagonal = sdloc_spec(K, p, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
-            SdlocSpec full = sdloc_spec(K, p, SDLOC_SCORE_FULL, TEST_DELTA);
+            SdlocSpec diagonal = sdloc_spec(K, p, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
+            SdlocSpec full = sdloc_spec(K, p, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
             SdlocParams diagonal_params = plausible_params(diagonal);
             SdlocParams full_params = sdloc_params_new(full);
             copy_into(full_params.m0, diagonal_params.m0);
@@ -801,9 +831,11 @@ the two-period minimum to 150, nu from 2.5, near the model's lower bound, to
 1e10, and random parameter vectors at each, drawn around a stationary point so
 the recursion stays bounded: five per cell for the one-lag diagonal model, two
 for the others, each moved off the truth by perturb_off_the_truth. At T = 2
-and 3 the longer lags reach before the first period. At nu = 1e14 the two nu
-gradients differ by more than 1e-9 in some draws, so past 1e10 each is
-compared against a long double reference instead, in
+and 3 the longer lags reach before the first period. At nu = 1e10 the two nu
+gradients differ by up to 1.3e-9 in some draws (K = 4, two diagonal lags,
+checked, T = 150: analytic -4.71978467764, traced -4.71978468367, a long
+double central difference -4.71978468639), so from 1e10 on the nu
+coordinate is compared against a long double reference instead, in
 test_nu_gradient_at_a_light_tail.
 */
 static void test_analytic_against_traced(void) {
@@ -844,6 +876,7 @@ static void test_analytic_against_traced(void) {
                         CHECK(value_error < 1e-9, "%s T=%d nu=%g: value %.17g against traced %.17g",
                               label, T, nus[v], (double)value, (double)reference);
                         for (int i = 0; i < n; i++) {
+                            if (i == sdloc_layout(spec).nu && nus[v] >= 1e10) continue;
                             double size = fabs((double)traced.d[i]) > 1 ? fabs((double)traced.d[i]) : 1;
                             double error = fabs((double)analytic.d[i] - (double)traced.d[i]) / size;
                             if (error > worst_gradient) worst_gradient = error;
@@ -885,8 +918,9 @@ writing the same parameters, more than the tolerance under test.
 static void test_nu_gradient_at_a_light_tail(void) {
     printf("the nu gradient at a light tail, against a long double reference\n");
     const double nus[] = { 1e6, 1e10, 1e14 };
-    const SdlocSpec specs[] = { sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA), sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA),
-                                sdloc_spec(1, 2, SDLOC_SCORE_FULL, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA) };
+    const SdlocSpec specs[] = { sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA), sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA),
+                                sdloc_spec(1, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA),
+                                sdloc_spec(4, 2, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA) };
     for (size_t which = 0; which < sizeof specs / sizeof specs[0]; which++)
         for (size_t v = 0; v < sizeof nus / sizeof nus[0]; v++) {
             SdlocSpec spec = specs[which];
@@ -966,7 +1000,9 @@ state in both, so only the first block of the state differs.
 The runs are reference_filter, in long double, at parameters drawn far from the
 plausible set, 1.5 per coordinate on the unconstrained scale, so that many
 land near the edge of the set, on a series simulated from the plausible
-parameters; 20 draws per spec, T = 300, starting 5 apart in the L norm.
+parameters; 20 draws per spec, T = 300, starting 5 apart in the L norm. Only
+the imposed specs: a checked spec draws its parameters from outside the set
+too, where the theorem says nothing.
 
 The negative control is the model a draw of the earlier sweep had before the
 condition existed, K = 1 with two full lags: a_1 = -0.11, a_2 = -0.20, b = 0.91,
@@ -980,6 +1016,7 @@ static void test_the_filter_forgets_its_start(void) {
     for (int which = 0; which < N_SPECS_UNDER_TEST; which++)
         for (int K = 1; K <= 3; K++) {
             SdlocSpec spec = spec_under_test(K, which);
+            if (is_checked(spec)) continue;
             int p = spec.p, T = 300;
             double delta = (double)spec.delta;
             double rho = p == 1 ? 1 : pow(1 - delta / 2, 1.0 / (p - 1));
@@ -1112,6 +1149,132 @@ static void test_invertibility_diagnostics(void) {
     printf("  ok\n");
 }
 
+/*
+A fit whose maximum lies on the edge of the invertible set, where the
+condition binds. On the standard-error test's sample, K = 2 with two full lags,
+T = 800 and a true C of 0.654, the fit without the condition ends at C = 1.142,
+so the fit with it must end on the edge, converged, report the edge, and keep
+that through the cache. The checked fit of the same sample must report the
+condition failed. A fit inside the set, one diagonal lag on its own sample,
+must not report the edge.
+*/
+static void test_a_fit_on_the_edge(void) {
+    printf("a fit whose maximum is on the edge of the invertible set\n");
+    SdlocSpec spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
+    SdlocParams truth = plausible_params(spec);
+    Rng rng = rng_new(8642u, 0);
+    Mat y = sdloc_simulate(&rng, &truth, 800);
+    SdlocFitResult result = sdloc_fit(y, &truth, sdloc_default_fit_options());
+    double C = (double)sdloc_invertibility_constant(&result.params);
+    printf("  %d iterations, %s, log-likelihood %.6f, gradient norm %.3g, C %.12f\n", result.niter,
+           lbfgs_status_text(result.status), (double)result.log_likelihood, (double)result.gradient_norm, C);
+    CHECK(result.is_at_invertibility_edge, "the fit must report that it is on the edge, C %.12f", C);
+    CHECK(result.is_converged, "the fit must converge, got %s", lbfgs_status_text(result.status));
+
+    const char *path = "out/score_driven_location_correctness_edge.json";
+    sdloc_save_fit(&result, y, path);
+    SdlocFitResult loaded = sdloc_fit_result_new(spec);
+    CHECK(sdloc_load_fit(&loaded, y, path) == 1, "an edge fit must load back");
+    CHECK(loaded.is_at_invertibility_edge, "the flag must survive the cache");
+    sdloc_fit_result_free(&loaded);
+    remove(path);
+
+    /* the same sample with the condition only checked: the maximum is
+       outside the set, the check must say so, the likelihood is at least the
+       imposed one, and the flag must survive the cache */
+    SdlocSpec checked_spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA);
+    SdlocParams checked_truth = plausible_params(checked_spec);
+    SdlocFitResult checked = sdloc_fit(y, &checked_truth, sdloc_default_fit_options());
+    double checked_C = (double)sdloc_invertibility_constant(&checked.params);
+    printf("  checked: %d iterations, %s, log-likelihood %.6f, gradient norm %.3g, C %.6f\n", checked.niter,
+           lbfgs_status_text(checked.status), (double)checked.log_likelihood,
+           (double)checked.gradient_norm, checked_C);
+    CHECK(checked.is_converged, "the checked fit must converge, got %s", lbfgs_status_text(checked.status));
+    CHECK(checked_C > 1 - (double)TEST_DELTA, "the checked maximum must be outside the set, C %.6f", checked_C);
+    CHECK(!checked.satisfies_invertibility_condition && !checked.is_at_invertibility_edge,
+          "the checked fit must report the condition failed and no edge");
+    CHECK(checked.log_likelihood >= result.log_likelihood - 1e-6,
+          "the larger set cannot have the lower maximum: %.9f against %.9f",
+          (double)checked.log_likelihood, (double)result.log_likelihood);
+    sdloc_save_fit(&checked, y, path);
+    SdlocFitResult checked_loaded = sdloc_fit_result_new(checked_spec);
+    CHECK(sdloc_load_fit(&checked_loaded, y, path) == 1, "a checked fit outside the set must load back");
+    CHECK(!checked_loaded.satisfies_invertibility_condition, "the failed check must survive the cache");
+    SdlocFitResult as_imposed = sdloc_fit_result_new(spec);
+    CHECK(sdloc_load_fit(&as_imposed, y, path) == 0, "a checked cache must not load into an imposed spec");
+    sdloc_fit_result_free(&as_imposed);
+    sdloc_fit_result_free(&checked_loaded);
+    remove(path);
+    sdloc_fit_result_free(&checked); sdloc_params_free(&checked_truth);
+
+    SdlocSpec inside_spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
+    SdlocParams inside_truth = plausible_params(inside_spec);
+    Rng other = rng_new(90210u, 0);
+    Mat inside_y = sdloc_simulate(&other, &inside_truth, 400);
+    SdlocFitResult inside = sdloc_fit(inside_y, &inside_truth, sdloc_default_fit_options());
+    CHECK(!inside.is_at_invertibility_edge, "a fit inside the set must not report the edge, C %.6g",
+          (double)sdloc_invertibility_constant(&inside.params));
+
+    sdloc_fit_result_free(&inside); mat_free(inside_y); sdloc_params_free(&inside_truth);
+    sdloc_fit_result_free(&result); mat_free(y); sdloc_params_free(&truth);
+    printf("  ok\n");
+}
+
+/*
+An imposed fit that walks out to the edge, where the radial coordinate
+saturates, and cannot walk back although the maximum over the set is inside
+it. The sample is the standard-error test's truth at T = 800 on stream
+(8642 + 7, 0), draw 7 of the small-loadings cells of
+tests/correctness/score_driven_location_invertibility_modes_study.c: with the
+restarts off the imposed fit stops on the edge 0.086 below the checked fit,
+whose estimate is inside the set at C = 0.80. With them on, the imposed fit
+must find that estimate, and report the restart through the cache.
+*/
+static void test_a_fit_trapped_on_the_edge_is_restarted(void) {
+    printf("an imposed fit trapped on the edge is restarted from inside the set\n");
+    SdlocSpec spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
+    SdlocSpec checked_spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA);
+    SdlocParams truth = plausible_params(spec), checked_truth = plausible_params(checked_spec);
+    Rng rng = rng_new(8642u + 7u, 0);
+    Mat y = sdloc_simulate(&rng, &truth, 800);
+
+    SdlocFitOptions without = sdloc_default_fit_options();
+    without.max_edge_restarts = 0;
+    SdlocFitResult trapped = sdloc_fit(y, &truth, without);
+    SdlocFitResult restarted = sdloc_fit(y, &truth, sdloc_default_fit_options());
+    SdlocFitResult checked = sdloc_fit(y, &checked_truth, sdloc_default_fit_options());
+    printf("  without restarts: log-likelihood %.6f, C %.6f; with: %.6f, C %.6f, %d restarts; checked %.6f, C %.6f\n",
+           (double)trapped.log_likelihood, (double)sdloc_invertibility_constant(&trapped.params),
+           (double)restarted.log_likelihood, (double)sdloc_invertibility_constant(&restarted.params),
+           restarted.edge_restarts, (double)checked.log_likelihood,
+           (double)sdloc_invertibility_constant(&checked.params));
+
+    CHECK(trapped.is_at_invertibility_edge && trapped.edge_restarts == 0,
+          "the control: without restarts the fit must stop on the edge");
+    CHECK(checked.satisfies_invertibility_condition, "the checked estimate must be inside the set");
+    CHECK(trapped.log_likelihood < checked.log_likelihood - 0.05,
+          "the control: the trapped fit must be below the maximum inside the set");
+    CHECK(restarted.edge_restarts >= 1 && !restarted.is_at_invertibility_edge && restarted.is_converged,
+          "the restarted fit must leave the edge and converge");
+    CHECK_NEAR(restarted.log_likelihood, checked.log_likelihood, 1e-5,
+               "the restarted fit must reach the maximum inside the set");
+    for (int k = 0; k < 2; k++)
+        CHECK_NEAR(AT(restarted.params.b, k, 0), AT(checked.params.b, k, 0), 1e-3,
+                   "the restarted estimate of b must be the checked one");
+
+    const char *path = "out/score_driven_location_correctness_restart.json";
+    sdloc_save_fit(&restarted, y, path);
+    SdlocFitResult loaded = sdloc_fit_result_new(spec);
+    CHECK(sdloc_load_fit(&loaded, y, path) == 1, "a restarted fit must load back");
+    CHECK(loaded.edge_restarts == restarted.edge_restarts, "the restart count must survive the cache");
+    sdloc_fit_result_free(&loaded);
+    remove(path);
+
+    sdloc_fit_result_free(&trapped); sdloc_fit_result_free(&restarted); sdloc_fit_result_free(&checked);
+    mat_free(y); sdloc_params_free(&truth); sdloc_params_free(&checked_truth);
+    printf("  ok\n");
+}
+
 static void test_simulator_matches_the_filter(void) {
     printf("the simulator and the filter agree on the recursion\n");
     for (int which = 0; which < N_SPECS_UNDER_TEST; which++) {
@@ -1214,7 +1377,8 @@ failure.
 */
 static void test_infeasible_points_return_a_sentinel(void) {
     printf("an unusable scale returns infinity rather than aborting\n");
-    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA) };
+    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA),
+                                sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA) };
     for (size_t which = 0; which < sizeof specs / sizeof specs[0]; which++) {
         SdlocSpec spec = specs[which];
         int K = spec.K, T = 40;
@@ -1277,7 +1441,8 @@ static void test_infeasible_points_return_a_sentinel(void) {
    before the last step. */
 static void test_fit_diagnostics_describe_the_result(void) {
     printf("the reported likelihood and gradient belong to the returned parameters\n");
-    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA) };
+    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA),
+                                sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA) };
     for (size_t which = 0; which < sizeof specs / sizeof specs[0]; which++) {
         SdlocSpec spec = specs[which];
         int T = 400;
@@ -1324,11 +1489,24 @@ static void test_fit_diagnostics_describe_the_result(void) {
         CHECK(result.is_converged == status_says_converged,
               "is_converged (%d) must agree with status %s",
               result.is_converged, lbfgs_status_text(result.status));
+
+        /* the invertibility flags are C(theta) against 1 - delta at the
+           returned parameters, the reference's C rather than the header's */
+        ReferenceModel fitted;
+        reference_model(theta.d, spec, &fitted);
+        int reference_satisfies = fitted.C <= 1 - (long double)TEST_DELTA;
+        CHECK(result.satisfies_invertibility_condition == reference_satisfies,
+              "satisfies_invertibility_condition %d against the reference's C %.9Lg",
+              result.satisfies_invertibility_condition, fitted.C);
+        if (is_checked(spec))
+            CHECK(!result.is_at_invertibility_edge, "a checked fit has no edge to be on");
+        else
+            CHECK(result.satisfies_invertibility_condition, "an imposed fit satisfies the condition");
         char label[64];
         spec_label(spec, label, sizeof label);
-        printf("  %s: converged %s after %d iterations, gradient norm %.4g, status: %s\n",
+        printf("  %s: converged %s after %d iterations, gradient norm %.4g, status: %s, C %.4Lg\n",
                label, result.is_converged ? "yes" : "no", result.niter,
-               (double)result.gradient_norm, lbfgs_status_text(result.status));
+               (double)result.gradient_norm, lbfgs_status_text(result.status), fitted.C);
 
         mat_free(gradient); mat_free(theta);
         sdloc_fit_result_free(&result);
@@ -1342,7 +1520,7 @@ static void test_fit_diagnostics_describe_the_result(void) {
    another sample is worse than no cache. */
 static void test_parameter_cache(void) {
     printf("the JSON cache round trips and refuses a different sample\n");
-    SdlocSpec spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA);
+    SdlocSpec spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
     int K = spec.K, T = 150;
     SdlocParams truth = plausible_params(spec);
     Rng rng = rng_new(1357u, 0);
@@ -1394,7 +1572,7 @@ header had then, one diagonal lag, and must load as that and as nothing else.
 static void test_cache_refuses_another_spec(void) {
     printf("a cache is refused by a model of another spec\n");
     int T = 100;
-    SdlocSpec written_spec = sdloc_spec(1, 2, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
+    SdlocSpec written_spec = sdloc_spec(1, 2, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
     SdlocParams truth = plausible_params(written_spec);
     Rng rng = rng_new(1122u, 0);
     Mat y = sdloc_simulate(&rng, &truth, T);
@@ -1405,8 +1583,8 @@ static void test_cache_refuses_another_spec(void) {
     SdlocFitResult fit = sdloc_fit(y, &truth, capped);
     sdloc_save_fit(&fit, y, path);
 
-    const SdlocSpec others[] = { sdloc_spec(1, 2, SDLOC_SCORE_FULL, TEST_DELTA), sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA),
-                                 sdloc_spec(1, 3, SDLOC_SCORE_DIAGONAL, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL, TEST_DELTA) };
+    const SdlocSpec others[] = { sdloc_spec(1, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA), sdloc_spec(1, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA),
+                                 sdloc_spec(1, 3, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA) };
     CHECK(sdloc_n_theta(others[0]) == sdloc_n_theta(written_spec),
           "the setup needs a mismatch of the same parameter count");
     for (size_t i = 0; i < sizeof others / sizeof others[0]; i++) {
@@ -1424,7 +1602,7 @@ static void test_cache_refuses_another_spec(void) {
 
     /* the format from before p existed: K and theta, nothing else, theta in
        the parametrization of that time */
-    SdlocSpec one_lag = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
+    SdlocSpec one_lag = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
     SdlocParams old_model = plausible_params(one_lag);
     Vec theta = mat_new(sdloc_n_theta(one_lag), 1);
     previous_theta(&old_model, theta);
@@ -1444,11 +1622,11 @@ static void test_cache_refuses_another_spec(void) {
         CHECK_NEAR(AT(reloaded.Omega_inv, k, k), AT(old_model.Omega_inv, k, k), 1e-12, "the old file's factor");
     }
     CHECK_NEAR(reloaded.nu, old_model.nu, 1e-10, "the old file's nu");
-    SdlocParams as_full = sdloc_params_new(sdloc_spec(2, 1, SDLOC_SCORE_FULL, TEST_DELTA));
+    SdlocParams as_full = sdloc_params_new(sdloc_spec(2, 1, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA));
     CHECK(sdloc_load_params(&as_full, path) == 0, "a file without score_matrices is not a full model");
-    SdlocParams as_two_lags = sdloc_params_new(sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL, TEST_DELTA));
+    SdlocParams as_two_lags = sdloc_params_new(sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA));
     CHECK(sdloc_load_params(&as_two_lags, path) == 0, "a file without p is not a two-lag model");
-    SdlocParams other_margin = sdloc_params_new(sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, (mreal)0.3));
+    SdlocParams other_margin = sdloc_params_new(sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, (mreal)0.3));
     CHECK(sdloc_load_params(&other_margin, path) == 1,
           "a file without delta loads for any margin its parameters satisfy, C = %.3f here",
           (double)sdloc_invertibility_constant(&old_model));
@@ -1472,6 +1650,43 @@ static void test_cache_refuses_another_spec(void) {
     mreal before = AT(untouched.b, 0, 0);
     CHECK(sdloc_load_params(&untouched, path) == 0, "an old file outside the invertible set is refused");
     CHECK(AT(untouched.b, 0, 0) == before, "a refused old file leaves the model alone");
+
+    /* a checked spec uses the parametrization the old file was written in,
+       so the same file loads into it as it stands, outside the set or not */
+    SdlocSpec one_lag_checked = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA);
+    SdlocParams as_checked = sdloc_params_new(one_lag_checked);
+    CHECK(sdloc_load_params(&as_checked, path) == 1, "an old file outside the set loads into a checked spec");
+    for (int k = 0; k < 2; k++) {
+        CHECK_NEAR(AT(as_checked.b, k, 0), AT(outside.b, k, 0), 1e-12, "the old file's b, checked");
+        CHECK_NEAR(AT(as_checked.A, k, k), AT(outside.A, k, k), 1e-12, "the old file's loading, checked");
+    }
+    CHECK(!sdloc_satisfies_invertibility_condition(&as_checked), "and it does not satisfy the condition");
+    sdloc_params_free(&as_checked);
+
+    /* a file written when the condition was always imposed carries delta and
+       no invertibility field: it is an imposed file, not a checked one */
+    root = sdloc_params_to_json(&old_model);
+    json_object_set(root, "invertibility", json_null());
+    json_write_file(root, path);
+    json_free(root);
+    SdlocParams imposed_era = sdloc_params_new(one_lag);
+    SdlocParams imposed_era_checked = sdloc_params_new(one_lag_checked);
+    CHECK(sdloc_load_params(&imposed_era_checked, path) == 0, "a file with a damaged invertibility field is refused");
+    _sdloc_unlink(&old_model, theta);
+    root = json_object();
+    json_object_set(root, "K", json_number(2));
+    json_object_set(root, "p", json_number(1));
+    json_object_set(root, "score_matrices", json_string("diagonal"));
+    json_object_set(root, "delta", json_number((double)TEST_DELTA));
+    values = json_array();
+    for (int i = 0; i < theta.r; i++) json_array_push(values, json_number((double)theta.d[i]));
+    json_object_set(root, "theta", values);
+    json_write_file(root, path);
+    json_free(root);
+    CHECK(sdloc_load_params(&imposed_era, path) == 1, "a file with delta and no mode loads as imposed");
+    CHECK_NEAR(AT(imposed_era.b, 0, 0), AT(old_model.b, 0, 0), 1e-12, "the imposed-era file's b");
+    CHECK(sdloc_load_params(&imposed_era_checked, path) == 0, "and not as checked");
+    sdloc_params_free(&imposed_era); sdloc_params_free(&imposed_era_checked);
     sdloc_params_free(&outside); sdloc_params_free(&untouched); sdloc_params_free(&other_margin);
 
     sdloc_params_free(&reloaded); sdloc_params_free(&as_full); sdloc_params_free(&as_two_lags);
@@ -1495,7 +1710,7 @@ first run's number every time.
 */
 static void test_a_resumed_chain_accumulates(void) {
     printf("a chain of resumed fits accumulates its iterations and its runs\n");
-    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
+    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
     int T = 150;
     SdlocParams truth = plausible_params(spec);
     Rng rng = rng_new(2468u, 0);
@@ -1594,7 +1809,7 @@ static void test_a_resumed_chain_accumulates(void) {
           lbfgs_status_text(reloaded.status), lbfgs_status_text(finished.status));
 
     /* A model of another spec does not pick up this chain. */
-    SdlocParams other_start = plausible_params(sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL, TEST_DELTA));
+    SdlocParams other_start = plausible_params(sdloc_spec(2, 2, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA));
     SdlocFitResult other = sdloc_fit_cached(y, &other_start, capped, path, 0);
     CHECK(other.nruns == 1 && other.params.spec.p == 2,
           "a cache of one lag must not be resumed by a two-lag fit, got %d runs", other.nruns);
@@ -1615,7 +1830,7 @@ static void test_a_resumed_chain_accumulates(void) {
    the wrong type aborted inside the accessors. */
 static void test_cache_refuses_a_damaged_file(void) {
     printf("a truncated cache, and one whose values have the wrong type, are refused\n");
-    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
+    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
     int T = 120;
     SdlocParams truth = plausible_params(spec);
     Rng rng = rng_new(4242u, 0);
@@ -1671,7 +1886,7 @@ written into the model and then reported as not loaded.
 */
 static void test_cache_refuses_a_file_it_cannot_use(void) {
     printf("an incomplete cache is refused, and a refused load changes nothing\n");
-    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
+    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
     int T = 120;
     SdlocParams truth = plausible_params(spec);
     Rng rng = rng_new(3690u, 0);
@@ -1773,7 +1988,7 @@ static void write_sdloc_cache_in_the_original_format(const SdlocFitResult *fit, 
 
 static void test_a_cache_from_before_the_reasons_were_recorded(void) {
     printf("a cache in the original format still loads, and is not refitted\n");
-    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
+    SdlocSpec spec = sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
     int T = 150;
     SdlocParams truth = plausible_params(spec);
     Rng rng = rng_new(9753u, 0);
@@ -1871,7 +2086,8 @@ static void test_a_cache_from_before_the_reasons_were_recorded(void) {
 
 static void test_standard_errors(void) {
     printf("standard errors at a fit, and the curvature they rest on\n");
-    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA) };
+    const SdlocSpec specs[] = { sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA),
+                                sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA), sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_CHECKED, TEST_DELTA) };
     for (size_t which = 0; which < sizeof specs / sizeof specs[0]; which++) {
         SdlocSpec spec = specs[which];
         int K = spec.K, T = 800;
@@ -1987,7 +2203,7 @@ from -0.48 to 0.72 against a true 0.50, each with a higher likelihood than the
 truth's.
 */
 static SdlocParams identified_two_full_lags(void) {
-    SdlocSpec spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL, TEST_DELTA);
+    SdlocSpec spec = sdloc_spec(2, 2, SDLOC_SCORE_FULL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
     SdlocParams m = plausible_params(spec);
     for (int k = 0; k < 2; k++) {
         AT(m.b, k, 0) = (mreal)(0.7 - 0.1 * k);
@@ -2020,7 +2236,7 @@ on the edge C = 1 - delta.
 static void test_recovery(void) {
     printf("parameter recovery from a perturbed start\n");
     for (int which = 0; which < 2; which++) {
-        SdlocParams truth = which == 0 ? plausible_params(sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA))
+        SdlocParams truth = which == 0 ? plausible_params(sdloc_spec(2, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA))
                                        : identified_two_full_lags();
         SdlocSpec spec = truth.spec;
         SdlocLayout layout = sdloc_layout(spec);
@@ -2102,7 +2318,7 @@ static void test_light_tail_stays_computable(void) {
     const int K = 2, T = 30;
     const double pi = 3.14159265358979323846, omega = 1.2;
     const double m0[2] = { 0.3, -0.15 };
-    SdlocSpec spec = sdloc_spec(K, 1, SDLOC_SCORE_DIAGONAL, TEST_DELTA);
+    SdlocSpec spec = sdloc_spec(K, 1, SDLOC_SCORE_DIAGONAL, SDLOC_INVERTIBILITY_IMPOSED, TEST_DELTA);
     SdlocLayout layout = sdloc_layout(spec);
 
     Rng rng = rng_new(20260831u, 11u);
@@ -2168,6 +2384,8 @@ int main(void) {
     test_simulator_matches_the_filter();
     test_the_filter_forgets_its_start();
     test_invertibility_diagnostics();
+    test_a_fit_on_the_edge();
+    test_a_fit_trapped_on_the_edge_is_restarted();
     test_infeasible_points_return_a_sentinel();
     test_fit_diagnostics_describe_the_result();
     test_parameter_cache();

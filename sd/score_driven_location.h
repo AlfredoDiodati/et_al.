@@ -64,7 +64,9 @@ condition is C(theta) <= 1 - delta, delta in (0, 1) a field of the spec, with
     Phi~ = L^-1 diag(b) L,  Psi~_j = r L^-1 A_j L^-T L,  r = sqrt((nu+K)(nu+2)) / nu,
 
 ||.|| the spectral norm and L = Omega_inv. This is a contraction condition
-derived for this model, summarized with its constants in
+derived for this model, proved in
+docs/SCORE_DRIVEN_LOCATION_INVERTIBILITY_DERIVATION_DOCUMENTATION.md and
+summarized against this file in
 docs/SCORE_DRIVEN_LOCATION_INVERTIBILITY_DOCUMENTATION.md; the derivation
 writes the update as Psi_j u(v) with u(v) = nu/(nu + q) v, which is this
 file's A_j s_t with Psi_j = r A_j L^-T, and this file's diagonal b is its
@@ -74,7 +76,16 @@ Complex Dynamic Models, Definitions 5.1 and 5.2, through its Theorem 4.23.
 C(theta) < 1 also gives max_k |b_k| < 1, so the location is stationary as
 well.
 
-The condition is imposed by the link, a radial map of the derivation's
+The spec's invertibility field decides what the fit does with the condition.
+Imposed, the fit maximizes the likelihood over the set C(theta) <= 1 - delta.
+Checked, it maximizes over every model with |b_k| < 1, and the condition is
+evaluated at the estimate and reported in SdlocFitResult's
+satisfies_invertibility_condition; the condition is sufficient, so a model
+that fails it may still be invertible. Checked, b and a diagonal A_j are
+tanh of their coordinates of theta and a full A_j is theta itself, the
+parametrization of this file before the condition existed.
+
+Imposed, the condition is enforced by the link, a radial map of the derivation's
 Section 5 applied to (b, A) rather than to (phi, Psi~), so that a diagonal B
 and diagonal A_j stay diagonal: with b0 and A0_j the free coordinates of theta
 and C0 = C(b0, A0; L, nu),
@@ -99,35 +110,50 @@ two against each other.
 
 typedef enum { SDLOC_SCORE_DIAGONAL, SDLOC_SCORE_FULL } SdlocScoreMatrices;
 
+/* Whether the fit maximizes over the set C(theta) <= 1 - delta (imposed), or
+   over every stationary model, with the condition evaluated at the estimate
+   and reported (checked). The two parametrize b and the A_j differently; see
+   the comment at the top of this file. */
+typedef enum { SDLOC_INVERTIBILITY_IMPOSED, SDLOC_INVERTIBILITY_CHECKED } SdlocInvertibilityMode;
+
 /* The structure of the model: K series, p lagged scores, whether the A_j are
-   diagonal or full, and delta, the margin of the invertibility condition
-   C(theta) <= 1 - delta. Plain scalars, no allocation. */
+   diagonal or full, whether the invertibility condition C(theta) <= 1 - delta
+   is imposed or only checked, and delta, its margin. Plain scalars, no
+   allocation. */
 typedef struct {
     int K;
     int p;
     SdlocScoreMatrices score_matrices;
+    SdlocInvertibilityMode invertibility;
     mreal delta;
 } SdlocSpec;
 
-static inline SdlocSpec sdloc_spec(int K, int p, SdlocScoreMatrices score_matrices, mreal delta) {
+static inline SdlocSpec sdloc_spec(int K, int p, SdlocScoreMatrices score_matrices,
+                                   SdlocInvertibilityMode invertibility, mreal delta) {
     assert(K > 0 && p > 0);
     assert(score_matrices == SDLOC_SCORE_DIAGONAL || score_matrices == SDLOC_SCORE_FULL);
+    assert(invertibility == SDLOC_INVERTIBILITY_IMPOSED || invertibility == SDLOC_INVERTIBILITY_CHECKED);
     assert(delta > 0 && delta < 1);
     SdlocSpec spec;
     spec.K = K;
     spec.p = p;
     spec.score_matrices = score_matrices;
+    spec.invertibility = invertibility;
     spec.delta = delta;
     return spec;
 }
 
 static inline int sdloc_spec_equal(SdlocSpec left, SdlocSpec right) {
     return left.K == right.K && left.p == right.p && left.score_matrices == right.score_matrices
-           && left.delta == right.delta;
+           && left.invertibility == right.invertibility && left.delta == right.delta;
 }
 
 static inline const char *sdloc_score_matrices_text(SdlocScoreMatrices score_matrices) {
     return score_matrices == SDLOC_SCORE_FULL ? "full" : "diagonal";
+}
+
+static inline const char *sdloc_invertibility_mode_text(SdlocInvertibilityMode invertibility) {
+    return invertibility == SDLOC_INVERTIBILITY_CHECKED ? "checked" : "imposed";
 }
 
 /*
@@ -135,8 +161,10 @@ Where each block starts in theta, generated from the spec. The order is m0
 (K), the score loadings A_1 ... A_p, b (K), the diagonal of Omega_inv (K), its
 strict lower triangle (K(K-1)/2), nu (1). Each A_j takes A_per_lag
 coordinates: its K diagonal entries when diagonal, its K x K entries in
-row-major order when full. The b and A blocks hold the free coordinates b0 and
-A0 of the radial map described at the top of this file.
+row-major order when full. With the condition imposed, the b and A blocks hold
+the free coordinates b0 and A0 of the radial map described at the top of this
+file; checked, they hold atanh(b), atanh of a diagonal A_j's entries, and a
+full A_j's entries.
 */
 typedef struct {
     int m0, A, A_per_lag, b, Omega_inv_diagonal, Omega_inv_below, nu, n_theta;
@@ -505,6 +533,24 @@ static inline mreal sdloc_invertibility_constant(const SdlocParams *m) {
     return C;
 }
 
+/* A model whose C(theta) is within this fraction of 1 - delta is on the edge
+   of the invertible set: the link puts it there only once tanh(C0) is within
+   1e-6 of 1, C0 above about 7.25. */
+#define SDLOC_EDGE_TOLERANCE 1e-6
+
+static inline int sdloc_is_at_invertibility_edge(const SdlocParams *m) {
+    if (m->spec.invertibility != SDLOC_INVERTIBILITY_IMPOSED) return 0;
+    return sdloc_invertibility_constant(m) >= (1 - m->spec.delta) * (1 - SDLOC_EDGE_TOLERANCE);
+}
+
+/* Whether m satisfies C(theta) <= 1 - delta. Always true of a model the
+   imposed link produced; a C that overflowed is a failure. */
+static inline int sdloc_satisfies_invertibility_condition(const SdlocParams *m) {
+    mreal C = sdloc_invertibility_constant(m);
+    if (MISNAN(C) || MISINF(C)) return 0;
+    return C <= (1 - m->spec.delta) * (1 + 16 * MEPS);
+}
+
 /* A[j] is A_{j+1}: a K x 1 node holding its diagonal when the spec says
    diagonal, a K x K node when full. */
 typedef struct {
@@ -548,6 +594,25 @@ static inline SdlocLinked _sdloc_link(Tape *tape, Node *theta, SdlocSpec spec) {
 
     linked.nu = ad_add(tape, ad_exp(tape, ad_slice(tape, theta, layout.nu, layout.nu + 1, 0, 1)),
                        sdloc_constant_node(tape, mat_fill(1, 1, 2)));
+
+    /* Checked: b and a diagonal A_j through tanh, a full A_j as theta. */
+    if (spec.invertibility == SDLOC_INVERTIBILITY_CHECKED) {
+        linked.is_usable = 1;
+        for (int k = 0; k < K; k++) {
+            mreal diagonal = AT(linked.Omega_inv->val, k, k);
+            if (diagonal == 0 || MISINF(diagonal) || MISNAN(diagonal)) linked.is_usable = 0;
+        }
+        linked.b = ad_tanh(tape, ad_slice(tape, theta, layout.b, layout.b + K, 0, 1));
+        linked.A = (Node**)malloc((size_t)spec.p * sizeof(Node*));
+        assert(linked.A);
+        for (int j = 0; j < spec.p; j++) {
+            int at = layout.A + j * layout.A_per_lag;
+            Node *block = ad_slice(tape, theta, at, at + layout.A_per_lag, 0, 1);
+            linked.A[j] = spec.score_matrices == SDLOC_SCORE_FULL ? ad_reshape(tape, block, K, K)
+                                                                  : ad_tanh(tape, block);
+        }
+        return linked;
+    }
 
     /* The radial map of the comment at the top of this file, on the tape: C0
        from b0 and A0, then lambda = (1 - delta) tanh(C0) / C0. Each A0_j enters
@@ -629,7 +694,8 @@ static inline void sdloc_linked_free(SdlocLinked *linked) {
    not a parameter, so a nonzero one is programmer error rather than something
    to drop silently. */
 /*
-The radial map inverted: (b0, A0) = atanh(C / (1 - delta)) / C (b, A), with
+Checked, b and a diagonal A_j go back through atanh, and a full A_j is copied.
+Imposed, the radial map is inverted: (b0, A0) = atanh(C / (1 - delta)) / C (b, A), with
 the factor 1 / (1 - delta) at C = 0. A model outside the invertible set,
 C(theta) > 1 - delta, has no theta, and handing one in is programmer error;
 sdloc_invertibility_constant is how a caller checks a starting point. At the
@@ -643,14 +709,18 @@ static inline void _sdloc_unlink(const SdlocParams *m, Vec theta) {
     int K = spec.K;
     SdlocLayout layout = sdloc_layout(spec);
     assert(theta.r == layout.n_theta && theta.c == 1);
+    int is_checked = spec.invertibility == SDLOC_INVERTIBILITY_CHECKED;
 
-    mreal C = sdloc_invertibility_constant(m);
-    double margin = 1.0 - (double)spec.delta;
-    assert(C <= margin * (1 + 16 * (double)MEPS)
-           && "the model is outside the invertible set C(theta) <= 1 - delta");
-    double ratio = (double)C / margin, largest = 1 - 4 * (double)MEPS;
-    if (ratio > largest) ratio = largest;
-    double factor = C == 0 ? 1 / margin : atanh(ratio) / (double)C;
+    double factor = 1;
+    if (!is_checked) {
+        mreal C = sdloc_invertibility_constant(m);
+        double margin = 1.0 - (double)spec.delta;
+        assert(C <= margin * (1 + 16 * (double)MEPS)
+               && "the model is outside the invertible set C(theta) <= 1 - delta");
+        double ratio = (double)C / margin, largest = 1 - 4 * (double)MEPS;
+        if (ratio > largest) ratio = largest;
+        factor = C == 0 ? 1 / margin : atanh(ratio) / (double)C;
+    }
 
     for (int i = 0; i < K; i++) theta.d[layout.m0 + i] = AT(m->m0, i, 0);
     for (int j = 0; j < spec.p; j++)
@@ -662,9 +732,22 @@ static inline void _sdloc_unlink(const SdlocParams *m, Vec theta) {
                     assert(value == 0 && "a diagonal A_j has no off-diagonal parameter");
                     continue;
                 }
-                theta.d[index] = (mreal)(factor * (double)value);
+                if (!is_checked) theta.d[index] = (mreal)(factor * (double)value);
+                else if (spec.score_matrices == SDLOC_SCORE_FULL) theta.d[index] = value;
+                else {
+                    assert(MABS(value) < 1 && "a diagonal loading outside (-1, 1) has no theta");
+                    theta.d[index] = (mreal)atanh((double)value);
+                }
             }
-    for (int i = 0; i < K; i++) theta.d[layout.b + i] = (mreal)(factor * (double)AT(m->b, i, 0));
+    for (int i = 0; i < K; i++) {
+        mreal value = AT(m->b, i, 0);
+        if (!is_checked) {
+            theta.d[layout.b + i] = (mreal)(factor * (double)value);
+        } else {
+            assert(MABS(value) < 1 && "a b outside (-1, 1) has no theta");
+            theta.d[layout.b + i] = (mreal)atanh((double)value);
+        }
+    }
     for (int k = 0; k < K; k++)
         theta.d[layout.Omega_inv_diagonal + k] = (mreal)log((double)AT(m->Omega_inv, k, k));
     int at = layout.Omega_inv_below;
@@ -673,16 +756,18 @@ static inline void _sdloc_unlink(const SdlocParams *m, Vec theta) {
     theta.d[layout.nu] = (mreal)log((double)m->nu - 2.0);
 }
 
-/* One transform per coordinate of theta, the first of the link's two stages:
-   b0 and A0 come out of it unchanged and the radial map then acts on them. The
-   analytic link, its chain rule and the standard errors all read this table,
-   so none of them can drift from the others. */
-typedef enum { SDLOC_LINK_IDENTITY, SDLOC_LINK_EXP, SDLOC_LINK_EXP_PLUS_TWO } SdlocLink;
+/* One transform per coordinate of theta, the first of the link's two stages.
+   Imposed, b0 and A0 come out of it unchanged and the radial map then acts on
+   them; checked, it is the whole link, with b and a diagonal A_j through tanh.
+   The analytic link, its chain rule and the standard errors all read this
+   table, so none of them can drift from the others. */
+typedef enum { SDLOC_LINK_IDENTITY, SDLOC_LINK_EXP, SDLOC_LINK_EXP_PLUS_TWO, SDLOC_LINK_TANH } SdlocLink;
 
 static inline mreal sdloc_link_forward(SdlocLink kind, mreal theta) {
     switch (kind) {
         case SDLOC_LINK_EXP: return (mreal)exp((double)theta);
         case SDLOC_LINK_EXP_PLUS_TWO: return (mreal)(exp((double)theta) + 2.0);
+        case SDLOC_LINK_TANH: return (mreal)tanh((double)theta);
         default: return theta;
     }
 }
@@ -691,6 +776,7 @@ static inline mreal sdloc_link_derivative(SdlocLink kind, mreal constrained) {
     switch (kind) {
         case SDLOC_LINK_EXP: return constrained;
         case SDLOC_LINK_EXP_PLUS_TWO: return constrained - 2;
+        case SDLOC_LINK_TANH: return 1 - constrained * constrained;
         default: return 1;
     }
 }
@@ -698,9 +784,12 @@ static inline mreal sdloc_link_derivative(SdlocLink kind, mreal constrained) {
 static inline void _sdloc_link_kinds(SdlocSpec spec, SdlocLink *out) {
     int K = spec.K;
     SdlocLayout layout = sdloc_layout(spec);
+    int is_checked = spec.invertibility == SDLOC_INVERTIBILITY_CHECKED;
+    SdlocLink loading = is_checked && spec.score_matrices == SDLOC_SCORE_DIAGONAL ? SDLOC_LINK_TANH
+                                                                                  : SDLOC_LINK_IDENTITY;
     for (int i = 0; i < K; i++) out[layout.m0 + i] = SDLOC_LINK_IDENTITY;
-    for (int i = 0; i < spec.p * layout.A_per_lag; i++) out[layout.A + i] = SDLOC_LINK_IDENTITY;
-    for (int i = 0; i < K; i++) out[layout.b + i] = SDLOC_LINK_IDENTITY;
+    for (int i = 0; i < spec.p * layout.A_per_lag; i++) out[layout.A + i] = loading;
+    for (int i = 0; i < K; i++) out[layout.b + i] = is_checked ? SDLOC_LINK_TANH : SDLOC_LINK_IDENTITY;
     for (int i = 0; i < K; i++) out[layout.Omega_inv_diagonal + i] = SDLOC_LINK_EXP;
     for (int i = 0; i < K * (K - 1) / 2; i++) out[layout.Omega_inv_below + i] = SDLOC_LINK_IDENTITY;
     out[layout.nu] = SDLOC_LINK_EXP_PLUS_TWO;
@@ -709,7 +798,8 @@ static inline void _sdloc_link_kinds(SdlocSpec spec, SdlocLink *out) {
 /*
 The analytic link, theta to the constrained parameters, in two stages: the
 per-coordinate table above, giving m0, b0, A0, Omega_inv and nu, then the
-radial map taking b0 and A0 to b and A. elementwise holds the first stage and
+radial map taking b0 and A0 to b and A, which a checked spec skips, its
+table already ending at b and A. elementwise holds the first stage and
 constrained the second, both in theta's layout, and Omega_inv is the factor as
 a dense K x K matrix. _sdloc_link_map_adjoint is the chain rule of both stages:
 the gradient of the filters, and each row of the Jacobian the standard errors
@@ -772,6 +862,7 @@ static inline int _sdloc_link_map_forward(SdlocLinkMap *map, const mreal *theta)
         mreal diagonal = map->Omega_inv[(size_t)k * K + k];
         if (diagonal == 0 || MISINF(diagonal) || MISNAN(diagonal)) return 0;
     }
+    if (map->spec.invertibility == SDLOC_INVERTIBILITY_CHECKED) return 1;
 
     map->C_zero = _sdloc_invertibility_constant(map->invertibility, map->Omega_inv,
                                                 map->elementwise[layout.nu],
@@ -805,6 +896,11 @@ static inline void _sdloc_link_map_adjoint(SdlocLinkMap *map, const mreal *const
     int K = map->spec.K, n = layout.n_theta, n_loadings = layout.b - layout.A;
     mreal *bar = map->bar;
     for (int i = 0; i < n; i++) bar[i] = constrained_bar[i];
+    if (map->spec.invertibility == SDLOC_INVERTIBILITY_CHECKED) {
+        for (int i = 0; i < n; i++)
+            theta_bar[i] = bar[i] * sdloc_link_derivative(map->kinds[i], map->elementwise[i]);
+        return;
+    }
 
     mreal lambda_bar = 0;
     for (int i = 0; i < K; i++) lambda_bar += bar[layout.b + i] * map->elementwise[layout.b + i];
@@ -916,14 +1012,31 @@ static inline Node *_sdloc_filter(Tape *tape, const SdlocLinked *linked, Mat y, 
                                                 linked->half_log_det_Sigma, log_sum);
 }
 
+/*
+max_edge_restarts and edge_restart_shrink concern an imposed fit that ends on
+the edge of the invertible set. The edge is at C0 = infinity in theta, and the
+likelihood's derivative in the radial direction carries 1 - tanh(C0)^2, 2e-15
+at the C0 = 17.68 a saturated fit is clamped to, so a fit that walks out there
+cannot walk back even when the maximum over the set lies inside it. Such a fit
+is restarted from its end with b and every A_j multiplied by
+edge_restart_shrink, which puts C at that fraction of 1 - delta, and the
+restart is kept when its likelihood is higher by more than
+SDLOC_EDGE_RESTART_GAIN. Restarts continue while each one is kept and ends on
+the edge again, up to max_edge_restarts; 0 turns them off. A checked fit has no
+edge and is never restarted.
+*/
 typedef struct {
     int max_iterations;
     mreal gradient_tolerance;
     mreal function_tolerance;
     int memory;
     mreal initial_step;
+    int max_edge_restarts;
+    mreal edge_restart_shrink;
     FILE *trace;
 } SdlocFitOptions;
+
+#define SDLOC_EDGE_RESTART_GAIN 1e-6
 
 static inline SdlocFitOptions sdloc_default_fit_options(void) {
     SdlocFitOptions options;
@@ -932,12 +1045,17 @@ static inline SdlocFitOptions sdloc_default_fit_options(void) {
     options.function_tolerance = (mreal)1e-12;
     options.memory = 10;
     options.initial_step = 1;
+    options.max_edge_restarts = 3;
+    options.edge_restart_shrink = (mreal)0.9;
     options.trace = NULL;
     return options;
 }
 
 /*
-niter counts one call to the solver. When a fit is resumed from an earlier
+niter counts the solver's iterations in one call to sdloc_fit, the edge
+restarts' included, and edge_restarts how many restarts that call ran; status,
+is_converged and gradient_norm are those of the run whose parameters are
+returned. When a fit is resumed from an earlier
 unconverged one, as sdloc_fit_cached does, total_niter is the sum over every
 run in the chain and nruns is how many runs there were, since what the estimate
 cost is the sum and the last run's niter alone understates it. A fit that
@@ -952,6 +1070,16 @@ is the most recent of them, the one describing the parameters returned here.
 
 status_is_known is 0 only for a cache written before the reasons were recorded,
 where status and run_status say nothing and must not be read.
+
+is_at_invertibility_edge says the parameters satisfy C(theta) = 1 - delta to
+within SDLOC_EDGE_TOLERANCE: the likelihood's maximum over the invertible set
+is on its edge, the unconstrained one presumably outside it. It is 0 for a
+checked spec, which has no edge.
+
+satisfies_invertibility_condition says C(theta) <= 1 - delta at the
+parameters. Imposed, it is 1 by construction; checked, it is the answer the
+check exists to give. Both flags are read off the parameters, so a loaded
+cache carries them too.
 */
 typedef struct {
     SdlocParams params;
@@ -965,6 +1093,9 @@ typedef struct {
     LbfgsStatus status;        /* why the most recent run stopped */
     int status_is_known;
     LbfgsStatus *run_status;   /* nruns entries, oldest first; NULL when not known */
+    int is_at_invertibility_edge;
+    int satisfies_invertibility_condition;
+    int edge_restarts; /* restarts from inside the set the last sdloc_fit ran */
 } SdlocFitResult;
 
 static inline void sdloc_fit_result_free(SdlocFitResult *result) {
@@ -992,6 +1123,9 @@ static inline SdlocFitResult sdloc_fit_result_new(SdlocSpec spec) {
     result.status = LBFGS_MAX_ITERATIONS;
     result.status_is_known = 0;
     result.run_status = NULL;
+    result.is_at_invertibility_edge = 0;
+    result.satisfies_invertibility_condition = 0;
+    result.edge_restarts = 0;
     return result;
 }
 
@@ -1510,13 +1644,20 @@ static inline mreal sdloc_negative_log_likelihood(Vec theta, Vec gradient, void 
     return -value;
 }
 
-/* Maximum likelihood, starting from initial_guess, which is not modified. The
-   spec of the fit is the spec of initial_guess. */
+/*
+Maximum likelihood starting from initial_guess, which is not modified. The
+spec of the fit is the spec of initial_guess, and its invertibility field
+says over what: the invertible set C(theta) <= 1 - delta when imposed, every
+model with |b_k| < 1 when checked. is_at_invertibility_edge reports an
+imposed maximum on the edge of the set, where the condition binds, and
+satisfies_invertibility_condition whether a checked maximum satisfies it.
+*/
 static inline SdlocFitResult sdloc_fit(Mat y, const SdlocParams *initial_guess,
                                        SdlocFitOptions options) {
     SdlocSpec spec = initial_guess->spec;
     assert(y.r == spec.K && y.c > 1);
-    assert(options.max_iterations > 0);
+    assert(options.max_iterations > 0 && options.max_edge_restarts >= 0);
+    assert(options.edge_restart_shrink > 0 && options.edge_restart_shrink < 1);
     int T = y.c;
     int n = sdloc_n_theta(spec);
     Vec start = mat_new(n, 1);
@@ -1535,6 +1676,32 @@ static inline SdlocFitResult sdloc_fit(Mat y, const SdlocParams *initial_guess,
     solver.initial_step = options.initial_step;
     solver.log_stream = options.trace;
     LbfgsResult solved = lbfgs(sdloc_negative_log_likelihood, &context, start, solver);
+    int niter = solved.niter, edge_restarts = 0;
+
+    /* The restarts of the comment above SdlocFitOptions. The solver
+       minimizes, so a higher likelihood is a lower value. */
+    if (spec.invertibility == SDLOC_INVERTIBILITY_IMPOSED) {
+        SdlocParams end = sdloc_params_new(spec);
+        Vec restart = mat_new(n, 1);
+        while (edge_restarts < options.max_edge_restarts) {
+            sdloc_params_from_theta(solved.theta, &end);
+            if (!sdloc_is_at_invertibility_edge(&end)) break;
+            for (int i = 0; i < end.A.r * end.A.c; i++) end.A.d[i] *= options.edge_restart_shrink;
+            for (int k = 0; k < spec.K; k++) AT(end.b, k, 0) *= options.edge_restart_shrink;
+            _sdloc_unlink(&end, restart);
+            LbfgsResult again = lbfgs(sdloc_negative_log_likelihood, &context, restart, solver);
+            niter += again.niter;
+            edge_restarts++;
+            if (!(again.value < solved.value - (mreal)SDLOC_EDGE_RESTART_GAIN)) {
+                mat_free(again.theta);
+                break;
+            }
+            mat_free(solved.theta);
+            solved = again;
+        }
+        mat_free(restart);
+        sdloc_params_free(&end);
+    }
     sdloc_analytic_free(context.workspace);
 
     SdlocFitResult result;
@@ -1542,13 +1709,16 @@ static inline SdlocFitResult sdloc_fit(Mat y, const SdlocParams *initial_guess,
     sdloc_params_from_theta(solved.theta, &result.params);
     result.log_likelihood = -solved.value;
     result.gradient_norm = solved.gradient_norm;
-    result.niter = solved.niter;
-    result.total_niter = solved.niter;
+    result.niter = niter;
+    result.total_niter = niter;
+    result.edge_restarts = edge_restarts;
     result.nruns = 1;
     result.is_converged = solved.is_converged;
     result.status = solved.status;
     result.status_is_known = 1;
     result.run_status = _sdloc_run_status_extend(NULL, 0, solved.status);
+    result.is_at_invertibility_edge = sdloc_is_at_invertibility_edge(&result.params);
+    result.satisfies_invertibility_condition = sdloc_satisfies_invertibility_condition(&result.params);
 
     mreal k = (mreal)n, periods = (mreal)T, mean = result.log_likelihood / periods;
     result.aic = 2 * k / periods - 2 * mean;
@@ -1626,6 +1796,8 @@ static inline JsonValue *sdloc_params_to_json(const SdlocParams *m) {
     json_object_set(root, "p", json_number(m->spec.p));
     json_object_set(root, "score_matrices",
                     json_string(sdloc_score_matrices_text(m->spec.score_matrices)));
+    json_object_set(root, "invertibility",
+                    json_string(sdloc_invertibility_mode_text(m->spec.invertibility)));
     json_object_set(root, "delta", json_number((double)m->spec.delta));
     Vec theta = mat_new(sdloc_n_theta(m->spec), 1);
     _sdloc_unlink(m, theta);
@@ -1646,16 +1818,28 @@ static inline void sdloc_save_params(const SdlocParams *m, const char *path) {
 Whether the spec stored in a parameter file is the one being loaded into. A
 file without p or score_matrices was written before either existed, when the
 model had exactly one diagonal score loading, so it is read as p = 1 and
-diagonal and matches only that spec. A file without delta was written before
-the invertibility condition was imposed: its theta is in the parametrization
-of that time, and *is_previous says so.
+diagonal and matches only that spec. A file without invertibility but with
+delta was written when the condition was always imposed, and matches only an
+imposed spec. A file without delta was written before the condition existed:
+its theta is in the parametrization a checked spec still uses, so it loads
+into a checked spec as it stands, and into an imposed one through
+_sdloc_params_from_previous_theta, which *is_previous asks for.
 */
 static inline int _sdloc_stored_spec_matches(const JsonValue *root, SdlocSpec spec, int *is_previous) {
     JsonValue *stored_delta = json_object_get(root, "delta");
-    *is_previous = stored_delta == NULL;
+    JsonValue *stored_mode = json_object_get(root, "invertibility");
+    int is_checked = spec.invertibility == SDLOC_INVERTIBILITY_CHECKED;
+    *is_previous = stored_delta == NULL && !is_checked;
     if (stored_delta && (stored_delta->type != JSON_NUMBER
                          || json_as_number(stored_delta) != (double)spec.delta))
         return 0;
+    if (stored_mode) {
+        if (stored_mode->type != JSON_STRING
+            || strcmp(json_as_string(stored_mode), sdloc_invertibility_mode_text(spec.invertibility)) != 0)
+            return 0;
+    } else if (stored_delta && is_checked) {
+        return 0;
+    }
     JsonValue *stored_K = json_object_get(root, "K");
     if (!stored_K || stored_K->type != JSON_NUMBER || json_as_number(stored_K) != (double)spec.K)
         return 0;
@@ -1769,6 +1953,7 @@ static inline void sdloc_save_fit(const SdlocFitResult *result, Mat y, const cha
     json_object_set(diagnostics, "niter", json_number(result->niter));
     json_object_set(diagnostics, "total_niter", json_number(result->total_niter));
     json_object_set(diagnostics, "nruns", json_number(result->nruns));
+    json_object_set(diagnostics, "edge_restarts", json_number(result->edge_restarts));
     json_object_set(diagnostics, "is_converged", json_number(result->is_converged));
     /* One entry per run, oldest first, and the last of them is what status
        holds, so the scalar is not written beside it. A result whose reasons are
@@ -1846,9 +2031,10 @@ static inline int sdloc_load_fit(SdlocFitResult *result, Mat y, const char *path
         return 0;
     }
 
-    double total_niter, nruns;
+    double total_niter, nruns, edge_restarts;
     if (!_sdloc_diagnostic(diagnostics, "total_niter", &total_niter)) total_niter = niter;
     if (!_sdloc_diagnostic(diagnostics, "nruns", &nruns)) nruns = 1;
+    if (!_sdloc_diagnostic(diagnostics, "edge_restarts", &edge_restarts)) edge_restarts = 0;
 
     JsonValue *reasons = json_object_get(diagnostics, "run_status");
     LbfgsStatus *history = NULL;
@@ -1880,11 +2066,14 @@ static inline int sdloc_load_fit(SdlocFitResult *result, Mat y, const char *path
     result->niter = (int)niter;
     result->total_niter = (int)total_niter;
     result->nruns = (int)nruns;
+    result->edge_restarts = (int)edge_restarts;
     result->is_converged = (int)is_converged;
     free(result->run_status);
     result->run_status = history;
     result->status_is_known = history != NULL;
     result->status = history ? history[(int)nruns - 1] : LBFGS_MAX_ITERATIONS;
+    result->is_at_invertibility_edge = sdloc_is_at_invertibility_edge(&result->params);
+    result->satisfies_invertibility_condition = sdloc_satisfies_invertibility_condition(&result->params);
     return 1;
 }
 
@@ -2101,7 +2290,7 @@ static inline SdlocStandardErrors sdloc_standard_errors(const SdlocParams *m, Ma
 
 /*
 What the invertibility result rests on, at a model. C is C(theta), below
-1 - delta by construction of the link. The derivation's uniform bound also
+1 - delta by construction of the link when the condition is imposed. The derivation's uniform bound also
 needs ||L||, ||L^-1|| and nu bounded over the parameter set, which the link
 does not impose: they are reported here so that the assumption that the
 estimates lie in such a set can be judged. B is the derivation's (39),
@@ -2154,10 +2343,14 @@ static inline void sdloc_write_report(const SdlocFitResult *result, Mat y, const
 
     fprintf(out, "score-driven vector location model, kappa = 1/2 scaled score, "
                  "Student-t shock\n");
-    fprintf(out, "K %d, score lags p %d, score matrices %s, invertibility margin delta %.6g\n",
-            K, spec.p, sdloc_score_matrices_text(spec.score_matrices), (double)spec.delta);
+    fprintf(out, "K %d, score lags p %d, score matrices %s, invertibility condition %s, margin delta %.6g\n",
+            K, spec.p, sdloc_score_matrices_text(spec.score_matrices),
+            sdloc_invertibility_mode_text(spec.invertibility), (double)spec.delta);
     fprintf(out, "iterations %d, converged %s, gradient_norm %.6g\n",
             result->niter, result->is_converged ? "yes" : "no", (double)result->gradient_norm);
+    if (result->edge_restarts)
+        fprintf(out, "restarted from inside the invertible set %d times after ending on its edge\n",
+                result->edge_restarts);
     if (result->status_is_known)
         fprintf(out, "stopping reason: %s\n", lbfgs_status_text(result->status));
     else
@@ -2177,8 +2370,18 @@ static inline void sdloc_write_report(const SdlocFitResult *result, Mat y, const
 
     SdlocInvertibilityDiagnostics invertibility = sdloc_invertibility_diagnostics(m);
     fprintf(out, "\nfilter invertibility\n");
-    fprintf(out, "C(theta) %.6g, imposed bound 1 - delta %.6g\n",
-            (double)invertibility.C, (double)invertibility.margin);
+    if (spec.invertibility == SDLOC_INVERTIBILITY_IMPOSED)
+        fprintf(out, "C(theta) %.6g, imposed bound 1 - delta %.6g%s\n",
+                (double)invertibility.C, (double)invertibility.margin,
+                result->is_at_invertibility_edge ? ", on the edge: the maximum over the invertible set lies on its"
+                                                   " boundary, and the standard errors below treat it as an"
+                                                   " interior point" : "");
+    else
+        fprintf(out, "C(theta) %.6g, checked against 1 - delta %.6g: %s\n",
+                (double)invertibility.C, (double)invertibility.margin,
+                result->satisfies_invertibility_condition
+                    ? "satisfied"
+                    : "not satisfied; the condition is sufficient, so the filter may still be invertible");
     fprintf(out, "not imposed, assumed bounded: ||Omega_inv|| %.6g, ||Omega_inv^-1|| %.6g, nu %.6g\n",
             (double)invertibility.norm_L, (double)invertibility.norm_L_inverse, (double)invertibility.nu);
     fprintf(out, "innovation bound B = sqrt(nu)/2 sum_j ||Psi~_j|| %.6g\n", (double)invertibility.B);
