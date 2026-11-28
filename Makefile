@@ -461,6 +461,16 @@ tests/performance/median_candidates: tests/performance/median_candidates.c stats
 bench-median_candidates: tests/performance/median_candidates
 	./tests/performance/median_candidates $(N)
 
+# Not part of bench.sh: stats_quickselect against the branch-free selection and
+# two dispatches between them on ordered, nearly ordered and random input; see
+# the file's header. N caps the sample length. Writes
+# out/selection_dispatch_candidates_report.txt.
+tests/performance/selection_dispatch_candidates: tests/performance/selection_dispatch_candidates.c stats.h random/random.h linalg/mat.h
+	$(CC) $(CFLAGS) tests/performance/selection_dispatch_candidates.c $(LDLIBS) -o tests/performance/selection_dispatch_candidates
+
+bench-selection_dispatch_candidates: tests/performance/selection_dispatch_candidates
+	./tests/performance/selection_dispatch_candidates $(N)
+
 bench-tensor_omp_threshold: tests/performance/tensor_omp_threshold
 	./tests/performance/tensor_omp_threshold
 
@@ -1650,7 +1660,7 @@ uninstall-core: uninstall-model
 	@-rmdir $(INCDIR) 2>/dev/null || true
 	@printf 'et_al. - core tier removed ($(INCDIR) and et_al.-core.pc)\n'
 
-.PHONY: seri-runs-npz test-mutations bench-npz_read_stages test-hp-state-space-python bench-band_chol_block_threshold bench-band_chol_solve_threshold test-band-chol-python test-brent-python bench-median_repeated_values bench-median_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-lp-nl-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery study-qvarma_consistency_rate study-qvarma_parameter_space study-score_driven_location_invertibility_modes install-core install-model uninstall-core uninstall-model
+.PHONY: seri-runs-npz test-mutations bench-npz_read_stages test-hp-state-space-python bench-band_chol_block_threshold bench-band_chol_solve_threshold test-band-chol-python test-brent-python bench-median_repeated_values bench-median_candidates bench-selection_dispatch_candidates bench-npy_read_candidates bench-lp_throughput bench-rolling_mean_threshold bench-cumsum_threshold bench-dargsort_threshold bench-tensor_omp_threshold bench-tensor_reduce_tile bench-tensor_batch_threads study-mcs_settings bench-mcs_candidates bench-fast_mcs_against_mcs bench-seri_mcs_performance bench-seri_mcs_candidates bench-seri_mcs_against_authors test-mcs-candidate test test-stress test-special test-npz-python test-cumsum-python test-rolling-mean-python test-hp-filter-python test-lp-python test-lp-nl-python test-ols-covariance-python test-fast-mcs-python test-seri-mcs-r test-gammainc-python test-csv-na-python test-lhs-r bench-lhs test-basis-r bench-basis test-integration test-integration-asan examples ad-asan study-qvarma_recovery study-qvarma_consistency_rate study-qvarma_parameter_space study-score_driven_location_invertibility_modes install-core install-model uninstall-core uninstall-model
 
 # Where one evaluation of the Woodbury Kalman filter spends its time, stage by
 # stage, on ss/dynamic_factor.h's systems; see the file's header. Writes
