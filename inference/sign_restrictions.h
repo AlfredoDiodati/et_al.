@@ -5,6 +5,7 @@
 #include "../dist/gauss.h"
 #include "../stats.h"
 #include <stdlib.h>
+#include <string.h>
 
 /*
 Sign-restricted identification of impulse responses, after Rubio-Ramirez,
@@ -30,24 +31,44 @@ normals are drawn by gauss_sample in one K x K call, so a caller drawing from
 the same stream gets the same rotations.
 */
 
-/* One rotation uniform over the orthogonal group of size K. Caller must
-   mat_free. */
-static inline Mat sign_restrictions_rotation(Rng *rng, int K) {
-    assert(K > 0);
-    Mat zero_location = mat_new(1, 1);
-    Mat unit_scale = mat_fill(1, 1, 1);
-    Mat normals = gauss_sample(rng, zero_location, unit_scale, K, K);
-    mat_free(zero_location);
-    mat_free(unit_scale);
+/* The rotation of a K x K matrix of standard normals, the second half of
+   sign_restrictions_rotation. normals may be a view. */
+static inline Mat _sign_restrictions_rotation_of(Mat normals) {
+    int K = normals.r;
     Mat Q, R;
     mat_qr(normals, &Q, &R);
-    mat_free(normals);
     /* Flipping a column of Q flips the matching row of R, so this is the
        factorization with a positive diagonal without recomputing it. */
     for (int j = 0; j < K; j++)
         if (AT(R, j, j) < 0)
             for (int a = 0; a < K; a++) AT(Q, a, j) = -AT(Q, a, j);
     mat_free(R);
+    return Q;
+}
+
+/* One K x K block of standard normals from rng, in one gauss_sample call per
+   block of rows: count matrices stacked, so that drawing them together takes
+   the same numbers from the stream as count separate draws. */
+static inline Mat _sign_restrictions_normals(Rng *rng, int K, int count) {
+    Mat zero_location = mat_new(1, 1);
+    Mat unit_scale = mat_fill(1, 1, 1);
+    Mat normals = gauss_sample(rng, zero_location, unit_scale, count * K, K);
+    mat_free(zero_location);
+    mat_free(unit_scale);
+    return normals;
+}
+
+/* Draws per block in sign_restriction_bands: the normals of a block are drawn
+   together and its rotations factored in parallel. */
+#define SIGN_RESTRICTIONS_BLOCK 4096
+
+/* One rotation uniform over the orthogonal group of size K. Caller must
+   mat_free. */
+static inline Mat sign_restrictions_rotation(Rng *rng, int K) {
+    assert(K > 0);
+    Mat normals = _sign_restrictions_normals(rng, K, 1);
+    Mat Q = _sign_restrictions_rotation_of(normals);
+    mat_free(normals);
     return Q;
 }
 
@@ -131,24 +152,42 @@ static inline SignRestrictionBands sign_restriction_bands(Rng *rng, const Mat *r
     bands.n_accepted = 0;
     bands.lower = bands.median = bands.upper = NULL;
 
-    int capacity = 1024;
+    /* The normals come off the stream in order, a block of draws at a time;
+       the factorizations and the sign checks of a block are independent and
+       shared among threads when the build has OpenMP; the kept rotations are
+       then appended in draw order, so the result does not depend on the
+       thread count. */
+    int capacity = 1024, block = SIGN_RESTRICTIONS_BLOCK;
     mreal *rotations = (mreal*)malloc((size_t)capacity * (size_t)entries * sizeof(mreal));
-    assert(rotations);
-    for (int d = 0; d < options.n_draws; d++) {
-        Mat Q = sign_restrictions_rotation(rng, K);
-        if (sign_restrictions_hold(impact, Q, signs)) {
+    mreal *candidates = (mreal*)malloc((size_t)block * (size_t)entries * sizeof(mreal));
+    int *kept = (int*)malloc((size_t)block * sizeof(int));
+    assert(rotations && candidates && kept);
+    for (int start = 0; start < options.n_draws; start += block) {
+        int size = options.n_draws - start < block ? options.n_draws - start : block;
+        Mat normals = _sign_restrictions_normals(rng, K, size);
+        #pragma omp parallel for schedule(static)
+        for (int d = 0; d < size; d++) {
+            Mat Q = _sign_restrictions_rotation_of(mat_slice(normals, d * K, (d + 1) * K, 0, K));
+            kept[d] = sign_restrictions_hold(impact, Q, signs);
+            for (int a = 0; a < K; a++)
+                for (int b = 0; b < K; b++) candidates[(size_t)d * entries + a * K + b] = AT(Q, a, b);
+            mat_free(Q);
+        }
+        mat_free(normals);
+        for (int d = 0; d < size; d++) {
+            if (!kept[d]) continue;
             if (bands.n_accepted == capacity) {
                 capacity *= 2;
                 rotations = (mreal*)realloc(rotations, (size_t)capacity * (size_t)entries * sizeof(mreal));
                 assert(rotations);
             }
-            mreal *slot = rotations + (size_t)bands.n_accepted * entries;
-            for (int a = 0; a < K; a++)
-                for (int b = 0; b < K; b++) slot[a * K + b] = AT(Q, a, b);
+            memcpy(rotations + (size_t)bands.n_accepted * entries, candidates + (size_t)d * entries,
+                   (size_t)entries * sizeof(mreal));
             bands.n_accepted++;
         }
-        mat_free(Q);
     }
+    free(candidates);
+    free(kept);
 
     if (bands.n_accepted > 0) {
         Mat **arrays[3] = { &bands.lower, &bands.median, &bands.upper };
@@ -159,25 +198,39 @@ static inline SignRestrictionBands sign_restriction_bands(Rng *rng, const Mat *r
         }
         /* Each value below is a sum of products of finite responses and an
            orthogonal rotation, so stats_quantile_inplace needs no finiteness
-           check from here. */
-        mreal *values = (mreal*)malloc((size_t)bands.n_accepted * sizeof(mreal));
-        assert(values);
-        for (int i = 0; i < count; i++)
-            for (int a = 0; a < K; a++)
-                for (int b = 0; b < K; b++) {
-                    for (int d = 0; d < bands.n_accepted; d++) {
-                        const mreal *Q = rotations + (size_t)d * entries;
+           check from here. One pass over the rotations per response fills
+           every entry's values, entry by entry contiguous, so the rotations
+           are read once per response rather than once per entry. */
+        size_t n_accepted = (size_t)bands.n_accepted;
+        const mreal probabilities[3] = { options.lower_percentile, (mreal)0.5, options.upper_percentile };
+        /* The responses are independent, so they are shared among threads when
+           the build has OpenMP, each thread with its own products buffer; the
+           numbers do not depend on how many threads there are. */
+        #pragma omp parallel
+        {
+        mreal *products = (mreal*)malloc(n_accepted * (size_t)entries * sizeof(mreal));
+        assert(products);
+        #pragma omp for schedule(dynamic, 1)
+        for (int i = 0; i < count; i++) {
+            for (size_t d = 0; d < n_accepted; d++) {
+                const mreal *Q = rotations + d * entries;
+                for (int a = 0; a < K; a++)
+                    for (int b = 0; b < K; b++) {
                         mreal sum = 0;
                         for (int k = 0; k < K; k++) sum += AT(responses[i], a, k) * Q[k * K + b];
-                        values[d] = sum;
+                        products[(size_t)(a * K + b) * n_accepted + d] = sum;
                     }
-                    AT(bands.lower[i], a, b) = stats_quantile_inplace(values, bands.n_accepted,
-                                                                      options.lower_percentile);
-                    AT(bands.median[i], a, b) = stats_quantile_inplace(values, bands.n_accepted, (mreal)0.5);
-                    AT(bands.upper[i], a, b) = stats_quantile_inplace(values, bands.n_accepted,
-                                                                      options.upper_percentile);
+            }
+            for (int a = 0; a < K; a++)
+                for (int b = 0; b < K; b++) {
+                    mreal *values = products + (size_t)(a * K + b) * n_accepted;
+                    AT(bands.lower[i], a, b) = stats_quantile_inplace(values, bands.n_accepted, probabilities[0]);
+                    AT(bands.median[i], a, b) = stats_quantile_inplace(values, bands.n_accepted, probabilities[1]);
+                    AT(bands.upper[i], a, b) = stats_quantile_inplace(values, bands.n_accepted, probabilities[2]);
                 }
-        free(values);
+        }
+        free(products);
+        }
     }
     free(rotations);
     return bands;

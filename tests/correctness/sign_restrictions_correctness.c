@@ -27,6 +27,9 @@ All draws from fixed seeds. Run with make tests/correctness/sign_restrictions_co
 #include "../check.h"
 #include <stdio.h>
 #include <math.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 static void test_rotations(void) {
     printf("rotations are orthogonal and uniform over the orthogonal group\n");
@@ -206,11 +209,82 @@ static void test_bands(void) {
     printf("  ok\n");
 }
 
+/*
+The bands draw their normals a block of SIGN_RESTRICTIONS_BLOCK rotations at a
+time and factor each block in parallel. Two blocks and 17 draws, from one
+stream, must keep the rotations one sign_restrictions_rotation per draw keeps
+from the same stream, and give the bands those rotations give: the reference
+here takes its quantiles one entry at a time with stats_quantile_inplace. With
+OpenMP, one thread and the default thread count must give the same bands.
+*/
+static void test_blocks_and_threads(void) {
+    printf("blocked and threaded draws against one rotation at a time\n");
+    int K = 3, n_draws = 2 * SIGN_RESTRICTIONS_BLOCK + 17;
+    Mat response = mat_new(K, K), signs = mat_new(K, K);
+    for (int a = 0; a < K; a++)
+        for (int b = 0; b < K; b++) AT(response, a, b) = (mreal)(cos(0.9 * a - 0.4 * b) + 2 * (a == b));
+    AT(signs, 0, 0) = 1;
+    AT(signs, 1, 2) = -1;
+    SignRestrictionBandOptions options = sign_restriction_default_band_options();
+    options.n_draws = n_draws;
+
+    Rng reference_rng = rng_new(606u, 0);
+    mreal *values[9];
+    for (int e = 0; e < K * K; e++) values[e] = (mreal*)malloc((size_t)n_draws * sizeof(mreal));
+    int kept = 0;
+    for (int d = 0; d < n_draws; d++) {
+        Mat Q = sign_restrictions_rotation(&reference_rng, K);
+        if (sign_restrictions_hold(response, Q, signs)) {
+            Mat product = mat_mul(response, Q);
+            for (int e = 0; e < K * K; e++) values[e][kept] = product.d[e];
+            mat_free(product);
+            kept++;
+        }
+        mat_free(Q);
+    }
+    Rng rng = rng_new(606u, 0);
+    SignRestrictionBands bands = sign_restriction_bands(&rng, &response, 1, response, signs, options);
+    CHECK(bands.n_accepted == kept, "the blocked draws keep %d rotations, one at a time %d", bands.n_accepted, kept);
+    double worst = 0;
+    for (int e = 0; e < K * K && kept > 0; e++) {
+        mreal expected[3] = { stats_quantile_inplace(values[e], kept, options.lower_percentile),
+                              stats_quantile_inplace(values[e], kept, (mreal)0.5),
+                              stats_quantile_inplace(values[e], kept, options.upper_percentile) };
+        mreal got[3] = { bands.lower[0].d[e], bands.median[0].d[e], bands.upper[0].d[e] };
+        for (int g = 0; g < 3; g++) {
+            double gap = fabs((double)(got[g] - expected[g]));
+            if (gap > worst) worst = gap;
+        }
+    }
+    CHECK(worst < 64 * (double)MEPS, "the blocked bands against one rotation at a time, gap %.3g", worst);
+    printf("  %d draws over %d blocks: %d kept, worst gap to one rotation at a time %.2e\n", n_draws,
+           (n_draws + SIGN_RESTRICTIONS_BLOCK - 1) / SIGN_RESTRICTIONS_BLOCK, kept, worst);
+#ifdef _OPENMP
+    int threads = omp_get_max_threads();
+    omp_set_num_threads(1);
+    Rng serial_rng = rng_new(606u, 0);
+    SignRestrictionBands serial = sign_restriction_bands(&serial_rng, &response, 1, response, signs, options);
+    omp_set_num_threads(threads);
+    int same = serial.n_accepted == bands.n_accepted;
+    for (int e = 0; e < K * K && same; e++)
+        same = serial.lower[0].d[e] == bands.lower[0].d[e] && serial.median[0].d[e] == bands.median[0].d[e]
+               && serial.upper[0].d[e] == bands.upper[0].d[e];
+    CHECK(same, "one thread and %d threads must give the same bands", threads);
+    printf("  one thread and %d threads: %s\n", threads, same ? "the same bands" : "different bands");
+    sign_restriction_bands_free(&serial);
+#endif
+    sign_restriction_bands_free(&bands);
+    for (int e = 0; e < K * K; e++) free(values[e]);
+    mat_free(response); mat_free(signs);
+    printf("  ok\n");
+}
+
 int main(void) {
     check_banner("sign restrictions");
     test_rotations();
     test_known_quantiles();
     test_hold();
     test_bands();
+    test_blocks_and_threads();
     return check_report();
 }

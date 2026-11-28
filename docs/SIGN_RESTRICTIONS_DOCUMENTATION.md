@@ -34,11 +34,23 @@ One rotation is computed in three steps:
 - factor it as `Q R` with `mat_qr`;
 - flip each column of `Q` whose matching diagonal entry of `R` is negative.
 
-The flip is what makes `Q` uniform (Haar) over the orthogonal group. Householder QR fixes the sign of each `R_jj` from the data it was given, so without the flip `Q` is uniform times a sign pattern that depends on the draw. `test_rotations` measures this: at `K = 3` the unflipped first entry has a mean of `-0.50` over 40000 draws, where a uniform rotation's is 0. The stream advances by one rotation per draw, whether or not the draw is kept. `sd/qvarma.h`'s `qvarma_impulse_bands` draws its rotations the same way from the same calls, so the same stream gives it the same rotations.
+The flip is what makes `Q` uniform (Haar) over the orthogonal group. Householder QR fixes the sign of each `R_jj` from the data it was given, so without the flip `Q` is uniform times a sign pattern that depends on the draw. `test_rotations` measures this: at `K = 3` the unflipped first entry has a mean of `-0.50` over 40000 draws, where a uniform rotation's is 0. The stream advances by one rotation per draw, whether or not the draw is kept. `sign_restriction_bands` draws the normals of `SIGN_RESTRICTIONS_BLOCK = 4096` rotations in one `gauss_sample` call, which takes the same numbers from the stream as one call per rotation, and keeps the passing rotations in draw order. `sd/qvarma.h`'s `qvarma_impulse_bands` draws one rotation at a time from the same calls, so the same stream gives both the same rotations; `tests/correctness/score_driven_location_impulse_responses.c` checks that their bands agree.
 
-## Cost
+## Cost and threading
 
-Memory is `K x K` numbers per kept rotation, so a million kept draws at `K = 3` is 72 MB in the float64 build. A band costs one `K x K` by `K x K` product per response matrix per kept rotation, plus three quantile selections per entry.
+Memory is `K x K` numbers per kept rotation, so a million kept draws at `K = 3` is 72 MB in the float64 build, plus one buffer of the same size per thread for the products of one response. A band costs one `K x K` by `K x K` product per response matrix per kept rotation, plus three quantile selections per entry, and the selections are most of the time. In a build with OpenMP the factorizations and sign checks of a block of draws, and the bands of different response matrices, run on all threads; the numbers do not depend on the thread count. `OMP_NUM_THREADS=1` gives one thread.
+
+Measured on an Intel Core i5-7400 (4 cores), `-O3 -march=native -ffast-math -fopenmp`, float64. Harness `out/irf_band_timing.c` with `out/irf_band_compare.sh`, not in the repository: 84 response matrices, the layout `sdloc_impulse_bands` passes at horizon 20, with entries `sin(1.3a + 0.7b + i) + 1{a = b}`, impact the first of them, `rng_new(123, 0)`. Each pair of numbers is one run, the header before these changes against the one after, alternated over 4 rounds, best time in milliseconds; the header before has no threading, so its time does not depend on the thread count. Restricted asks impact `(1,1) > 0` and `(2,1) < 0`, which keeps about 11%. That header against itself gave ratios from 0.999 to 1.003, and every run returned the same bands to the last bit.
+
+| `K` | draws | restricted | 1 thread, before and after | 2 threads, before and after | 4 threads, before and after |
+|---|---|---|---|---|---|
+| 2 | 100000 | no | 854, 850 | 854, 444 | 870, 249 |
+| 3 | 100000 | no | 1958, 1850 | 1955, 958 | 2009, 563 |
+| 3 | 100000 | yes | 254, 251 | 251, 132 | 258, 79 |
+| 3 | 1000000 | yes | 2681, 2533 | 2715, 1366 | 2730, 861 |
+| 5 | 100000 | no | 6379, 5009 | 6480, 2608 | 6612, 1534 |
+
+The one-thread gain is the product loop: one pass over the rotations per response matrix fills every entry, where the loop before it passed over all of them once per entry. Taking the three quantiles by nested selection, each after the median inside the half it leaves, was measured and not kept: it saved nothing at `K = 3` and cost 4% at `K = 2` and in the restricted `K = 3` case. The selection itself is `stats_quickselect`, whose branch-free variant was measured twice as fast on values in random order and slower on sorted input, and left unshipped; see `docs/STATS_PERFORMANCE_DOCUMENTATION.md`.
 
 ## Testing
 
@@ -48,6 +60,7 @@ Memory is `K x K` numbers per kept rotation, so a million kept draws at `K = 3` 
 - **Uniformity**: three exact moments of a Haar rotation, `E[Q_ab] = 0`, `E[Q_ab^2] = 1/K` and `P(det Q = 1) = 1/2`, must hold within 5 Monte Carlo standard errors at each `K`. The second moment's standard error uses `E[Q^4] = 3 / (K (K + 2))`. The unflipped QR factor at `K = 3` is the negative control, and the mean check rejects it.
 - **A known output**: for `K = 2` an entry of a uniform rotation is `cos(theta)` with `theta` uniform. The 10%, 50% and 90% bands of the identity response with no restriction must therefore land on `cos(0.9 pi) = -0.9511`, 0 and `cos(0.1 pi) = 0.9511`, within 5 standard errors of each quantile (`0.0015` in the tails, `0.0079` at the median, for 40000 draws). The measured worst gap is `0.0100`.
 - **The sign check**: hand-built impacts and rotations. These cover both signs, an unrestricted entry, a zero response failing either restriction, and a strided view.
+- **Blocks and threads**: 8209 draws, two blocks and 17 draws, keep exactly the rotations one `sign_restrictions_rotation` per draw keeps from the same stream, and give exactly the bands of those rotations; with OpenMP, one thread and the default thread count give the same bands.
 - **The bands**:
   - the band of `2.5 R` is 2.5 times the band of `R`, to 64 machine epsilons;
   - the same seed gives the same bands;
